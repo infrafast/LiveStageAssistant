@@ -99,6 +99,7 @@ class WebMonitor:
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
         self._session_context_rename_handler: Callable[[str, str], dict[str, Any]] | None = None
         self._session_context_delete_handler: Callable[[str], dict[str, Any]] | None = None
+        self._cancel_handler: Callable[[], None] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
         self._web_audio_tts_handler: Callable[[str], dict[str, Any]] | None = None
         self._started_at = time.time()
@@ -155,6 +156,11 @@ class WebMonitor:
         with self._lock:
             self._web_audio_transcribe_handler = transcribe_handler
             self._web_audio_tts_handler = tts_handler
+
+    def set_cancel_handler(self, handler: Callable[[], None]) -> None:
+        """Register a callback invoked when the web UI requests cancellation."""
+        with self._lock:
+            self._cancel_handler = handler
 
     def install_console_capture(self) -> None:
         with self._lock:
@@ -638,9 +644,14 @@ class WebMonitor:
             return self._injected_commands.popleft()
 
     def request_cancel(self) -> None:
+        handler = None
         with self._lock:
-            self._cancel_requested = True
+            if self._snapshot.get("assistant_busy"):
+                self._cancel_requested = True
+            handler = self._cancel_handler
             self._snapshot["updated_at"] = time.time()
+        if handler:
+            handler()
 
     def pop_cancel_requested(self) -> bool:
         with self._lock:
@@ -1724,6 +1735,7 @@ INDEX_HTML = """<!doctype html>
     let conversationDiscard = false;
     let lastSpokenAssistantMessageId = null;
     let webTtsPlaying = false;
+    let currentWebTtsAudio = null;
     let thinkingAudio = null;
     let thinkingAudioUrl = "";
     let thinkingAudioPlaying = false;
@@ -1735,6 +1747,18 @@ INDEX_HTML = """<!doctype html>
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+    }
+
+    function isStopCommand(value) {
+      const normalized = String(value || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\\u0300-\\u036f]/g, "")
+        .replace(/[^\\w'-]+/g, " ")
+        .trim();
+      if (!normalized) return false;
+      const stopWords = new Set(["stop", "stoppe", "stope", "arrete", "arreter", "annule", "annuler", "cancel"]);
+      return normalized.split(/\\s+/).some((word) => stopWords.has(word));
     }
 
     function ledClass(status) {
@@ -2233,6 +2257,7 @@ INDEX_HTML = """<!doctype html>
         const data = await response.json();
         if (!data.audio_base64 || !data.mime_type) return;
         const audio = new Audio(`data:${data.mime_type};base64,${data.audio_base64}`);
+        currentWebTtsAudio = audio;
         audio.playbackRate = Math.max(0.6, Math.min(1.8, Number(webAudio.tts_speed || 1)));
         await new Promise((resolve, reject) => {
           audio.addEventListener("ended", resolve, { once: true });
@@ -2242,9 +2267,21 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         metaEl.textContent = `web TTS unavailable: ${error}`;
       } finally {
+        currentWebTtsAudio = null;
         webTtsPlaying = false;
         scheduleConversationRestart(250);
       }
+    }
+
+    function stopWebTts() {
+      if (currentWebTtsAudio) {
+        const audio = currentWebTtsAudio;
+        currentWebTtsAudio.pause();
+        currentWebTtsAudio.currentTime = 0;
+        currentWebTtsAudio = null;
+        audio.dispatchEvent(new Event("ended"));
+      }
+      webTtsPlaying = false;
     }
 
     async function startThinkingAudio() {
@@ -2273,8 +2310,9 @@ INDEX_HTML = """<!doctype html>
       thinkingAudioPlaying = false;
     }
 
-    async function cancelCommand() {
-      if (!composerLocked || cancelRequestInFlight) return;
+    async function cancelCommand(force = false) {
+      stopWebTts();
+      if ((!force && !composerLocked) || cancelRequestInFlight) return;
       cancelRequestInFlight = true;
       injectSubmit.disabled = true;
       injectCommand.placeholder = "Cancelling...";
@@ -2646,6 +2684,12 @@ INDEX_HTML = """<!doctype html>
       }
       const command = injectCommand.value.trim();
       if (!command) return;
+      if (isStopCommand(command)) {
+        await cancelCommand(true);
+        injectCommand.value = "";
+        autoSizeComposer();
+        return;
+      }
       await submitCommand(command);
     });
 

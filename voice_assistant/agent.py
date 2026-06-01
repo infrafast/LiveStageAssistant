@@ -54,6 +54,8 @@ except ImportError:
 
 TTS_ENGINE = pyttsx3.init()
 TTS_LOCK = threading.Lock()
+TTS_STOP_EVENT = threading.Event()
+TTS_PLAYBACK_PROCESS: subprocess.Popen | None = None
 FORCE_EXIT_REQUESTED = threading.Event()
 DEFAULT_ELEVENLABS_VOICE_ID = "1EmYoP3UnnnwhlJKovEy"  # french male; ZF6FPAbjXT4488VcRRnw = english female
 DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
@@ -188,9 +190,7 @@ CURRENT_STATE_QUERY_MARKERS = (
     "à combien",
 )
 DEFAULT_STT_PROMPT = (
-    "Commandes courtes en français pour une console de mixage. "
-    "Les commandes commencent souvent par: mets, met, règle, baisse, monte, coupe, mute, active, réactive. "
-    "Ne colle pas le verbe 'mets' au nom qui suit: écris 'mets Claude', 'mets Voc-Claude', 'mets snare'."
+"You are a helpful voice assistant with access to various tools. Your name is Live Stage Assistant. Be precise, conservative, and tool-driven in your responses since they will be spoken aloud and have to be suitable for text-to-speech and API calls. Summarize your results. Reply in the same language as the user's latest request whenever possible. Use plain text only. Do not use emojis, emoticons, markdown, bullets, symbols, or decorative characters. Behave like a friendly calm and motivating assistant. Use conversation memory for context, preferences, and follow-up references, but not as the source of truth for live external state. When the user asks about the current state of anything outside this conversation, treat the answer as time-sensitive. Use the relevant MCP read tool before answering. Do not answer current external state from memory, previous tool results, or assumptions. If no suitable read tool is available, say that you cannot verify the current state and use only tools exposed by the MCP servers. "
 )
 FUSED_SET_COMMAND_RE = re.compile(r"^\s*(mets|met|me)([a-zà-ÿ][a-zà-ÿ0-9_-]{3,})(\b|$)", re.IGNORECASE)
 
@@ -289,16 +289,28 @@ def play_mp3_bytes(audio_bytes: bytes) -> None:
     if not elevenlabs_playback_available():
         raise RuntimeError("ffplay is not available")
 
+    global TTS_PLAYBACK_PROCESS
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
             temp_file.write(audio_bytes)
             temp_path = temp_file.name
-        subprocess.run(
+        TTS_PLAYBACK_PROCESS = subprocess.Popen(
             ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", temp_path],
-            check=True,
         )
+        while TTS_PLAYBACK_PROCESS.poll() is None:
+            if TTS_STOP_EVENT.is_set():
+                TTS_PLAYBACK_PROCESS.terminate()
+                try:
+                    TTS_PLAYBACK_PROCESS.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    TTS_PLAYBACK_PROCESS.kill()
+                break
+            time.sleep(0.05)
+        if TTS_PLAYBACK_PROCESS.returncode not in (0, None) and not TTS_STOP_EVENT.is_set():
+            raise subprocess.CalledProcessError(TTS_PLAYBACK_PROCESS.returncode, TTS_PLAYBACK_PROCESS.args)
     finally:
+        TTS_PLAYBACK_PROCESS = None
         if temp_path:
             try:
                 os.unlink(temp_path)
@@ -1363,6 +1375,20 @@ class VoiceAssistant:
         words = set(normalized.split())
         return any(word in words or normalized == word for word in self.voice_cancel_words)
 
+    def stop_tts(self) -> None:
+        """Stop any local/backend TTS playback that can be interrupted."""
+        TTS_STOP_EVENT.set()
+        try:
+            TTS_ENGINE.stop()
+        except Exception:
+            pass
+        process = TTS_PLAYBACK_PROCESS
+        if process and process.poll() is None:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+
     async def listen_for_voice_cancel_during_thinking(
         self,
         stop_event: threading.Event,
@@ -1544,6 +1570,7 @@ class VoiceAssistant:
         if self.tts_provider == "none":
             return False
 
+        TTS_STOP_EVENT.clear()
         if self.tts_provider == "pyttsx3":
             return self.text_to_speech_pyttsx3(text)
 
@@ -1556,6 +1583,7 @@ class VoiceAssistant:
             else:
                 try:
                     with TTS_LOCK:
+                        TTS_STOP_EVENT.clear()
                         audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
                         play_mp3_bytes(audio)
                     return True
@@ -1572,8 +1600,10 @@ class VoiceAssistant:
                     return self.text_to_speech_pyttsx3(text)
                 try:
                     with TTS_LOCK:
+                        TTS_STOP_EVENT.clear()
                         audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
-                        play(audio)
+                        audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
+                        play_mp3_bytes(audio_bytes)
                     return True
                 except Exception as e:
                     if local_tts_playback_available():
@@ -1600,6 +1630,7 @@ class VoiceAssistant:
 
         try:
             with TTS_LOCK:
+                TTS_STOP_EVENT.clear()
                 TTS_ENGINE.say(text)
                 TTS_ENGINE.runAndWait()
             return True
@@ -1686,6 +1717,10 @@ class VoiceAssistant:
         # Special commands
         if text.lower() in ["exit", "quit", "goodbye"]:
             return "Goodbye! Have a great day!"
+
+        if self.is_voice_cancel_phrase(text):
+            self.stop_tts()
+            return "D'accord, j'arrête."
 
         if text.lower() == "clear":
             if self.agent:
@@ -1842,6 +1877,7 @@ class VoiceAssistant:
                                 voice_cancel_detected = voice_cancel_task.result()
                         if self.web_monitor and self.web_monitor.pop_cancel_requested():
                             print("Web monitor cancel requested. Cancelling current command.")
+                            self.stop_tts()
                             process_task.cancel()
                             try:
                                 await process_task
@@ -1852,6 +1888,7 @@ class VoiceAssistant:
                             break
                         if voice_cancel_detected:
                             print("Voice cancel phrase detected. Cancelling current command.")
+                            self.stop_tts()
                             process_task.cancel()
                             try:
                                 await process_task
@@ -1863,6 +1900,7 @@ class VoiceAssistant:
                             break
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Cancelling current command.")
+                            self.stop_tts()
                             process_task.cancel()
                             try:
                                 await process_task
@@ -2631,6 +2669,7 @@ async def main():
                 ),
                 tts_handler=web_tts_handler,
             )
+            web_monitor.set_cancel_handler(assistant.stop_tts)
 
         return assistant
 
