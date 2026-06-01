@@ -56,6 +56,7 @@ FORCE_EXIT_REQUESTED = threading.Event()
 DEFAULT_ELEVENLABS_VOICE_ID = "1EmYoP3UnnnwhlJKovEy"  # french male; ZF6FPAbjXT4488VcRRnw = english female
 DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "alloy"
+DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 LOGGER = logging.getLogger(__name__)
 AUTO_ENV_ONLINE = Path(".env.online")
 AUTO_ENV_OFFLINE = Path(".env.offline")
@@ -446,6 +447,7 @@ class VoiceAssistant:
         mcp_prompt_sources: list[dict] | None = None,
         mcp_prompt_merge_mode: str = "append",
         mcp_agent_memory_enabled: bool = True,
+        mcp_agent_timeout_seconds: float = DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
         voice_cancel_during_thinking: bool = False,
         notes_dir: str | None = None,
         system_prompt: str | None = None,
@@ -480,6 +482,7 @@ class VoiceAssistant:
             mcp_prompt_sources: Optional ordered list of MCP prompt sources
             mcp_prompt_merge_mode: How to merge remote instructions: append or replace
             mcp_agent_memory_enabled: Whether MCPAgent should keep conversation memory
+            mcp_agent_timeout_seconds: Maximum seconds to wait for one LLM/MCP agent response
             voice_cancel_during_thinking: Listen for short spoken cancel words while the LLM/MCP agent is processing
             notes_dir: Directory for storing notes (default: temp dir)
             system_prompt: Optional custom system prompt for the assistant
@@ -555,6 +558,7 @@ class VoiceAssistant:
         self.mcp_prompt_sources = mcp_prompt_sources or []
         self.mcp_prompt_merge_mode = (mcp_prompt_merge_mode or "append").lower()
         self.mcp_agent_memory_enabled = mcp_agent_memory_enabled
+        self.mcp_agent_timeout_seconds = max(1.0, float(mcp_agent_timeout_seconds or DEFAULT_MCP_AGENT_TIMEOUT_SECONDS))
         self.mcp_client = None
         self.agent = None
         self.reload_event = reload_event
@@ -1624,8 +1628,13 @@ class VoiceAssistant:
         self.start_thinking_sound()
         try:
             agent_input = self._with_runtime_instructions(text)
-            response = await self.agent.run(agent_input)
+            response = await asyncio.wait_for(
+                self.agent.run(agent_input),
+                timeout=self.mcp_agent_timeout_seconds,
+            )
             return response
+        except asyncio.TimeoutError:
+            return "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple."
         except Exception as e:
             error_text = str(e)
             if "context_length_exceeded" in error_text or "maximum context length" in error_text:
@@ -2282,6 +2291,10 @@ async def main():
         mcp_config_path = env_optional("MCP_CONFIG")
         mcp_prompt_merge_mode = os.getenv("MCP_PROMPT_MERGE_MODE", "append").lower()
         mcp_agent_memory_enabled = env_bool("MCP_AGENT_MEMORY_ENABLED", True)
+        mcp_agent_timeout_seconds = env_float(
+            "MCP_AGENT_TIMEOUT_SECONDS",
+            DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
+        )
 
         if llm_provider not in {"openai", "ollama"}:
             print(f"Error: LLM_PROVIDER must be 'openai' or 'ollama', got: {llm_provider}")
@@ -2414,6 +2427,7 @@ async def main():
             mcp_load_server_prompt=env_bool("MCP_LOAD_SERVER_PROMPT", False),
             mcp_prompt_merge_mode=mcp_prompt_merge_mode,
             mcp_agent_memory_enabled=mcp_agent_memory_enabled,
+            mcp_agent_timeout_seconds=mcp_agent_timeout_seconds,
             voice_cancel_during_thinking=voice_cancel_during_thinking,
             system_prompt=system_prompt,
             reload_event=reload_event,
