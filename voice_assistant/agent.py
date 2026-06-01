@@ -190,7 +190,11 @@ CURRENT_STATE_QUERY_MARKERS = (
     "à combien",
 )
 DEFAULT_STT_PROMPT = (
-"You are a helpful voice assistant with access to various tools. Your name is Live Stage Assistant. Be precise, conservative, and tool-driven in your responses since they will be spoken aloud and have to be suitable for text-to-speech and API calls. Summarize your results. Reply in the same language as the user's latest request whenever possible. Use plain text only. Do not use emojis, emoticons, markdown, bullets, symbols, or decorative characters. Behave like a friendly calm and motivating assistant. Use conversation memory for context, preferences, and follow-up references, but not as the source of truth for live external state. When the user asks about the current state of anything outside this conversation, treat the answer as time-sensitive. Use the relevant MCP read tool before answering. Do not answer current external state from memory, previous tool results, or assumptions. If no suitable read tool is available, say that you cannot verify the current state and use only tools exposed by the MCP servers. "
+    "Commandes courtes en français pour une console de mixage. "
+    "Mots fréquents: mets, met, règle, baisse, monte, coupe, mute, active, réactive, "
+    "bus, retour, façade, dB, moins trois dB, Voc-Claude, snare, kick, Laurent. "
+    "Ne colle pas le verbe 'mets' au nom qui suit: écris 'mets Claude', 'mets Voc-Claude', 'mets snare'. "
+    "Garde les noms de pistes courts et précis."
 )
 FUSED_SET_COMMAND_RE = re.compile(r"^\s*(mets|met|me)([a-zà-ÿ][a-zà-ÿ0-9_-]{3,})(\b|$)", re.IGNORECASE)
 
@@ -2173,7 +2177,8 @@ async def main():
         current_cloud_tts_provider = cloud_tts_provider_from_values(values)
         current_tts_output = tts_output_from_values(values)
         current_wake_word = (values.get("WAKE_WORD") or "").strip()
-        current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip()
+        current_stt_prompt = (values.get("STT_PROMPT") or DEFAULT_STT_PROMPT).strip()
+        current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or "You are a helpful voice assistant with access to various tools. Your name is mcp-use. Be concise in your responses since they will be spoken aloud. Summarize your results. Behave like a great motivational speaker, and motivate me throughout the conversation.").strip()
         current_session_context_size = env_int_from_values(values, "SESSION_CONTEXT_SIZE", 6000)
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
@@ -2217,6 +2222,7 @@ async def main():
             "tts_outputs": TTS_OUTPUT_OPTIONS,
             "selected_tts_output": current_tts_output,
             "selected_wake_word": current_wake_word,
+            "selected_stt_prompt": current_stt_prompt,
             "selected_system_prompt": current_system_prompt,
             "selected_session_context_size": current_session_context_size,
             "voices": list_elevenlabs_voice_options(values),
@@ -2236,6 +2242,7 @@ async def main():
         cloud_tts_provider: str,
         tts_output: str,
         wake_word: str,
+        stt_prompt: str,
         system_prompt: str,
         session_context_size: int,
         voice_id: str,
@@ -2250,6 +2257,7 @@ async def main():
         cloud_tts_provider = (cloud_tts_provider or "").strip().lower()
         tts_output = (tts_output or "").strip().lower()
         wake_word = (wake_word or "").strip()
+        stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
         system_prompt = (system_prompt or "").strip()
         session_context_size = max(0, min(12000, int(session_context_size or 0)))
         voice_id = voice_id.strip()
@@ -2327,6 +2335,7 @@ async def main():
                 "TTS_PROVIDER": updated_tts_provider,
                 "WEB_TTS_PROVIDER": updated_web_tts_provider,
                 "WAKE_WORD": wake_word,
+                "STT_PROMPT": stt_prompt,
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
                 "SESSION_CONTEXT_SIZE": str(session_context_size),
                 "ELEVENLABS_VOICE_ID": voice_id,
@@ -2732,13 +2741,14 @@ async def main():
     if web_monitor:
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(env_file, provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, wake_word, system_prompt, session_context_size, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, wake_word, stt_prompt, system_prompt, session_context_size, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
                 env_file,
                 provider,
                 model,
                 cloud_tts_provider,
                 tts_output,
                 wake_word,
+                stt_prompt,
                 system_prompt,
                 session_context_size,
                 voice_id,

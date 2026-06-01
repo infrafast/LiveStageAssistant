@@ -93,7 +93,7 @@ class WebMonitor:
         self._stderr_original: TextIO | None = None
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
-        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]] | None = None
+        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
@@ -122,7 +122,7 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[[str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -365,6 +365,7 @@ class WebMonitor:
                     cloud_tts_provider = str(payload.get("cloud_tts_provider") or "").strip().lower()
                     tts_output = str(payload.get("tts_output") or "").strip().lower()
                     wake_word = str(payload.get("wake_word") or "").strip()
+                    stt_prompt = str(payload.get("stt_prompt") or "").strip()
                     system_prompt = str(payload.get("system_prompt") or "").strip()
                     try:
                         session_context_size = int(payload.get("session_context_size") or 0)
@@ -387,6 +388,7 @@ class WebMonitor:
                             cloud_tts_provider,
                             tts_output,
                             wake_word,
+                            stt_prompt,
                             system_prompt,
                             session_context_size,
                             voice_id,
@@ -1480,6 +1482,7 @@ INDEX_HTML = """<!doctype html>
       background: var(--surface-soft);
     }
     #logs { min-height: 360px; }
+    #stt-prompt,
     #assistant-system-prompt { min-height: 180px; }
     #prompt { min-height: 300px; }
     @media (max-width: 720px) {
@@ -1611,6 +1614,15 @@ INDEX_HTML = """<!doctype html>
         </section>
         <section>
           <details>
+            <summary>STT guide</summary>
+            <div class="field">
+              <label for="stt-prompt">STT_PROMPT</label>
+              <textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details>
             <summary>Other</summary>
             <div class="config-controls">
               <div class="field">
@@ -1663,6 +1675,7 @@ INDEX_HTML = """<!doctype html>
     const stateEl = document.querySelector("#state");
     const configEl = document.querySelector("#config");
     const logsEl = document.querySelector("#logs");
+    const sttPromptEl = document.querySelector("#stt-prompt");
     const assistantSystemPromptEl = document.querySelector("#assistant-system-prompt");
     const promptEl = document.querySelector("#prompt");
     const metaEl = document.querySelector("#meta");
@@ -2480,6 +2493,7 @@ INDEX_HTML = """<!doctype html>
       llmModel.disabled = true;
       sessionContextSize.disabled = true;
       wakeWord.disabled = true;
+      sttPromptEl.disabled = true;
       assistantSystemPromptEl.disabled = true;
       cloudTtsProvider.disabled = true;
       for (const input of ttsOutputInputs) input.disabled = true;
@@ -2508,6 +2522,7 @@ INDEX_HTML = """<!doctype html>
         }
         setSessionContextSize(data.selected_session_context_size || 0);
         wakeWord.value = data.selected_wake_word || "";
+        sttPromptEl.value = data.selected_stt_prompt || "";
         assistantSystemPromptEl.value = data.selected_system_prompt || "";
 
         cloudTtsProvider.replaceChildren();
@@ -2587,6 +2602,7 @@ INDEX_HTML = """<!doctype html>
         llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
         sessionContextSize.disabled = false;
         wakeWord.disabled = false;
+        sttPromptEl.disabled = false;
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
@@ -2811,6 +2827,7 @@ INDEX_HTML = """<!doctype html>
       const model = llmModel.value;
       const sessionContextSizeValue = Number(sessionContextSize.value || 0);
       const wakeWordValue = wakeWord.value.trim();
+      const sttPromptValue = sttPromptEl.value.trim();
       const systemPromptValue = assistantSystemPromptEl.value.trim();
       const cloudTtsProviderValue = cloudTtsProvider.value;
       const ttsOutputValue = selectedTtsOutput();
@@ -2833,6 +2850,7 @@ INDEX_HTML = """<!doctype html>
             cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,
             wake_word: wakeWordValue,
+            stt_prompt: sttPromptValue,
             system_prompt: systemPromptValue,
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
