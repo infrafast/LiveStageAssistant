@@ -93,7 +93,7 @@ class WebMonitor:
         self._stderr_original: TextIO | None = None
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
-        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, str, float], dict[str, Any]] | None = None
+        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, str, str, float], dict[str, Any]] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
         self._web_audio_tts_handler: Callable[[str], dict[str, Any]] | None = None
         self._started_at = time.time()
@@ -114,7 +114,7 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[[str, str, str, str, str, str, str, str, str, float], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -308,7 +308,7 @@ class WebMonitor:
                         self.send_error(503, "LLM configuration is not available")
                         return
 
-                    payload = self._read_json_body()
+                    payload = self._read_json_body(max_bytes=512 * 1024)
                     if payload is None:
                         return
 
@@ -320,6 +320,7 @@ class WebMonitor:
                     cloud_tts_provider = str(payload.get("cloud_tts_provider") or "").strip().lower()
                     tts_output = str(payload.get("tts_output") or "").strip().lower()
                     wake_word = str(payload.get("wake_word") or "").strip()
+                    system_prompt = str(payload.get("system_prompt") or "").strip()
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
@@ -336,6 +337,7 @@ class WebMonitor:
                             cloud_tts_provider,
                             tts_output,
                             wake_word,
+                            system_prompt,
                             voice_id,
                             thinking_sound_file,
                             openai_tts_voice,
@@ -947,9 +949,11 @@ INDEX_HTML = """<!doctype html>
       gap: 12px;
     }
     .tab-panel.active {
-      display: grid;
+      display: flex;
+      flex-direction: column;
     }
     section {
+      flex: 0 0 auto;
       border: 1px solid var(--border);
       border-radius: 8px;
       background: var(--surface);
@@ -1007,6 +1011,7 @@ INDEX_HTML = """<!doctype html>
       padding: 14px;
     }
     .field {
+      min-width: 0;
       display: grid;
       gap: 5px;
     }
@@ -1085,11 +1090,17 @@ INDEX_HTML = """<!doctype html>
       overflow-wrap: anywhere;
     }
     .config-footer {
+      flex: 0 0 auto;
       display: flex;
       justify-content: flex-end;
       align-items: center;
       gap: 12px;
       padding: 10px 14px 14px;
+    }
+    .prompt-fields {
+      display: grid;
+      gap: 14px;
+      padding: 14px;
     }
     textarea.inspect {
       display: block;
@@ -1099,12 +1110,16 @@ INDEX_HTML = """<!doctype html>
       border: 0;
       border-top: 1px solid var(--border);
       padding: 12px;
-      background: var(--surface-soft);
+      background: var(--surface);
       color: var(--text);
       font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       outline: none;
     }
+    textarea.inspect[readonly] {
+      background: var(--surface-soft);
+    }
     #logs { min-height: 360px; }
+    #assistant-system-prompt { min-height: 180px; }
     #prompt { min-height: 300px; }
     @media (max-width: 720px) {
       .topbar { padding-inline: 12px; }
@@ -1162,26 +1177,12 @@ INDEX_HTML = """<!doctype html>
             <textarea class="inspect" id="logs" readonly spellcheck="false"></textarea>
           </details>
         </section>
-        <section>
-          <details>
-            <summary>Prompt</summary>
-            <textarea class="inspect" id="prompt" readonly spellcheck="false"></textarea>
-          </details>
-        </section>
       </div>
       <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
         <section>
           <details open>
             <summary>STT/TTS</summary>
             <div class="config-controls">
-              <div class="field">
-                <label for="llm-provider">Provider</label>
-                <select id="llm-provider"></select>
-              </div>
-              <div class="field">
-                <label for="llm-model">LLM</label>
-                <select id="llm-model"></select>
-              </div>
               <div class="field">
                 <label for="wake-word">Wake Word</label>
                 <input id="wake-word" type="text" placeholder="Disabled">
@@ -1210,9 +1211,46 @@ INDEX_HTML = """<!doctype html>
                 <label for="openai-tts-speed">TTS Speed <span id="openai-tts-speed-label">1.0x</span></label>
                 <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
               </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details open>
+            <summary>IA model</summary>
+            <div class="config-controls">
+              <div class="field">
+                <label for="llm-provider">Provider</label>
+                <select id="llm-provider"></select>
+              </div>
+              <div class="field">
+                <label for="llm-model">LLM</label>
+                <select id="llm-model"></select>
+              </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details>
+            <summary>Other</summary>
+            <div class="config-controls">
               <div class="field">
                 <label for="thinking-sound">Thinking Sound</label>
                 <select id="thinking-sound"></select>
+              </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details>
+            <summary>Prompt</summary>
+            <div class="prompt-fields">
+              <div class="field">
+                <label for="assistant-system-prompt">ASSISTANT_SYSTEM_PROMPT</label>
+                <textarea class="inspect" id="assistant-system-prompt" spellcheck="false"></textarea>
+              </div>
+              <div class="field">
+                <label for="prompt">Final Prompt</label>
+                <textarea class="inspect" id="prompt" readonly spellcheck="false"></textarea>
               </div>
             </div>
           </details>
@@ -1235,6 +1273,7 @@ INDEX_HTML = """<!doctype html>
     const stateEl = document.querySelector("#state");
     const configEl = document.querySelector("#config");
     const logsEl = document.querySelector("#logs");
+    const assistantSystemPromptEl = document.querySelector("#assistant-system-prompt");
     const promptEl = document.querySelector("#prompt");
     const metaEl = document.querySelector("#meta");
     const messagesEl = document.querySelector("#messages");
@@ -1877,6 +1916,7 @@ INDEX_HTML = """<!doctype html>
       llmProvider.disabled = true;
       llmModel.disabled = true;
       wakeWord.disabled = true;
+      assistantSystemPromptEl.disabled = true;
       cloudTtsProvider.disabled = true;
       for (const input of ttsOutputInputs) input.disabled = true;
       elevenlabsVoice.disabled = true;
@@ -1903,6 +1943,7 @@ INDEX_HTML = """<!doctype html>
           llmProvider.value = selectedProvider;
         }
         wakeWord.value = data.selected_wake_word || "";
+        assistantSystemPromptEl.value = data.selected_system_prompt || "";
 
         cloudTtsProvider.replaceChildren();
         const selectedCloudTtsProvider = data.selected_cloud_tts_provider || "";
@@ -1980,6 +2021,7 @@ INDEX_HTML = """<!doctype html>
         llmProvider.disabled = false;
         llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
         wakeWord.disabled = false;
+        assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
         syncTtsProviderControls();
@@ -2119,6 +2161,7 @@ INDEX_HTML = """<!doctype html>
       const provider = llmProvider.value;
       const model = llmModel.value;
       const wakeWordValue = wakeWord.value.trim();
+      const systemPromptValue = assistantSystemPromptEl.value.trim();
       const cloudTtsProviderValue = cloudTtsProvider.value;
       const ttsOutputValue = selectedTtsOutput();
       const voiceId = elevenlabsVoice.value;
@@ -2139,6 +2182,7 @@ INDEX_HTML = """<!doctype html>
             cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,
             wake_word: wakeWordValue,
+            system_prompt: systemPromptValue,
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
             openai_tts_voice: openAiTtsVoiceValue,

@@ -1910,6 +1910,19 @@ async def main():
         except (OSError, json.JSONDecodeError):
             return None
 
+    def format_env_value(value: str) -> str:
+        """Format an env value so python-dotenv can parse it back safely."""
+        value = str(value)
+        if re.fullmatch(r"[A-Za-z0-9_./:@+-]*", value):
+            return value
+        escaped = (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        )
+        return f'"{escaped}"'
+
     def update_env_file_values(env_file: Path, updates: dict[str, str]) -> None:
         """Update or append KEY=value pairs in an env file while preserving other lines."""
         try:
@@ -1928,7 +1941,7 @@ async def main():
             key = line.split("=", 1)[0].strip()
             if key in remaining:
                 newline = "\n" if line.endswith("\n") else ""
-                updated_lines.append(f"{key}={remaining.pop(key)}{newline}")
+                updated_lines.append(f"{key}={format_env_value(remaining.pop(key))}{newline}")
             else:
                 updated_lines.append(line)
 
@@ -1936,7 +1949,7 @@ async def main():
             if updated_lines and not updated_lines[-1].endswith("\n"):
                 updated_lines[-1] += "\n"
             for key, value in remaining.items():
-                updated_lines.append(f"{key}={value}\n")
+                updated_lines.append(f"{key}={format_env_value(value)}\n")
 
         try:
             env_file.write_text("".join(updated_lines))
@@ -2010,6 +2023,7 @@ async def main():
         current_cloud_tts_provider = cloud_tts_provider_from_values(values)
         current_tts_output = tts_output_from_values(values)
         current_wake_word = (values.get("WAKE_WORD") or "").strip()
+        current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip()
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
@@ -2052,6 +2066,7 @@ async def main():
             "tts_outputs": TTS_OUTPUT_OPTIONS,
             "selected_tts_output": current_tts_output,
             "selected_wake_word": current_wake_word,
+            "selected_system_prompt": current_system_prompt,
             "voices": list_elevenlabs_voice_options(values),
             "selected_voice_id": current_voice_id,
             "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
@@ -2069,6 +2084,7 @@ async def main():
         cloud_tts_provider: str,
         tts_output: str,
         wake_word: str,
+        system_prompt: str,
         voice_id: str,
         thinking_sound_file: str,
         openai_tts_voice: str,
@@ -2081,6 +2097,7 @@ async def main():
         cloud_tts_provider = (cloud_tts_provider or "").strip().lower()
         tts_output = (tts_output or "").strip().lower()
         wake_word = (wake_word or "").strip()
+        system_prompt = (system_prompt or "").strip()
         voice_id = voice_id.strip()
         thinking_sound_file = thinking_sound_file.strip()
         openai_tts_voice = (openai_tts_voice or "").strip()
@@ -2156,6 +2173,7 @@ async def main():
                 "TTS_PROVIDER": updated_tts_provider,
                 "WEB_TTS_PROVIDER": updated_web_tts_provider,
                 "WAKE_WORD": wake_word,
+                "ASSISTANT_SYSTEM_PROMPT": system_prompt,
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
                 "WEB_TTS_VOICE": openai_tts_voice,
@@ -2187,6 +2205,7 @@ async def main():
             "cloud_tts_provider": cloud_tts_provider,
             "tts_output": tts_output,
             "wake_word": wake_word,
+            "system_prompt": system_prompt,
             "voice_id": voice_id,
             "thinking_sound_file": thinking_sound_file,
             "openai_tts_voice": openai_tts_voice,
@@ -2494,13 +2513,14 @@ async def main():
     if web_monitor:
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(env_file, provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, wake_word, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, wake_word, system_prompt, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
                 env_file,
                 provider,
                 model,
                 cloud_tts_provider,
                 tts_output,
                 wake_word,
+                system_prompt,
                 voice_id,
                 thinking_sound_file,
                 openai_tts_voice,
