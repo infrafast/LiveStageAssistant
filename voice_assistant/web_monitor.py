@@ -917,15 +917,11 @@ INDEX_HTML = """<!doctype html>
     .session-menu-button {
       width: 32px;
       border: 0;
-      border-left: 1px solid transparent;
       border-radius: 0 8px 8px 0;
       background: transparent;
       color: var(--muted);
       font-weight: 700;
       letter-spacing: 0;
-    }
-    .session-row.active .session-menu-button {
-      border-left-color: var(--border);
     }
     .session-menu-button:hover,
     .session-main:hover {
@@ -1788,11 +1784,14 @@ INDEX_HTML = """<!doctype html>
 
     function sessionButton(session, activeId) {
       const active = session.id === activeId ? " active" : "";
-      const count = Number(session.message_count || 0);
+      const summaryTime = Number(session.llm_summary_updated_at || 0);
+      const summaryLabel = summaryTime
+        ? new Date(summaryTime * 1000).toLocaleString("fr-FR")
+        : "No summary";
       return `<div class="session-row${active}" data-session-id="${escapeHtml(session.id)}" data-session-title="${escapeHtml(session.title || "Untitled session")}">
         <button class="session-main" type="button">
           <span class="session-title">${escapeHtml(session.title || "Untitled session")}</span>
-          <span class="session-meta">${count} message${count === 1 ? "" : "s"}</span>
+          <span class="session-meta">${escapeHtml(summaryLabel)}</span>
         </button>
         <button class="session-menu-button" type="button" title="Session actions" aria-label="Session actions">...</button>
         <div class="session-menu">

@@ -97,6 +97,7 @@ class SessionContextStore:
                     "message_count": len(data.get("messages") or []),
                     "summary": data.get("summary") or "",
                     "llm_summary": data.get("llm_summary") or "",
+                    "llm_summary_updated_at": data.get("llm_summary_updated_at"),
                 }
             )
         sessions.sort(key=lambda item: float(item.get("updated_at") or 0), reverse=True)
