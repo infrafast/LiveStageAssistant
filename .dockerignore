@@ -23,6 +23,7 @@ logs/
 recordings/
 audio_files/
 voice_assistant_notes/
+.contexts/
 .mcp/
 mcp_sessions/
 mcp_cache/

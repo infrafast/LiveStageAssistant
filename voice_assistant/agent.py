@@ -45,9 +45,11 @@ from pydantic import AnyUrl
 
 try:
     from .web_monitor import WebMonitor, build_service_state
+    from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .wake_word import apply_wake_word, parse_wake_words
 except ImportError:
     from web_monitor import WebMonitor, build_service_state
+    from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from wake_word import apply_wake_word, parse_wake_words
 
 TTS_ENGINE = pyttsx3.init()
@@ -58,6 +60,7 @@ DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "alloy"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 LOGGER = logging.getLogger(__name__)
+logging.getLogger("mcp_use").propagate = False
 AUTO_ENV_ONLINE = Path(".env.online")
 AUTO_ENV_OFFLINE = Path(".env.offline")
 AUTO_CONNECTIVITY_HOST = "api.openai.com"
@@ -448,6 +451,8 @@ class VoiceAssistant:
         mcp_prompt_merge_mode: str = "append",
         mcp_agent_memory_enabled: bool = True,
         mcp_agent_timeout_seconds: float = DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
+        session_context_store: SessionContextStore | None = None,
+        session_context_size: int = 6000,
         voice_cancel_during_thinking: bool = False,
         notes_dir: str | None = None,
         system_prompt: str | None = None,
@@ -483,6 +488,8 @@ class VoiceAssistant:
             mcp_prompt_merge_mode: How to merge remote instructions: append or replace
             mcp_agent_memory_enabled: Whether MCPAgent should keep conversation memory
             mcp_agent_timeout_seconds: Maximum seconds to wait for one LLM/MCP agent response
+            session_context_store: Persistent chat session store
+            session_context_size: Maximum active session summary characters injected into each LLM/MCP turn; 0 disables injection
             voice_cancel_during_thinking: Listen for short spoken cancel words while the LLM/MCP agent is processing
             notes_dir: Directory for storing notes (default: temp dir)
             system_prompt: Optional custom system prompt for the assistant
@@ -559,6 +566,8 @@ class VoiceAssistant:
         self.mcp_prompt_merge_mode = (mcp_prompt_merge_mode or "append").lower()
         self.mcp_agent_memory_enabled = mcp_agent_memory_enabled
         self.mcp_agent_timeout_seconds = max(1.0, float(mcp_agent_timeout_seconds or DEFAULT_MCP_AGENT_TIMEOUT_SECONDS))
+        self.session_context_store = session_context_store
+        self.session_context_size = max(0, int(session_context_size or 0))
         self.mcp_client = None
         self.agent = None
         self.reload_event = reload_event
@@ -587,6 +596,11 @@ class VoiceAssistant:
         )
         self.system_prompt = f"{base_system_prompt.rstrip()} {EXTERNAL_STATE_FRESHNESS_RULE}"
         if self.web_monitor:
+            if self.session_context_store:
+                self.web_monitor.set_context_state(
+                    self.session_context_store.snapshot(),
+                    session_context_size=self.session_context_size,
+                )
             self.web_monitor.update(prompt=self.system_prompt)
 
         # Create a proper notes directory
@@ -1608,6 +1622,13 @@ class VoiceAssistant:
     async def process_command(self, text: str) -> str:
         """Process user command with MCP agent."""
         print(f"\nYou said: {text}")
+        if self.session_context_store:
+            self.session_context_store.append_message("user", text)
+            if self.web_monitor:
+                self.web_monitor.set_context_state(
+                    self.session_context_store.snapshot(),
+                    session_context_size=self.session_context_size,
+                )
         if self.web_monitor:
             self.web_monitor.append_dialogue("user", text)
             self.web_monitor.set_assistant_busy(True)
@@ -1619,6 +1640,14 @@ class VoiceAssistant:
         if text.lower() == "clear":
             if self.agent:
                 self.agent.clear_conversation_history()
+            if self.session_context_store:
+                self.session_context_store.clear_current()
+                if self.web_monitor:
+                    self.web_monitor.replace_dialogue(self.session_context_store.snapshot().get("messages") or [])
+                    self.web_monitor.set_context_state(
+                        self.session_context_store.snapshot(),
+                        session_context_size=self.session_context_size,
+                    )
             return "Conversation history cleared."
 
         # Process with MCP agent
@@ -1653,6 +1682,13 @@ class VoiceAssistant:
 
     def _with_runtime_instructions(self, text: str) -> str:
         instructions = [MIXER_TARGET_RESOLUTION_RULE, TOOL_ACTION_FRESHNESS_RULE]
+        if self.session_context_size > 0 and self.session_context_store:
+            session_context = self.session_context_store.context_text(
+                exclude_last_user=True,
+                max_chars=self.session_context_size,
+            )
+            if session_context:
+                instructions.append(session_context)
         if not self._looks_like_current_external_state_query(text):
             return f"{text}\n\n" + "\n".join(instructions)
 
@@ -1806,6 +1842,13 @@ class VoiceAssistant:
                     return "reload"
 
                 print(f"\nAssistant: {response}")
+                if self.session_context_store:
+                    self.session_context_store.append_message("assistant", response)
+                    if self.web_monitor:
+                        self.web_monitor.set_context_state(
+                            self.session_context_store.snapshot(),
+                            session_context_size=self.session_context_size,
+                        )
                 if self.web_monitor:
                     self.web_monitor.append_dialogue("assistant", response)
                     self.web_monitor.set_assistant_busy(False)
@@ -1886,6 +1929,15 @@ async def main():
             return default
         try:
             return float(str(value).strip())
+        except ValueError:
+            return default
+
+    def env_int_from_values(values: dict, name: str, default: int) -> int:
+        value = values.get(name)
+        if value is None or str(value).strip() == "":
+            return default
+        try:
+            return int(str(value).strip())
         except ValueError:
             return default
 
@@ -2033,6 +2085,7 @@ async def main():
         current_tts_output = tts_output_from_values(values)
         current_wake_word = (values.get("WAKE_WORD") or "").strip()
         current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip()
+        current_session_context_size = env_int_from_values(values, "SESSION_CONTEXT_SIZE", 6000)
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
@@ -2076,6 +2129,7 @@ async def main():
             "selected_tts_output": current_tts_output,
             "selected_wake_word": current_wake_word,
             "selected_system_prompt": current_system_prompt,
+            "selected_session_context_size": current_session_context_size,
             "voices": list_elevenlabs_voice_options(values),
             "selected_voice_id": current_voice_id,
             "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
@@ -2094,6 +2148,7 @@ async def main():
         tts_output: str,
         wake_word: str,
         system_prompt: str,
+        session_context_size: int,
         voice_id: str,
         thinking_sound_file: str,
         openai_tts_voice: str,
@@ -2107,6 +2162,7 @@ async def main():
         tts_output = (tts_output or "").strip().lower()
         wake_word = (wake_word or "").strip()
         system_prompt = (system_prompt or "").strip()
+        session_context_size = max(0, min(12000, int(session_context_size or 0)))
         voice_id = voice_id.strip()
         thinking_sound_file = thinking_sound_file.strip()
         openai_tts_voice = (openai_tts_voice or "").strip()
@@ -2183,6 +2239,7 @@ async def main():
                 "WEB_TTS_PROVIDER": updated_web_tts_provider,
                 "WAKE_WORD": wake_word,
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
+                "SESSION_CONTEXT_SIZE": str(session_context_size),
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
                 "WEB_TTS_VOICE": openai_tts_voice,
@@ -2215,6 +2272,7 @@ async def main():
             "tts_output": tts_output,
             "wake_word": wake_word,
             "system_prompt": system_prompt,
+            "session_context_size": session_context_size,
             "voice_id": voice_id,
             "thinking_sound_file": thinking_sound_file,
             "openai_tts_voice": openai_tts_voice,
@@ -2295,6 +2353,8 @@ async def main():
             "MCP_AGENT_TIMEOUT_SECONDS",
             DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
         )
+        session_context_dir = os.getenv("SESSION_CONTEXT_DIR", str(DEFAULT_CONTEXT_DIR)).strip() or str(DEFAULT_CONTEXT_DIR)
+        session_context_size = max(0, min(12000, env_int("SESSION_CONTEXT_SIZE", 6000)))
 
         if llm_provider not in {"openai", "ollama"}:
             print(f"Error: LLM_PROVIDER must be 'openai' or 'ollama', got: {llm_provider}")
@@ -2331,6 +2391,7 @@ async def main():
             print(f"Using web audio: STT={web_stt_provider}, TTS={web_tts_provider}")
         print(f"Using wake word: {', '.join(wake_words) if wake_words else 'disabled'}")
         print(f"Using MCP agent memory: {mcp_agent_memory_enabled}")
+        print(f"Using session context size: {session_context_size} ({session_context_dir})")
 
         web_audio_needs_openai = web_audio_enabled and (
             web_stt_provider == "openai" or web_tts_provider == "openai"
@@ -2386,6 +2447,11 @@ async def main():
                 print(f"Error: invalid JSON in MCP_CONFIG '{mcp_config_path}': {e}")
                 sys.exit(1)
 
+        session_context_store = SessionContextStore(
+            session_context_dir,
+            summary_max_chars=DEFAULT_SUMMARY_MAX_CHARS,
+        )
+
         if web_monitor:
             env_values = dict(dotenv_values(env_file))
             internet_status = env_file == AUTO_ENV_ONLINE if auto_env_mode else "unknown"
@@ -2404,6 +2470,11 @@ async def main():
                 ),
                 web_audio=web_audio_state,
                 thinking_sound_file=thinking_sound_file,
+            )
+            web_monitor.replace_dialogue(session_context_store.snapshot().get("messages") or [])
+            web_monitor.set_context_state(
+                session_context_store.snapshot(),
+                session_context_size=session_context_size,
             )
 
         assistant = VoiceAssistant(
@@ -2428,6 +2499,8 @@ async def main():
             mcp_prompt_merge_mode=mcp_prompt_merge_mode,
             mcp_agent_memory_enabled=mcp_agent_memory_enabled,
             mcp_agent_timeout_seconds=mcp_agent_timeout_seconds,
+            session_context_store=session_context_store,
+            session_context_size=session_context_size,
             voice_cancel_during_thinking=voice_cancel_during_thinking,
             system_prompt=system_prompt,
             reload_event=reload_event,
@@ -2435,6 +2508,33 @@ async def main():
         )
 
         if web_monitor:
+            def session_context_response() -> dict[str, Any]:
+                snapshot = session_context_store.snapshot()
+                web_monitor.replace_dialogue(snapshot.get("messages") or [])
+                web_monitor.set_context_state(
+                    snapshot,
+                    session_context_size=assistant.session_context_size,
+                )
+                return snapshot
+
+            def select_session_context(session_id: str) -> dict[str, Any]:
+                session_context_store.select_session(session_id)
+                if assistant.agent:
+                    assistant.agent.clear_conversation_history()
+                return session_context_response()
+
+            def new_session_context(title: str | None = None) -> dict[str, Any]:
+                session_context_store.new_session(title)
+                if assistant.agent:
+                    assistant.agent.clear_conversation_history()
+                return session_context_response()
+
+            web_monitor.set_session_context_handlers(
+                list_handler=session_context_response,
+                new_handler=new_session_context,
+                select_handler=select_session_context,
+            )
+
             if web_audio_state["tts_enabled"] and web_tts_provider == "openai" and assistant.openai_client is None:
                 assistant.openai_client = openai.OpenAI(api_key=openai_api_key)
             if web_audio_state["tts_enabled"] and web_tts_provider == "elevenlabs" and assistant.elevenlabs_client is None:
@@ -2527,7 +2627,7 @@ async def main():
     if web_monitor:
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(env_file, provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, wake_word, system_prompt, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, wake_word, system_prompt, session_context_size, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
                 env_file,
                 provider,
                 model,
@@ -2535,6 +2635,7 @@ async def main():
                 tts_output,
                 wake_word,
                 system_prompt,
+                session_context_size,
                 voice_id,
                 thinking_sound_file,
                 openai_tts_voice,

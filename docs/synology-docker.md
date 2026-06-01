@@ -57,7 +57,7 @@ Edit `container/config/.env.infrafast`.
 Keep `container/config/mcp_servers.synology.json` in the same folder.
 Put API keys in the two text files. You can leave the ElevenLabs file empty only when neither `CLOUD_TTS_PROVIDER=elevenlabs` nor `WEB_TTS_PROVIDER=elevenlabs` is used.
 
-The compose file mounts `./container/config` to `/config:ro` and `./container/data` to `/data`. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself.
+The compose file mounts `./container/config` to `/config:ro` and `./container/data` to `/data`. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Persisted web chat sessions should use a writable mounted path such as `SESSION_CONTEXT_DIR=/data/contexts`.
 
 ## XMSeries-MCP
 
@@ -126,6 +126,8 @@ WEB_AUDIO_ENABLED=true
 WEB_TTS_PROVIDER=openai
 STT_PROVIDER=openai-whisper
 LLM_PROVIDER=openai
+SESSION_CONTEXT_SIZE=6000
+SESSION_CONTEXT_DIR=/data/contexts
 ```
 
 In the web config, use `TTS Output = Browser` for this first-run shape. `Backend` is useful only when the container has usable speaker/audio passthrough; `Silent` sets both backend and browser TTS to `none`.

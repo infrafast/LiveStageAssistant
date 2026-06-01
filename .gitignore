@@ -223,6 +223,9 @@ pids
 OPENAI_API_KEY.txt
 ELEVENLABS_API_KEY.txt
 
+# Local persisted chat session contexts
+.contexts/
+
 # Other
 .history
 .swp

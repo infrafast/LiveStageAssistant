@@ -93,7 +93,10 @@ class WebMonitor:
         self._stderr_original: TextIO | None = None
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
-        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, str, str, float], dict[str, Any]] | None = None
+        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]] | None = None
+        self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
+        self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
+        self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
         self._web_audio_tts_handler: Callable[[str], dict[str, Any]] | None = None
         self._started_at = time.time()
@@ -105,6 +108,8 @@ class WebMonitor:
             "config": {},
             "config_text": "{}",
             "prompt": "",
+            "session_context": {"active_id": "", "sessions": [], "current": {}, "messages": []},
+            "session_context_size": 6000,
             "assistant_busy": False,
             "web_audio": {"enabled": False, "stt_enabled": False, "tts_enabled": False},
             "updated_at": time.time(),
@@ -114,12 +119,25 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[[str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
             self._llm_options_handler = options_handler
             self._llm_config_save_handler = save_handler
+
+    def set_session_context_handlers(
+        self,
+        *,
+        list_handler: Callable[[], dict[str, Any]],
+        new_handler: Callable[[str | None], dict[str, Any]],
+        select_handler: Callable[[str], dict[str, Any]],
+    ) -> None:
+        """Register callbacks used by the web UI to list/create/select chat sessions."""
+        with self._lock:
+            self._session_context_list_handler = list_handler
+            self._session_context_new_handler = new_handler
+            self._session_context_select_handler = select_handler
 
     def set_web_audio_handlers(
         self,
@@ -198,6 +216,9 @@ class WebMonitor:
                     if parsed.path == "/api/llm-options":
                         self._handle_llm_options(parsed.query)
                         return
+                    if parsed.path == "/api/session-context":
+                        self._handle_session_context_list()
+                        return
                     if parsed.path.startswith("/assets/"):
                         self._handle_asset(parsed.path)
                         return
@@ -218,6 +239,12 @@ class WebMonitor:
                         return
                     if self.path == "/api/llm-config":
                         self._handle_llm_config_save()
+                        return
+                    if self.path == "/api/session-context/new":
+                        self._handle_session_context_new()
+                        return
+                    if self.path == "/api/session-context/select":
+                        self._handle_session_context_select()
                         return
                     self.send_error(404)
 
@@ -321,6 +348,11 @@ class WebMonitor:
                     tts_output = str(payload.get("tts_output") or "").strip().lower()
                     wake_word = str(payload.get("wake_word") or "").strip()
                     system_prompt = str(payload.get("system_prompt") or "").strip()
+                    try:
+                        session_context_size = int(payload.get("session_context_size") or 0)
+                    except (TypeError, ValueError):
+                        self.send_error(400, "Session context size must be an integer")
+                        return
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
@@ -338,6 +370,7 @@ class WebMonitor:
                             tts_output,
                             wake_word,
                             system_prompt,
+                            session_context_size,
                             voice_id,
                             thinking_sound_file,
                             openai_tts_voice,
@@ -348,6 +381,56 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self.send_error(500, f"Could not save LLM configuration: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_session_context_list(self) -> None:
+                    handler = monitor._session_context_list_handler
+                    if handler is None:
+                        self.send_error(503, "Session context is not available")
+                        return
+                    try:
+                        result = handler()
+                    except Exception as e:
+                        self.send_error(500, f"Could not list session contexts: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_session_context_new(self) -> None:
+                    handler = monitor._session_context_new_handler
+                    if handler is None:
+                        self.send_error(503, "Session context is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    title = str(payload.get("title") or "").strip() or None
+                    try:
+                        result = handler(title)
+                    except Exception as e:
+                        self.send_error(500, f"Could not create session context: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_session_context_select(self) -> None:
+                    handler = monitor._session_context_select_handler
+                    if handler is None:
+                        self.send_error(503, "Session context is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    session_id = str(payload.get("id") or "").strip()
+                    if not session_id:
+                        self.send_error(400, "Session id is required")
+                        return
+                    try:
+                        result = handler(session_id)
+                    except ValueError as e:
+                        self.send_error(404, str(e))
+                        return
+                    except Exception as e:
+                        self.send_error(500, f"Could not select session context: {e}")
                         return
                     self._send_json(result)
 
@@ -527,6 +610,40 @@ class WebMonitor:
                 self._messages.popleft()
             self._snapshot["updated_at"] = time.time()
 
+    def replace_dialogue(self, messages: list[dict[str, Any]]) -> None:
+        with self._lock:
+            self._messages.clear()
+            next_id = 1
+            for message in messages[-self.max_messages :]:
+                text = str(message.get("text") or "").strip()
+                if not text:
+                    continue
+                role = message.get("role") if message.get("role") in {"user", "assistant"} else "assistant"
+                message_id = int(message.get("id") or next_id)
+                self._messages.append(
+                    {
+                        "id": message_id,
+                        "role": role,
+                        "text": text,
+                        "created_at": float(message.get("created_at") or time.time()),
+                    }
+                )
+                next_id = max(next_id, message_id + 1)
+            self._next_message_id = next_id
+            self._snapshot["updated_at"] = time.time()
+
+    def set_context_state(
+        self,
+        session_context: dict[str, Any],
+        *,
+        session_context_size: int | None = None,
+    ) -> None:
+        with self._lock:
+            self._snapshot["session_context"] = session_context
+            if session_context_size is not None:
+                self._snapshot["session_context_size"] = session_context_size
+            self._snapshot["updated_at"] = time.time()
+
     def set_assistant_busy(self, busy: bool) -> None:
         with self._lock:
             self._snapshot["assistant_busy"] = busy
@@ -671,6 +788,61 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       grid-template-rows: auto minmax(0, 1fr) auto;
     }
+    .main-layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+    }
+    .session-sidebar {
+      min-height: 0;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: var(--surface-soft);
+      padding: 12px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 10px;
+    }
+    .session-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-weight: 650;
+    }
+    .session-list {
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      align-content: start;
+      gap: 6px;
+    }
+    .session-item {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 8px 9px;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      display: grid;
+      gap: 2px;
+    }
+    .session-item.active {
+      border-color: var(--border);
+      background: var(--surface);
+    }
+    .session-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 650;
+    }
+    .session-meta {
+      color: var(--muted);
+      font-size: 11px;
+    }
     .topbar {
       min-height: 58px;
       display: flex;
@@ -711,6 +883,15 @@ INDEX_HTML = """<!doctype html>
     }
     .icon-button:hover {
       background: var(--surface-soft);
+    }
+    .small-button {
+      min-height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 10px;
+      background: var(--surface);
+      color: var(--text);
+      font-weight: 650;
     }
     .chat-scroll {
       min-height: 0;
@@ -1123,6 +1304,12 @@ INDEX_HTML = """<!doctype html>
     #prompt { min-height: 300px; }
     @media (max-width: 720px) {
       .topbar { padding-inline: 12px; }
+      .main-layout { grid-template-columns: 1fr; }
+      .session-sidebar {
+        max-height: 140px;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
       .bubble { max-width: 88%; }
       .overlay { padding: 8px; }
       .settings-panel { height: 100%; }
@@ -1140,8 +1327,17 @@ INDEX_HTML = """<!doctype html>
       <button class="icon-button" id="settings-open" type="button" title="Settings" aria-label="Settings">&#9881;</button>
     </header>
 
-    <main class="chat-scroll" id="chat-scroll">
-      <div class="messages" id="messages"></div>
+    <main class="main-layout">
+      <aside class="session-sidebar" aria-label="Sessions">
+        <div class="session-header">
+          <span>Sessions</span>
+          <button class="small-button" id="session-new" type="button" title="New session" aria-label="New session">+</button>
+        </div>
+        <div class="session-list" id="session-list"></div>
+      </aside>
+      <div class="chat-scroll" id="chat-scroll">
+        <div class="messages" id="messages"></div>
+      </div>
     </main>
 
     <div class="composer-wrap">
@@ -1226,6 +1422,10 @@ INDEX_HTML = """<!doctype html>
                 <label for="llm-model">LLM</label>
                 <select id="llm-model"></select>
               </div>
+              <div class="field">
+                <label for="session-context-size">Session Context <span id="session-context-size-label">6000</span></label>
+                <input id="session-context-size" type="range" min="0" max="12000" step="500" value="6000">
+              </div>
             </div>
           </details>
         </section>
@@ -1278,6 +1478,8 @@ INDEX_HTML = """<!doctype html>
     const metaEl = document.querySelector("#meta");
     const messagesEl = document.querySelector("#messages");
     const chatScroll = document.querySelector("#chat-scroll");
+    const sessionList = document.querySelector("#session-list");
+    const sessionNew = document.querySelector("#session-new");
     const injectForm = document.querySelector("#inject-form");
     const injectCommand = document.querySelector("#inject-command");
     const injectSubmit = document.querySelector("#inject-submit");
@@ -1290,6 +1492,8 @@ INDEX_HTML = """<!doctype html>
     const panels = Array.from(document.querySelectorAll(".tab-panel"));
     const llmProvider = document.querySelector("#llm-provider");
     const llmModel = document.querySelector("#llm-model");
+    const sessionContextSize = document.querySelector("#session-context-size");
+    const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
     const wakeWord = document.querySelector("#wake-word");
     const cloudTtsProvider = document.querySelector("#cloud-tts-provider");
     const ttsOutputInputs = Array.from(document.querySelectorAll('input[name="tts-output"]'));
@@ -1370,6 +1574,37 @@ INDEX_HTML = """<!doctype html>
       return `<div class="message-row ${role}${pending}">
         <div class="bubble">${escapeHtml(message.text)}</div>
       </div>`;
+    }
+
+    function sessionButton(session, activeId) {
+      const active = session.id === activeId ? " active" : "";
+      const count = Number(session.message_count || 0);
+      return `<button class="session-item${active}" type="button" data-session-id="${escapeHtml(session.id)}">
+        <span class="session-title">${escapeHtml(session.title || "Untitled session")}</span>
+        <span class="session-meta">${count} message${count === 1 ? "" : "s"}</span>
+      </button>`;
+    }
+
+    function renderSessions(sessionContext) {
+      const context = sessionContext || {};
+      const sessions = context.sessions || [];
+      const activeId = context.active_id || "";
+      if (sessions.length === 0) {
+        sessionList.innerHTML = `<div class="session-meta">No session</div>`;
+        return;
+      }
+      sessionList.innerHTML = sessions.map((session) => sessionButton(session, activeId)).join("");
+    }
+
+    function syncSessionContextSizeLabel() {
+      const value = Number(sessionContextSize.value || 0);
+      sessionContextSizeLabel.textContent = value === 0 ? "Off" : String(value);
+    }
+
+    function setSessionContextSize(value) {
+      const nextValue = Math.max(0, Math.min(12000, Number(value || 0)));
+      sessionContextSize.value = String(nextValue);
+      syncSessionContextSizeLabel();
     }
 
     function thinkingBubble() {
@@ -1915,6 +2150,7 @@ INDEX_HTML = """<!doctype html>
       llmOptionsLoading = true;
       llmProvider.disabled = true;
       llmModel.disabled = true;
+      sessionContextSize.disabled = true;
       wakeWord.disabled = true;
       assistantSystemPromptEl.disabled = true;
       cloudTtsProvider.disabled = true;
@@ -1942,6 +2178,7 @@ INDEX_HTML = """<!doctype html>
         if (selectedProvider && llmProvider.value !== selectedProvider) {
           llmProvider.value = selectedProvider;
         }
+        setSessionContextSize(data.selected_session_context_size || 0);
         wakeWord.value = data.selected_wake_word || "";
         assistantSystemPromptEl.value = data.selected_system_prompt || "";
 
@@ -2020,6 +2257,7 @@ INDEX_HTML = """<!doctype html>
       } finally {
         llmProvider.disabled = false;
         llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
+        sessionContextSize.disabled = false;
         wakeWord.disabled = false;
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
@@ -2055,6 +2293,10 @@ INDEX_HTML = """<!doctype html>
         configEl.value = data.config_text || "";
         syncLlmControls(data);
         promptEl.value = data.prompt || "";
+        renderSessions(data.session_context || {});
+        if (!settingsOverlay.classList.contains("open")) {
+          setSessionContextSize(data.session_context_size || 0);
+        }
         const shouldStick = logsEl.scrollTop + logsEl.clientHeight >= logsEl.scrollHeight - 8;
         logsEl.value = data.logs || "";
         if (shouldStick) logsEl.scrollTop = logsEl.scrollHeight;
@@ -2134,6 +2376,40 @@ INDEX_HTML = """<!doctype html>
       setConversationEnabled(!conversationEnabled);
     });
 
+    sessionNew.addEventListener("click", async () => {
+      try {
+        const response = await fetch("/api/session-context/new", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        if (!response.ok) throw new Error(await response.text());
+        pendingMessages = [];
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `new session failed: ${error}`;
+      }
+    });
+
+    sessionList.addEventListener("click", async (event) => {
+      const button = event.target.closest(".session-item");
+      if (!button || composerLocked) return;
+      const sessionId = button.dataset.sessionId;
+      if (!sessionId) return;
+      try {
+        const response = await fetch("/api/session-context/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        pendingMessages = [];
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `session switch failed: ${error}`;
+      }
+    });
+
     settingsOpen.addEventListener("click", () => setSettingsOpen(true));
     settingsClose.addEventListener("click", () => setSettingsOpen(false));
     settingsOverlay.addEventListener("click", (event) => {
@@ -2156,10 +2432,12 @@ INDEX_HTML = """<!doctype html>
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
     }
+    sessionContextSize.addEventListener("input", syncSessionContextSizeLabel);
 
     llmSave.addEventListener("click", async () => {
       const provider = llmProvider.value;
       const model = llmModel.value;
+      const sessionContextSizeValue = Number(sessionContextSize.value || 0);
       const wakeWordValue = wakeWord.value.trim();
       const systemPromptValue = assistantSystemPromptEl.value.trim();
       const cloudTtsProviderValue = cloudTtsProvider.value;
@@ -2179,6 +2457,7 @@ INDEX_HTML = """<!doctype html>
           body: JSON.stringify({
             provider,
             model,
+            session_context_size: sessionContextSizeValue,
             cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,
             wake_word: wakeWordValue,

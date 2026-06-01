@@ -46,8 +46,8 @@ For developpers: https://deepwiki.com/infrafast/LiveStageAssistant
 - 🌐 **Multiple Model Providers**: Works with OpenAI or local Ollama models that support tool calling
 - 🛠️ **Multi-Tool Integration**: Seamlessly connects to any MCP servers:
 - 🧭 **MCP-provided Startup Instructions**: Optionally loads system instructions from MCP prompts, resources, or one configured fallback tool
-- 🖥️ **Local Web Monitor**: Chat-style command UI, runtime state, active config, console logs, final prompt, request cancellation, and manual command injection
-- 💾 **Conversational Memory**: Maintains context across interactions
+- 🖥️ **Local Web Monitor**: Chat-style command UI, persisted sessions, runtime state, active config, console logs, final prompt, request cancellation, and manual command injection
+- 💾 **Conversational Memory**: Maintains in-memory MCPAgent context plus persisted web chat session summaries
 - 🗣️ **Optional Wake Word**: Gate spoken commands with a global wake word after STT transcription
 - 🎯 **Extensible**: Easy to add new MCP servers and capabilities
 - 📴 **Offline Mode**: Can run with Ollama, local Whisper, pyttsx3, and local MCP servers after models/packages are installed
@@ -272,6 +272,8 @@ WAKE_WORD=                                      # Empty keeps current behavior; 
 ASSISTANT_SYSTEM_PROMPT="You are a helpful voice assistant..."  # Customize personality
 MCP_AGENT_MEMORY_ENABLED=true                  # Keep conversational memory; live external state still requires MCP reads
 MCP_AGENT_TIMEOUT_SECONDS=45                   # Max seconds for one LLM/MCP response before timeout
+SESSION_CONTEXT_SIZE=6000                      # Inject up to this many session-summary chars; 0 disables injection
+SESSION_CONTEXT_DIR=.contexts                  # Local directory for .context JSON session files
 MCP_CONFIG=mcp_servers.offline.json             # Optional config override
 
 # Optional - MCP-provided Assistant Instructions
@@ -287,6 +289,8 @@ The assistant is configured from an environment file. The CLI intentionally acce
 API secrets are read through `OPENAI_API_KEY_FILE` and `ELEVENLABS_API_KEY_FILE`. These variables must contain paths to text files that contain the secret, not the secret value itself. In Docker/Synology deployments, place those files in the mounted config folder on the host, for example `./container/config/OPENAI_API_KEY.txt`, and point the container env file to `/config/OPENAI_API_KEY.txt`.
 
 The assistant treats current external state as time-sensitive. Conversation memory can preserve context and follow-up references, but when the user asks for the current state of anything outside the conversation, the agent is instructed to call the relevant MCP read tool before answering. Set `MCP_AGENT_MEMORY_ENABLED=false` only if you want to disable MCPAgent conversation memory entirely. `MCP_AGENT_TIMEOUT_SECONDS` limits one LLM/MCP turn; if the agent has not produced a response before that delay, the request is cancelled and the assistant says that the request is taking too long.
+
+Web chat sessions are persisted as `.context.json` files under `SESSION_CONTEXT_DIR`. The web monitor shows the sessions in the left sidebar, restores the selected session's message bubbles, and loads the most recently active session on startup. The active session keeps both the full message list for UI restore and a bounded summary-style transcript used for runtime continuity. `SESSION_CONTEXT_SIZE` controls how many characters from that summary are injected into each LLM/MCP turn, but the injected context is not added to the Final Prompt shown in the Config tab. The web range accepts `0` to `12000`; set it to `0`, or use **Config -> IA model -> Session Context**, if a prior session is steering the assistant too strongly. Even when session context is enabled, live external state still must be read again through MCP tools.
 
 ### Wake Word
 
@@ -324,7 +328,8 @@ The web monitor is intentionally split between a clean chat surface and a techni
 - While the thinking animation is visible, the browser also loops the selected `THINKING_SOUND_FILE` from `assets/`, matching the backend thinking-sound behavior.
 - Pressing the stop button calls `/api/cancel-command`, cancels the active agent task, clears the busy state, and returns the assistant to listening.
 - If `WEB_AUDIO_ENABLED=true`, a browser microphone button appears in the composer. The browser records audio, sends it to the backend, the backend calls OpenAI STT, and the transcribed text is injected as a normal command.
-- The top-right settings button opens an overlay. The first tab contains **State**, **Console Log**, and **Prompt** collapsibles. The second tab contains **Config**.
+- The left sidebar lists persisted sessions. The `+` button creates a new session, and selecting a session restores its chat bubbles and clears the in-memory MCPAgent history for a clean switch.
+- The top-right settings button opens an overlay. The first tab contains **State** and **Console Log** collapsibles. The second tab contains **Config** with **STT/TTS**, **IA model**, **Other**, **Prompt**, and **Env file** collapsibles.
 
 The monitor exposes these HTTP endpoints:
 
@@ -334,6 +339,7 @@ The monitor exposes these HTTP endpoints:
 - `POST /api/web-transcribe`: accepts browser-recorded base64 audio and returns transcribed command text when web audio is enabled.
 - `POST /api/web-tts`: returns browser-playable base64 MP3 speech when web audio TTS is enabled.
 - `GET /api/llm-options` and `POST /api/llm-config`: back the provider/model/voice/thinking-sound controls in the config tab.
+- `GET /api/session-context`, `POST /api/session-context/new`, and `POST /api/session-context/select`: list, create, and switch persisted chat sessions.
 
 Dialogue and technical logs are separate. The main chat only displays user commands and assistant responses. Python `stdout`, `stderr`, and existing `logging.StreamHandler` instances are mirrored into **Settings > Monitor > Console Log**, so tool traces such as OSC read/write logs stay available without cluttering the main dialogue.
 
