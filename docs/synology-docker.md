@@ -132,4 +132,6 @@ SESSION_CONTEXT_DIR=/data/contexts
 
 In the web config, use `TTS Output = Browser` for this first-run shape. `Backend` is useful only when the container has usable speaker/audio passthrough; `Silent` sets both backend and browser TTS to `none`.
 
+`SESSION_CONTEXT_SIZE` controls how much of the active `.context.json` session summary is reinjected for continuity. In the web chat, restored bubbles highlighted in green are the messages that fit in the current context window; moving the **Session Context** range updates that preview immediately. Use `0` to disable context injection.
+
 Once the monitor path is stable, try microphone/speaker passthrough if needed.

@@ -171,16 +171,21 @@ class SessionContextStore:
 
     def context_text(self, *, exclude_last_user: bool = False, max_chars: int | None = None) -> str:
         summary = (self.current.get("summary") or "").strip() if self.current else ""
-        if exclude_last_user and self.current:
+        if max_chars is not None:
+            limit = max(0, int(max_chars))
+            if limit == 0:
+                return ""
+            if self.current:
+                messages = list(self.current.get("messages") or [])
+                if exclude_last_user and messages and messages[-1].get("role") == "user":
+                    messages = messages[:-1]
+                summary = self._build_summary(messages, max_chars=limit)
+            elif len(summary) > limit:
+                summary = summary[: max(0, limit - 3)].rstrip() + "..."
+        elif exclude_last_user and self.current:
             messages = list(self.current.get("messages") or [])
             if messages and messages[-1].get("role") == "user":
                 summary = self._build_summary(messages[:-1])
-        if max_chars is not None:
-            max_chars = max(0, int(max_chars))
-            if max_chars == 0:
-                return ""
-            if len(summary) > max_chars:
-                summary = summary[: max(0, max_chars - 3)].rstrip() + "..."
         if not summary:
             return ""
         return (
@@ -206,7 +211,10 @@ class SessionContextStore:
             return compact or "New session"
         return compact[:45].rstrip() + "..."
 
-    def _build_summary(self, messages: list[dict[str, Any]]) -> str:
+    def _build_summary(self, messages: list[dict[str, Any]], *, max_chars: int | None = None) -> str:
+        limit = max(0, int(max_chars if max_chars is not None else self.summary_max_chars))
+        if limit == 0:
+            return ""
         lines = []
         total = 0
         for message in reversed(messages):
@@ -216,10 +224,10 @@ class SessionContextStore:
                 continue
             line = f"{role}: {text}"
             line_len = len(line) + 1
-            if lines and total + line_len > self.summary_max_chars:
+            if lines and total + line_len > limit:
                 break
-            if line_len > self.summary_max_chars:
-                line = line[: self.summary_max_chars - 3].rstrip() + "..."
+            if line_len > limit:
+                line = line[: max(0, limit - 3)].rstrip() + "..."
                 line_len = len(line) + 1
             lines.append(line)
             total += line_len

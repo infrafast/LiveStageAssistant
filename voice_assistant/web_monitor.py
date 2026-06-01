@@ -943,6 +943,17 @@ INDEX_HTML = """<!doctype html>
       background: var(--assistant);
       color: var(--text);
     }
+    .message-row.context-included .bubble {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent);
+    }
+    .message-row.user.context-included .bubble {
+      background: var(--accent);
+      color: #ffffff;
+    }
+    .message-row.assistant.context-included .bubble {
+      background: color-mix(in srgb, var(--accent) 15%, var(--assistant));
+    }
     .message-row.pending .bubble {
       opacity: 0.74;
     }
@@ -1571,7 +1582,8 @@ INDEX_HTML = """<!doctype html>
     function messageBubble(message) {
       const role = message.role === "user" ? "user" : "assistant";
       const pending = message.pending ? " pending" : "";
-      return `<div class="message-row ${role}${pending}">
+      const contextIncluded = message.context_included ? " context-included" : "";
+      return `<div class="message-row ${role}${pending}${contextIncluded}">
         <div class="bubble">${escapeHtml(message.text)}</div>
       </div>`;
     }
@@ -1605,6 +1617,47 @@ INDEX_HTML = """<!doctype html>
       const nextValue = Math.max(0, Math.min(12000, Number(value || 0)));
       sessionContextSize.value = String(nextValue);
       syncSessionContextSizeLabel();
+    }
+
+    function summaryLineForMessage(message) {
+      const role = message.role === "user" ? "User" : "Assistant";
+      const text = String(message.text || "").replace(/\\s+/g, " ").trim();
+      return text ? `${role}: ${text}` : "";
+    }
+
+    function contextIncludedMessageIds(messages, maxChars) {
+      const limit = Math.max(0, Math.min(12000, Number(maxChars || 0)));
+      const included = new Set();
+      if (limit === 0) return included;
+
+      let candidates = [...(messages || [])];
+      if (candidates.length > 0 && candidates[candidates.length - 1].role === "user") {
+        candidates = candidates.slice(0, -1);
+      }
+
+      let total = 0;
+      const selected = [];
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const message = candidates[index];
+        const line = summaryLineForMessage(message);
+        if (!line) continue;
+        let lineLength = line.length + 1;
+        if (selected.length > 0 && total + lineLength > limit) break;
+        selected.push(message.id);
+        if (lineLength > limit) lineLength = limit + 1;
+        total += lineLength;
+      }
+
+      for (const id of selected) included.add(String(id));
+      return included;
+    }
+
+    function withContextPreview(messages) {
+      const includedIds = contextIncludedMessageIds(messages, sessionContextSize.value);
+      return (messages || []).map((message) => ({
+        ...message,
+        context_included: includedIds.has(String(message.id))
+      }));
     }
 
     function thinkingBubble() {
@@ -2069,7 +2122,7 @@ INDEX_HTML = """<!doctype html>
         });
       });
 
-      const rows = [...(serverMessages || []), ...pendingMessages];
+      const rows = [...withContextPreview(serverMessages || []), ...pendingMessages];
       const shouldStick = chatScroll.scrollTop + chatScroll.clientHeight >= chatScroll.scrollHeight - 24;
       if (rows.length === 0) {
         messagesEl.innerHTML = `<div class="empty-state">Live Stage Assistant</div>`;
@@ -2432,7 +2485,10 @@ INDEX_HTML = """<!doctype html>
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
     }
-    sessionContextSize.addEventListener("input", syncSessionContextSizeLabel);
+    sessionContextSize.addEventListener("input", () => {
+      syncSessionContextSizeLabel();
+      renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
+    });
 
     llmSave.addEventListener("click", async () => {
       const provider = llmProvider.value;
