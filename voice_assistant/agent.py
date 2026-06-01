@@ -111,7 +111,7 @@ DEFAULT_VOICE_CANCEL_WORDS = (
     "cancel",
 )
 OPENAI_TTS_VOICE_OPTIONS = [
-    {"id": "alloy", "label": "Alloy"},
+    {"id": "alloy", "label": "Alloy (masculine)"},
     {"id": "echo", "label": "Echo (masculine)"},
     {"id": "onyx", "label": "Onyx (masculine)"},
     {"id": "nova", "label": "Nova (feminine)"},

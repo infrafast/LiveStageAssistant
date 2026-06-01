@@ -1522,10 +1522,10 @@ INDEX_HTML = """<!doctype html>
 
     <div class="composer-wrap">
       <form class="inject-form" id="inject-form">
-        <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" disabled>&#8734;</button>
-        <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" disabled>&#9679;</button>
+        <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" disabled>🗨️</button>
+        <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" disabled>🎙️</button>
         <textarea id="inject-command" rows="1" autocomplete="off" placeholder="Message"></textarea>
-        <button id="inject-submit" type="submit" title="Send" aria-label="Send">&#8593;</button>
+        <button id="inject-submit" type="submit" title="Send" aria-label="Send">⬆️</button>
       </form>
     </div>
   </div>
@@ -1884,7 +1884,7 @@ INDEX_HTML = """<!doctype html>
       webConversation.disabled = !webAudio.stt_enabled;
       webMic.disabled = composerLocked || !webAudio.stt_enabled || isRecording || conversationEnabled;
       injectSubmit.classList.toggle("stop-mode", composerLocked);
-      injectSubmit.innerHTML = composerLocked ? "&#9632;" : "&#8593;";
+      injectSubmit.innerHTML = composerLocked ? "&#9632;" : "⬆️";
       injectSubmit.title = composerLocked ? "Stop" : "Send";
       injectSubmit.setAttribute("aria-label", composerLocked ? "Stop" : "Send");
       injectCommand.placeholder = composerLocked ? "Assistant is thinking..." : "Message";
@@ -1896,7 +1896,7 @@ INDEX_HTML = """<!doctype html>
     function setRecording(recording) {
       isRecording = Boolean(recording);
       webMic.classList.toggle("recording", isRecording);
-      webMic.innerHTML = isRecording ? "&#9632;" : "&#9679;";
+      webMic.innerHTML = isRecording ? "&#9632;" : "🎙️";
       webMic.title = isRecording ? "Stop recording" : "Voice input";
       webMic.setAttribute("aria-label", isRecording ? "Stop recording" : "Voice input");
       webMic.disabled = (composerLocked && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
