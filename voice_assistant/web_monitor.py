@@ -1378,6 +1378,9 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       gap: 5px;
     }
+    .field.full-row {
+      grid-column: 1 / -1;
+    }
     .field.hidden {
       display: none;
     }
@@ -1482,7 +1485,7 @@ INDEX_HTML = """<!doctype html>
       background: var(--surface-soft);
     }
     #logs { min-height: 360px; }
-    #stt-prompt,
+    #stt-prompt { min-height: 96px; }
     #assistant-system-prompt { min-height: 180px; }
     #prompt { min-height: 300px; }
     @media (max-width: 720px) {
@@ -1566,6 +1569,10 @@ INDEX_HTML = """<!doctype html>
                 <label for="wake-word">Wake Word</label>
                 <input id="wake-word" type="text" placeholder="Disabled">
               </div>
+              <div class="field full-row">
+                <label for="stt-prompt">STT_PROMPT</label>
+                <textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea>
+              </div>
               <div class="field">
                 <label for="cloud-tts-provider">TTS</label>
                 <select id="cloud-tts-provider"></select>
@@ -1609,15 +1616,6 @@ INDEX_HTML = """<!doctype html>
                 <label for="session-context-size">Session Context <span id="session-context-size-label">6000</span></label>
                 <input id="session-context-size" type="range" min="0" max="12000" step="500" value="6000">
               </div>
-            </div>
-          </details>
-        </section>
-        <section>
-          <details>
-            <summary>STT guide</summary>
-            <div class="field">
-              <label for="stt-prompt">STT_PROMPT</label>
-              <textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea>
             </div>
           </details>
         </section>
