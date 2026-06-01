@@ -87,6 +87,14 @@ MIXER_TARGET_RESOLUTION_RULE = (
     "resolve globally across all families. If the resolution is fuzzy, stop and ask the user to confirm the "
     "resolved target before reading or writing. Do not mention this internal rule."
 )
+SESSION_LLM_SUMMARY_PROMPT = (
+    "You maintain a compact continuity summary for a persisted assistant chat session.\n"
+    "Rewrite the transcript below into a concise memory summary for future turns.\n"
+    "Keep stable user preferences, explicit decisions, unresolved tasks, important entities, and useful context.\n"
+    "Do not invent facts. Do not include live external state as truth unless the transcript says it was verified.\n"
+    "Prefer short bullets. Keep the result under 2500 characters.\n\n"
+    "Transcript summary to compress:\n"
+)
 DEFAULT_VOICE_CANCEL_WORDS = (
     "stop",
     "stoppe",
@@ -722,6 +730,48 @@ class VoiceAssistant:
 
         print(f"Using OpenAI model: {self.model}")
         return ChatOpenAI(model=self.model, api_key=self.openai_api_key)
+
+    async def refresh_session_llm_summary(self) -> bool:
+        """Generate the persisted LLM summary for the active session when it is missing."""
+        if not self.session_context_store:
+            return False
+        source_summary = self.session_context_store.summary_source_text()
+        if not source_summary:
+            self.session_context_store.set_llm_summary("", source_summary)
+            return False
+        if self.session_context_store.injectable_summary() != source_summary:
+            return False
+
+        try:
+            llm = self._build_llm()
+            result = await asyncio.wait_for(
+                llm.ainvoke(SESSION_LLM_SUMMARY_PROMPT + source_summary),
+                timeout=self.mcp_agent_timeout_seconds,
+            )
+            content = getattr(result, "content", result)
+            if isinstance(content, list):
+                content = "\n".join(str(item) for item in content if item)
+            llm_summary = str(content or "").strip()
+            if not llm_summary:
+                return False
+            self.session_context_store.set_llm_summary(llm_summary, source_summary)
+            if self.web_monitor:
+                self.web_monitor.set_context_state(
+                    self.session_context_store.snapshot(),
+                    session_context_size=self.session_context_size,
+                )
+            print("✓ Session LLM summary refreshed.")
+            return True
+        except Exception as e:
+            print(f"Could not refresh session LLM summary, using transcript summary fallback: {e}")
+            return False
+
+    def refresh_session_llm_summary_blocking(self) -> bool:
+        """Refresh the session LLM summary from a non-async web handler thread."""
+        try:
+            return asyncio.run(self.refresh_session_llm_summary())
+        except RuntimeError:
+            return False
 
     def _text_from_mcp_content(self, content) -> str | None:
         """Extract text from common MCP prompt/resource/tool content objects."""
@@ -1710,6 +1760,7 @@ class VoiceAssistant:
         if not await self.initialize_mcp():
             print("Failed to initialize MCP. Exiting.")
             return "exit"
+        await self.refresh_session_llm_summary()
 
         try:
             while True:
@@ -2519,13 +2570,26 @@ async def main():
 
             def select_session_context(session_id: str) -> dict[str, Any]:
                 session_context_store.select_session(session_id)
+                assistant.refresh_session_llm_summary_blocking()
                 if assistant.agent:
                     assistant.agent.clear_conversation_history()
                 return session_context_response()
 
             def new_session_context(title: str | None = None) -> dict[str, Any]:
                 session_context_store.new_session(title)
+                assistant.refresh_session_llm_summary_blocking()
                 if assistant.agent:
+                    assistant.agent.clear_conversation_history()
+                return session_context_response()
+
+            def rename_session_context(session_id: str, title: str) -> dict[str, Any]:
+                session_context_store.rename_session(session_id, title)
+                return session_context_response()
+
+            def delete_session_context(session_id: str) -> dict[str, Any]:
+                was_active = session_context_store.active_id == session_id
+                session_context_store.delete_session(session_id)
+                if was_active and assistant.agent:
                     assistant.agent.clear_conversation_history()
                 return session_context_response()
 
@@ -2533,6 +2597,8 @@ async def main():
                 list_handler=session_context_response,
                 new_handler=new_session_context,
                 select_handler=select_session_context,
+                rename_handler=rename_session_context,
+                delete_handler=delete_session_context,
             )
 
             if web_audio_state["tts_enabled"] and web_tts_provider == "openai" and assistant.openai_client is None:

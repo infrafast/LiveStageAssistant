@@ -97,6 +97,8 @@ class WebMonitor:
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
+        self._session_context_rename_handler: Callable[[str, str], dict[str, Any]] | None = None
+        self._session_context_delete_handler: Callable[[str], dict[str, Any]] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
         self._web_audio_tts_handler: Callable[[str], dict[str, Any]] | None = None
         self._started_at = time.time()
@@ -132,12 +134,16 @@ class WebMonitor:
         list_handler: Callable[[], dict[str, Any]],
         new_handler: Callable[[str | None], dict[str, Any]],
         select_handler: Callable[[str], dict[str, Any]],
+        rename_handler: Callable[[str, str], dict[str, Any]],
+        delete_handler: Callable[[str], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list/create/select chat sessions."""
         with self._lock:
             self._session_context_list_handler = list_handler
             self._session_context_new_handler = new_handler
             self._session_context_select_handler = select_handler
+            self._session_context_rename_handler = rename_handler
+            self._session_context_delete_handler = delete_handler
 
     def set_web_audio_handlers(
         self,
@@ -245,6 +251,12 @@ class WebMonitor:
                         return
                     if self.path == "/api/session-context/select":
                         self._handle_session_context_select()
+                        return
+                    if self.path == "/api/session-context/rename":
+                        self._handle_session_context_rename()
+                        return
+                    if self.path == "/api/session-context/delete":
+                        self._handle_session_context_delete()
                         return
                     self.send_error(404)
 
@@ -431,6 +443,54 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self.send_error(500, f"Could not select session context: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_session_context_rename(self) -> None:
+                    handler = monitor._session_context_rename_handler
+                    if handler is None:
+                        self.send_error(503, "Session context is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    session_id = str(payload.get("id") or "").strip()
+                    title = str(payload.get("title") or "").strip()
+                    if not session_id:
+                        self.send_error(400, "Session id is required")
+                        return
+                    if not title:
+                        self.send_error(400, "Session title is required")
+                        return
+                    try:
+                        result = handler(session_id, title)
+                    except ValueError as e:
+                        self.send_error(404, str(e))
+                        return
+                    except Exception as e:
+                        self.send_error(500, f"Could not rename session context: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_session_context_delete(self) -> None:
+                    handler = monitor._session_context_delete_handler
+                    if handler is None:
+                        self.send_error(503, "Session context is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    session_id = str(payload.get("id") or "").strip()
+                    if not session_id:
+                        self.send_error(400, "Session id is required")
+                        return
+                    try:
+                        result = handler(session_id)
+                    except ValueError as e:
+                        self.send_error(404, str(e))
+                        return
+                    except Exception as e:
+                        self.send_error(500, f"Could not delete session context: {e}")
                         return
                     self._send_json(result)
 
@@ -817,11 +877,25 @@ INDEX_HTML = """<!doctype html>
       align-content: start;
       gap: 6px;
     }
-    .session-item {
+    .session-row {
+      position: relative;
       width: 100%;
       min-height: 42px;
       border: 1px solid transparent;
       border-radius: 8px;
+      background: transparent;
+      color: var(--text);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 32px;
+      align-items: stretch;
+    }
+    .session-row.active {
+      border-color: var(--border);
+      background: var(--surface);
+    }
+    .session-main {
+      min-width: 0;
+      border: 0;
       padding: 8px 9px;
       background: transparent;
       color: var(--text);
@@ -829,9 +903,53 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       gap: 2px;
     }
-    .session-item.active {
-      border-color: var(--border);
+    .session-menu-button {
+      width: 32px;
+      border: 0;
+      border-left: 1px solid transparent;
+      border-radius: 0 8px 8px 0;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+    .session-row.active .session-menu-button {
+      border-left-color: var(--border);
+    }
+    .session-menu-button:hover,
+    .session-main:hover {
+      background: color-mix(in srgb, var(--surface) 62%, transparent);
+    }
+    .session-menu {
+      position: absolute;
+      top: 34px;
+      right: 4px;
+      z-index: 8;
+      min-width: 128px;
+      display: none;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
       background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .session-row.menu-open .session-menu {
+      display: grid;
+    }
+    .session-menu-action {
+      min-height: 30px;
+      border: 0;
+      border-radius: 6px;
+      padding: 0 8px;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+    }
+    .session-menu-action:hover {
+      background: var(--surface-soft);
+    }
+    .session-menu-action.danger {
+      color: var(--bad);
     }
     .session-title {
       overflow: hidden;
@@ -1086,6 +1204,50 @@ INDEX_HTML = """<!doctype html>
     .overlay.open {
       display: grid;
       place-items: center;
+    }
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      display: none;
+      place-items: center;
+      background: rgba(0, 0, 0, 0.26);
+      backdrop-filter: blur(2px);
+    }
+    .loading-overlay.open {
+      display: grid;
+    }
+    .loading-panel {
+      min-width: min(320px, calc(100vw - 36px));
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+    }
+    .loading-spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: loadingSpin 0.8s linear infinite;
+    }
+    .loading-title {
+      font-weight: 650;
+    }
+    .loading-detail {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    @keyframes loadingSpin {
+      to { transform: rotate(360deg); }
     }
     .settings-panel {
       width: min(1040px, 100%);
@@ -1480,6 +1642,16 @@ INDEX_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="loading-overlay" id="session-loading" aria-hidden="true">
+    <div class="loading-panel" role="status" aria-live="polite">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <div>
+        <div class="loading-title" id="session-loading-title">Loading session</div>
+        <div class="loading-detail">Preparing persisted context summary</div>
+      </div>
+    </div>
+  </div>
+
   <script>
     const stateEl = document.querySelector("#state");
     const configEl = document.querySelector("#config");
@@ -1499,6 +1671,8 @@ INDEX_HTML = """<!doctype html>
     const settingsOpen = document.querySelector("#settings-open");
     const settingsClose = document.querySelector("#settings-close");
     const settingsOverlay = document.querySelector("#settings-overlay");
+    const sessionLoading = document.querySelector("#session-loading");
+    const sessionLoadingTitle = document.querySelector("#session-loading-title");
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const panels = Array.from(document.querySelectorAll(".tab-panel"));
     const llmProvider = document.querySelector("#llm-provider");
@@ -1591,10 +1765,17 @@ INDEX_HTML = """<!doctype html>
     function sessionButton(session, activeId) {
       const active = session.id === activeId ? " active" : "";
       const count = Number(session.message_count || 0);
-      return `<button class="session-item${active}" type="button" data-session-id="${escapeHtml(session.id)}">
-        <span class="session-title">${escapeHtml(session.title || "Untitled session")}</span>
-        <span class="session-meta">${count} message${count === 1 ? "" : "s"}</span>
-      </button>`;
+      return `<div class="session-row${active}" data-session-id="${escapeHtml(session.id)}" data-session-title="${escapeHtml(session.title || "Untitled session")}">
+        <button class="session-main" type="button">
+          <span class="session-title">${escapeHtml(session.title || "Untitled session")}</span>
+          <span class="session-meta">${count} message${count === 1 ? "" : "s"}</span>
+        </button>
+        <button class="session-menu-button" type="button" title="Session actions" aria-label="Session actions">...</button>
+        <div class="session-menu">
+          <button class="session-menu-action" type="button" data-session-action="rename">Rename</button>
+          <button class="session-menu-action danger" type="button" data-session-action="delete">Delete</button>
+        </div>
+      </div>`;
     }
 
     function renderSessions(sessionContext) {
@@ -2187,6 +2368,63 @@ INDEX_HTML = """<!doctype html>
       else settingsOpen.focus();
     }
 
+    function setSessionLoading(loading, title = "Loading session") {
+      sessionLoading.classList.toggle("open", Boolean(loading));
+      sessionLoading.setAttribute("aria-hidden", loading ? "false" : "true");
+      sessionLoadingTitle.textContent = title;
+      sessionNew.disabled = Boolean(loading);
+      for (const button of sessionList.querySelectorAll(".session-main, .session-menu-button, .session-menu-action")) {
+        button.disabled = Boolean(loading);
+      }
+    }
+
+    function closeSessionMenus() {
+      for (const row of sessionList.querySelectorAll(".session-row.menu-open")) {
+        row.classList.remove("menu-open");
+      }
+    }
+
+    async function renameSession(sessionId, currentTitle) {
+      const title = window.prompt("Rename session", currentTitle || "Untitled session");
+      if (title === null) return;
+      const cleanedTitle = title.trim();
+      if (!cleanedTitle) return;
+      setSessionLoading(true, "Renaming session");
+      try {
+        const response = await fetch("/api/session-context/rename", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId, title: cleanedTitle })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `session rename failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+
+    async function deleteSession(sessionId, currentTitle) {
+      const confirmed = window.confirm(`Delete session "${currentTitle || "Untitled session"}"?`);
+      if (!confirmed) return;
+      setSessionLoading(true, "Deleting session");
+      try {
+        const response = await fetch("/api/session-context/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        pendingMessages = [];
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `session delete failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+
     function activateTab(tabId) {
       for (const tab of tabs) {
         const active = tab.id === tabId;
@@ -2430,6 +2668,7 @@ INDEX_HTML = """<!doctype html>
     });
 
     sessionNew.addEventListener("click", async () => {
+      setSessionLoading(true, "Creating session");
       try {
         const response = await fetch("/api/session-context/new", {
           method: "POST",
@@ -2441,14 +2680,42 @@ INDEX_HTML = """<!doctype html>
         await refresh();
       } catch (error) {
         metaEl.textContent = `new session failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
       }
     });
 
     sessionList.addEventListener("click", async (event) => {
-      const button = event.target.closest(".session-item");
-      if (!button || composerLocked) return;
-      const sessionId = button.dataset.sessionId;
+      const actionButton = event.target.closest(".session-menu-action");
+      const menuButton = event.target.closest(".session-menu-button");
+      const mainButton = event.target.closest(".session-main");
+      const row = event.target.closest(".session-row");
+      if (!row || composerLocked) return;
+      const sessionId = row.dataset.sessionId;
       if (!sessionId) return;
+
+      if (actionButton) {
+        const action = actionButton.dataset.sessionAction;
+        const title = row.dataset.sessionTitle || "Untitled session";
+        closeSessionMenus();
+        if (action === "rename") {
+          await renameSession(sessionId, title);
+        } else if (action === "delete") {
+          await deleteSession(sessionId, title);
+        }
+        return;
+      }
+
+      if (menuButton) {
+        const wasOpen = row.classList.contains("menu-open");
+        closeSessionMenus();
+        row.classList.toggle("menu-open", !wasOpen);
+        return;
+      }
+
+      if (!mainButton) return;
+      closeSessionMenus();
+      setSessionLoading(true, "Loading session");
       try {
         const response = await fetch("/api/session-context/select", {
           method: "POST",
@@ -2460,7 +2727,13 @@ INDEX_HTML = """<!doctype html>
         await refresh();
       } catch (error) {
         metaEl.textContent = `session switch failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
       }
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".session-row")) closeSessionMenus();
     });
 
     settingsOpen.addEventListener("click", () => setSettingsOpen(true));

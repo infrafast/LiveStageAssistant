@@ -50,6 +50,8 @@ class SessionContextStore:
             "created_at": now,
             "updated_at": now,
             "summary": "",
+            "llm_summary": "",
+            "llm_summary_updated_at": None,
             "messages": [],
         }
 
@@ -64,14 +66,17 @@ class SessionContextStore:
         data.setdefault("created_at", time.time())
         data.setdefault("updated_at", data["created_at"])
         data.setdefault("summary", "")
+        data.setdefault("llm_summary", "")
+        data.setdefault("llm_summary_updated_at", None)
         data.setdefault("messages", [])
         return data
 
-    def _write_session(self, data: dict[str, Any]) -> None:
+    def _write_session(self, data: dict[str, Any], *, set_active: bool = True) -> None:
         self.context_dir.mkdir(parents=True, exist_ok=True)
         path = self._session_path(str(data["id"]))
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
-        self.active_file.write_text(str(data["id"]))
+        if set_active:
+            self.active_file.write_text(str(data["id"]))
 
     def _save_current(self) -> None:
         if self.current:
@@ -91,6 +96,7 @@ class SessionContextStore:
                     "updated_at": data.get("updated_at"),
                     "message_count": len(data.get("messages") or []),
                     "summary": data.get("summary") or "",
+                    "llm_summary": data.get("llm_summary") or "",
                 }
             )
         sessions.sort(key=lambda item: float(item.get("updated_at") or 0), reverse=True)
@@ -134,11 +140,48 @@ class SessionContextStore:
         self._save_current()
         return self.current
 
+    def rename_session(self, session_id: str, title: str) -> dict[str, Any]:
+        cleaned_title = re.sub(r"\s+", " ", title).strip()
+        if not cleaned_title:
+            raise ValueError("session title cannot be empty")
+        data = self._read_session(self._session_path(session_id))
+        if not data:
+            raise ValueError(f"session '{session_id}' was not found")
+        data["title"] = cleaned_title[:120]
+        data["updated_at"] = time.time()
+        is_active = self.active_id == data["id"]
+        if is_active:
+            self.current = data
+        self._write_session(data, set_active=is_active)
+        return data
+
+    def delete_session(self, session_id: str) -> dict[str, Any]:
+        path = self._session_path(session_id)
+        data = self._read_session(path)
+        if not data:
+            raise ValueError(f"session '{session_id}' was not found")
+
+        was_active = self.active_id == data["id"]
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        if was_active:
+            try:
+                self.active_file.unlink()
+            except FileNotFoundError:
+                pass
+            self.current = {}
+            return self.load_active_or_latest()
+        return self.current or self.load_active_or_latest()
+
     def clear_current(self) -> None:
         if not self.current:
             self.load_active_or_latest()
         self.current["messages"] = []
         self.current["summary"] = ""
+        self.current["llm_summary"] = ""
+        self.current["llm_summary_updated_at"] = None
         self.current["updated_at"] = time.time()
         self._save_current()
 
@@ -170,12 +213,13 @@ class SessionContextStore:
         return message
 
     def context_text(self, *, exclude_last_user: bool = False, max_chars: int | None = None) -> str:
-        summary = (self.current.get("summary") or "").strip() if self.current else ""
+        uses_llm_summary = bool(self.current) and bool(str(self.current.get("llm_summary") or "").strip())
+        summary = self.injectable_summary().strip()
         if max_chars is not None:
             limit = max(0, int(max_chars))
             if limit == 0:
                 return ""
-            if self.current:
+            if self.current and not uses_llm_summary:
                 messages = list(self.current.get("messages") or [])
                 if exclude_last_user and messages and messages[-1].get("role") == "user":
                     messages = messages[:-1]
@@ -194,6 +238,26 @@ class SessionContextStore:
             "do not treat it as source of truth for live external state:\n"
             f"{summary}"
         )
+
+    def injectable_summary(self) -> str:
+        if not self.current:
+            return ""
+        llm_summary = str(self.current.get("llm_summary") or "").strip()
+        if llm_summary:
+            return llm_summary
+        return str(self.current.get("summary") or "").strip()
+
+    def summary_source_text(self) -> str:
+        return str(self.current.get("summary") or "").strip() if self.current else ""
+
+    def set_llm_summary(self, summary: str, source_summary: str | None = None) -> None:
+        if not self.current:
+            self.load_active_or_latest()
+        cleaned_summary = summary.strip()
+        self.current["llm_summary"] = cleaned_summary
+        self.current["llm_summary_updated_at"] = time.time() if cleaned_summary else None
+        self.current["updated_at"] = time.time()
+        self._save_current()
 
     def snapshot(self) -> dict[str, Any]:
         if not self.current:
