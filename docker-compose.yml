@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     network_mode: host
     volumes:
-      - ./container/config:/config:ro
+      - ./container/config:/config
       - ./container/data:/data
       - ./assets:/app/assets:ro
       # Optional: mount a built XMSeries-MCP checkout here.
