@@ -13,7 +13,7 @@ The harder parts are runtime integrations:
 - Offline mode needs Ollama and local Whisper model caches available to the container.
 - The XMSeries-MCP repository must be mounted after it has been installed and built.
 
-For a first Synology deployment, use the web monitor and text command injection with `TTS_PROVIDER=none`.
+For a first Synology deployment, use the web monitor and text command injection with `TTS_PROVIDER=none`. This leaves backend speaker output disabled and allows browser/web TTS to speak when `WEB_AUDIO_ENABLED=true`.
 
 ## Files
 
@@ -55,7 +55,7 @@ container/
 
 Edit `container/config/.env.infrafast`.
 Keep `container/config/mcp_servers.synology.json` in the same folder.
-Put API keys in the two text files, or leave the ElevenLabs file empty if `TTS_PROVIDER=none`.
+Put API keys in the two text files. You can leave the ElevenLabs file empty only when neither `CLOUD_TTS_PROVIDER=elevenlabs` nor `WEB_TTS_PROVIDER=elevenlabs` is used.
 
 The compose file mounts `./container/config` to `/config:ro` and `./container/data` to `/data`. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself.
 
@@ -120,9 +120,14 @@ Recommended first-run settings:
 ```env
 WEB_MONITOR_HOST=0.0.0.0
 WEB_MONITOR_PORT=8765
+CLOUD_TTS_PROVIDER=openai
 TTS_PROVIDER=none
+WEB_AUDIO_ENABLED=true
+WEB_TTS_PROVIDER=openai
 STT_PROVIDER=openai-whisper
 LLM_PROVIDER=openai
 ```
+
+In the web config, use `TTS Output = Browser` for this first-run shape. `Backend` is useful only when the container has usable speaker/audio passthrough; `Silent` sets both backend and browser TTS to `none`.
 
 Once the monitor path is stable, try microphone/speaker passthrough if needed.

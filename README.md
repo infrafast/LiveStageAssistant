@@ -41,7 +41,7 @@ For developpers: https://deepwiki.com/infrafast/LiveStageAssistant
 ## Features
 
 - 🎤 **Voice Input**: Real-time speech-to-text using OpenAI Whisper API or local Whisper
-- 🔊 **Voice Output**: High-quality text-to-speech using ElevenLabs, pyttsx3, or no spoken output
+- 🔊 **Voice Output**: High-quality text-to-speech using OpenAI, ElevenLabs, pyttsx3, or no spoken output
 - 🤖 **AI-Powered**: Conversational AI with memory persistence
 - 🌐 **Multiple Model Providers**: Works with OpenAI or local Ollama models that support tool calling
 - 🛠️ **Multi-Tool Integration**: Seamlessly connects to any MCP servers:
@@ -59,9 +59,9 @@ For developpers: https://deepwiki.com/infrafast/LiveStageAssistant
 │ User Voice  │ --> │ Speech-to-   │ --> │  LLM with   │ --> │ Text-to-     │
 │   Input     │     │ Text (STT)   │     │  MCPAgent   │     │ Speech (TTS) │
 └─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
-                     Whisper             OpenAI  │                ElevenLabs
-                     API or local      or local  |                or pyttsx3
-                                        (Ollama) │                
+                     Whisper             OpenAI  │                OpenAI,
+                     API or local      or local  |                ElevenLabs,
+                                        (Ollama) │                or pyttsx3
                                                  │
                                           ┌──────▼────────┐
                                           │ MCP Servers   │
@@ -238,7 +238,8 @@ STT_LANGUAGE=auto                               # auto-detect, or force en, fr, 
 STT_PROMPT="Commandes courtes en français..."   # Optional context prompt for Whisper
 
 # Text-to-speech settings
-TTS_PROVIDER=elevenlabs                         # elevenlabs | pyttsx3 | none
+CLOUD_TTS_PROVIDER=openai                       # TTS dropdown: none | openai | elevenlabs
+TTS_PROVIDER=none                               # Backend output: openai | elevenlabs | pyttsx3 | none
 
 # Voice Settings
 ELEVENLABS_VOICE_OPTIONS=kENkNtk0xyzG09WW40xE (Marcel), 1EmYoP3UnnnwhlJKovEy (Anthony)
@@ -261,10 +262,10 @@ WEB_RECORDING_MAX_SECONDS=8                    # Browser mic auto-stop duration
 WEB_CONVERSATION_SILENCE_MS=900                # Browser conversation mode end-of-utterance silence
 WEB_CONVERSATION_IDLE_SECONDS=25               # Restart the listener if no speech is detected
 WEB_CONVERSATION_THRESHOLD=0.035               # Browser-side RMS speech threshold
-WEB_TTS_PROVIDER=openai
+WEB_TTS_PROVIDER=openai                         # Browser output: openai | elevenlabs | none
 WEB_TTS_MODEL=gpt-4o-mini-tts
 WEB_TTS_VOICE=alloy
-WEB_TTS_SPEED=1.00
+WEB_TTS_SPEED=1.00                              # Cloud TTS speed for web playback and backend cloud TTS
 
 # Optional - Assistant Configuration
 WAKE_WORD=                                      # Empty keeps current behavior; set e.g. "Mixeur" to gate commands
@@ -303,6 +304,8 @@ If multiple variants are needed, separate them with a comma, semicolon, or pipe:
 ```bash
 WAKE_WORD=Mixeur,Mixer
 ```
+
+The web config exposes the same value in the STT/TTS section. Saving the config writes `WAKE_WORD` to the active env file and reloads the assistant, so the new wake-word gate applies after the runtime reload.
 
 ### Web Monitor
 
@@ -353,6 +356,7 @@ WEB_RECORDING_MAX_SECONDS=8
 WEB_CONVERSATION_SILENCE_MS=900
 WEB_CONVERSATION_IDLE_SECONDS=25
 WEB_CONVERSATION_THRESHOLD=0.035
+CLOUD_TTS_PROVIDER=openai
 WEB_TTS_PROVIDER=openai
 WEB_TTS_MODEL=gpt-4o-mini-tts
 WEB_TTS_VOICE=alloy
@@ -363,11 +367,13 @@ The browser microphone path requires browser microphone permission and a browser
 
 The conversation button next to the microphone enables continuous browser listening. In this mode the push-to-talk button is disabled, the browser detects speech/silence locally, sends each detected utterance to the backend, and then restarts listening after the assistant is done. If `WAKE_WORD` is configured, conversation-mode transcriptions must pass the same wake-word gate before being injected. Manual push-to-talk remains direct command input and does not require the wake word.
 
-Backend TTS has priority over web TTS. If `TTS_PROVIDER` is `elevenlabs` or `pyttsx3`, the monitor still allows browser STT, but web TTS is disabled to avoid double audio. To let the browser play assistant responses, set `TTS_PROVIDER=none` and enable `WEB_AUDIO_ENABLED=true` with `WEB_TTS_PROVIDER=openai`.
+`CLOUD_TTS_PROVIDER` is the TTS dropdown shown in the config page. Set it to `none`, `openai`, or `elevenlabs`. The separate `TTS Output` control chooses `Browser`, `Backend`, or `Silent`; it saves that choice by updating `TTS_PROVIDER` and `WEB_TTS_PROVIDER`. Browser output saves `TTS_PROVIDER=none` plus `WEB_TTS_PROVIDER=<cloud provider>`, backend output saves `TTS_PROVIDER=<cloud provider>` plus `WEB_TTS_PROVIDER=none`, and silent output saves both as `none`. Selecting `TTS=none` forces silent output.
 
-The config page exposes four built-in OpenAI web TTS voices: `echo`, `onyx`, `nova`, and `shimmer`. It also exposes `WEB_TTS_SPEED`, applied by the browser playback engine from slow to fast. OpenAI voice choices are built-in values rather than fetched dynamically like ElevenLabs voice IDs.
+Backend TTS has priority over web TTS. If `TTS_PROVIDER` is `openai`, `elevenlabs`, or `pyttsx3`, the monitor still allows browser STT, but web TTS is disabled to avoid double audio. To let the browser play assistant responses, set `TTS_PROVIDER=none`, enable `WEB_AUDIO_ENABLED=true`, and set `WEB_TTS_PROVIDER` to the same cloud value as `CLOUD_TTS_PROVIDER`.
 
-If the backend or selected profile cannot reach OpenAI, browser audio falls back to silent text chat. The main chat input and stop button remain usable over the local network.
+Browser/web TTS never falls back to pyttsx3. If the selected web cloud provider cannot be used, browser audio falls back to silent text chat. Backend/non-web cloud TTS can fall back to pyttsx3 when `TTS_PROVIDER` is `openai` or `elevenlabs`.
+
+The config page shows only the voice selector for the selected TTS provider: OpenAI voices when `openai` is selected, ElevenLabs voices when `elevenlabs` is selected, and no voice selector when `none` is selected. It also exposes `WEB_TTS_SPEED`, used as browser playback speed for web TTS and passed to the cloud provider for backend cloud TTS. Saving the config triggers the existing runtime reload, so the active web/backend TTS handlers are replaced after the assistant reloads. OpenAI voice choices are built-in values rather than fetched dynamically like ElevenLabs voice IDs.
 
 #### Voice Cancel During Thinking
 
@@ -379,7 +385,7 @@ When set to `true`, the assistant starts a short-lived parallel listener only du
 
 The repository includes two ready-to-use environment profiles:
 
-- `.env.online`: cloud mode with OpenAI for LLM/STT, ElevenLabs for TTS, and `mcp_servers.json`
+- `.env.online`: cloud mode with OpenAI for LLM/STT, TTS dropdown set to ElevenLabs, and `mcp_servers.json`
 - `.env.offline`: local mode with Ollama for LLM, local Whisper for STT, pyttsx3 for TTS, and `mcp_servers.offline.json`
 - `auto`: switch to/from online to offline setting depending according to internet connectivity
 
@@ -595,7 +601,7 @@ With `--env-file auto`, the assistant checks internet connectivity at startup. I
 
 After the announcement, the current voice loop is interrupted if needed, the active assistant instance is cleaned up, and a fresh instance is started from the newly detected env file. This reloads the TTS, STT, LLM, and MCP configuration from the selected profile. Any command currently being recorded or processed may be cancelled during the switch, which keeps the implementation simple and avoids mixing services from two profiles. Once the new assistant is ready, it announces that the environment was updated and the in-flight request was cancelled using the TTS from the new profile.
 
-If you run `python voice_assistant/agent.py` without `--env-file`, the assistant loads `.env` when present. If `.env` does not exist, internal defaults are used: OpenAI with `gpt-4o-mini` for the LLM, OpenAI Whisper for STT, ElevenLabs for TTS when `ELEVENLABS_API_KEY` is available, `thinking.wav` for the processing sound, and `mcp_servers.json` when no explicit MCP config is provided. In that default mode, `OPENAI_API_KEY` is required because both the LLM and STT providers use OpenAI.
+If you run `python voice_assistant/agent.py` without `--env-file`, the assistant loads `.env` when present. If `.env` does not exist, internal defaults are used: OpenAI with `gpt-4o-mini` for the LLM, OpenAI Whisper for STT, ElevenLabs as the legacy backend TTS default, `CLOUD_TTS_PROVIDER=openai` for the TTS dropdown, `thinking.wav` for the processing sound, and `mcp_servers.json` when no explicit MCP config is provided. In that default mode, `OPENAI_API_KEY` is required because both the LLM and STT providers use OpenAI.
 
 For short stage commands, `STT_PROMPT` can give Whisper mixer-specific context. The bundled default biases French mixer commands such as `mets Claude`, `baisse snare`, `mute Voc-Claude`, and the assistant also fixes the narrow transcription artifact where a leading `mets` command is fused with the following channel name.
 
@@ -610,7 +616,7 @@ assistant = VoiceAssistant(
     model="gpt-4o-mini",
     llm_provider="openai",
     stt_provider="openai-whisper",
-    tts_provider="elevenlabs",
+    tts_provider="openai",
 )
 
 # Using Ollama, local Whisper, and local pyttsx3
@@ -658,7 +664,7 @@ When `LLM_PROVIDER=ollama`, the app stays on Ollama. Start `ollama serve` and pu
 
 ### Changing Voice Settings
 
-Pass different parameters when initializing. For offline mode, use `tts_provider="pyttsx3"`; for silent text-only output, use `tts_provider="none"`.
+Pass different parameters when initializing. For offline mode, use `tts_provider="pyttsx3"`; for silent text-only output, use `tts_provider="none"`. For backend/non-web cloud speech, use `tts_provider="openai"` or `tts_provider="elevenlabs"`; those cloud modes may fall back to local pyttsx3 if local playback or the selected cloud request fails.
 
 ```python
 assistant = VoiceAssistant(
@@ -683,6 +689,8 @@ ELEVENLABS_VOICE_ID=1EmYoP3UnnnwhlJKovEy
 
 Each entry uses `voice_id (Display name)`. The dropdown shows the display name and saves the selected voice ID to `ELEVENLABS_VOICE_ID`.
 
+The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Output` control decides whether speech comes from the browser, from the backend speaker, or nowhere. When the browser is the active speech output (`TTS_PROVIDER=none` and `WEB_TTS_PROVIDER=openai|elevenlabs`), the browser uses that cloud provider with no pyttsx3 fallback. When backend speech is active (`TTS_PROVIDER=openai|elevenlabs`), backend speech uses that cloud provider and can fall back to pyttsx3. Selecting `none` sets cloud/browser TTS to silent and hides cloud voice controls.
+
 ## Troubleshooting
 
 ### Common Issues
@@ -698,7 +706,8 @@ Each entry uses `voice_id (Display name)`. The dropdown shows the display name a
    - Verify API keys are set correctly
    - Check API quotas
    - Use `TTS_PROVIDER=pyttsx3` in the selected env file for fully local TTS
-   - System will fall back to pyttsx3 if ElevenLabs fails
+   - Backend cloud TTS falls back to pyttsx3 if OpenAI or ElevenLabs fails
+   - Browser/web TTS does not fall back to pyttsx3; set `TTS_PROVIDER=none`, `WEB_AUDIO_ENABLED=true`, and `WEB_TTS_PROVIDER=openai` or `elevenlabs`
    - On Ubuntu/Debian/Raspberry Pi OS, install the system TTS/audio packages: `sudo apt-get install alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1`
    - In headless environments without ALSA, `ffplay`, or `aplay`, spoken output is skipped without noisy playback errors. Use `TTS_PROVIDER=none` to make silent mode explicit.
 
