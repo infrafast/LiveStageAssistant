@@ -73,6 +73,7 @@ Documenté comme expérimental et désactivé par défaut.
 Web Audio
 Ajout d’un mode web audio optionnel:
 
+CONNECTIVITY_MODE=online
 WEB_AUDIO_ENABLED=false
 WEB_STT_PROVIDER=openai
 WEB_STT_MODEL=whisper-1
@@ -100,7 +101,13 @@ Règle choisie:
 
 le TTS backend a priorité;
 si TTS_PROVIDER != none, le web TTS est désactivé pour éviter double audio;
-pour utiliser TTS web, mettre TTS_PROVIDER=none.
+pour utiliser TTS web, mettre TTS_PROVIDER=none;
+si TTS Output = Browser est sauvé depuis la config web, WEB_AUDIO_ENABLED est aussi forcé à true pour garder le fichier .env cohérent.
+Connectivité
+Ajout d’un commutateur CONNECTIVITY_MODE dans la config web:
+
+online expose les options cloud LLM/STT/TTS;
+offline masque les options cloud STT/TTS, affiche TTS: local pyttsx3, et sauvegarde un profil local cohérent avec LLM_PROVIDER=ollama, STT_PROVIDER=local-whisper, CLOUD_TTS_PROVIDER=none, TTS_PROVIDER=pyttsx3, WEB_AUDIO_ENABLED=false et WEB_TTS_PROVIDER=none.
 Push-to-talk Web
 Bouton micro:
 

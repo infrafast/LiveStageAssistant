@@ -61,6 +61,7 @@ FORCE_EXIT_REQUESTED = threading.Event()
 DEFAULT_ELEVENLABS_VOICE_ID = "1EmYoP3UnnnwhlJKovEy"  # french male; ZF6FPAbjXT4488VcRRnw = english female
 DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "alloy"
+DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("mcp_use").propagate = False
@@ -307,6 +308,21 @@ def tts_output_from_values(values: dict) -> str:
     if web_provider in {"openai", "elevenlabs"}:
         return "browser"
     return "silent"
+
+
+def connectivity_mode_from_values(values: dict, env_file: Path | None = None) -> str:
+    """Return whether this profile should use online cloud controls or offline local controls."""
+    configured = (values.get("CONNECTIVITY_MODE") or "").strip().lower()
+    if configured in {"online", "offline"}:
+        return configured
+    if env_file == AUTO_ENV_OFFLINE:
+        return "offline"
+    llm_provider = (values.get("LLM_PROVIDER") or "").strip().lower()
+    stt_provider = (values.get("STT_PROVIDER") or "").strip().lower()
+    tts_provider = (values.get("TTS_PROVIDER") or "").strip().lower()
+    if llm_provider == "ollama" or stt_provider == "local-whisper" or tts_provider == "pyttsx3":
+        return "offline"
+    return "online"
 
 
 def play_mp3_bytes(audio_bytes: bytes) -> None:
@@ -2198,6 +2214,7 @@ async def main():
 
     def build_llm_options(env_file: Path, requested_provider: str | None = None) -> dict[str, Any]:
         values = dict(dotenv_values(env_file))
+        current_connectivity_mode = connectivity_mode_from_values(values, env_file)
         current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
         provider = (requested_provider or current_provider or "openai").strip().lower()
         current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
@@ -2242,6 +2259,7 @@ async def main():
 
         return {
             "provider": provider,
+            "selected_connectivity_mode": current_connectivity_mode,
             "providers": provider_entries,
             "models": models,
             "selected_model": current_model if provider == current_provider else "",
@@ -2269,6 +2287,7 @@ async def main():
         model: str,
         cloud_tts_provider: str,
         tts_output: str,
+        connectivity_mode: str,
         wake_word: str,
         stt_prompt: str,
         system_prompt: str,
@@ -2285,6 +2304,7 @@ async def main():
         model = model.strip()
         cloud_tts_provider = (cloud_tts_provider or "").strip().lower()
         tts_output = (tts_output or "").strip().lower()
+        connectivity_mode = (connectivity_mode or "").strip().lower()
         wake_word = (wake_word or "").strip()
         stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
         system_prompt = (system_prompt or "").strip()
@@ -2296,6 +2316,10 @@ async def main():
         if provider not in {"openai", "ollama"}:
             raise ValueError(f"unsupported LLM provider: {provider}")
         values = dict(dotenv_values(env_file))
+        if not connectivity_mode:
+            connectivity_mode = connectivity_mode_from_values(values, env_file)
+        if connectivity_mode not in {"online", "offline"}:
+            raise ValueError(f"unsupported connectivity mode: {connectivity_mode}")
         def env_secret_available(name: str) -> bool:
             file_path = (values.get(f"{name}_FILE") or "").strip()
             if not file_path:
@@ -2306,6 +2330,16 @@ async def main():
                 return False
 
         current_cloud_tts_provider = cloud_tts_provider_from_values(values)
+        if connectivity_mode == "offline":
+            provider = "ollama"
+            cloud_tts_provider = "none"
+            tts_output = "backend"
+            updated_tts_provider = "pyttsx3"
+            updated_web_tts_provider = "none"
+            updated_web_audio_enabled = "false"
+        else:
+            if provider == "ollama":
+                raise ValueError("online mode cannot use Ollama; switch to offline mode for local LLM")
         if not cloud_tts_provider:
             cloud_tts_provider = current_cloud_tts_provider
         if cloud_tts_provider not in {"none", "openai", "elevenlabs"}:
@@ -2314,9 +2348,11 @@ async def main():
             tts_output = tts_output_from_values(dict(dotenv_values(env_file)))
         if tts_output not in {"browser", "backend", "silent"}:
             raise ValueError(f"unsupported TTS output: {tts_output}")
-        if cloud_tts_provider == "none":
+        if connectivity_mode != "offline" and cloud_tts_provider == "none":
             tts_output = "silent"
-        if cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "browser":
+        if connectivity_mode == "offline":
+            pass
+        elif cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "browser":
             updated_tts_provider = "none"
             updated_web_tts_provider = cloud_tts_provider
             updated_web_audio_enabled = "true"
@@ -2343,6 +2379,12 @@ async def main():
             updated_web_audio_enabled = (values.get("WEB_AUDIO_ENABLED") or "false").strip().lower() or "false"
         current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
         current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        if connectivity_mode == "offline" and (
+            not model
+            or (current_provider != "ollama" and model == current_model)
+            or model.startswith(("gpt-", "o1", "o3", "o4"))
+        ):
+            model = (values.get("OFFLINE_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
         if not model:
             model = current_model
         if not model:
@@ -2353,9 +2395,11 @@ async def main():
             raise ValueError("OpenAI cannot be selected while internet is offline")
         if llm_changed:
             available_models, reason = (list_openai_models(values) if provider == "openai" else list_ollama_models(values))
-            if reason:
+            if reason and connectivity_mode != "offline":
                 raise ValueError(reason)
-            if available_models and model not in {item["id"] for item in available_models}:
+            if available_models and model not in {item["id"] for item in available_models} and connectivity_mode == "offline":
+                model = available_models[0]["id"]
+            elif available_models and model not in {item["id"] for item in available_models}:
                 raise ValueError(f"model '{model}' is not available for provider '{provider}'")
 
         voice_options = list_elevenlabs_voice_options(values)
@@ -2380,6 +2424,8 @@ async def main():
             {
                 "LLM_PROVIDER": provider,
                 "OPENAI_MODEL": model,
+                "CONNECTIVITY_MODE": connectivity_mode,
+                "STT_PROVIDER": "local-whisper" if connectivity_mode == "offline" else (values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
                 "CLOUD_TTS_PROVIDER": cloud_tts_provider,
                 "TTS_PROVIDER": updated_tts_provider,
                 "WEB_AUDIO_ENABLED": updated_web_audio_enabled,
@@ -2426,6 +2472,7 @@ async def main():
             ),
             "provider": provider,
             "model": model,
+            "connectivity_mode": connectivity_mode,
             "cloud_tts_provider": cloud_tts_provider,
             "tts_output": tts_output,
             "wake_word": wake_word,
@@ -2801,12 +2848,13 @@ async def main():
     if web_monitor:
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(env_file, provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, wake_word, stt_prompt, system_prompt, session_context_size, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
                 env_file,
                 provider,
                 model,
                 cloud_tts_provider,
                 tts_output,
+                connectivity_mode,
                 wake_word,
                 stt_prompt,
                 system_prompt,

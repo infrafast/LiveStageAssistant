@@ -93,7 +93,7 @@ class WebMonitor:
         self._stderr_original: TextIO | None = None
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
-        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]] | None = None
+        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
@@ -122,7 +122,7 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[[str, str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -364,6 +364,7 @@ class WebMonitor:
                         return
                     cloud_tts_provider = str(payload.get("cloud_tts_provider") or "").strip().lower()
                     tts_output = str(payload.get("tts_output") or "").strip().lower()
+                    connectivity_mode = str(payload.get("connectivity_mode") or "").strip().lower()
                     wake_word = str(payload.get("wake_word") or "").strip()
                     stt_prompt = str(payload.get("stt_prompt") or "").strip()
                     system_prompt = str(payload.get("system_prompt") or "").strip()
@@ -387,6 +388,7 @@ class WebMonitor:
                             model,
                             cloud_tts_provider,
                             tts_output,
+                            connectivity_mode,
                             wake_word,
                             stt_prompt,
                             system_prompt,
@@ -1383,7 +1385,21 @@ INDEX_HTML = """<!doctype html>
     .field.full-row {
       grid-column: 1 / -1;
     }
-    .field.hidden {
+	    .field.hidden {
+	      display: none;
+	    }
+    .offline-audio-summary {
+      grid-column: 1 / -1;
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      border: 1px solid var(--border);
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .offline-audio-summary.hidden {
       display: none;
     }
     .segmented {
@@ -1561,12 +1577,23 @@ INDEX_HTML = """<!doctype html>
             <textarea class="inspect" id="logs" readonly spellcheck="false"></textarea>
           </details>
         </section>
-      </div>
-      <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
+	      </div>
+	      <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
         <section>
-          <details open>
-            <summary>STT/TTS</summary>
-            <div class="config-controls">
+          <div class="config-controls">
+            <div class="field full-row">
+              <label>Connectivity</label>
+              <div class="segmented" id="connectivity-mode" role="radiogroup" aria-label="Connectivity">
+                <label><input type="radio" name="connectivity-mode" value="online">Online</label>
+                <label><input type="radio" name="connectivity-mode" value="offline">Offline</label>
+              </div>
+            </div>
+          </div>
+        </section>
+	        <section>
+	          <details open>
+	            <summary>STT/TTS</summary>
+	            <div class="config-controls">
               <div class="field">
                 <label for="wake-word">Wake Word</label>
                 <input id="wake-word" type="text" placeholder="Disabled">
@@ -1575,18 +1602,19 @@ INDEX_HTML = """<!doctype html>
                 <label for="stt-prompt">STT_PROMPT</label>
                 <textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea>
               </div>
-              <div class="field">
-                <label for="cloud-tts-provider">TTS</label>
-                <select id="cloud-tts-provider"></select>
-              </div>
-              <div class="field">
-                <label>TTS Output</label>
-                <div class="segmented" id="tts-output" role="radiogroup" aria-label="TTS Output">
-                  <label><input type="radio" name="tts-output" value="browser">Browser</label>
-                  <label><input type="radio" name="tts-output" value="backend">Backend</label>
-                  <label><input type="radio" name="tts-output" value="silent">Silent</label>
-                </div>
-              </div>
+	              <div class="field cloud-audio-control">
+	                <label for="cloud-tts-provider">TTS</label>
+	                <select id="cloud-tts-provider"></select>
+	              </div>
+	              <div class="field cloud-audio-control">
+	                <label>TTS Output</label>
+	                <div class="segmented" id="tts-output" role="radiogroup" aria-label="TTS Output">
+	                  <label><input type="radio" name="tts-output" value="browser">Browser</label>
+	                  <label><input type="radio" name="tts-output" value="backend">Backend</label>
+	                  <label><input type="radio" name="tts-output" value="silent">Silent</label>
+	                </div>
+	              </div>
+	              <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local pyttsx3</div>
               <div class="field" id="elevenlabs-voice-field">
                 <label for="elevenlabs-voice">ElevenLabs Voice</label>
                 <select id="elevenlabs-voice"></select>
@@ -1695,11 +1723,14 @@ INDEX_HTML = """<!doctype html>
     const sessionLoadingTitle = document.querySelector("#session-loading-title");
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const panels = Array.from(document.querySelectorAll(".tab-panel"));
-    const llmProvider = document.querySelector("#llm-provider");
-    const llmModel = document.querySelector("#llm-model");
-    const sessionContextSize = document.querySelector("#session-context-size");
-    const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
-    const wakeWord = document.querySelector("#wake-word");
+	    const llmProvider = document.querySelector("#llm-provider");
+	    const llmModel = document.querySelector("#llm-model");
+	    const sessionContextSize = document.querySelector("#session-context-size");
+	    const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
+    const connectivityModeInputs = Array.from(document.querySelectorAll('input[name="connectivity-mode"]'));
+    const cloudAudioControls = Array.from(document.querySelectorAll(".cloud-audio-control"));
+    const offlineAudioSummary = document.querySelector("#offline-audio-summary");
+	    const wakeWord = document.querySelector("#wake-word");
     const cloudTtsProvider = document.querySelector("#cloud-tts-provider");
     const ttsOutputInputs = Array.from(document.querySelectorAll('input[name="tts-output"]'));
     const elevenlabsVoiceField = document.querySelector("#elevenlabs-voice-field");
@@ -2378,20 +2409,49 @@ INDEX_HTML = """<!doctype html>
       openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
     }
 
-    function syncTtsProviderControls() {
-      const provider = cloudTtsProvider.value || "none";
-      const output = selectedTtsOutput();
-      const forceSilent = provider === "none";
-      for (const input of ttsOutputInputs) {
-        input.disabled = forceSilent && input.value !== "silent";
-        input.checked = forceSilent ? input.value === "silent" : input.value === output;
+	    function syncTtsProviderControls() {
+      const connectivityMode = selectedConnectivityMode();
+      const offline = connectivityMode === "offline";
+	      const provider = cloudTtsProvider.value || "none";
+	      const output = selectedTtsOutput();
+	      const forceSilent = provider === "none";
+      for (const element of cloudAudioControls) element.classList.toggle("hidden", offline);
+      offlineAudioSummary.classList.toggle("hidden", !offline);
+	      for (const input of ttsOutputInputs) {
+	        input.disabled = offline || (forceSilent && input.value !== "silent");
+	        input.checked = offline ? input.value === "backend" : (forceSilent ? input.value === "silent" : input.value === output);
+	      }
+	      elevenlabsVoiceField.classList.toggle("hidden", offline || provider !== "elevenlabs");
+	      openaiTtsVoiceField.classList.toggle("hidden", offline || provider !== "openai");
+	      ttsSpeedField.classList.toggle("hidden", offline || provider === "none");
+	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
+	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
+	      openaiTtsSpeed.disabled = offline || provider === "none";
+	    }
+
+    function selectedConnectivityMode() {
+      const checked = connectivityModeInputs.find((input) => input.checked);
+      return checked ? checked.value : "online";
+    }
+
+    function setSelectedConnectivityMode(value) {
+      const nextValue = value === "offline" ? "offline" : "online";
+      for (const input of connectivityModeInputs) {
+        input.checked = input.value === nextValue;
       }
-      elevenlabsVoiceField.classList.toggle("hidden", provider !== "elevenlabs");
-      openaiTtsVoiceField.classList.toggle("hidden", provider !== "openai");
-      ttsSpeedField.classList.toggle("hidden", provider === "none");
-      elevenlabsVoice.disabled = provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
-      openaiTtsVoice.disabled = provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
-      openaiTtsSpeed.disabled = provider === "none";
+    }
+
+    function syncConnectivityControls() {
+      if (selectedConnectivityMode() === "offline") {
+        if ([...llmProvider.options].some((option) => option.value === "ollama")) {
+          llmProvider.value = "ollama";
+        }
+        if ([...cloudTtsProvider.options].some((option) => option.value === "none")) {
+          cloudTtsProvider.value = "none";
+        }
+        setSelectedTtsOutput("backend");
+      }
+      syncTtsProviderControls();
     }
 
     function selectedTtsOutput() {
@@ -2486,12 +2546,13 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function loadLlmOptions(provider, preferredModel) {
+	    async function loadLlmOptions(provider, preferredModel, connectivityOverride = "") {
       if (llmOptionsLoading) return;
       llmOptionsLoading = true;
-      llmProvider.disabled = true;
-      llmModel.disabled = true;
-      sessionContextSize.disabled = true;
+	      llmProvider.disabled = true;
+	      llmModel.disabled = true;
+      for (const input of connectivityModeInputs) input.disabled = true;
+	      sessionContextSize.disabled = true;
       wakeWord.disabled = true;
       sttPromptEl.disabled = true;
       assistantSystemPromptEl.disabled = true;
@@ -2509,8 +2570,9 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
 
-        const selectedProvider = data.provider || provider || "";
-        llmProvider.replaceChildren();
+	        const selectedProvider = data.provider || provider || "";
+        setSelectedConnectivityMode(connectivityOverride || data.selected_connectivity_mode || "online");
+	        llmProvider.replaceChildren();
         for (const item of data.providers || []) {
           const label = item.available === false && item.reason
             ? `${item.label || item.id} (${item.reason})`
@@ -2576,9 +2638,9 @@ INDEX_HTML = """<!doctype html>
             openaiTtsVoice.appendChild(option(`${selectedOpenAiTtsVoice} (current)`, selectedOpenAiTtsVoice, false, true));
           }
         }
-        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
-        syncOpenAiSpeedLabel();
-        syncTtsProviderControls();
+	        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
+	        syncOpenAiSpeedLabel();
+	        syncConnectivityControls();
 
         thinkingSound.replaceChildren();
         const selectedThinkingSound = data.selected_thinking_sound_file || "";
@@ -2598,15 +2660,16 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         llmMessage.textContent = `LLM options unavailable: ${error}`;
       } finally {
-        llmProvider.disabled = false;
-        llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
-        sessionContextSize.disabled = false;
+	        llmProvider.disabled = false;
+	        llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
+        for (const input of connectivityModeInputs) input.disabled = false;
+	        sessionContextSize.disabled = false;
         wakeWord.disabled = false;
         sttPromptEl.disabled = false;
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
-        syncTtsProviderControls();
+	        syncConnectivityControls();
         thinkingSound.disabled = thinkingSound.options.length === 0 || !thinkingSound.value;
         llmSave.disabled = !llmProvider.value;
         llmOptionsLoading = false;
@@ -2815,11 +2878,18 @@ INDEX_HTML = """<!doctype html>
       tab.addEventListener("click", () => activateTab(tab.id));
     }
 
-    llmProvider.addEventListener("change", () => {
-      loadLlmOptions(llmProvider.value, "");
-    });
+	    llmProvider.addEventListener("change", () => {
+	      loadLlmOptions(llmProvider.value, "", selectedConnectivityMode());
+	    });
 
-    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
+    for (const input of connectivityModeInputs) {
+      input.addEventListener("change", () => {
+        const mode = selectedConnectivityMode();
+        loadLlmOptions(mode === "offline" ? "ollama" : "openai", "", mode);
+      });
+    }
+
+	    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
     }
@@ -2833,9 +2903,10 @@ INDEX_HTML = """<!doctype html>
       const model = llmModel.value;
       const sessionContextSizeValue = Number(sessionContextSize.value || 0);
       const wakeWordValue = wakeWord.value.trim();
-      const sttPromptValue = sttPromptEl.value.trim();
-      const systemPromptValue = assistantSystemPromptEl.value.trim();
-      const cloudTtsProviderValue = cloudTtsProvider.value;
+	      const sttPromptValue = sttPromptEl.value.trim();
+	      const systemPromptValue = assistantSystemPromptEl.value.trim();
+      const connectivityModeValue = selectedConnectivityMode();
+	      const cloudTtsProviderValue = cloudTtsProvider.value;
       const ttsOutputValue = selectedTtsOutput();
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
@@ -2852,8 +2923,9 @@ INDEX_HTML = """<!doctype html>
           body: JSON.stringify({
             provider,
             model,
-            session_context_size: sessionContextSizeValue,
-            cloud_tts_provider: cloudTtsProviderValue,
+	            session_context_size: sessionContextSizeValue,
+            connectivity_mode: connectivityModeValue,
+	            cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,
             wake_word: wakeWordValue,
             stt_prompt: sttPromptValue,
