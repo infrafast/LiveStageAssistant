@@ -385,7 +385,15 @@ class WebMonitor:
                         self.send_error(404)
                         return
 
-                    content_type = mimetypes.guess_type(resolved_path.name)[0] or "application/octet-stream"
+                    suffix = resolved_path.suffix.lower()
+                    explicit_types = {
+                        ".js": "text/javascript; charset=utf-8",
+                        ".mjs": "text/javascript; charset=utf-8",
+                        ".css": "text/css; charset=utf-8",
+                        ".json": "application/json; charset=utf-8",
+                        ".wasm": "application/wasm",
+                    }
+                    content_type = explicit_types.get(suffix) or mimetypes.guess_type(resolved_path.name)[0] or "application/octet-stream"
                     try:
                         data = resolved_path.read_bytes()
                     except OSError as e:
@@ -395,6 +403,7 @@ class WebMonitor:
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Cache-Control", "public, max-age=3600")
+                    self.send_header("Cross-Origin-Resource-Policy", "same-origin")
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)

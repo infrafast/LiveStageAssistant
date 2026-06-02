@@ -38,6 +38,7 @@ Create a project folder such as:
       mcp_servers.synology.json
     data/
   assets/
+  static/
   XMSeries-MCP/
 ```
 
