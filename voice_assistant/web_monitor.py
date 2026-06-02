@@ -1198,7 +1198,7 @@ VNC_HTML = """<!doctype html>
       const scheme = window.location.protocol === "https:" ? "wss" : "ws";
       const proxyUrl = `${scheme}://${window.location.host}/api/vnc-proxy?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
 
-      const { default: RFB } = await import("/static/novnc/core/rfb.js");
+      const { default: RFB } = await import("/static/novnc/core/rfb.js?v=lsa-novnc-20260602-1");
       const rfb = new RFB(screenEl, proxyUrl, { credentials: { password } });
       rfb.viewOnly = false;
       rfb.scaleViewport = true;
