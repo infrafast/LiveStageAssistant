@@ -279,6 +279,22 @@ class WebMonitor:
                         return
                     self.send_error(404)
 
+                def do_HEAD(self) -> None:
+                    parsed = urlparse(self.path)
+                    if parsed.path in {"/", "/index.html"}:
+                        self._send_text(INDEX_HTML, "text/html; charset=utf-8", send_body=False)
+                        return
+                    if parsed.path == "/vnc.html":
+                        self._send_text(VNC_HTML, "text/html; charset=utf-8", send_body=False)
+                        return
+                    if parsed.path.startswith("/static/"):
+                        self._handle_static(parsed.path, send_body=False)
+                        return
+                    if parsed.path.startswith("/assets/"):
+                        self._handle_asset(parsed.path, send_body=False)
+                        return
+                    self.send_error(404)
+
                 def do_POST(self) -> None:
                     if self.path == "/api/inject-command":
                         self._handle_inject_command()
@@ -324,13 +340,14 @@ class WebMonitor:
                 def log_message(self, format: str, *args: Any) -> None:
                     return
 
-                def _send_text(self, value: str, content_type: str) -> None:
+                def _send_text(self, value: str, content_type: str, *, send_body: bool = True) -> None:
                     encoded = value.encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
-                    self.wfile.write(encoded)
+                    if send_body:
+                        self.wfile.write(encoded)
 
                 def _send_json(self, value: dict[str, Any]) -> None:
                     encoded = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -341,7 +358,7 @@ class WebMonitor:
                     self.end_headers()
                     self.wfile.write(encoded)
 
-                def _handle_asset(self, request_path: str) -> None:
+                def _handle_asset(self, request_path: str, *, send_body: bool = True) -> None:
                     raw_name = request_path.removeprefix("/assets/")
                     asset_name = Path(raw_name).name
                     if not asset_name or asset_name != raw_name:
@@ -365,9 +382,10 @@ class WebMonitor:
                     self.send_header("Cache-Control", "public, max-age=3600")
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
-                    self.wfile.write(data)
+                    if send_body:
+                        self.wfile.write(data)
 
-                def _handle_static(self, request_path: str) -> None:
+                def _handle_static(self, request_path: str, *, send_body: bool = True) -> None:
                     raw_path = request_path.removeprefix("/static/")
                     parts = [part for part in raw_path.split("/") if part]
                     if not parts or any(part in {".", ".."} for part in parts):
@@ -406,7 +424,8 @@ class WebMonitor:
                     self.send_header("Cross-Origin-Resource-Policy", "same-origin")
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
-                    self.wfile.write(data)
+                    if send_body:
+                        self.wfile.write(data)
 
                 def _handle_vnc_proxy(self, query: str) -> None:
                     params = parse_qs(query)

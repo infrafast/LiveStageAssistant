@@ -2,7 +2,7 @@
   "mcpServers": {
     "xmseries-http": {
       "type": "streamable-http",
-      "url": "http://xmseriesmcp.infrafast.fr/mcp",
+      "url": "https://xmseriesmcp.infrafast.fr/mcp",
       "headers": {
         "Authorization": "Bearer change-me"
       },
