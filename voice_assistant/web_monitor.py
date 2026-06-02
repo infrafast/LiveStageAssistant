@@ -1238,7 +1238,7 @@ VNC_HTML = """<!doctype html>
       const check = await checkResponse.json();
       if (!check.reachable) {
         setStatus(`hors ligne cible VNC injoignable: ${check.error || "connexion impossible"}`, false);
-        return;
+        throw new Error("LSA_VNC_TARGET_UNREACHABLE");
       }
       setStatus(`Connexion WebSocket VNC ${host}:${port}...`, false);
       console.info("[LSA noVNC] TCP target reachable, opening WebSocket proxy", { host, port, proxyUrl });
@@ -1265,7 +1265,11 @@ VNC_HTML = """<!doctype html>
         setStatus("Échec sécurité VNC", false);
       });
     } catch (error) {
+      if (error && error.message === "LSA_VNC_TARGET_UNREACHABLE") {
+        console.info("[LSA noVNC] TCP target unreachable");
+      } else {
       setStatus(`noVNC indisponible: ${error}`, false);
+      }
     }
   </script>
 </body>
