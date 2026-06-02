@@ -325,6 +325,7 @@ The web monitor is intentionally split between a clean chat surface and a techni
 
 - The main page is a ChatGPT-like command window. User commands appear as right-aligned bubbles and assistant/TTS responses appear as left-aligned bubbles.
 - The command input stays pinned to the bottom of the page. Press Enter or the up-arrow button to send; Shift+Enter inserts a newline.
+- A **Remote screen** collapsible above the chat embeds the monitor's generated `/vnc.html` page in an iframe for visual monitoring. The default field is `vnc://192.168.0.160:5900?password=ronron`; the browser-side helper converts `vnc://` values to `/vnc.html?host=...&port=...&password=...&autoconnect=1`. The monitor also exposes `/api/vnc-proxy`, a small WebSocket-to-TCP bridge used by noVNC to reach the VNC target. This panel is independent of the assistant logic. The generated page loads the noVNC browser module from a CDN unless you replace it with a local copy.
 - While the LLM/MCP agent is processing, the input is disabled and the response area shows a small thinking animation. The send arrow becomes a square stop button.
 - While the thinking animation is visible, the browser also loops the selected `THINKING_SOUND_FILE` from `assets/`, matching the backend thinking-sound behavior.
 - Pressing the stop button calls `/api/cancel-command`, cancels the active agent task, clears the busy state, and returns the assistant to listening.

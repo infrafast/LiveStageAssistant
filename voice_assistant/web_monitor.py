@@ -5,11 +5,15 @@ from __future__ import annotations
 import base64
 import binascii
 from collections import deque
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import mimetypes
 from pathlib import Path
+import select
+import socket
+import struct
 import sys
 import threading
 import time
@@ -242,6 +246,12 @@ class WebMonitor:
                     if parsed.path in {"/", "/index.html"}:
                         self._send_text(INDEX_HTML, "text/html; charset=utf-8")
                         return
+                    if parsed.path == "/vnc.html":
+                        self._send_text(VNC_HTML, "text/html; charset=utf-8")
+                        return
+                    if parsed.path == "/api/vnc-proxy":
+                        self._handle_vnc_proxy(parsed.query)
+                        return
                     if parsed.path == "/api/snapshot":
                         self._send_json(monitor.snapshot())
                         return
@@ -343,6 +353,115 @@ class WebMonitor:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
+
+                def _handle_vnc_proxy(self, query: str) -> None:
+                    params = parse_qs(query)
+                    host = (params.get("host") or [""])[0].strip()
+                    port_text = (params.get("port") or ["5900"])[0].strip()
+                    if not host:
+                        self.send_error(400, "VNC host is required")
+                        return
+                    try:
+                        port = int(port_text)
+                    except ValueError:
+                        self.send_error(400, "VNC port must be an integer")
+                        return
+                    if port < 1 or port > 65535:
+                        self.send_error(400, "VNC port is out of range")
+                        return
+
+                    ws_key = self.headers.get("Sec-WebSocket-Key", "").strip()
+                    if self.headers.get("Upgrade", "").lower() != "websocket" or not ws_key:
+                        self.send_error(426, "WebSocket upgrade required")
+                        return
+
+                    try:
+                        target = socket.create_connection((host, port), timeout=5)
+                    except OSError as e:
+                        self.send_error(502, f"Could not connect to VNC target: {e}")
+                        return
+
+                    accept = base64.b64encode(
+                        hashlib.sha1((ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+                    ).decode("ascii")
+                    self.send_response(101, "Switching Protocols")
+                    self.send_header("Upgrade", "websocket")
+                    self.send_header("Connection", "Upgrade")
+                    self.send_header("Sec-WebSocket-Accept", accept)
+                    self.end_headers()
+                    self._proxy_websocket_to_tcp(target)
+
+                def _recv_exact(self, sock: socket.socket, length: int) -> bytes:
+                    chunks = []
+                    remaining = length
+                    while remaining > 0:
+                        chunk = sock.recv(remaining)
+                        if not chunk:
+                            raise ConnectionError("socket closed")
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    return b"".join(chunks)
+
+                def _read_ws_frame(self, sock: socket.socket) -> tuple[int, bytes]:
+                    header = self._recv_exact(sock, 2)
+                    opcode = header[0] & 0x0F
+                    masked = bool(header[1] & 0x80)
+                    length = header[1] & 0x7F
+                    if length == 126:
+                        length = struct.unpack("!H", self._recv_exact(sock, 2))[0]
+                    elif length == 127:
+                        length = struct.unpack("!Q", self._recv_exact(sock, 8))[0]
+                    mask = self._recv_exact(sock, 4) if masked else b""
+                    payload = self._recv_exact(sock, length) if length else b""
+                    if masked and payload:
+                        payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+                    return opcode, payload
+
+                def _send_ws_frame(self, sock: socket.socket, payload: bytes, opcode: int = 2) -> None:
+                    length = len(payload)
+                    header = bytearray([0x80 | opcode])
+                    if length < 126:
+                        header.append(length)
+                    elif length <= 0xFFFF:
+                        header.append(126)
+                        header.extend(struct.pack("!H", length))
+                    else:
+                        header.append(127)
+                        header.extend(struct.pack("!Q", length))
+                    sock.sendall(bytes(header) + payload)
+
+                def _proxy_websocket_to_tcp(self, target: socket.socket) -> None:
+                    client = self.connection
+                    try:
+                        client.setblocking(True)
+                        target.setblocking(True)
+                        while True:
+                            readable, _, exceptional = select.select([client, target], [], [client, target], 30)
+                            if exceptional:
+                                break
+                            if not readable:
+                                continue
+                            if target in readable:
+                                data = target.recv(65536)
+                                if not data:
+                                    break
+                                self._send_ws_frame(client, data, opcode=2)
+                            if client in readable:
+                                opcode, payload = self._read_ws_frame(client)
+                                if opcode == 8:
+                                    break
+                                if opcode == 9:
+                                    self._send_ws_frame(client, payload, opcode=10)
+                                    continue
+                                if opcode in {0, 1, 2} and payload:
+                                    target.sendall(payload)
+                    except (OSError, ConnectionError):
+                        pass
+                    finally:
+                        try:
+                            target.close()
+                        except OSError:
+                            pass
 
                 def _read_json_body(self, max_bytes: int = 16_384) -> dict[str, Any] | None:
                     try:
@@ -924,6 +1043,88 @@ def build_service_state(
     }
 
 
+VNC_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Stage Assistant noVNC</title>
+  <style>
+    html, body, #screen {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #111;
+      color: #eee;
+      font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #status {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      z-index: 2;
+      max-width: calc(100% - 20px);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: rgba(0, 0, 0, 0.68);
+      color: #f2f2f2;
+    }
+    #screen.connected + #status {
+      opacity: 0.18;
+    }
+    #screen.connected + #status:hover {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div id="screen"></div>
+  <div id="status">Connexion noVNC...</div>
+  <script type="module">
+    const statusEl = document.querySelector("#status");
+    const screenEl = document.querySelector("#screen");
+    const params = new URLSearchParams(window.location.search);
+
+    function setStatus(text, connected = false) {
+      statusEl.textContent = text;
+      screenEl.classList.toggle("connected", connected);
+      window.parent.postMessage({ type: "lsa-vnc-status", text, connected }, window.location.origin);
+    }
+
+    try {
+      const host = params.get("host") || "192.168.0.160";
+      const port = params.get("port") || "5900";
+      const password = params.get("password") || "ronron";
+      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+      const proxyUrl = `${scheme}://${window.location.host}/api/vnc-proxy?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
+
+      const { default: RFB } = await import("https://cdn.jsdelivr.net/npm/@novnc/novnc/core/rfb.js");
+      const rfb = new RFB(screenEl, proxyUrl, { credentials: { password } });
+      rfb.viewOnly = false;
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false;
+      rfb.addEventListener("connect", () => setStatus(`Connecté à ${host}:${port}`, true));
+      rfb.addEventListener("disconnect", (event) => {
+        const detail = event.detail && event.detail.clean ? "" : " connexion interrompue";
+        setStatus(`hors ligne${detail}`, false);
+      });
+      rfb.addEventListener("credentialsrequired", () => {
+        setStatus("Mot de passe VNC requis ou invalide", false);
+      });
+      rfb.addEventListener("securityfailure", () => {
+        setStatus("Échec sécurité VNC", false);
+      });
+    } catch (error) {
+      setStatus(`noVNC indisponible: ${error}`, false);
+    }
+  </script>
+</body>
+</html>
+"""
+
+
 INDEX_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -1147,6 +1348,57 @@ INDEX_HTML = """<!doctype html>
       overflow-y: auto;
       padding: 22px 16px 16px;
       scroll-behavior: smooth;
+    }
+    .chat-panel {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .vnc-panel {
+      margin: 10px 16px 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+      overflow: hidden;
+    }
+    .vnc-panel summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 0;
+    }
+    .vnc-status {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .vnc-status.online { color: var(--ok); }
+    .vnc-status.offline { color: var(--bad); }
+    .vnc-controls {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
+      gap: 10px;
+      padding: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .vnc-frame-wrap {
+      width: min(1368px, calc(100vw - 300px));
+      height: min(768px, calc(100vh - 230px));
+      min-height: 360px;
+      margin: 0 auto 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--surface-soft);
+    }
+    .vnc-frame {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+      background: #000;
     }
     .messages {
       width: min(920px, 100%);
@@ -1652,6 +1904,11 @@ INDEX_HTML = """<!doctype html>
         border-right: 0;
         border-bottom: 1px solid var(--border);
       }
+      .vnc-frame-wrap {
+        width: calc(100vw - 32px);
+        height: min(62vh, 768px);
+      }
+      .vnc-controls { grid-template-columns: 1fr; }
       .bubble { max-width: 88%; }
       .overlay { padding: 8px; }
       .settings-panel { height: 100%; }
@@ -1677,8 +1934,20 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="session-list" id="session-list"></div>
       </aside>
-      <div class="chat-scroll" id="chat-scroll">
-        <div class="messages" id="messages"></div>
+      <div class="chat-panel">
+        <details class="vnc-panel" id="vnc-panel">
+          <summary>Remote screen <span class="vnc-status offline" id="vnc-status">hors ligne</span></summary>
+          <div class="vnc-controls">
+            <input id="vnc-url" type="text" value="vnc://192.168.0.160:5900?password=ronron" spellcheck="false" aria-label="VNC URL">
+            <button class="small-button" id="vnc-connect" type="button">Connecter</button>
+          </div>
+          <div class="vnc-frame-wrap">
+            <iframe class="vnc-frame" id="vnc-frame" title="noVNC remote screen" loading="lazy" referrerpolicy="no-referrer"></iframe>
+          </div>
+        </details>
+        <div class="chat-scroll" id="chat-scroll">
+          <div class="messages" id="messages"></div>
+        </div>
       </div>
     </main>
 
@@ -1848,6 +2117,10 @@ INDEX_HTML = """<!doctype html>
     const metaEl = document.querySelector("#meta");
     const messagesEl = document.querySelector("#messages");
     const chatScroll = document.querySelector("#chat-scroll");
+    const vncUrl = document.querySelector("#vnc-url");
+    const vncConnect = document.querySelector("#vnc-connect");
+    const vncFrame = document.querySelector("#vnc-frame");
+    const vncStatus = document.querySelector("#vnc-status");
     const sessionList = document.querySelector("#session-list");
     const sessionNew = document.querySelector("#session-new");
     const injectForm = document.querySelector("#inject-form");
@@ -1892,6 +2165,7 @@ INDEX_HTML = """<!doctype html>
     let connectivityLocked = false;
     let configBaseline = "";
     let environmentLoadingActive = false;
+    let vncConnectTimer = null;
     let lastServerMessages = [];
     let pendingMessages = [];
     let composerLocked = false;
@@ -1947,6 +2221,66 @@ INDEX_HTML = """<!doctype html>
       if (!normalized) return false;
       const stopWords = new Set(["stop", "stoppe", "stope", "arrete", "arreter", "annule", "annuler", "cancel"]);
       return normalized.split(/\\s+/).some((word) => stopWords.has(word));
+    }
+
+    function setVncStatus(value) {
+      const status = value || "hors ligne";
+      vncStatus.textContent = status;
+      vncStatus.classList.toggle("online", status.startsWith("connecté") || status.startsWith("Connecté"));
+      vncStatus.classList.toggle("offline", status.startsWith("hors ligne"));
+    }
+
+    function noVncUrlFromInput(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      const lowerRaw = raw.toLowerCase();
+      if (lowerRaw.startsWith("http://") || lowerRaw.startsWith("https://")) return raw;
+
+      const parsed = new URL(lowerRaw.startsWith("vnc:") ? `http:${raw.slice(4)}` : raw);
+      const params = new URLSearchParams();
+      params.set("host", parsed.hostname);
+      params.set("port", parsed.port || "5900");
+      params.set("autoconnect", "1");
+      params.set("resize", "scale");
+      const password = parsed.searchParams.get("password") || "ronron";
+      if (password) params.set("password", password);
+      return `/vnc.html?${params.toString()}`;
+    }
+
+    async function connectVnc() {
+      let frameUrl = "";
+      try {
+        frameUrl = noVncUrlFromInput(vncUrl.value);
+      } catch (error) {
+        setVncStatus("hors ligne");
+        metaEl.textContent = `VNC URL invalide: ${error}`;
+        return;
+      }
+      if (!frameUrl) {
+        setVncStatus("hors ligne");
+        return;
+      }
+      setVncStatus("connexion...");
+      window.clearTimeout(vncConnectTimer);
+      vncConnectTimer = window.setTimeout(() => setVncStatus("hors ligne"), 5000);
+      try {
+        const targetUrl = new URL(frameUrl, window.location.href);
+        if (targetUrl.origin === window.location.origin) {
+          const response = await fetch(targetUrl.href, { method: "GET", cache: "no-store" });
+          if (!response.ok) {
+            window.clearTimeout(vncConnectTimer);
+            setVncStatus("hors ligne");
+            metaEl.textContent = `noVNC indisponible: ${targetUrl.pathname}`;
+            return;
+          }
+        }
+      } catch (error) {
+        window.clearTimeout(vncConnectTimer);
+        setVncStatus("hors ligne");
+        metaEl.textContent = `noVNC indisponible: ${error}`;
+        return;
+      }
+      vncFrame.src = frameUrl;
     }
 
     function ledClass(status) {
@@ -3087,6 +3421,29 @@ INDEX_HTML = """<!doctype html>
 
     refresh();
     setInterval(refresh, 1500);
+    connectVnc();
+
+    vncConnect.addEventListener("click", connectVnc);
+    vncUrl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        connectVnc();
+      }
+    });
+    vncFrame.addEventListener("load", () => {
+      setVncStatus("connexion...");
+    });
+    vncFrame.addEventListener("error", () => {
+      window.clearTimeout(vncConnectTimer);
+      setVncStatus("hors ligne");
+    });
+    window.addEventListener("message", (event) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data || {};
+      if (data.type !== "lsa-vnc-status") return;
+      window.clearTimeout(vncConnectTimer);
+      setVncStatus(String(data.text || (data.connected ? "connecté" : "hors ligne")));
+    });
 
     injectCommand.addEventListener("input", autoSizeComposer);
     injectCommand.addEventListener("keydown", (event) => {
