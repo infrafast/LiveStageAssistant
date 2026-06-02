@@ -28,6 +28,7 @@ import threading
 import time
 from typing import Any
 import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 
@@ -2246,6 +2247,24 @@ async def main():
             ),
         }
 
+    def remote_screen_url_from_values(values: dict) -> str:
+        return (values.get("REMOTE_SCREEN_VNC_URL") or "vnc://192.168.0.160:5900?password=ronron").strip()
+
+    def save_remote_screen_config(env_file: Path, vnc_url: str, web_monitor: WebMonitor | None) -> dict[str, Any]:
+        cleaned_url = vnc_url.strip()
+        if not cleaned_url:
+            raise ValueError("VNC URL is required")
+        parsed = urllib.parse.urlparse(cleaned_url)
+        if parsed.scheme not in {"vnc", "http", "https"}:
+            raise ValueError("VNC URL must start with vnc://, http://, or https://")
+        if not parsed.netloc:
+            raise ValueError("VNC URL must include a host")
+
+        update_env_file_values(env_file, {"REMOTE_SCREEN_VNC_URL": cleaned_url})
+        if web_monitor:
+            web_monitor.update(remote_screen={"vnc_url": cleaned_url})
+        return {"saved": True, "vnc_url": cleaned_url}
+
     def resolve_selected_env_file(selection: str, current_env_file: Path) -> Path:
         selection_path = Path(selection)
         candidate = selection_path if selection_path.is_absolute() else Path.cwd() / selection_path
@@ -2728,6 +2747,7 @@ async def main():
                     mcp_config=mcp_config,
                 ),
                 web_audio=web_audio_state,
+                remote_screen={"vnc_url": remote_screen_url_from_values(env_values)},
                 thinking_sound_file=thinking_sound_file,
             )
             web_monitor.replace_dialogue(session_context_store.snapshot().get("messages") or [])
@@ -2965,6 +2985,9 @@ async def main():
         web_monitor.set_env_profile_handlers(
             list_handler=lambda: list_available_env_files(get_active_env_file(), auto_env_mode),
             switch_handler=switch_active_env_file,
+        )
+        web_monitor.set_remote_screen_handler(
+            lambda vnc_url: save_remote_screen_config(get_active_env_file(), vnc_url, web_monitor)
         )
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),

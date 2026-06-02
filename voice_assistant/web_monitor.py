@@ -100,6 +100,7 @@ class WebMonitor:
         self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]] | None = None
         self._env_profile_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
+        self._remote_screen_save_handler: Callable[[str], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
@@ -123,6 +124,7 @@ class WebMonitor:
             "session_context_size": 6000,
             "assistant_busy": False,
             "environment_loading": {"active": False, "title": ""},
+            "remote_screen": {"vnc_url": "vnc://192.168.0.160:5900?password=ronron"},
             "web_audio": {"enabled": False, "stt_enabled": False, "tts_enabled": False},
             "updated_at": time.time(),
         }
@@ -148,6 +150,11 @@ class WebMonitor:
         with self._lock:
             self._env_profile_handler = list_handler
             self._env_profile_switch_handler = switch_handler
+
+    def set_remote_screen_handler(self, save_handler: Callable[[str], dict[str, Any]]) -> None:
+        """Register callback used by the web UI to save remote-screen settings."""
+        with self._lock:
+            self._remote_screen_save_handler = save_handler
 
     def set_session_context_handlers(
         self,
@@ -290,6 +297,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/env-profile":
                         self._handle_env_profile_switch()
+                        return
+                    if self.path == "/api/remote-screen-config":
+                        self._handle_remote_screen_config()
                         return
                     if self.path == "/api/session-context/new":
                         self._handle_session_context_new()
@@ -623,6 +633,28 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self.send_error(500, f"Could not switch env profile: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_remote_screen_config(self) -> None:
+                    handler = monitor._remote_screen_save_handler
+                    if handler is None:
+                        self.send_error(503, "Remote screen configuration is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    vnc_url = str(payload.get("vnc_url") or "").strip()
+                    if not vnc_url:
+                        self.send_error(400, "VNC URL is required")
+                        return
+                    try:
+                        result = handler(vnc_url)
+                    except ValueError as e:
+                        self.send_error(400, str(e))
+                        return
+                    except Exception as e:
+                        self.send_error(500, f"Could not save remote screen configuration: {e}")
                         return
                     self._send_json(result)
 
@@ -1014,6 +1046,7 @@ class WebMonitor:
         mcp_config: dict[str, Any] | None = None,
         prompt: str | None = None,
         web_audio: dict[str, Any] | None = None,
+        remote_screen: dict[str, Any] | None = None,
         thinking_sound_file: str | None = None,
     ) -> None:
         with self._lock:
@@ -1042,6 +1075,8 @@ class WebMonitor:
                 self._snapshot["prompt"] = prompt
             if web_audio is not None:
                 self._snapshot["web_audio"] = web_audio
+            if remote_screen is not None:
+                self._snapshot["remote_screen"] = remote_screen
             if thinking_sound_file is not None:
                 cleaned_file = Path(thinking_sound_file).name if thinking_sound_file else ""
                 if cleaned_file:
@@ -2208,6 +2243,7 @@ INDEX_HTML = """<!doctype html>
     let configBaseline = "";
     let environmentLoadingActive = false;
     let vncConnectTimer = null;
+    let vncUrlDirty = false;
     let lastServerMessages = [];
     let pendingMessages = [];
     let composerLocked = false;
@@ -2289,13 +2325,26 @@ INDEX_HTML = """<!doctype html>
       return `/vnc.html?${params.toString()}`;
     }
 
-    async function connectVnc() {
+    async function saveRemoteScreenUrl() {
+      const nextUrl = vncUrl.value.trim();
+      const response = await fetch("/api/remote-screen-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vnc_url: nextUrl })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      vncUrlDirty = false;
+      return response.json();
+    }
+
+    async function connectVnc({ save = false } = {}) {
       let frameUrl = "";
       try {
+        if (save) await saveRemoteScreenUrl();
         frameUrl = noVncUrlFromInput(vncUrl.value);
       } catch (error) {
         setVncStatus("hors ligne");
-        metaEl.textContent = `VNC URL invalide: ${error}`;
+        metaEl.textContent = `VNC URL error: ${error}`;
         return;
       }
       if (!frameUrl) {
@@ -3400,6 +3449,10 @@ INDEX_HTML = """<!doctype html>
         ];
         stateEl.innerHTML = rows.join("");
         configEl.value = data.config_text || "";
+        const remoteScreen = data.remote_screen || {};
+        if (!vncUrlDirty && remoteScreen.vnc_url && vncUrl.value !== remoteScreen.vnc_url) {
+          vncUrl.value = remoteScreen.vnc_url;
+        }
         const environmentLoading = data.environment_loading || {};
         setEnvironmentLoading(
           Boolean(environmentLoading.active),
@@ -3465,11 +3518,14 @@ INDEX_HTML = """<!doctype html>
     setInterval(refresh, 1500);
     connectVnc();
 
-    vncConnect.addEventListener("click", connectVnc);
+    vncUrl.addEventListener("input", () => {
+      vncUrlDirty = true;
+    });
+    vncConnect.addEventListener("click", () => connectVnc({ save: true }));
     vncUrl.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        connectVnc();
+        connectVnc({ save: true });
       }
     });
     vncFrame.addEventListener("load", () => {
