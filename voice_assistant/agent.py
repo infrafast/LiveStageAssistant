@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from typing import Any
 import urllib.error
 import urllib.request
@@ -109,6 +110,18 @@ DEFAULT_VOICE_CANCEL_WORDS = (
     "arreter",
     "arrêter",
     "cancel",
+)
+DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
+    "You are a helpful voice assistant with access to various tools. Your name is Live Stage Assistant. "
+    "Be precise, conservative, and tool-driven in your responses since they will be spoken aloud and have "
+    "to be suitable for text-to-speech and API calls. Summarize your results. "
+    "Reply in the same language as the user's latest request whenever possible. "
+    "Use plain text only. Do not use emojis, emoticons, markdown, bullets, symbols, or decorative characters. "
+    "For spoken numeric values, write negative numbers with words: say 'moins 11 dB' in French "
+    "and 'minus 11 dB' in English instead of '-11 dB'. "
+    "Write measurement units in words for text-to-speech: say 'décibels' in French or 'decibels' "
+    "in English instead of 'dB', and 'volts' instead of 'V'. "
+    "Behave like a friendly calm and motivating assistant."
 )
 OPENAI_TTS_VOICE_OPTIONS = [
     {"id": "alloy", "label": "Alloy (masculine)"},
@@ -218,6 +231,14 @@ def request_force_exit(_signum=None, _frame=None) -> None:
         os._exit(130)
     FORCE_EXIT_REQUESTED.set()
     raise KeyboardInterrupt
+
+
+def with_external_state_freshness_rule(prompt: str) -> str:
+    """Append the live-state freshness rule once to the configured system prompt."""
+    cleaned_prompt = prompt.rstrip()
+    if EXTERNAL_STATE_FRESHNESS_RULE in cleaned_prompt:
+        return cleaned_prompt
+    return f"{cleaned_prompt} {EXTERNAL_STATE_FRESHNESS_RULE}"
 
 
 def read_secret_from_env_values(values: dict, name: str) -> str | None:
@@ -600,25 +621,8 @@ class VoiceAssistant:
         self.microphone_available = True
         self.microphone_warning_shown = False
         
-        #self.system_prompt = system_prompt or (
-        #    "You are a helpful voice assistant with access to various tools. Your name is mcp-use "
-        #    "Be concise in your responses since they will be spoken aloud. Summarize your results. "
-        #    "Reply in the same language as the user's latest request whenever possible. "
-        #    "Behave like a great motivational speaker, and motivate me throughout the conversation."
-        #)
-
-        base_system_prompt = system_prompt or (
-            "You are a helpful voice assistant with access to various tools. Your name is Live Stage Assistant. "
-            "Be concise in your responses since they will be spoken aloud and have to be suitable for text-to-speech and API calls.. Summarize your results. "
-            "Reply in the same language as the user's latest request whenever possible. "
-            "Use plain text only. Do not use emojis, emoticons, markdown, bullets, symbols, or decorative characters. "
-            "For spoken numeric values, write negative numbers with words: say 'moins 11 dB' in French "
-            "and 'minus 11 dB' in English instead of '-11 dB'. "
-            "Write measurement units in words for text-to-speech: say 'décibels' in French or 'decibels' "
-            "in English instead of 'dB', and 'volts' instead of 'V'. "
-            "Behave like a friendly calm and motivating assistant."
-        )
-        self.system_prompt = f"{base_system_prompt.rstrip()} {EXTERNAL_STATE_FRESHNESS_RULE}"
+        base_system_prompt = system_prompt or DEFAULT_ASSISTANT_SYSTEM_PROMPT
+        self.system_prompt = with_external_state_freshness_rule(base_system_prompt)
         if self.web_monitor:
             if self.session_context_store:
                 self.web_monitor.set_context_state(
@@ -1601,6 +1605,8 @@ class VoiceAssistant:
         elif self.tts_provider == "elevenlabs":
             if self.elevenlabs_client:
                 if not elevenlabs_playback_available():
+                    if local_tts_playback_available():
+                        print("ElevenLabs TTS selected but ffplay is unavailable. Falling back to pyttsx3...")
                     return self.text_to_speech_pyttsx3(text)
                 try:
                     with TTS_LOCK:
@@ -2178,7 +2184,7 @@ async def main():
         current_tts_output = tts_output_from_values(values)
         current_wake_word = (values.get("WAKE_WORD") or "").strip()
         current_stt_prompt = (values.get("STT_PROMPT") or DEFAULT_STT_PROMPT).strip()
-        current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or "You are a helpful voice assistant with access to various tools. Your name is mcp-use. Be concise in your responses since they will be spoken aloud. Summarize your results. Behave like a great motivational speaker, and motivate me throughout the conversation.").strip()
+        current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip()
         current_session_context_size = env_int_from_values(values, "SESSION_CONTEXT_SIZE", 6000)
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
@@ -2211,6 +2217,7 @@ async def main():
             message = "OpenAI models loaded from API."
         elif provider == "ollama":
             message = "Ollama local models loaded."
+        message = f"{message} Active env: {env_file}.".strip()
 
         return {
             "provider": provider,
@@ -2251,6 +2258,7 @@ async def main():
         openai_tts_speed: float,
         web_monitor: WebMonitor | None,
         reload_event: threading.Event | None,
+        auto_env_mode: bool = False,
     ) -> dict[str, Any]:
         provider = provider.strip().lower()
         model = model.strip()
@@ -2267,8 +2275,16 @@ async def main():
         if provider not in {"openai", "ollama"}:
             raise ValueError(f"unsupported LLM provider: {provider}")
         values = dict(dotenv_values(env_file))
+        def env_secret_available(name: str) -> bool:
+            file_path = (values.get(f"{name}_FILE") or "").strip()
+            if not file_path:
+                return False
+            try:
+                return bool(Path(file_path).read_text().strip())
+            except OSError:
+                return False
+
         current_cloud_tts_provider = cloud_tts_provider_from_values(values)
-        current_tts_provider = (values.get("TTS_PROVIDER") or "elevenlabs").strip().lower()
         if not cloud_tts_provider:
             cloud_tts_provider = current_cloud_tts_provider
         if cloud_tts_provider not in {"none", "openai", "elevenlabs"}:
@@ -2282,16 +2298,28 @@ async def main():
         if cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "browser":
             updated_tts_provider = "none"
             updated_web_tts_provider = cloud_tts_provider
+            updated_web_audio_enabled = "true"
+            if not env_secret_available("OPENAI_API_KEY"):
+                raise ValueError("browser audio requires OPENAI_API_KEY_FILE for web speech-to-text")
+            if cloud_tts_provider == "elevenlabs" and not env_secret_available("ELEVENLABS_API_KEY"):
+                raise ValueError("ElevenLabs browser TTS requires ELEVENLABS_API_KEY_FILE")
         elif cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "backend":
-            updated_tts_provider = (
-                "pyttsx3"
-                if current_tts_provider == "pyttsx3" and cloud_tts_provider == current_cloud_tts_provider
-                else cloud_tts_provider
-            )
+            if auto_env_mode and env_file == AUTO_ENV_OFFLINE:
+                raise ValueError(
+                    "auto mode is currently using .env.offline, whose backend TTS is local pyttsx3. "
+                    "Start with --env-file .env.online or wait for auto mode to switch online before saving cloud backend TTS."
+                )
+            updated_tts_provider = cloud_tts_provider
             updated_web_tts_provider = "none"
+            updated_web_audio_enabled = (values.get("WEB_AUDIO_ENABLED") or "false").strip().lower() or "false"
+            if cloud_tts_provider == "openai" and not env_secret_available("OPENAI_API_KEY"):
+                raise ValueError("OpenAI backend TTS requires OPENAI_API_KEY_FILE")
+            if cloud_tts_provider == "elevenlabs" and not env_secret_available("ELEVENLABS_API_KEY"):
+                raise ValueError("ElevenLabs backend TTS requires ELEVENLABS_API_KEY_FILE")
         else:
             updated_tts_provider = "none"
             updated_web_tts_provider = "none"
+            updated_web_audio_enabled = (values.get("WEB_AUDIO_ENABLED") or "false").strip().lower() or "false"
         current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
         current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
         if not model:
@@ -2333,7 +2361,11 @@ async def main():
                 "OPENAI_MODEL": model,
                 "CLOUD_TTS_PROVIDER": cloud_tts_provider,
                 "TTS_PROVIDER": updated_tts_provider,
+                "WEB_AUDIO_ENABLED": updated_web_audio_enabled,
+                "WEB_STT_PROVIDER": "openai",
+                "WEB_STT_MODEL": (values.get("WEB_STT_MODEL") or "whisper-1").strip() or "whisper-1",
                 "WEB_TTS_PROVIDER": updated_web_tts_provider,
+                "WEB_TTS_MODEL": (values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip() or DEFAULT_OPENAI_TTS_MODEL,
                 "WAKE_WORD": wake_word,
                 "STT_PROMPT": stt_prompt,
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
@@ -2364,6 +2396,13 @@ async def main():
 
         return {
             "saved": True,
+            "message": (
+                "Saved. Browser TTS enabled WEB_AUDIO_ENABLED=true."
+                if tts_output == "browser"
+                else f"Saved. Backend TTS uses {cloud_tts_provider} in {env_file}."
+                if tts_output == "backend" and cloud_tts_provider in {"openai", "elevenlabs"}
+                else "Saved."
+            ),
             "provider": provider,
             "model": model,
             "cloud_tts_provider": cloud_tts_provider,
@@ -2757,6 +2796,7 @@ async def main():
                 openai_tts_speed,
                 web_monitor,
                 reload_event,
+                auto_env_mode,
             ),
         )
 
