@@ -11,7 +11,6 @@ services:
       - ./container/config:/config
       - ./container/data:/data
       - ./assets:/app/assets:ro
-      - ./static:/app/static:ro
       # Optional: mount a built XMSeries-MCP checkout here.
       # - ./XMSeries-MCP:/xmseries-mcp:ro
     # Optional, required only if you want microphone/speaker access from the NAS.

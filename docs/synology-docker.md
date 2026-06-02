@@ -38,7 +38,6 @@ Create a project folder such as:
       mcp_servers.synology.json
     data/
   assets/
-  static/
   XMSeries-MCP/
 ```
 
@@ -53,6 +52,8 @@ container/
     mcp_servers.synology.json
   data/
 ```
+
+The Docker image includes the `static/` folder, including the vendored noVNC client. Avoid mounting a host `static/` folder over `/app/static`; a partial host copy will hide the complete files from the image and can break noVNC module imports such as `static/novnc/vendor/pako/lib/zlib/inflate.js`.
 
 Edit `container/config/.env.infrafast`.
 Keep `container/config/mcp_servers.synology.json` in the same folder.
