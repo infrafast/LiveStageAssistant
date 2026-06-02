@@ -259,6 +259,9 @@ class WebMonitor:
                     if parsed.path == "/api/vnc-proxy":
                         self._handle_vnc_proxy(parsed.query)
                         return
+                    if parsed.path == "/api/vnc-check":
+                        self._handle_vnc_check(parsed.query)
+                        return
                     if parsed.path == "/api/snapshot":
                         self._send_json(monitor.snapshot())
                         return
@@ -428,20 +431,10 @@ class WebMonitor:
                         self.wfile.write(data)
 
                 def _handle_vnc_proxy(self, query: str) -> None:
-                    params = parse_qs(query)
-                    host = (params.get("host") or [""])[0].strip()
-                    port_text = (params.get("port") or ["5900"])[0].strip()
-                    if not host:
-                        self.send_error(400, "VNC host is required")
+                    target_params = self._parse_vnc_target(query)
+                    if target_params is None:
                         return
-                    try:
-                        port = int(port_text)
-                    except ValueError:
-                        self.send_error(400, "VNC port must be an integer")
-                        return
-                    if port < 1 or port > 65535:
-                        self.send_error(400, "VNC port is out of range")
-                        return
+                    host, port = target_params
 
                     ws_key = self.headers.get("Sec-WebSocket-Key", "").strip()
                     if self.headers.get("Upgrade", "").lower() != "websocket" or not ws_key:
@@ -463,6 +456,36 @@ class WebMonitor:
                     self.send_header("Sec-WebSocket-Accept", accept)
                     self.end_headers()
                     self._proxy_websocket_to_tcp(target)
+
+                def _handle_vnc_check(self, query: str) -> None:
+                    target_params = self._parse_vnc_target(query)
+                    if target_params is None:
+                        return
+                    host, port = target_params
+                    try:
+                        with socket.create_connection((host, port), timeout=3):
+                            pass
+                    except OSError as e:
+                        self._send_json({"reachable": False, "host": host, "port": port, "error": str(e)})
+                        return
+                    self._send_json({"reachable": True, "host": host, "port": port})
+
+                def _parse_vnc_target(self, query: str) -> tuple[str, int] | None:
+                    params = parse_qs(query)
+                    host = (params.get("host") or [""])[0].strip()
+                    port_text = (params.get("port") or ["5900"])[0].strip()
+                    if not host:
+                        self.send_error(400, "VNC host is required")
+                        return None
+                    try:
+                        port = int(port_text)
+                    except ValueError:
+                        self.send_error(400, "VNC port must be an integer")
+                        return None
+                    if port < 1 or port > 65535:
+                        self.send_error(400, "VNC port is out of range")
+                        return None
+                    return host, port
 
                 def _recv_exact(self, sock: socket.socket, length: int) -> bytes:
                     chunks = []
@@ -1197,8 +1220,20 @@ VNC_HTML = """<!doctype html>
       const password = params.get("password") || "ronron";
       const scheme = window.location.protocol === "https:" ? "wss" : "ws";
       const proxyUrl = `${scheme}://${window.location.host}/api/vnc-proxy?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
+      const checkUrl = `/api/vnc-check?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
 
       const { default: RFB } = await import("/static/novnc/core/rfb.js?v=lsa-novnc-20260602-1");
+      setStatus(`Test VNC ${host}:${port}...`, false);
+      const checkResponse = await fetch(checkUrl, { cache: "no-store" });
+      if (!checkResponse.ok) {
+        throw new Error(`diagnostic VNC HTTP ${checkResponse.status}`);
+      }
+      const check = await checkResponse.json();
+      if (!check.reachable) {
+        setStatus(`hors ligne cible VNC injoignable: ${check.error || "connexion impossible"}`, false);
+        return;
+      }
+      setStatus(`Connexion WebSocket VNC ${host}:${port}...`, false);
       const rfb = new RFB(screenEl, proxyUrl, { credentials: { password } });
       rfb.viewOnly = false;
       rfb.scaleViewport = true;
