@@ -1896,6 +1896,7 @@ INDEX_HTML = """<!doctype html>
     let pendingMessages = [];
     let composerLocked = false;
     let cancelRequestInFlight = false;
+    let openSessionMenuId = "";
     let webAudio = { enabled: false, stt_enabled: false, tts_enabled: false };
     let mediaRecorder = null;
     let mediaStream = null;
@@ -1975,11 +1976,12 @@ INDEX_HTML = """<!doctype html>
 
     function sessionButton(session, activeId) {
       const active = session.id === activeId ? " active" : "";
+      const menuOpen = session.id === openSessionMenuId ? " menu-open" : "";
       const summaryTime = Number(session.llm_summary_updated_at || 0);
       const summaryLabel = summaryTime
         ? new Date(summaryTime * 1000).toLocaleString("fr-FR")
         : "No summary";
-      return `<div class="session-row${active}" data-session-id="${escapeHtml(session.id)}" data-session-title="${escapeHtml(session.title || "Untitled session")}">
+      return `<div class="session-row${active}${menuOpen}" data-session-id="${escapeHtml(session.id)}" data-session-title="${escapeHtml(session.title || "Untitled session")}">
         <button class="session-main" type="button">
           <span class="session-title">${escapeHtml(session.title || "Untitled session")}</span>
           <span class="session-meta">${escapeHtml(summaryLabel)}</span>
@@ -1999,8 +2001,12 @@ INDEX_HTML = """<!doctype html>
       const sessions = context.sessions || [];
       const activeId = context.active_id || "";
       if (sessions.length === 0) {
+        openSessionMenuId = "";
         sessionList.innerHTML = `<div class="session-meta">No session</div>`;
         return;
+      }
+      if (openSessionMenuId && !sessions.some((session) => session.id === openSessionMenuId)) {
+        openSessionMenuId = "";
       }
       sessionList.innerHTML = sessions.map((session) => sessionButton(session, activeId)).join("");
     }
@@ -2761,6 +2767,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     function closeSessionMenus() {
+      openSessionMenuId = "";
       for (const row of sessionList.querySelectorAll(".session-row.menu-open")) {
         row.classList.remove("menu-open");
       }
@@ -3170,7 +3177,10 @@ INDEX_HTML = """<!doctype html>
       if (menuButton) {
         const wasOpen = row.classList.contains("menu-open");
         closeSessionMenus();
-        row.classList.toggle("menu-open", !wasOpen);
+        if (!wasOpen) {
+          openSessionMenuId = sessionId;
+          row.classList.add("menu-open");
+        }
         return;
       }
 

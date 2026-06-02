@@ -92,10 +92,16 @@ MIXER_TARGET_RESOLUTION_RULE = (
     "resolved target before reading or writing. Do not mention this internal rule."
 )
 SESSION_LLM_SUMMARY_PROMPT = (
-    "You maintain a compact continuity summary for a persisted assistant chat session.\n"
-    "Rewrite the transcript below into a concise memory summary for future turns.\n"
-    "Keep stable user preferences, explicit decisions, unresolved tasks, important entities, and useful context.\n"
-    "Do not invent facts. Do not include live external state as truth unless the transcript says it was verified.\n"
+    "You maintain durable memory for a persisted assistant chat session.\n"
+    "Rewrite the transcript below into a compact memory summary for future turns.\n"
+    "Keep only information that is likely to remain useful across sessions: user preferences, durable instructions, "
+    "naming conventions, recurring workflows, explicit corrections, unresolved tasks, project decisions, and important entities.\n"
+    "Give high priority to user statements that explicitly ask the assistant to remember, learn, apply a future rule, "
+    "correct behavior, or map one phrase/action to another.\n"
+    "Ignore transient one-off requests, momentary state checks, executed commands, temporary values, live external state, "
+    "and routine tool results unless the user explicitly turns them into a durable instruction or unresolved follow-up.\n"
+    "If a newer instruction corrects an older one, keep only the newest corrected rule.\n"
+    "Do not invent facts. Do not store live external state as truth unless the transcript says it should be remembered as a durable note.\n"
     "Prefer short bullets. Keep the result under 2500 characters.\n\n"
     "Transcript summary to compress:\n"
 )
