@@ -31,6 +31,9 @@ COPY static ./static
 COPY mcp_servers*.json ./
 COPY docker-entrypoint.sh /usr/local/bin/live-stage-assistant-entrypoint
 
+RUN test -f static/novnc/core/rfb.js \
+    && test -f static/novnc/vendor/pako/lib/zlib/inflate.js
+
 RUN python -m pip install --upgrade pip \
     && python -m pip install .
 
