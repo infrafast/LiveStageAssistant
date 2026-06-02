@@ -2212,6 +2212,60 @@ async def main():
             if wav_path.is_file()
         ]
 
+    def display_env_path(path: Path) -> str:
+        try:
+            return str(path.resolve().relative_to(Path.cwd().resolve()))
+        except ValueError:
+            return str(path)
+
+    def list_available_env_files(current_env_file: Path, auto_env_mode: bool) -> dict[str, Any]:
+        candidates: dict[str, Path] = {}
+        for candidate in Path.cwd().glob(".env*"):
+            if candidate.is_file():
+                candidates[display_env_path(candidate)] = candidate
+        if current_env_file.exists():
+            candidates[display_env_path(current_env_file)] = current_env_file
+
+        profiles = [
+            {
+                "id": profile_id,
+                "label": profile_id,
+                "selected": profile_path.resolve() == current_env_file.resolve(),
+            }
+            for profile_id, profile_path in sorted(candidates.items(), key=lambda item: item[0].lower())
+        ]
+        return {
+            "current": display_env_path(current_env_file),
+            "profiles": profiles,
+            "switching_enabled": not auto_env_mode,
+            "auto_mode": auto_env_mode,
+            "connectivity_locked": auto_env_mode,
+            "message": (
+                "Manual env switching is disabled while --env-file auto controls the active profile."
+                if auto_env_mode
+                else ""
+            ),
+        }
+
+    def resolve_selected_env_file(selection: str, current_env_file: Path) -> Path:
+        selection_path = Path(selection)
+        candidate = selection_path if selection_path.is_absolute() else Path.cwd() / selection_path
+        try:
+            resolved_candidate = candidate.resolve(strict=True)
+        except OSError as e:
+            raise ValueError(f"env file not found: {selection}") from e
+        if not resolved_candidate.is_file():
+            raise ValueError(f"env file is not a file: {selection}")
+        if not resolved_candidate.name.startswith(".env"):
+            raise ValueError("only .env* files can be selected")
+
+        allowed = {path.resolve() for path in Path.cwd().glob(".env*") if path.is_file()}
+        if current_env_file.exists():
+            allowed.add(current_env_file.resolve())
+        if resolved_candidate not in allowed:
+            raise ValueError("selected env file is outside the available .env profiles")
+        return resolved_candidate
+
     def build_llm_options(env_file: Path, requested_provider: str | None = None) -> dict[str, Any]:
         values = dict(dotenv_values(env_file))
         current_connectivity_mode = connectivity_mode_from_values(values, env_file)
@@ -2833,6 +2887,49 @@ async def main():
         sys.exit(1)
 
     reload_event = threading.Event()
+    env_file_lock = threading.RLock()
+
+    def get_active_env_file() -> Path:
+        with env_file_lock:
+            return env_file
+
+    def switch_active_env_file(selection: str) -> dict[str, Any]:
+        nonlocal env_file
+        if auto_env_mode:
+            raise ValueError("manual env switching is disabled while --env-file auto controls the active profile")
+        with env_file_lock:
+            previous_env_file = env_file
+            selected_env_file = resolve_selected_env_file(selection, previous_env_file)
+            if selected_env_file.resolve() == previous_env_file.resolve():
+                return {
+                    "switched": False,
+                    "env_file": display_env_path(env_file),
+                    "message": f"Already using {display_env_path(env_file)}.",
+                }
+            env_file = selected_env_file
+            values = dict(dotenv_values(env_file))
+            mcp_config = load_mcp_config_from_values(values)
+            if web_monitor:
+                web_monitor.update(
+                    env_file=env_file,
+                    mode="manual",
+                    env_values=values,
+                    mcp_config=mcp_config or {},
+                    services=build_service_state(
+                        llm_provider=(values.get("LLM_PROVIDER") or "openai").strip().lower(),
+                        model=(values.get("OPENAI_MODEL") or "gpt-4o-mini").strip(),
+                        stt_provider=(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
+                        tts_provider=(values.get("TTS_PROVIDER") or "elevenlabs").strip().lower(),
+                        mcp_config=mcp_config,
+                    ),
+                )
+            reload_event.set()
+            return {
+                "switched": True,
+                "env_file": display_env_path(env_file),
+                "message": f"Switching to {display_env_path(env_file)}.",
+            }
+
     web_monitor = None
     if web_enabled:
         web_monitor = WebMonitor()
@@ -2846,10 +2943,14 @@ async def main():
             print(f"Web monitor disabled: could not bind {web_host}:{web_port}: {e}")
 
     if web_monitor:
+        web_monitor.set_env_profile_handlers(
+            list_handler=lambda: list_available_env_files(get_active_env_file(), auto_env_mode),
+            switch_handler=switch_active_env_file,
+        )
         web_monitor.set_llm_config_handlers(
-            options_handler=lambda provider=None: build_llm_options(env_file, provider),
+            options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
             save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
-                env_file,
+                get_active_env_file(),
                 provider,
                 model,
                 cloud_tts_provider,
@@ -2877,7 +2978,8 @@ async def main():
             announce_reload_complete = False
             while True:
                 reload_event.clear()
-                assistant = build_assistant_from_env(env_file, reload_event=reload_event, web_monitor=web_monitor)
+                active_env_file = get_active_env_file()
+                assistant = build_assistant_from_env(active_env_file, reload_event=reload_event, web_monitor=web_monitor)
                 if announce_reload_complete:
                     await assistant.text_to_speech("Configuration mise à jour. L'assistant redémarre avec le nouveau modèle.")
                     announce_reload_complete = False
@@ -2886,7 +2988,7 @@ async def main():
                 if run_result != "reload":
                     break
 
-                print(f"Configuration reload requested. Restarting assistant with {env_file}.")
+                print(f"Configuration reload requested. Restarting assistant with {get_active_env_file()}.")
                 announce_reload_complete = True
         finally:
             if web_monitor:
@@ -2907,13 +3009,15 @@ async def main():
     try:
         announce_reload_complete = False
         while True:
-            env_file = auto_monitor.detected_env_file
-            if not env_file.exists():
-                print(f"Error: env file not found: {env_file}")
+            detected_env_file = auto_monitor.detected_env_file
+            with env_file_lock:
+                env_file = detected_env_file
+            if not detected_env_file.exists():
+                print(f"Error: env file not found: {detected_env_file}")
                 sys.exit(1)
 
             reload_event.clear()
-            assistant = build_assistant_from_env(env_file, reload_event=reload_event, web_monitor=web_monitor)
+            assistant = build_assistant_from_env(detected_env_file, reload_event=reload_event, web_monitor=web_monitor)
             if announce_reload_complete:
                 await assistant.text_to_speech("Environnement mis à jour. La demande en cours a été annulée.")
                 announce_reload_complete = False

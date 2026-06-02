@@ -94,6 +94,8 @@ class WebMonitor:
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]] | None = None
+        self._env_profile_handler: Callable[[], dict[str, Any]] | None = None
+        self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
@@ -128,6 +130,17 @@ class WebMonitor:
         with self._lock:
             self._llm_options_handler = options_handler
             self._llm_config_save_handler = save_handler
+
+    def set_env_profile_handlers(
+        self,
+        *,
+        list_handler: Callable[[], dict[str, Any]],
+        switch_handler: Callable[[str], dict[str, Any]],
+    ) -> None:
+        """Register callbacks used by the web UI to list and switch env profiles."""
+        with self._lock:
+            self._env_profile_handler = list_handler
+            self._env_profile_switch_handler = switch_handler
 
     def set_session_context_handlers(
         self,
@@ -228,6 +241,9 @@ class WebMonitor:
                     if parsed.path == "/api/llm-options":
                         self._handle_llm_options(parsed.query)
                         return
+                    if parsed.path == "/api/env-profiles":
+                        self._handle_env_profiles()
+                        return
                     if parsed.path == "/api/session-context":
                         self._handle_session_context_list()
                         return
@@ -251,6 +267,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/llm-config":
                         self._handle_llm_config_save()
+                        return
+                    if self.path == "/api/env-profile":
+                        self._handle_env_profile_switch()
                         return
                     if self.path == "/api/session-context/new":
                         self._handle_session_context_new()
@@ -403,6 +422,40 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self.send_error(500, f"Could not save LLM configuration: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_env_profiles(self) -> None:
+                    handler = monitor._env_profile_handler
+                    if handler is None:
+                        self.send_error(503, "Env profile switching is not available")
+                        return
+                    try:
+                        result = handler()
+                    except Exception as e:
+                        self.send_error(500, f"Could not list env profiles: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_env_profile_switch(self) -> None:
+                    handler = monitor._env_profile_switch_handler
+                    if handler is None:
+                        self.send_error(503, "Env profile switching is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    env_file = str(payload.get("env_file") or "").strip()
+                    if not env_file:
+                        self.send_error(400, "env_file is required")
+                        return
+                    try:
+                        result = handler(env_file)
+                    except ValueError as e:
+                        self.send_error(400, str(e))
+                        return
+                    except Exception as e:
+                        self.send_error(500, f"Could not switch env profile: {e}")
                         return
                     self._send_json(result)
 
@@ -1388,6 +1441,23 @@ INDEX_HTML = """<!doctype html>
 	    .field.hidden {
 	      display: none;
 	    }
+    .hidden {
+      display: none !important;
+    }
+    .inline-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 18px;
+      margin-left: 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0 7px;
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      vertical-align: middle;
+    }
     .offline-audio-summary {
       grid-column: 1 / -1;
       min-height: 38px;
@@ -1440,6 +1510,9 @@ INDEX_HTML = """<!doctype html>
     .segmented label:has(input:disabled) {
       opacity: 0.45;
       cursor: default;
+    }
+    #connectivity-mode {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
     label {
       font-size: 12px;
@@ -1582,7 +1655,8 @@ INDEX_HTML = """<!doctype html>
         <section>
           <div class="config-controls">
             <div class="field full-row">
-              <label>Connectivity</label>
+              <label>Connectivity <span class="inline-badge hidden" id="connectivity-auto-badge">Auto</span></label>
+              <select id="env-profile"></select>
               <div class="segmented" id="connectivity-mode" role="radiogroup" aria-label="Connectivity">
                 <label><input type="radio" name="connectivity-mode" value="online">Online</label>
                 <label><input type="radio" name="connectivity-mode" value="offline">Offline</label>
@@ -1726,7 +1800,9 @@ INDEX_HTML = """<!doctype html>
 	    const llmProvider = document.querySelector("#llm-provider");
 	    const llmModel = document.querySelector("#llm-model");
 	    const sessionContextSize = document.querySelector("#session-context-size");
-	    const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
+    const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
+    const envProfile = document.querySelector("#env-profile");
+    const connectivityAutoBadge = document.querySelector("#connectivity-auto-badge");
     const connectivityModeInputs = Array.from(document.querySelectorAll('input[name="connectivity-mode"]'));
     const cloudAudioControls = Array.from(document.querySelectorAll(".cloud-audio-control"));
     const offlineAudioSummary = document.querySelector("#offline-audio-summary");
@@ -1745,6 +1821,11 @@ INDEX_HTML = """<!doctype html>
     const llmMessage = document.querySelector("#llm-message");
     let llmControlsInitialized = false;
     let llmOptionsLoading = false;
+    let envProfilesLoading = false;
+    let activeEnvProfile = "";
+    let envProfileSwitchingEnabled = false;
+    let connectivityLocked = false;
+    let configBaseline = "";
     let lastServerMessages = [];
     let pendingMessages = [];
     let composerLocked = false;
@@ -2405,6 +2486,110 @@ INDEX_HTML = """<!doctype html>
       return opt;
     }
 
+    function configSignature() {
+      return JSON.stringify({
+        env_profile: activeEnvProfile,
+        connectivity_mode: selectedConnectivityMode(),
+        provider: llmProvider.value || "",
+        model: llmModel.value || "",
+        session_context_size: Number(sessionContextSize.value || 0),
+        wake_word: wakeWord.value.trim(),
+        stt_prompt: sttPromptEl.value.trim(),
+        system_prompt: assistantSystemPromptEl.value.trim(),
+        cloud_tts_provider: cloudTtsProvider.value || "",
+        tts_output: selectedTtsOutput(),
+        voice_id: elevenlabsVoice.value || "",
+        thinking_sound_file: thinkingSound.value || "",
+        openai_tts_voice: openaiTtsVoice.value || "",
+        openai_tts_speed: Number(openaiTtsSpeed.value || 1)
+      });
+    }
+
+    function markConfigClean() {
+      configBaseline = configSignature();
+    }
+
+    function hasUnsavedConfigChanges() {
+      return Boolean(configBaseline) && configSignature() !== configBaseline;
+    }
+
+    async function loadEnvProfiles() {
+      if (envProfilesLoading) return false;
+      envProfilesLoading = true;
+      let profileChanged = false;
+      try {
+        const response = await fetch("/api/env-profiles", { cache: "no-store" });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        const current = data.current || "";
+        profileChanged = Boolean(activeEnvProfile) && current && current !== activeEnvProfile;
+        activeEnvProfile = current;
+        envProfile.replaceChildren();
+        for (const profile of data.profiles || []) {
+          envProfile.appendChild(option(profile.label || profile.id, profile.id, false, profile.id === current || profile.selected));
+        }
+        if (current && envProfile.value !== current) {
+          envProfile.value = current;
+        }
+        envProfileSwitchingEnabled = data.switching_enabled !== false;
+        connectivityLocked = data.connectivity_locked === true;
+        connectivityAutoBadge.classList.toggle("hidden", data.auto_mode !== true);
+        envProfile.disabled = !envProfileSwitchingEnabled || envProfile.options.length <= 1;
+        if (data.message && !llmMessage.textContent) {
+          llmMessage.textContent = data.message;
+        }
+      } catch (error) {
+        envProfile.replaceChildren(option("Env profiles unavailable", "", true, true));
+        envProfile.disabled = true;
+        connectivityAutoBadge.classList.add("hidden");
+        llmMessage.textContent = `Env profiles unavailable: ${error}`;
+      } finally {
+        envProfilesLoading = false;
+      }
+      return profileChanged;
+    }
+
+    async function switchEnvProfile(nextEnvProfile) {
+      if (!nextEnvProfile || nextEnvProfile === activeEnvProfile) {
+        envProfile.value = activeEnvProfile;
+        return;
+      }
+      if (hasUnsavedConfigChanges()) {
+        const confirmed = window.confirm("Unsaved config changes will be discarded. Switch env profile anyway?");
+        if (!confirmed) {
+          envProfile.value = activeEnvProfile;
+          return;
+        }
+      }
+
+      envProfile.disabled = true;
+      llmSave.disabled = true;
+      llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
+      try {
+        const response = await fetch("/api/env-profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ env_file: nextEnvProfile })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        activeEnvProfile = data.env_file || nextEnvProfile;
+        llmControlsInitialized = false;
+        configBaseline = "";
+        llmMessage.textContent = data.message || "Env profile switched.";
+        await loadEnvProfiles();
+        await loadLlmOptions("", "");
+        markConfigClean();
+        await refresh();
+      } catch (error) {
+        envProfile.value = activeEnvProfile;
+        llmMessage.textContent = `Env switch failed: ${error}`;
+      } finally {
+        envProfile.disabled = !envProfileSwitchingEnabled || envProfile.options.length <= 1;
+        llmSave.disabled = !llmProvider.value;
+      }
+    }
+
     function syncOpenAiSpeedLabel() {
       openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
     }
@@ -2441,6 +2626,12 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function syncConnectivityLock() {
+      for (const input of connectivityModeInputs) {
+        input.disabled = connectivityLocked;
+      }
+    }
+
     function syncConnectivityControls() {
       if (selectedConnectivityMode() === "offline") {
         if ([...llmProvider.options].some((option) => option.value === "ollama")) {
@@ -2451,6 +2642,7 @@ INDEX_HTML = """<!doctype html>
         }
         setSelectedTtsOutput("backend");
       }
+      syncConnectivityLock();
       syncTtsProviderControls();
     }
 
@@ -2547,7 +2739,8 @@ INDEX_HTML = """<!doctype html>
     }
 
 	    async function loadLlmOptions(provider, preferredModel, connectivityOverride = "") {
-      if (llmOptionsLoading) return;
+      if (llmOptionsLoading) return false;
+      const shouldMarkClean = !connectivityOverride;
       llmOptionsLoading = true;
 	      llmProvider.disabled = true;
 	      llmModel.disabled = true;
@@ -2657,12 +2850,15 @@ INDEX_HTML = """<!doctype html>
         }
 
         llmMessage.textContent = data.message || "";
+        if (shouldMarkClean) {
+          markConfigClean();
+        }
       } catch (error) {
         llmMessage.textContent = `LLM options unavailable: ${error}`;
       } finally {
 	        llmProvider.disabled = false;
 	        llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
-        for (const input of connectivityModeInputs) input.disabled = false;
+        for (const input of connectivityModeInputs) input.disabled = connectivityLocked;
 	        sessionContextSize.disabled = false;
         wakeWord.disabled = false;
         sttPromptEl.disabled = false;
@@ -2674,15 +2870,18 @@ INDEX_HTML = """<!doctype html>
         llmSave.disabled = !llmProvider.value;
         llmOptionsLoading = false;
       }
+      return true;
     }
 
-    function syncLlmControls(data) {
+    async function syncLlmControls(data) {
       if (llmControlsInitialized) return;
       const env = (data.config && data.config.env) || {};
       const provider = String(env.LLM_PROVIDER || "openai").toLowerCase();
       const model = String(env.OPENAI_MODEL || "");
-      llmControlsInitialized = true;
-      loadLlmOptions(provider, model);
+      const loaded = await loadLlmOptions(provider, model);
+      if (loaded !== false) {
+        llmControlsInitialized = true;
+      }
     }
 
     async function refresh() {
@@ -2698,7 +2897,12 @@ INDEX_HTML = """<!doctype html>
         ];
         stateEl.innerHTML = rows.join("");
         configEl.value = data.config_text || "";
-        syncLlmControls(data);
+        const envProfileChanged = await loadEnvProfiles();
+        if (envProfileChanged) {
+          llmControlsInitialized = false;
+          configBaseline = "";
+        }
+        await syncLlmControls(data);
         promptEl.value = data.prompt || "";
         renderSessions(data.session_context || {});
         if (!settingsOverlay.classList.contains("open")) {
@@ -2889,6 +3093,10 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    envProfile.addEventListener("change", () => {
+      switchEnvProfile(envProfile.value);
+    });
+
 	    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
@@ -2939,6 +3147,7 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         llmMessage.textContent = data.message || "Saved.";
+        markConfigClean();
         await refresh();
       } catch (error) {
         llmMessage.textContent = `Save failed: ${error}`;
