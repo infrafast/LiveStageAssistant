@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "xmseries-http": {
+      "type": "streamable-http",
+      "url": "http://192.168.0.1:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer change-me"
+      },
+      "assistantPrompt": {
+        "promptName": "xmseries_mixer_assistant",
+        "resourceUri": "xmseries://prompt/system",
+        "tool": "osc_get_agent_prompt"
+      }             
+    }  
+  }
+}
