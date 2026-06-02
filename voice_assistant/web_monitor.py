@@ -454,6 +454,13 @@ class WebMonitor:
                     self.send_header("Upgrade", "websocket")
                     self.send_header("Connection", "Upgrade")
                     self.send_header("Sec-WebSocket-Accept", accept)
+                    ws_protocols = [
+                        protocol.strip()
+                        for protocol in self.headers.get("Sec-WebSocket-Protocol", "").split(",")
+                        if protocol.strip()
+                    ]
+                    if ws_protocols:
+                        self.send_header("Sec-WebSocket-Protocol", ws_protocols[0])
                     self.end_headers()
                     self._proxy_websocket_to_tcp(target)
 
@@ -1234,19 +1241,27 @@ VNC_HTML = """<!doctype html>
         return;
       }
       setStatus(`Connexion WebSocket VNC ${host}:${port}...`, false);
+      console.info("[LSA noVNC] TCP target reachable, opening WebSocket proxy", { host, port, proxyUrl });
       const rfb = new RFB(screenEl, proxyUrl, { credentials: { password } });
       rfb.viewOnly = false;
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
-      rfb.addEventListener("connect", () => setStatus(`Connecté à ${host}:${port}`, true));
+      console.info("[LSA noVNC] RFB instance created");
+      rfb.addEventListener("connect", () => {
+        console.info("[LSA noVNC] connected");
+        setStatus(`Connecté à ${host}:${port}`, true);
+      });
       rfb.addEventListener("disconnect", (event) => {
+        console.info("[LSA noVNC] disconnected", event.detail || {});
         const detail = event.detail && event.detail.clean ? "" : " connexion interrompue";
         setStatus(`hors ligne${detail}`, false);
       });
       rfb.addEventListener("credentialsrequired", () => {
+        console.info("[LSA noVNC] credentials required");
         setStatus("Mot de passe VNC requis ou invalide", false);
       });
       rfb.addEventListener("securityfailure", () => {
+        console.info("[LSA noVNC] security failure");
         setStatus("Échec sécurité VNC", false);
       });
     } catch (error) {
