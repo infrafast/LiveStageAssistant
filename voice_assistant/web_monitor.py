@@ -663,7 +663,7 @@ class WebMonitor:
             self._snapshot["updated_at"] = time.time()
             return True
 
-    def append_dialogue(self, role: str, text: str) -> None:
+    def append_dialogue(self, role: str, text: str, *, speak: bool = False) -> None:
         cleaned_text = text.strip()
         if not cleaned_text:
             return
@@ -671,12 +671,13 @@ class WebMonitor:
         normalized_role = role if role in {"user", "assistant"} else "assistant"
         with self._lock:
             self._messages.append(
-                {
-                    "id": self._next_message_id,
-                    "role": normalized_role,
-                    "text": cleaned_text,
-                    "created_at": time.time(),
-                }
+                    {
+                        "id": self._next_message_id,
+                        "role": normalized_role,
+                        "text": cleaned_text,
+                        "speak": bool(speak),
+                        "created_at": time.time(),
+                    }
             )
             self._next_message_id += 1
             while len(self._messages) > self.max_messages:
@@ -698,6 +699,7 @@ class WebMonitor:
                         "id": message_id,
                         "role": role,
                         "text": text,
+                        "speak": bool(message.get("speak")),
                         "created_at": float(message.get("created_at") or time.time()),
                     }
                 )
@@ -2656,8 +2658,14 @@ INDEX_HTML = """<!doctype html>
         setComposerLocked(showThinking);
         renderMessages(lastServerMessages, showThinking);
         const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
+        const latestAssistantMessageAgeMs = latestAssistantMessage && latestAssistantMessage.created_at
+          ? Date.now() - Number(latestAssistantMessage.created_at) * 1000
+          : Infinity;
+        const shouldSpeakLatestAssistant = latestAssistantMessage && (
+          previousBusy || (latestAssistantMessage.speak === true && latestAssistantMessageAgeMs < 30000)
+        );
         if (
-          previousBusy &&
+          shouldSpeakLatestAssistant &&
           !showThinking &&
           webAudio.tts_enabled &&
           latestAssistantMessage &&

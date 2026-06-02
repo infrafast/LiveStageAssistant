@@ -347,19 +347,30 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
     """Speak a network status message with the TTS configured by the detected env file."""
     values = dotenv_values_func(env_file)
     tts_provider = (values.get("TTS_PROVIDER") or "elevenlabs").strip().lower()
+    web_tts_provider = (values.get("WEB_TTS_PROVIDER") or "none").strip().lower()
+    web_audio_enabled = str(values.get("WEB_AUDIO_ENABLED") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+    cloud_provider = tts_provider
+    if cloud_provider == "none" and web_audio_enabled and web_tts_provider in {"openai", "elevenlabs"}:
+        cloud_provider = web_tts_provider
     voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
 
     with TTS_LOCK:
-        if tts_provider == "none":
+        if cloud_provider == "none":
             print(f"Auto network status: {text}")
             return
 
-        if tts_provider == "elevenlabs":
+        if cloud_provider == "elevenlabs":
             elevenlabs_api_key = read_secret_from_env_values(values, "ELEVENLABS_API_KEY")
             if elevenlabs_api_key:
                 try:
                     if not elevenlabs_playback_available():
-                        return
+                        raise RuntimeError("ffplay is not available")
                     client = ElevenLabs(api_key=elevenlabs_api_key)
                     audio = client.text_to_speech.convert(
                         text=text,
@@ -371,20 +382,25 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
                             speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0)
                         ),
                     )
-                    play(audio)
+                    audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
+                    play_mp3_bytes(audio_bytes)
                     return
                 except Exception as e:
                     if local_tts_playback_available():
                         print(f"Auto network status ElevenLabs TTS failed: {e}")
                     else:
                         return
+            elif local_tts_playback_available():
+                print("Auto network status ElevenLabs TTS skipped: missing ELEVENLABS_API_KEY_FILE")
+            else:
+                return
 
-        if tts_provider == "openai":
+        if cloud_provider == "openai":
             openai_api_key = read_secret_from_env_values(values, "OPENAI_API_KEY")
             if openai_api_key:
                 try:
                     if not elevenlabs_playback_available():
-                        return
+                        raise RuntimeError("ffplay is not available")
                     client = openai.OpenAI(api_key=openai_api_key)
                     response = client.audio.speech.create(
                         model=(values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip(),
@@ -400,6 +416,10 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
                         print(f"Auto network status OpenAI TTS failed: {e}")
                     else:
                         return
+            elif local_tts_playback_available():
+                print("Auto network status OpenAI TTS skipped: missing OPENAI_API_KEY_FILE")
+            else:
+                return
 
         if not local_tts_playback_available():
             return
@@ -458,6 +478,7 @@ class AutoNetworkMonitor:
         print(f"Auto network status changed: {status_text}. Detected profile: {detected_env}")
         if self.web_monitor:
             self.web_monitor.update(internet=online, env_file=detected_env, mode="auto")
+            self.web_monitor.append_dialogue("assistant", status_text, speak=True)
         speak_auto_network_status(status_text, detected_env, self.dotenv_values_func)
 
     @property
