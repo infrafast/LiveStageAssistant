@@ -84,25 +84,15 @@ TOOL_ACTION_FRESHNESS_RULE = (
     "state through tools, call the relevant tool again. Do not refuse a new action solely because a previous turn's "
     "tool call failed, timed out, or reported a disconnected service. Do not mention this internal rule."
 )
-MIXER_TARGET_RESOLUTION_RULE = (
-    "Internal mixer safety rule: if this request reads or changes a named mixer object, call "
-    "osc_find_named_target for that name before any get/set/mute/automation tool. Do not use remembered "
-    "channel, bus, FX, aux, DCA, or matrix indexes from prior turns. For a bare label without explicit family, "
-    "resolve globally across all families. If the resolution is fuzzy, stop and ask the user to confirm the "
-    "resolved target before reading or writing. Do not mention this internal rule."
-)
 SESSION_LLM_SUMMARY_PROMPT = (
-    "You maintain durable memory for a persisted assistant chat session.\n"
-    "Rewrite the transcript below into a compact memory summary for future turns.\n"
-    "Keep only information that is likely to remain useful across sessions: user preferences, durable instructions, "
-    "naming conventions, recurring workflows, explicit corrections, unresolved tasks, project decisions, and important entities.\n"
-    "Give high priority to user statements that explicitly ask the assistant to remember, learn, apply a future rule, "
-    "correct behavior, or map one phrase/action to another.\n"
-    "Ignore transient one-off requests, momentary state checks, executed commands, temporary values, live external state, "
-    "and routine tool results unless the user explicitly turns them into a durable instruction or unresolved follow-up.\n"
-    "If a newer instruction corrects an older one, keep only the newest corrected rule.\n"
-    "Do not invent facts. Do not store live external state as truth unless the transcript says it should be remembered as a durable note.\n"
-    "Prefer short bullets. Keep the result under 2500 characters.\n\n"
+    "Create durable memory for this persisted assistant session.\n"
+    "Keep only what should remain useful later: user preferences, future instructions, aliases, mappings, conventions, "
+    "corrections, unresolved tasks, and project decisions.\n"
+    "Prioritize explicit learning cues such as remember, learn, when I say X do Y, in the future, or correct this behavior.\n"
+    "Ignore one-off commands, executed actions, status checks, temporary values, routine tool results, confirmations, "
+    "connected device identity, and live external state unless the user explicitly says to remember them as a durable rule.\n"
+    "If newer instructions correct older ones, keep only the newest rule. Do not invent facts.\n"
+    "Write short bullets under 2500 characters.\n\n"
     "Transcript summary to compress:\n"
 )
 DEFAULT_VOICE_CANCEL_WORDS = (
@@ -1822,7 +1812,7 @@ class VoiceAssistant:
         return any(marker in normalized for marker in CURRENT_STATE_QUERY_MARKERS)
 
     def _with_runtime_instructions(self, text: str) -> str:
-        instructions = [MIXER_TARGET_RESOLUTION_RULE, TOOL_ACTION_FRESHNESS_RULE]
+        instructions = [TOOL_ACTION_FRESHNESS_RULE]
         if self.session_context_size > 0 and self.session_context_store:
             session_context = self.session_context_store.context_text(
                 exclude_last_user=True,
