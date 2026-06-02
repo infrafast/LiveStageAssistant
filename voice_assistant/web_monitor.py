@@ -264,6 +264,9 @@ class WebMonitor:
                     if parsed.path == "/api/session-context":
                         self._handle_session_context_list()
                         return
+                    if parsed.path.startswith("/static/"):
+                        self._handle_static(parsed.path)
+                        return
                     if parsed.path.startswith("/assets/"):
                         self._handle_asset(parsed.path)
                         return
@@ -345,6 +348,38 @@ class WebMonitor:
                         data = asset_path.read_bytes()
                     except OSError as e:
                         self.send_error(500, f"Could not read asset: {e}")
+                        return
+
+                    self.send_response(200)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Cache-Control", "public, max-age=3600")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+
+                def _handle_static(self, request_path: str) -> None:
+                    raw_path = request_path.removeprefix("/static/")
+                    parts = [part for part in raw_path.split("/") if part]
+                    if not parts or any(part in {".", ".."} for part in parts):
+                        self.send_error(404)
+                        return
+
+                    static_path = Path("static").joinpath(*parts)
+                    try:
+                        resolved_root = Path("static").resolve()
+                        resolved_path = static_path.resolve()
+                    except OSError:
+                        self.send_error(404)
+                        return
+                    if not resolved_path.is_file() or resolved_root not in resolved_path.parents:
+                        self.send_error(404)
+                        return
+
+                    content_type = mimetypes.guess_type(resolved_path.name)[0] or "application/octet-stream"
+                    try:
+                        data = resolved_path.read_bytes()
+                    except OSError as e:
+                        self.send_error(500, f"Could not read static file: {e}")
                         return
 
                     self.send_response(200)
@@ -1100,7 +1135,7 @@ VNC_HTML = """<!doctype html>
       const scheme = window.location.protocol === "https:" ? "wss" : "ws";
       const proxyUrl = `${scheme}://${window.location.host}/api/vnc-proxy?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
 
-      const { default: RFB } = await import("https://cdn.jsdelivr.net/npm/@novnc/novnc/core/rfb.js");
+      const { default: RFB } = await import("/static/novnc/core/rfb.js");
       const rfb = new RFB(screenEl, proxyUrl, { credentials: { password } });
       rfb.viewOnly = false;
       rfb.scaleViewport = true;
@@ -1344,16 +1379,13 @@ INDEX_HTML = """<!doctype html>
       font-weight: 650;
     }
     .chat-scroll {
-      min-height: 0;
-      overflow-y: auto;
       padding: 22px 16px 16px;
       scroll-behavior: smooth;
     }
     .chat-panel {
       min-height: 0;
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
-      overflow: hidden;
+      overflow-y: auto;
+      scroll-behavior: smooth;
     }
     .vnc-panel {
       margin: 10px 16px 0;
@@ -1367,6 +1399,15 @@ INDEX_HTML = """<!doctype html>
       align-items: center;
       gap: 10px;
       border-bottom: 0;
+    }
+    .vnc-panel summary::before {
+      content: "▸";
+      color: var(--muted);
+      font-size: 12px;
+      transform: translateY(-1px);
+    }
+    .vnc-panel[open] summary::before {
+      content: "▾";
     }
     .vnc-status {
       margin-left: auto;
@@ -1385,8 +1426,9 @@ INDEX_HTML = """<!doctype html>
     }
     .vnc-frame-wrap {
       width: min(1368px, calc(100vw - 300px));
-      height: min(768px, calc(100vh - 230px));
+      height: 768px;
       min-height: 360px;
+      max-height: min(768px, calc(100vh - 230px));
       margin: 0 auto 12px;
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -1934,7 +1976,7 @@ INDEX_HTML = """<!doctype html>
         </div>
         <div class="session-list" id="session-list"></div>
       </aside>
-      <div class="chat-panel">
+      <div class="chat-panel" id="chat-panel">
         <details class="vnc-panel" id="vnc-panel">
           <summary>Remote screen <span class="vnc-status offline" id="vnc-status">hors ligne</span></summary>
           <div class="vnc-controls">
@@ -2116,7 +2158,7 @@ INDEX_HTML = """<!doctype html>
     const promptEl = document.querySelector("#prompt");
     const metaEl = document.querySelector("#meta");
     const messagesEl = document.querySelector("#messages");
-    const chatScroll = document.querySelector("#chat-scroll");
+    const chatPanel = document.querySelector("#chat-panel");
     const vncUrl = document.querySelector("#vnc-url");
     const vncConnect = document.querySelector("#vnc-connect");
     const vncFrame = document.querySelector("#vnc-frame");
@@ -2874,14 +2916,14 @@ INDEX_HTML = """<!doctype html>
       });
 
       const rows = [...withContextPreview(serverMessages || []), ...pendingMessages];
-      const shouldStick = chatScroll.scrollTop + chatScroll.clientHeight >= chatScroll.scrollHeight - 24;
+      const shouldStick = chatPanel.scrollTop + chatPanel.clientHeight >= chatPanel.scrollHeight - 24;
       if (rows.length === 0) {
         messagesEl.innerHTML = `<div class="empty-state">Live Stage Assistant</div>`;
       } else {
         messagesEl.innerHTML = rows.map(messageBubble).join("") + (showThinking ? thinkingBubble() : "");
       }
       if (shouldStick) {
-        chatScroll.scrollTop = chatScroll.scrollHeight;
+        chatPanel.scrollTop = chatPanel.scrollHeight;
       }
     }
 
