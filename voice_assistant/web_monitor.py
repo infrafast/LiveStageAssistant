@@ -116,6 +116,7 @@ class WebMonitor:
             "session_context": {"active_id": "", "sessions": [], "current": {}, "messages": []},
             "session_context_size": 6000,
             "assistant_busy": False,
+            "environment_loading": {"active": False, "title": ""},
             "web_audio": {"enabled": False, "stt_enabled": False, "tts_enabled": False},
             "updated_at": time.time(),
         }
@@ -779,6 +780,14 @@ class WebMonitor:
             self._snapshot["assistant_busy"] = busy
             if not busy:
                 self._cancel_requested = False
+            self._snapshot["updated_at"] = time.time()
+
+    def set_environment_loading(self, active: bool, title: str = "rafraichissement de l'environnement") -> None:
+        with self._lock:
+            self._snapshot["environment_loading"] = {
+                "active": bool(active),
+                "title": title if active else "",
+            }
             self._snapshot["updated_at"] = time.time()
 
     def _filter_log_value(self, value: str) -> str:
@@ -1826,6 +1835,7 @@ INDEX_HTML = """<!doctype html>
     let envProfileSwitchingEnabled = false;
     let connectivityLocked = false;
     let configBaseline = "";
+    let environmentLoadingActive = false;
     let lastServerMessages = [];
     let pendingMessages = [];
     let composerLocked = false;
@@ -2564,6 +2574,7 @@ INDEX_HTML = """<!doctype html>
 
       envProfile.disabled = true;
       llmSave.disabled = true;
+      setEnvironmentLoading(true, "rafraichissement de l'environnement");
       llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
       try {
         const response = await fetch("/api/env-profile", {
@@ -2582,6 +2593,7 @@ INDEX_HTML = """<!doctype html>
         markConfigClean();
         await refresh();
       } catch (error) {
+        setEnvironmentLoading(false);
         envProfile.value = activeEnvProfile;
         llmMessage.textContent = `Env switch failed: ${error}`;
       } finally {
@@ -2670,14 +2682,24 @@ INDEX_HTML = """<!doctype html>
       else settingsOpen.focus();
     }
 
-    function setSessionLoading(loading, title = "Loading session") {
+    function setLoadingOverlay(loading, title = "Loading") {
       sessionLoading.classList.toggle("open", Boolean(loading));
       sessionLoading.setAttribute("aria-hidden", loading ? "false" : "true");
       sessionLoadingTitle.textContent = title;
+    }
+
+    function setEnvironmentLoading(loading, title = "rafraichissement de l'environnement") {
+      environmentLoadingActive = Boolean(loading);
+      setLoadingOverlay(environmentLoadingActive, title);
+    }
+
+    function setSessionLoading(loading, title = "Loading session") {
       sessionNew.disabled = Boolean(loading);
       for (const button of sessionList.querySelectorAll(".session-main, .session-menu-button, .session-menu-action")) {
         button.disabled = Boolean(loading);
       }
+      if (environmentLoadingActive && !loading) return;
+      setLoadingOverlay(loading, title);
     }
 
     function closeSessionMenus() {
@@ -2897,6 +2919,11 @@ INDEX_HTML = """<!doctype html>
         ];
         stateEl.innerHTML = rows.join("");
         configEl.value = data.config_text || "";
+        const environmentLoading = data.environment_loading || {};
+        setEnvironmentLoading(
+          Boolean(environmentLoading.active),
+          environmentLoading.title || "rafraichissement de l'environnement"
+        );
         const envProfileChanged = await loadEnvProfiles();
         if (envProfileChanged) {
           llmControlsInitialized = false;
@@ -3147,9 +3174,11 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         llmMessage.textContent = data.message || "Saved.";
+        setEnvironmentLoading(true, "rafraichissement de l'environnement");
         markConfigClean();
         await refresh();
       } catch (error) {
+        setEnvironmentLoading(false);
         llmMessage.textContent = `Save failed: ${error}`;
       } finally {
         llmSave.disabled = !llmProvider.value;

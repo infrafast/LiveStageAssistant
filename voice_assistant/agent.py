@@ -493,6 +493,7 @@ class AutoNetworkMonitor:
         detected_env = AUTO_ENV_ONLINE if online else AUTO_ENV_OFFLINE
         print(f"Auto network status changed: {status_text}. Detected profile: {detected_env}")
         if self.web_monitor:
+            self.web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
             self.web_monitor.update(internet=online, env_file=detected_env, mode="auto")
             self.web_monitor.append_dialogue("assistant", status_text, speak=True)
         speak_auto_network_status(status_text, detected_env, self.dotenv_values_func)
@@ -2511,6 +2512,7 @@ async def main():
                     mcp_config=mcp_config,
                 ),
             )
+            web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
 
         if reload_event:
             reload_event.set()
@@ -2910,6 +2912,7 @@ async def main():
             values = dict(dotenv_values(env_file))
             mcp_config = load_mcp_config_from_values(values)
             if web_monitor:
+                web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
                 web_monitor.update(
                     env_file=env_file,
                     mode="manual",
@@ -2983,6 +2986,8 @@ async def main():
                 if announce_reload_complete:
                     await assistant.text_to_speech("Configuration mise à jour. L'assistant redémarre avec le nouveau modèle.")
                     announce_reload_complete = False
+                if web_monitor:
+                    web_monitor.set_environment_loading(False)
 
                 run_result = await assistant.run()
                 if run_result != "reload":
@@ -3021,6 +3026,8 @@ async def main():
             if announce_reload_complete:
                 await assistant.text_to_speech("Environnement mis à jour. La demande en cours a été annulée.")
                 announce_reload_complete = False
+            if web_monitor:
+                web_monitor.set_environment_loading(False)
 
             run_result = await assistant.run()
             if run_result != "reload":
