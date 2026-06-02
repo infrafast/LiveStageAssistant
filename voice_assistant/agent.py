@@ -2239,7 +2239,7 @@ async def main():
             "profiles": profiles,
             "switching_enabled": not auto_env_mode,
             "auto_mode": auto_env_mode,
-            "connectivity_locked": auto_env_mode,
+            "connectivity_locked": current_env_file.name in {".env.online", ".env.offline"},
             "message": (
                 "Manual env switching is disabled while --env-file auto controls the active profile."
                 if auto_env_mode
