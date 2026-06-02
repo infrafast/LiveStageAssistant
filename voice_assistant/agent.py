@@ -795,6 +795,8 @@ class VoiceAssistant:
             return False
         source_summary = self.session_context_store.summary_source_text()
         if not source_summary:
+            if self.session_context_store.injectable_summary():
+                return False
             self.session_context_store.set_llm_summary("", source_summary)
             return False
         if self.session_context_store.injectable_summary() != source_summary:
@@ -2796,6 +2798,13 @@ async def main():
                 session_context_store.rename_session(session_id, title)
                 return session_context_response()
 
+            def clear_session_context(session_id: str) -> dict[str, Any]:
+                was_active = session_context_store.active_id == session_id
+                session_context_store.clear_session_conversation(session_id, preserve_llm_summary=True)
+                if was_active and assistant.agent:
+                    assistant.agent.clear_conversation_history()
+                return session_context_response()
+
             def delete_session_context(session_id: str) -> dict[str, Any]:
                 was_active = session_context_store.active_id == session_id
                 session_context_store.delete_session(session_id)
@@ -2808,6 +2817,7 @@ async def main():
                 new_handler=new_session_context,
                 select_handler=select_session_context,
                 rename_handler=rename_session_context,
+                clear_handler=clear_session_context,
                 delete_handler=delete_session_context,
             )
 

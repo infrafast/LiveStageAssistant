@@ -100,6 +100,7 @@ class WebMonitor:
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
         self._session_context_rename_handler: Callable[[str, str], dict[str, Any]] | None = None
+        self._session_context_clear_handler: Callable[[str], dict[str, Any]] | None = None
         self._session_context_delete_handler: Callable[[str], dict[str, Any]] | None = None
         self._cancel_handler: Callable[[], None] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
@@ -150,6 +151,7 @@ class WebMonitor:
         new_handler: Callable[[str | None], dict[str, Any]],
         select_handler: Callable[[str], dict[str, Any]],
         rename_handler: Callable[[str, str], dict[str, Any]],
+        clear_handler: Callable[[str], dict[str, Any]],
         delete_handler: Callable[[str], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list/create/select chat sessions."""
@@ -158,6 +160,7 @@ class WebMonitor:
             self._session_context_new_handler = new_handler
             self._session_context_select_handler = select_handler
             self._session_context_rename_handler = rename_handler
+            self._session_context_clear_handler = clear_handler
             self._session_context_delete_handler = delete_handler
 
     def set_web_audio_handlers(
@@ -280,6 +283,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/session-context/rename":
                         self._handle_session_context_rename()
+                        return
+                    if self.path == "/api/session-context/clear":
+                        self._handle_session_context_clear()
                         return
                     if self.path == "/api/session-context/delete":
                         self._handle_session_context_delete()
@@ -555,6 +561,28 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self.send_error(500, f"Could not delete session context: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_session_context_clear(self) -> None:
+                    handler = monitor._session_context_clear_handler
+                    if handler is None:
+                        self.send_error(503, "Session context is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    session_id = str(payload.get("id") or "").strip()
+                    if not session_id:
+                        self.send_error(400, "Session id is required")
+                        return
+                    try:
+                        result = handler(session_id)
+                    except ValueError as e:
+                        self.send_error(404, str(e))
+                        return
+                    except Exception as e:
+                        self.send_error(500, f"Could not clear session context: {e}")
                         return
                     self._send_json(result)
 
@@ -1931,6 +1959,7 @@ INDEX_HTML = """<!doctype html>
         <button class="session-menu-button" type="button" title="Session actions" aria-label="Session actions">...</button>
         <div class="session-menu">
           <button class="session-menu-action" type="button" data-session-action="rename">Rename</button>
+          <button class="session-menu-action" type="button" data-session-action="clear">Clear conversation</button>
           <button class="session-menu-action danger" type="button" data-session-action="delete">Delete</button>
         </div>
       </div>`;
@@ -2749,6 +2778,28 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function clearSessionConversation(sessionId, currentTitle) {
+      const confirmed = window.confirm(
+        `Clear visible conversation for "${currentTitle || "Untitled session"}"? The LLM summary will be kept.`
+      );
+      if (!confirmed) return;
+      setSessionLoading(true, "Clearing conversation");
+      try {
+        const response = await fetch("/api/session-context/clear", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        pendingMessages = [];
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `session clear failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+
     function activateTab(tabId) {
       for (const tab of tabs) {
         const active = tab.id === tabId;
@@ -3059,6 +3110,8 @@ INDEX_HTML = """<!doctype html>
         closeSessionMenus();
         if (action === "rename") {
           await renameSession(sessionId, title);
+        } else if (action === "clear") {
+          await clearSessionConversation(sessionId, title);
         } else if (action === "delete") {
           await deleteSession(sessionId, title);
         }

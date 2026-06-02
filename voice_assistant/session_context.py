@@ -176,6 +176,23 @@ class SessionContextStore:
             return self.load_active_or_latest()
         return self.current or self.load_active_or_latest()
 
+    def clear_session_conversation(self, session_id: str, *, preserve_llm_summary: bool = True) -> dict[str, Any]:
+        data = self._read_session(self._session_path(session_id))
+        if not data:
+            raise ValueError(f"session '{session_id}' was not found")
+
+        if not preserve_llm_summary:
+            data["llm_summary"] = ""
+            data["llm_summary_updated_at"] = None
+        data["messages"] = []
+        data["summary"] = ""
+        data["updated_at"] = time.time()
+        is_active = self.active_id == data["id"]
+        if is_active:
+            self.current = data
+        self._write_session(data, set_active=is_active)
+        return data
+
     def clear_current(self) -> None:
         if not self.current:
             self.load_active_or_latest()
