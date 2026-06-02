@@ -101,6 +101,7 @@ class WebMonitor:
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
         self._session_context_rename_handler: Callable[[str, str], dict[str, Any]] | None = None
         self._session_context_clear_handler: Callable[[str], dict[str, Any]] | None = None
+        self._session_context_save_handler: Callable[[str], dict[str, Any]] | None = None
         self._session_context_delete_handler: Callable[[str], dict[str, Any]] | None = None
         self._cancel_handler: Callable[[], None] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
@@ -152,6 +153,7 @@ class WebMonitor:
         select_handler: Callable[[str], dict[str, Any]],
         rename_handler: Callable[[str, str], dict[str, Any]],
         clear_handler: Callable[[str], dict[str, Any]],
+        save_handler: Callable[[str], dict[str, Any]],
         delete_handler: Callable[[str], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list/create/select chat sessions."""
@@ -161,6 +163,7 @@ class WebMonitor:
             self._session_context_select_handler = select_handler
             self._session_context_rename_handler = rename_handler
             self._session_context_clear_handler = clear_handler
+            self._session_context_save_handler = save_handler
             self._session_context_delete_handler = delete_handler
 
     def set_web_audio_handlers(
@@ -286,6 +289,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/session-context/clear":
                         self._handle_session_context_clear()
+                        return
+                    if self.path == "/api/session-context/save":
+                        self._handle_session_context_save()
                         return
                     if self.path == "/api/session-context/delete":
                         self._handle_session_context_delete()
@@ -583,6 +589,28 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self.send_error(500, f"Could not clear session context: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_session_context_save(self) -> None:
+                    handler = monitor._session_context_save_handler
+                    if handler is None:
+                        self.send_error(503, "Session context is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    session_id = str(payload.get("id") or "").strip()
+                    if not session_id:
+                        self.send_error(400, "Session id is required")
+                        return
+                    try:
+                        result = handler(session_id)
+                    except ValueError as e:
+                        self.send_error(404, str(e))
+                        return
+                    except Exception as e:
+                        self.send_error(500, f"Could not save session context: {e}")
                         return
                     self._send_json(result)
 
@@ -1960,6 +1988,7 @@ INDEX_HTML = """<!doctype html>
         <div class="session-menu">
           <button class="session-menu-action" type="button" data-session-action="rename">Rename</button>
           <button class="session-menu-action" type="button" data-session-action="clear">Clear conversation</button>
+          <button class="session-menu-action" type="button" data-session-action="save-context">Save context</button>
           <button class="session-menu-action danger" type="button" data-session-action="delete">Delete</button>
         </div>
       </div>`;
@@ -2800,6 +2829,24 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function saveSessionContext(sessionId, currentTitle) {
+      setSessionLoading(true, "Saving context");
+      try {
+        const response = await fetch("/api/session-context/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        await refresh();
+        metaEl.textContent = `context saved for ${currentTitle || "Untitled session"}`;
+      } catch (error) {
+        metaEl.textContent = `context save failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+
     function activateTab(tabId) {
       for (const tab of tabs) {
         const active = tab.id === tabId;
@@ -3112,6 +3159,8 @@ INDEX_HTML = """<!doctype html>
           await renameSession(sessionId, title);
         } else if (action === "clear") {
           await clearSessionConversation(sessionId, title);
+        } else if (action === "save-context") {
+          await saveSessionContext(sessionId, title);
         } else if (action === "delete") {
           await deleteSession(sessionId, title);
         }

@@ -789,17 +789,17 @@ class VoiceAssistant:
         print(f"Using OpenAI model: {self.model}")
         return ChatOpenAI(model=self.model, api_key=self.openai_api_key)
 
-    async def refresh_session_llm_summary(self) -> bool:
-        """Generate the persisted LLM summary for the active session when it is missing."""
+    async def refresh_session_llm_summary(self, *, force: bool = False) -> bool:
+        """Generate the persisted LLM summary for the active session."""
         if not self.session_context_store:
             return False
         source_summary = self.session_context_store.summary_source_text()
         if not source_summary:
-            if self.session_context_store.injectable_summary():
+            if self.session_context_store.injectable_summary() and not force:
                 return False
             self.session_context_store.set_llm_summary("", source_summary)
             return False
-        if self.session_context_store.injectable_summary() != source_summary:
+        if not force and self.session_context_store.injectable_summary() != source_summary:
             return False
 
         try:
@@ -826,10 +826,10 @@ class VoiceAssistant:
             print(f"Could not refresh session LLM summary, using transcript summary fallback: {e}")
             return False
 
-    def refresh_session_llm_summary_blocking(self) -> bool:
+    def refresh_session_llm_summary_blocking(self, *, force: bool = False) -> bool:
         """Refresh the session LLM summary from a non-async web handler thread."""
         try:
-            return asyncio.run(self.refresh_session_llm_summary())
+            return asyncio.run(self.refresh_session_llm_summary(force=force))
         except RuntimeError:
             return False
 
@@ -2805,6 +2805,15 @@ async def main():
                     assistant.agent.clear_conversation_history()
                 return session_context_response()
 
+            def save_session_context(session_id: str) -> dict[str, Any]:
+                session_context_store.select_session(session_id)
+                refreshed = assistant.refresh_session_llm_summary_blocking(force=True)
+                if assistant.agent:
+                    assistant.agent.clear_conversation_history()
+                snapshot = session_context_response()
+                snapshot["llm_summary_refreshed"] = refreshed
+                return snapshot
+
             def delete_session_context(session_id: str) -> dict[str, Any]:
                 was_active = session_context_store.active_id == session_id
                 session_context_store.delete_session(session_id)
@@ -2818,6 +2827,7 @@ async def main():
                 select_handler=select_session_context,
                 rename_handler=rename_session_context,
                 clear_handler=clear_session_context,
+                save_handler=save_session_context,
                 delete_handler=delete_session_context,
             )
 
