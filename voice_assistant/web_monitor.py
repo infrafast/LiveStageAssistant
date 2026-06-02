@@ -1690,10 +1690,10 @@ INDEX_HTML = """<!doctype html>
       width: 40px;
       height: 40px;
       min-height: 40px;
-      border: 0;
+      border: 1px solid var(--border);
       border-radius: 8px;
-      background: var(--text);
-      color: var(--bg);
+      background: var(--surface-soft);
+      color: var(--text);
       font-size: 18px;
       line-height: 1;
     }
@@ -1725,9 +1725,9 @@ INDEX_HTML = """<!doctype html>
       opacity: 0.55;
     }
     #inject-submit:disabled {
-      background: var(--surface-soft);
       color: var(--muted);
-      border: 1px solid var(--border);
+      cursor: not-allowed;
+      opacity: 0.55;
     }
     #inject-submit.stop-mode {
       background: var(--surface-soft);
@@ -2112,7 +2112,7 @@ INDEX_HTML = """<!doctype html>
 
     <div class="composer-wrap">
       <form class="inject-form" id="inject-form">
-        <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" disabled>🗨️</button>
+        <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" disabled>💬</button>
         <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" disabled>🎙️</button>
         <textarea id="inject-command" rows="1" autocomplete="off" placeholder="Message"></textarea>
         <button id="inject-submit" type="submit" title="Send" aria-label="Send">⬆️</button>
