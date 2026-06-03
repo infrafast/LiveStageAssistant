@@ -273,6 +273,7 @@ WAKE_WORD=                                      # Empty keeps current behavior; 
 ASSISTANT_SYSTEM_PROMPT="You are a helpful voice assistant..."  # Customize personality
 MCP_AGENT_MEMORY_ENABLED=true                  # Keep conversational memory; live external state still requires MCP reads
 MCP_AGENT_TIMEOUT_SECONDS=45                   # Max seconds for one LLM/MCP response before timeout
+MCP_TOOL_ROUTING_ENABLED=false                 # Use assistantPrompt.routing keywords to expose only one MCP server's tools
 SESSION_CONTEXT_SIZE=6000                      # Inject up to this many session-summary chars; 0 disables injection
 SESSION_CONTEXT_DIR=.contexts                  # Local directory for .context JSON session files
 MCP_CONFIG=mcp_servers.offline.json             # Optional config override
@@ -498,7 +499,8 @@ Then add an `assistantPrompt` block to each MCP server that should contribute st
       "assistantPrompt": {
         "promptName": "xmseries_mixer_assistant",
         "resourceUri": "xmseries://prompt/system",
-        "tool": "osc_get_agent_prompt"
+        "tool": "osc_get_agent_prompt",
+        "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus"
       }
     }
   }
@@ -557,8 +559,11 @@ Each `assistantPrompt` block can define:
 1. `promptName`: optional MCP prompt name
 2. `resourceUri`: optional MCP resource URI
 3. `tool`: optional explicit fallback tool name
+4. `routing`: optional comma-separated business keywords used when `MCP_TOOL_ROUTING_ENABLED=true`
 
 The prompts are loaded in the order of the servers under `mcpServers`. A failing server prompt logs a warning and does not block the others.
+
+When MCP tool routing is enabled from the web config or with `MCP_TOOL_ROUTING_ENABLED=true`, the assistant checks each command against `assistantPrompt.routing`. If a keyword matches, that single turn is run with only that MCP server's tools and the console log includes `[MCP CALL: <server> only]`. If the routed turn fails or returns an empty response, the assistant restores the full tool list and retries with the current default behavior.
 
 At startup, when instructions are loaded, the assistant writes a console log entry listing the MCP prompt sources that were actually merged, for example:
 
@@ -618,7 +623,7 @@ After the announcement, the current voice loop is interrupted if needed, the act
 
 If you run `python voice_assistant/agent.py` without `--env-file`, the assistant loads `.env` when present. If `.env` does not exist, internal defaults are used: OpenAI with `gpt-4o-mini` for the LLM, OpenAI Whisper for STT, ElevenLabs as the legacy backend TTS default, `CLOUD_TTS_PROVIDER=openai` for the TTS dropdown, `thinking.wav` for the processing sound, and `mcp_servers.json` when no explicit MCP config is provided. In that default mode, `OPENAI_API_KEY` is required because both the LLM and STT providers use OpenAI.
 
-For short stage commands, `STT_PROMPT` can give Whisper mixer-specific context. The bundled default biases French mixer commands such as `mets Claude`, `baisse snare`, `mute Voc-Claude`, and the assistant also fixes the narrow transcription artifact where a leading `mets` command is fused with the following channel name. The web config exposes this value under **Config -> STT/TTS**.
+For short stage commands, `STT_PROMPT` can give Whisper mixer-specific context. The bundled default biases French mixer commands such as `mets Claude`, `baisse snare`, `mute Voc-Claude`, and the assistant also fixes the narrow transcription artifact where a leading `mets` command is fused with the following channel name. At runtime, any `assistantPrompt.routing` keywords from the active `MCP_CONFIG` are appended to the STT prompt without rewriting the env file. The web config exposes the base value under **Config -> STT/TTS**.
 
 ### Changing Model Provider
 

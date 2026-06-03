@@ -2,12 +2,21 @@
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["--offline", "-y", "@modelcontextprotocol/server-filesystem", "."],
+      "args": [
+        "--offline",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "."
+      ],
       "env": {}
     },
     "memory": {
       "command": "npx",
-      "args": ["--offline", "-y", "@modelcontextprotocol/server-memory"],
+      "args": [
+        "--offline",
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
       "env": {}
     },
     "mixer": {
@@ -28,8 +37,9 @@
       "assistantPrompt": {
         "promptName": "xmseries_mixer_assistant",
         "resourceUri": "xmseries://prompt/system",
-        "tool": "osc_get_agent_prompt"
+        "tool": "osc_get_agent_prompt",
+        "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus, décibel, db, tranche"
       }
-    }    
+    }
   }
 }

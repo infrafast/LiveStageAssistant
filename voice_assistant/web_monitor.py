@@ -133,7 +133,7 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[[str, str, str, str, str, str, str, str, int, bool, str, str, str, float], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -627,6 +627,7 @@ class WebMonitor:
                     except (TypeError, ValueError):
                         self.send_error(400, "Session context size must be an integer")
                         return
+                    mcp_tool_routing_enabled = bool(payload.get("mcp_tool_routing_enabled"))
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
@@ -647,6 +648,7 @@ class WebMonitor:
                             stt_prompt,
                             system_prompt,
                             session_context_size,
+                            mcp_tool_routing_enabled,
                             voice_id,
                             thinking_sound_file,
                             openai_tts_voice,
@@ -2236,6 +2238,13 @@ INDEX_HTML = """<!doctype html>
                 <label for="session-context-size">Session Context <span id="session-context-size-label">6000</span></label>
                 <input id="session-context-size" type="range" min="0" max="12000" step="500" value="6000">
               </div>
+              <div class="field">
+                <label>Tool Routing</label>
+                <div class="segmented" id="mcp-tool-routing" role="radiogroup" aria-label="Tool Routing">
+                  <label><input type="radio" name="mcp-tool-routing" value="false">Off</label>
+                  <label><input type="radio" name="mcp-tool-routing" value="true">Routing</label>
+                </div>
+              </div>
             </div>
           </details>
         </section>
@@ -2323,6 +2332,7 @@ INDEX_HTML = """<!doctype html>
 	    const llmModel = document.querySelector("#llm-model");
 	    const sessionContextSize = document.querySelector("#session-context-size");
     const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
+    const mcpToolRoutingInputs = Array.from(document.querySelectorAll('input[name="mcp-tool-routing"]'));
     const envProfile = document.querySelector("#env-profile");
     const connectivityAutoBadge = document.querySelector("#connectivity-auto-badge");
     const connectivityModeInputs = Array.from(document.querySelectorAll('input[name="connectivity-mode"]'));
@@ -3274,6 +3284,7 @@ INDEX_HTML = """<!doctype html>
         provider: llmProvider.value || "",
         model: llmModel.value || "",
         session_context_size: Number(sessionContextSize.value || 0),
+        mcp_tool_routing_enabled: selectedMcpToolRoutingEnabled(),
         wake_word: wakeWord.value.trim(),
         stt_prompt: sttPromptEl.value.trim(),
         system_prompt: assistantSystemPromptEl.value.trim(),
@@ -3405,6 +3416,18 @@ INDEX_HTML = """<!doctype html>
     function setSelectedConnectivityMode(value) {
       const nextValue = value === "offline" ? "offline" : "online";
       for (const input of connectivityModeInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function selectedMcpToolRoutingEnabled() {
+      const checked = mcpToolRoutingInputs.find((input) => input.checked);
+      return checked ? checked.value === "true" : false;
+    }
+
+    function setSelectedMcpToolRoutingEnabled(enabled) {
+      const nextValue = enabled ? "true" : "false";
+      for (const input of mcpToolRoutingInputs) {
         input.checked = input.value === nextValue;
       }
     }
@@ -3579,7 +3602,8 @@ INDEX_HTML = """<!doctype html>
 	      llmProvider.disabled = true;
 	      llmModel.disabled = true;
       for (const input of connectivityModeInputs) input.disabled = true;
-	      sessionContextSize.disabled = true;
+	        sessionContextSize.disabled = true;
+      for (const input of mcpToolRoutingInputs) input.disabled = true;
       wakeWord.disabled = true;
       sttPromptEl.disabled = true;
       assistantSystemPromptEl.disabled = true;
@@ -3610,6 +3634,7 @@ INDEX_HTML = """<!doctype html>
           llmProvider.value = selectedProvider;
         }
         setSessionContextSize(data.selected_session_context_size || 0);
+        setSelectedMcpToolRoutingEnabled(Boolean(data.selected_mcp_tool_routing_enabled));
         wakeWord.value = data.selected_wake_word || "";
         sttPromptEl.value = data.selected_stt_prompt || "";
         assistantSystemPromptEl.value = data.selected_system_prompt || "";
@@ -3694,6 +3719,7 @@ INDEX_HTML = """<!doctype html>
 	        llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
         for (const input of connectivityModeInputs) input.disabled = connectivityLocked;
 	        sessionContextSize.disabled = false;
+        for (const input of mcpToolRoutingInputs) input.disabled = false;
         wakeWord.disabled = false;
         sttPromptEl.disabled = false;
         assistantSystemPromptEl.disabled = false;
@@ -3977,11 +4003,15 @@ INDEX_HTML = """<!doctype html>
       syncSessionContextSizeLabel();
       renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
     });
+    for (const input of mcpToolRoutingInputs) {
+      input.addEventListener("change", () => {});
+    }
 
     llmSave.addEventListener("click", async () => {
       const provider = llmProvider.value;
       const model = llmModel.value;
       const sessionContextSizeValue = Number(sessionContextSize.value || 0);
+      const mcpToolRoutingEnabled = selectedMcpToolRoutingEnabled();
       const wakeWordValue = wakeWord.value.trim();
 	      const sttPromptValue = sttPromptEl.value.trim();
 	      const systemPromptValue = assistantSystemPromptEl.value.trim();
@@ -4004,6 +4034,7 @@ INDEX_HTML = """<!doctype html>
             provider,
             model,
 	            session_context_size: sessionContextSizeValue,
+            mcp_tool_routing_enabled: mcpToolRoutingEnabled,
             connectivity_mode: connectivityModeValue,
 	            cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,

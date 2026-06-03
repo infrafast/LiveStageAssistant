@@ -531,6 +531,7 @@ class VoiceAssistant:
         mcp_prompt_merge_mode: str = "append",
         mcp_agent_memory_enabled: bool = True,
         mcp_agent_timeout_seconds: float = DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
+        mcp_tool_routing_enabled: bool = False,
         session_context_store: SessionContextStore | None = None,
         session_context_size: int = 6000,
         voice_cancel_during_thinking: bool = False,
@@ -568,6 +569,7 @@ class VoiceAssistant:
             mcp_prompt_merge_mode: How to merge remote instructions: append or replace
             mcp_agent_memory_enabled: Whether MCPAgent should keep conversation memory
             mcp_agent_timeout_seconds: Maximum seconds to wait for one LLM/MCP agent response
+            mcp_tool_routing_enabled: Whether assistantPrompt.routing keywords restrict a turn to one MCP server
             session_context_store: Persistent chat session store
             session_context_size: Maximum active session summary characters injected into each LLM/MCP turn; 0 disables injection
             voice_cancel_during_thinking: Listen for short spoken cancel words while the LLM/MCP agent is processing
@@ -605,7 +607,8 @@ class VoiceAssistant:
         self.tts_provider = tts_provider.lower()
         self.local_whisper_model_name = local_whisper_model
         self.stt_language = stt_language or None
-        self.stt_prompt = stt_prompt or DEFAULT_STT_PROMPT
+        base_stt_prompt = stt_prompt or DEFAULT_STT_PROMPT
+        self.stt_prompt = base_stt_prompt
         self.openai_client = None
         self.local_whisper_model = None
         if self.stt_provider == "openai-whisper" or self.tts_provider == "openai":
@@ -646,8 +649,13 @@ class VoiceAssistant:
         self.mcp_prompt_merge_mode = (mcp_prompt_merge_mode or "append").lower()
         self.mcp_agent_memory_enabled = mcp_agent_memory_enabled
         self.mcp_agent_timeout_seconds = max(1.0, float(mcp_agent_timeout_seconds or DEFAULT_MCP_AGENT_TIMEOUT_SECONDS))
+        self.mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
+        self.mcp_tool_routes: list[dict[str, Any]] = []
+        self.mcp_all_tools: list[Any] = []
+        self.mcp_tools_by_server: dict[str, list[Any]] = {}
         self.session_context_store = session_context_store
         self.session_context_size = max(0, int(session_context_size or 0))
+        self.stt_prompt = self._with_mcp_routing_stt_keywords(base_stt_prompt)
         self.mcp_client = None
         self.agent = None
         self.reload_event = reload_event
@@ -889,6 +897,92 @@ class VoiceAssistant:
                 "tool": self.mcp_prompt_tool,
             }
         ]
+
+    def _split_routing_keywords(self, value: Any) -> list[str]:
+        if isinstance(value, str):
+            raw_values = value.split(",")
+        elif isinstance(value, list):
+            raw_values = value
+        else:
+            raw_values = []
+
+        keywords = []
+        seen = set()
+        for item in raw_values:
+            keyword = str(item or "").strip().lower()
+            if keyword and keyword not in seen:
+                keywords.append(keyword)
+                seen.add(keyword)
+        return keywords
+
+    def _build_mcp_tool_routes(self, config: dict | None) -> list[dict[str, Any]]:
+        routes = []
+        if not config:
+            return routes
+
+        for server_name, server_config in (config.get("mcpServers") or {}).items():
+            if not isinstance(server_config, dict):
+                continue
+            prompt_config = server_config.get("assistantPrompt") or server_config.get("agentPrompt")
+            if not isinstance(prompt_config, dict):
+                continue
+            keywords = self._split_routing_keywords(prompt_config.get("routing"))
+            if keywords:
+                routes.append({"server": server_name, "keywords": keywords})
+        return routes
+
+    def _mcp_routing_keywords(self) -> list[str]:
+        keywords = []
+        seen = set()
+        for route in self._build_mcp_tool_routes(self.mcp_config):
+            for keyword in route.get("keywords") or []:
+                normalized = str(keyword or "").strip()
+                dedupe_key = normalized.lower()
+                if normalized and dedupe_key not in seen:
+                    keywords.append(normalized)
+                    seen.add(dedupe_key)
+        return keywords
+
+    def _with_mcp_routing_stt_keywords(self, base_prompt: str) -> str:
+        prompt = (base_prompt or DEFAULT_STT_PROMPT).strip()
+        keywords = self._mcp_routing_keywords()
+        if not keywords:
+            return prompt
+
+        limited_keywords = keywords[:80]
+        keyword_text = ", ".join(limited_keywords)
+        routing_prompt = f"Mots métier MCP possibles: {keyword_text}."
+        if routing_prompt.lower() in prompt.lower():
+            return prompt
+
+        enriched = f"{prompt} {routing_prompt}".strip()
+        print(f"STT prompt enriched with {len(limited_keywords)} MCP routing keyword(s).")
+        return enriched
+
+    def _refresh_mcp_tool_routing_cache(self) -> None:
+        self.mcp_tool_routes = self._build_mcp_tool_routes(self.mcp_config)
+        self.mcp_all_tools = list(getattr(self.agent, "_tools", []) or [])
+        self.mcp_tools_by_server = {}
+        if not self.mcp_client:
+            return
+
+        connector_to_server = {}
+        for server_name, session in getattr(self.mcp_client, "sessions", {}).items():
+            connector = getattr(session, "connector", None)
+            if connector is not None:
+                connector_to_server[id(connector)] = server_name
+
+        for tool in self.mcp_all_tools:
+            connector = getattr(tool, "tool_connector", None)
+            server_name = connector_to_server.get(id(connector))
+            if server_name:
+                self.mcp_tools_by_server.setdefault(server_name, []).append(tool)
+
+        if self.mcp_tool_routing_enabled and self.mcp_tool_routes:
+            configured = ", ".join(
+                f"{route['server']}({', '.join(route['keywords'])})" for route in self.mcp_tool_routes
+            )
+            print(f"MCP tool routing configured: {configured}")
 
     def _source_value(self, source: dict, *keys: str) -> str | None:
         for key in keys:
@@ -1191,6 +1285,7 @@ class VoiceAssistant:
         # Replace environment variable placeholders
         config = self._substitute_env_vars(config)
         config = self._filter_unavailable_mcp_servers(config)
+        self.mcp_config = config
 
         try:
             # Create MCP client
@@ -1215,6 +1310,7 @@ class VoiceAssistant:
                 system_prompt=self.system_prompt,
             )
             await self.agent.initialize()
+            self._refresh_mcp_tool_routing_cache()
 
             print("✓ MCP servers initialized successfully!")
             if self.web_monitor:
@@ -1747,6 +1843,90 @@ class VoiceAssistant:
             "mime_type": "audio/mpeg",
         }
 
+    def _select_mcp_tool_route(self, text: str) -> dict[str, Any] | None:
+        if not self.mcp_tool_routing_enabled or not self.mcp_tool_routes:
+            return None
+
+        normalized = text.lower()
+        for route in self.mcp_tool_routes:
+            if any(self._routing_keyword_matches(normalized, keyword) for keyword in route.get("keywords") or []):
+                server_name = route.get("server")
+                if server_name and self.mcp_tools_by_server.get(server_name):
+                    return route
+        return None
+
+    def _routing_keyword_matches(self, normalized_text: str, keyword: str) -> bool:
+        keyword = str(keyword or "").strip().lower()
+        if not keyword:
+            return False
+        if any(char.isspace() for char in keyword):
+            return keyword in normalized_text
+        return re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", normalized_text, flags=re.IGNORECASE) is not None
+
+    async def _set_agent_tool_subset(self, tools: list[Any]) -> None:
+        if not self.agent:
+            return
+
+        self.agent._tools = list(tools)
+        if hasattr(self.agent, "_create_system_message_from_tools"):
+            await self.agent._create_system_message_from_tools(self.agent._tools)
+        if hasattr(self.agent, "_create_agent"):
+            self.agent._agent_executor = self.agent._create_agent()
+
+    async def _run_agent_with_optional_tool_routing(self, text: str) -> str:
+        if not self.agent:
+            return "Sorry, the assistant is not properly initialized."
+
+        agent_input = self._with_runtime_instructions(text)
+        route = self._select_mcp_tool_route(text)
+        if not route:
+            response = await asyncio.wait_for(
+                self.agent.run(agent_input),
+                timeout=self.mcp_agent_timeout_seconds,
+            )
+            return response if isinstance(response, str) else str(response)
+
+        server_name = str(route["server"])
+        routed_tools = self.mcp_tools_by_server.get(server_name) or []
+        if not routed_tools:
+            response = await asyncio.wait_for(
+                self.agent.run(agent_input),
+                timeout=self.mcp_agent_timeout_seconds,
+            )
+            return response if isinstance(response, str) else str(response)
+
+        print(f"[MCP CALL: {server_name} only]")
+        original_tools = list(getattr(self.agent, "_tools", []) or [])
+        original_history = list(self.agent.get_conversation_history()) if hasattr(self.agent, "get_conversation_history") else []
+        routed_failed = False
+        try:
+            await self._set_agent_tool_subset(routed_tools)
+            response = await asyncio.wait_for(
+                self.agent.run(agent_input),
+                timeout=self.mcp_agent_timeout_seconds,
+            )
+            if isinstance(response, str) and response.strip():
+                return response
+            if response:
+                return str(response)
+            print(f"[MCP CALL: {server_name} only] empty response, falling back to all tools")
+            routed_failed = True
+        except Exception as e:
+            print(f"[MCP CALL: {server_name} only] failed: {e}; falling back to all tools")
+            routed_failed = True
+        finally:
+            if self.agent:
+                await self._set_agent_tool_subset(original_tools or self.mcp_all_tools)
+
+        if self.agent and routed_failed:
+            self.agent._conversation_history = original_history
+
+        response = await asyncio.wait_for(
+            self.agent.run(agent_input),
+            timeout=self.mcp_agent_timeout_seconds,
+        )
+        return response if isinstance(response, str) else str(response)
+
     async def process_command(self, text: str) -> str:
         """Process user command with MCP agent."""
         print(f"\nYou said: {text}")
@@ -1788,12 +1968,7 @@ class VoiceAssistant:
 
         self.start_thinking_sound()
         try:
-            agent_input = self._with_runtime_instructions(text)
-            response = await asyncio.wait_for(
-                self.agent.run(agent_input),
-                timeout=self.mcp_agent_timeout_seconds,
-            )
-            return response
+            return await self._run_agent_with_optional_tool_routing(text)
         except asyncio.TimeoutError:
             return "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple."
         except Exception as e:
@@ -2077,6 +2252,12 @@ async def main():
         except ValueError:
             return default
 
+    def env_bool_from_values(values: dict, name: str, default: bool = False) -> bool:
+        value = values.get(name)
+        if value is None or str(value).strip() == "":
+            return default
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
     def env_optional(name: str) -> str | None:
         value = os.getenv(name)
         if value is None or value.strip() == "":
@@ -2296,6 +2477,7 @@ async def main():
         current_stt_prompt = (values.get("STT_PROMPT") or DEFAULT_STT_PROMPT).strip()
         current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip()
         current_session_context_size = env_int_from_values(values, "SESSION_CONTEXT_SIZE", 6000)
+        current_mcp_tool_routing_enabled = env_bool_from_values(values, "MCP_TOOL_ROUTING_ENABLED", False)
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
@@ -2343,6 +2525,7 @@ async def main():
             "selected_stt_prompt": current_stt_prompt,
             "selected_system_prompt": current_system_prompt,
             "selected_session_context_size": current_session_context_size,
+            "selected_mcp_tool_routing_enabled": current_mcp_tool_routing_enabled,
             "voices": list_elevenlabs_voice_options(values),
             "selected_voice_id": current_voice_id,
             "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
@@ -2364,6 +2547,7 @@ async def main():
         stt_prompt: str,
         system_prompt: str,
         session_context_size: int,
+        mcp_tool_routing_enabled: bool,
         voice_id: str,
         thinking_sound_file: str,
         openai_tts_voice: str,
@@ -2381,6 +2565,7 @@ async def main():
         stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
         system_prompt = (system_prompt or "").strip()
         session_context_size = max(0, min(12000, int(session_context_size or 0)))
+        mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
         voice_id = voice_id.strip()
         thinking_sound_file = thinking_sound_file.strip()
         openai_tts_voice = (openai_tts_voice or "").strip()
@@ -2509,6 +2694,7 @@ async def main():
                 "STT_PROMPT": stt_prompt,
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
                 "SESSION_CONTEXT_SIZE": str(session_context_size),
+                "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
                 "WEB_TTS_VOICE": openai_tts_voice,
@@ -2631,6 +2817,7 @@ async def main():
             "MCP_AGENT_TIMEOUT_SECONDS",
             DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
         )
+        mcp_tool_routing_enabled = env_bool("MCP_TOOL_ROUTING_ENABLED", False)
         session_context_dir = os.getenv("SESSION_CONTEXT_DIR", str(DEFAULT_CONTEXT_DIR)).strip() or str(DEFAULT_CONTEXT_DIR)
         session_context_size = max(0, min(12000, env_int("SESSION_CONTEXT_SIZE", 6000)))
 
@@ -2669,6 +2856,7 @@ async def main():
             print(f"Using web audio: STT={web_stt_provider}, TTS={web_tts_provider}")
         print(f"Using wake word: {', '.join(wake_words) if wake_words else 'disabled'}")
         print(f"Using MCP agent memory: {mcp_agent_memory_enabled}")
+        print(f"Using MCP tool routing: {'enabled' if mcp_tool_routing_enabled else 'disabled'}")
         print(f"Using session context size: {session_context_size} ({session_context_dir})")
 
         web_audio_needs_openai = web_audio_enabled and (
@@ -2778,6 +2966,7 @@ async def main():
             mcp_prompt_merge_mode=mcp_prompt_merge_mode,
             mcp_agent_memory_enabled=mcp_agent_memory_enabled,
             mcp_agent_timeout_seconds=mcp_agent_timeout_seconds,
+            mcp_tool_routing_enabled=mcp_tool_routing_enabled,
             session_context_store=session_context_store,
             session_context_size=session_context_size,
             voice_cancel_during_thinking=voice_cancel_during_thinking,
@@ -2991,7 +3180,7 @@ async def main():
         )
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -3002,6 +3191,7 @@ async def main():
                 stt_prompt,
                 system_prompt,
                 session_context_size,
+                mcp_tool_routing_enabled,
                 voice_id,
                 thinking_sound_file,
                 openai_tts_voice,
