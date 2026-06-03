@@ -1661,7 +1661,7 @@ INDEX_HTML = """<!doctype html>
       min-height: 56px;
       margin: 0 auto;
       display: grid;
-      grid-template-columns: 40px 40px minmax(0, 1fr) 40px;
+      grid-template-columns: 40px 40px minmax(0, 1fr);
       gap: 8px;
       align-items: end;
       border: 1px solid var(--border);
@@ -1670,7 +1670,31 @@ INDEX_HTML = """<!doctype html>
       background: var(--surface);
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
     }
+    .inject-form.busy {
+      grid-template-columns: 40px 40px minmax(0, 1fr) 40px;
+    }
+    .command-field {
+      position: relative;
+      min-width: 0;
+      min-height: 38px;
+    }
+    #soundwave {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 8px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.16s ease;
+    }
+    .command-field.soundwave-active #soundwave {
+      opacity: 1;
+    }
     #inject-command {
+      position: relative;
+      z-index: 1;
       width: 100%;
       max-height: 160px;
       min-height: 38px;
@@ -1681,6 +1705,13 @@ INDEX_HTML = """<!doctype html>
       background: transparent;
       color: var(--text);
       line-height: 1.4;
+    }
+    .command-field.soundwave-active #inject-command {
+      color: transparent;
+      caret-color: transparent;
+    }
+    .command-field.soundwave-active #inject-command::placeholder {
+      color: transparent;
     }
     #inject-command:disabled {
       color: var(--muted);
@@ -1698,7 +1729,8 @@ INDEX_HTML = """<!doctype html>
       line-height: 1;
     }
     #web-mic,
-    #web-conversation {
+    #web-conversation,
+    #inject-stop {
       width: 40px;
       height: 40px;
       min-height: 40px;
@@ -1708,6 +1740,15 @@ INDEX_HTML = """<!doctype html>
       color: var(--text);
       font-size: 17px;
       line-height: 1;
+    }
+    #inject-stop {
+      display: none;
+      background: var(--surface-soft);
+      color: #000000;
+      font-size: 13px;
+    }
+    #inject-stop.visible {
+      display: block;
     }
     #web-conversation.active {
       border-color: var(--accent);
@@ -1719,7 +1760,8 @@ INDEX_HTML = """<!doctype html>
       color: var(--bad);
     }
     #web-mic:disabled,
-    #web-conversation:disabled {
+    #web-conversation:disabled,
+    #inject-stop:disabled {
       color: var(--muted);
       cursor: not-allowed;
       opacity: 0.55;
@@ -2114,8 +2156,11 @@ INDEX_HTML = """<!doctype html>
       <form class="inject-form" id="inject-form">
         <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" disabled>💬</button>
         <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" disabled>🎙️</button>
-        <textarea id="inject-command" rows="1" autocomplete="off" placeholder="Message"></textarea>
-        <button id="inject-submit" type="submit" title="Send" aria-label="Send">⬆️</button>
+        <div class="command-field" id="command-field">
+          <canvas id="soundwave" aria-hidden="true"></canvas>
+          <textarea id="inject-command" rows="1" autocomplete="off" enterkeyhint="send" placeholder="Message"></textarea>
+        </div>
+        <button id="inject-stop" type="button" title="Stop" aria-label="Stop">&#9632;</button>
       </form>
     </div>
   </div>
@@ -2283,8 +2328,10 @@ INDEX_HTML = """<!doctype html>
     const sessionList = document.querySelector("#session-list");
     const sessionNew = document.querySelector("#session-new");
     const injectForm = document.querySelector("#inject-form");
+    const commandField = document.querySelector("#command-field");
+    const soundwave = document.querySelector("#soundwave");
     const injectCommand = document.querySelector("#inject-command");
-    const injectSubmit = document.querySelector("#inject-submit");
+    const injectStop = document.querySelector("#inject-stop");
     const webConversation = document.querySelector("#web-conversation");
     const webMic = document.querySelector("#web-mic");
     const settingsOpen = document.querySelector("#settings-open");
@@ -2343,6 +2390,8 @@ INDEX_HTML = """<!doctype html>
     let recordingSpeechDetected = false;
     let recordingSilenceStartedAt = null;
     let recordingStartedAt = 0;
+    let soundwaveAnimationId = null;
+    let soundwaveStartedAt = 0;
     let conversationEnabled = false;
     let conversationRecorder = null;
     let conversationStream = null;
@@ -2357,6 +2406,9 @@ INDEX_HTML = """<!doctype html>
     let conversationDiscard = false;
     let lastSpokenAssistantMessageId = null;
     let webTtsPlaying = false;
+    let webTtsAudioContext = null;
+    let webTtsUnlocked = false;
+    let currentWebTtsSource = null;
     let currentWebTtsAudio = null;
     let thinkingAudio = null;
     let thinkingAudioUrl = "";
@@ -2585,14 +2637,11 @@ INDEX_HTML = """<!doctype html>
     function setComposerLocked(locked) {
       const wasLocked = composerLocked;
       composerLocked = Boolean(locked);
-      injectCommand.disabled = composerLocked;
-      injectSubmit.disabled = cancelRequestInFlight;
+      injectForm.classList.toggle("busy", composerLocked);
+      injectStop.classList.toggle("visible", composerLocked);
+      injectStop.disabled = !composerLocked || cancelRequestInFlight;
       webConversation.disabled = !webAudio.stt_enabled;
       webMic.disabled = composerLocked || !webAudio.stt_enabled || isRecording || conversationEnabled;
-      injectSubmit.classList.toggle("stop-mode", composerLocked);
-      injectSubmit.innerHTML = composerLocked ? "&#9632;" : "⬆️";
-      injectSubmit.title = composerLocked ? "Stop" : "Send";
-      injectSubmit.setAttribute("aria-label", composerLocked ? "Stop" : "Send");
       injectCommand.placeholder = composerLocked ? "Assistant is thinking..." : "Message";
       if (wasLocked && !composerLocked && !settingsOverlay.classList.contains("open")) {
         window.setTimeout(() => injectCommand.focus({ preventScroll: true }), 0);
@@ -2636,7 +2685,78 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function base64ToArrayBuffer(base64) {
+      const binary = window.atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes.buffer;
+    }
+
+    async function unlockWebTtsAudio() {
+      if (!webAudio.tts_enabled || webTtsUnlocked) return;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      try {
+        if (!webTtsAudioContext) webTtsAudioContext = new AudioContextClass();
+        if (webTtsAudioContext.state === "suspended") await webTtsAudioContext.resume();
+        const buffer = webTtsAudioContext.createBuffer(1, 1, 22050);
+        const source = webTtsAudioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(webTtsAudioContext.destination);
+        source.start(0);
+        webTtsUnlocked = webTtsAudioContext.state === "running";
+      } catch (error) {
+        webTtsUnlocked = false;
+      }
+    }
+
+    async function playWebTtsBuffer(audioBase64) {
+      if (!webTtsAudioContext || webTtsAudioContext.state !== "running") return false;
+      try {
+        const arrayBuffer = base64ToArrayBuffer(audioBase64);
+        const audioBuffer = await webTtsAudioContext.decodeAudioData(arrayBuffer.slice(0));
+        const source = webTtsAudioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.playbackRate.value = Math.max(0.6, Math.min(1.8, Number(webAudio.tts_speed || 1)));
+        source.connect(webTtsAudioContext.destination);
+        currentWebTtsSource = source;
+        await new Promise((resolve, reject) => {
+          source.addEventListener("ended", resolve, { once: true });
+          try {
+            source.start(0);
+          } catch (error) {
+            reject(error);
+          }
+        });
+        return true;
+      } catch (error) {
+        currentWebTtsSource = null;
+        return false;
+      }
+    }
+
+    async function playWebTtsElement(audioBase64, mimeType) {
+      const arrayBuffer = base64ToArrayBuffer(audioBase64);
+      const blob = new Blob([arrayBuffer], { type: mimeType || "audio/mpeg" });
+      const objectUrl = URL.createObjectURL(blob);
+      const audio = new Audio(objectUrl);
+      currentWebTtsAudio = audio;
+      audio.playbackRate = Math.max(0.6, Math.min(1.8, Number(webAudio.tts_speed || 1)));
+      try {
+        await new Promise((resolve, reject) => {
+          audio.addEventListener("ended", resolve, { once: true });
+          audio.addEventListener("error", reject, { once: true });
+          audio.play().catch(reject);
+        });
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+
     function stopMediaStream() {
+      stopSoundwave();
       clearRecordingTimer();
       if (recordingMonitorId) {
         window.cancelAnimationFrame(recordingMonitorId);
@@ -2671,6 +2791,82 @@ INDEX_HTML = """<!doctype html>
       return analyserRms(recordingAnalyser);
     }
 
+    function resizeSoundwaveCanvas() {
+      const rect = soundwave.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.floor(rect.width * scale));
+      const height = Math.max(1, Math.floor(rect.height * scale));
+      if (soundwave.width !== width || soundwave.height !== height) {
+        soundwave.width = width;
+        soundwave.height = height;
+      }
+      return { width, height, scale };
+    }
+
+    function drawSoundwave() {
+      if (!soundwaveAnimationId) return;
+      const ctx = soundwave.getContext("2d");
+      if (!ctx) return;
+
+      const { width, height, scale } = resizeSoundwaveCanvas();
+      const cssWidth = width / scale;
+      const cssHeight = height / scale;
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+      const time = (Date.now() - soundwaveStartedAt) / 1000;
+      const centerY = cssHeight / 2;
+      const padding = 10;
+      const usableWidth = Math.max(1, cssWidth - padding * 2);
+      const analyser = recordingAnalyser;
+      const samples = analyser ? new Uint8Array(analyser.fftSize) : null;
+      if (analyser && samples) analyser.getByteTimeDomainData(samples);
+
+      const gradient = ctx.createLinearGradient(padding, 0, cssWidth - padding, 0);
+      gradient.addColorStop(0, "rgba(16, 185, 129, 0.25)");
+      gradient.addColorStop(0.5, "rgba(59, 130, 246, 0.85)");
+      gradient.addColorStop(1, "rgba(16, 185, 129, 0.25)");
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = gradient;
+      ctx.beginPath();
+
+      const points = 96;
+      for (let point = 0; point < points; point += 1) {
+        const ratio = point / (points - 1);
+        const x = padding + ratio * usableWidth;
+        let normalized = Math.sin(ratio * Math.PI * 8 + time * 4.5) * 0.12;
+        if (samples) {
+          const sampleIndex = Math.min(samples.length - 1, Math.floor(ratio * samples.length));
+          normalized = (samples[sampleIndex] - 128) / 128;
+        }
+        const envelope = Math.sin(ratio * Math.PI);
+        const y = centerY + normalized * envelope * cssHeight * 0.42;
+        if (point === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      soundwaveAnimationId = window.requestAnimationFrame(drawSoundwave);
+    }
+
+    function startSoundwave() {
+      commandField.classList.add("soundwave-active");
+      soundwaveStartedAt = Date.now();
+      if (soundwaveAnimationId) window.cancelAnimationFrame(soundwaveAnimationId);
+      soundwaveAnimationId = window.requestAnimationFrame(drawSoundwave);
+    }
+
+    function stopSoundwave() {
+      commandField.classList.remove("soundwave-active");
+      if (soundwaveAnimationId) {
+        window.cancelAnimationFrame(soundwaveAnimationId);
+        soundwaveAnimationId = null;
+      }
+      const ctx = soundwave.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, soundwave.width, soundwave.height);
+    }
+
     async function submitCommand(command) {
       const cleanedCommand = command.trim();
       if (!cleanedCommand || composerLocked) return;
@@ -2700,6 +2896,23 @@ INDEX_HTML = """<!doctype html>
         renderMessages(lastServerMessages, false);
         metaEl.textContent = `inject failed: ${error}`;
       }
+    }
+
+    async function submitComposerCommand() {
+      await unlockWebTtsAudio();
+      if (composerLocked) {
+        await cancelCommand();
+        return;
+      }
+      const command = injectCommand.value.trim();
+      if (!command) return;
+      if (isStopCommand(command)) {
+        await cancelCommand(true);
+        injectCommand.value = "";
+        autoSizeComposer();
+        return;
+      }
+      await submitCommand(command);
     }
 
     async function handleRecordedAudio(blob, options = {}) {
@@ -2772,6 +2985,7 @@ INDEX_HTML = """<!doctype html>
         });
         mediaRecorder.start();
         setRecording(true);
+        startSoundwave();
         const maxRecordingMs = Math.max(1000, Number(webAudio.max_record_seconds || 8) * 1000);
         recordingTimer = window.setTimeout(() => stopWebRecording(), maxRecordingMs);
         monitorPushToTalkAudio();
@@ -2961,17 +3175,12 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         if (!data.audio_base64 || !data.mime_type) return;
-        const audio = new Audio(`data:${data.mime_type};base64,${data.audio_base64}`);
-        currentWebTtsAudio = audio;
-        audio.playbackRate = Math.max(0.6, Math.min(1.8, Number(webAudio.tts_speed || 1)));
-        await new Promise((resolve, reject) => {
-          audio.addEventListener("ended", resolve, { once: true });
-          audio.addEventListener("error", reject, { once: true });
-          audio.play().catch(reject);
-        });
+        const playedWithContext = await playWebTtsBuffer(data.audio_base64);
+        if (!playedWithContext) await playWebTtsElement(data.audio_base64, data.mime_type);
       } catch (error) {
-        metaEl.textContent = `web TTS unavailable: ${error}`;
+        metaEl.textContent = `web TTS unavailable: ${error}. Tap send, mic, or conversation once to enable iPhone audio.`;
       } finally {
+        currentWebTtsSource = null;
         currentWebTtsAudio = null;
         webTtsPlaying = false;
         scheduleConversationRestart(250);
@@ -2979,6 +3188,12 @@ INDEX_HTML = """<!doctype html>
     }
 
     function stopWebTts() {
+      if (currentWebTtsSource) {
+        try {
+          currentWebTtsSource.stop(0);
+        } catch (error) {}
+        currentWebTtsSource = null;
+      }
       if (currentWebTtsAudio) {
         const audio = currentWebTtsAudio;
         currentWebTtsAudio.pause();
@@ -3019,7 +3234,7 @@ INDEX_HTML = """<!doctype html>
       stopWebTts();
       if ((!force && !composerLocked) || cancelRequestInFlight) return;
       cancelRequestInFlight = true;
-      injectSubmit.disabled = true;
+      injectStop.disabled = true;
       injectCommand.placeholder = "Cancelling...";
       try {
         const response = await fetch("/api/cancel-command", {
@@ -3629,34 +3844,29 @@ INDEX_HTML = """<!doctype html>
     injectCommand.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();
-        if (!composerLocked) injectForm.requestSubmit();
+        submitComposerCommand();
+      }
+    });
+
+    injectCommand.addEventListener("beforeinput", (event) => {
+      if (event.inputType === "insertLineBreak" && !event.shiftKey) {
+        event.preventDefault();
+        submitComposerCommand();
       }
     });
 
     injectForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (composerLocked) {
-        await cancelCommand();
-        return;
-      }
-      const command = injectCommand.value.trim();
-      if (!command) return;
-      if (isStopCommand(command)) {
-        await cancelCommand(true);
-        injectCommand.value = "";
-        autoSizeComposer();
-        return;
-      }
-      await submitCommand(command);
+      await submitComposerCommand();
     });
 
-    injectSubmit.addEventListener("click", async (event) => {
-      if (!composerLocked) return;
-      event.preventDefault();
+    injectStop.addEventListener("click", async () => {
+      await unlockWebTtsAudio();
       await cancelCommand();
     });
 
     webMic.addEventListener("click", async () => {
+      await unlockWebTtsAudio();
       if (isRecording) {
         stopWebRecording();
       } else {
@@ -3664,7 +3874,8 @@ INDEX_HTML = """<!doctype html>
       }
     });
 
-    webConversation.addEventListener("click", () => {
+    webConversation.addEventListener("click", async () => {
+      await unlockWebTtsAudio();
       setConversationEnabled(!conversationEnabled);
     });
 

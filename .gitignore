@@ -245,4 +245,9 @@ LSA-LSA-Codebase-OPEN_AI_API_KEY.txt
 mcp_servers_cptoinfrafast.json
 .env.cptoinfrafast
 LSA-LSA-Codebase-OPENAI_API_KEY.txt
+<<<<<<< HEAD
 LSA-LSA-Localhost-OPENAI_API_KEY.txt
+=======
+.env.cbtoinfrafast
+mcp_servers_cbtoinfrafast.json
+>>>>>>> 64b9d71 (micro)
