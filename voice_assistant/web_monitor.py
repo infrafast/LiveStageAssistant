@@ -2392,6 +2392,7 @@ INDEX_HTML = """<!doctype html>
     let conversationStartedAt = 0;
     let conversationRestartTimer = null;
     let conversationDiscard = false;
+    let conversationStopStreamAfterSegment = false;
     let lastSpokenAssistantMessageId = null;
     let webTtsPlaying = false;
     let webTtsAudioContext = null;
@@ -3027,11 +3028,15 @@ INDEX_HTML = """<!doctype html>
       return analyserRms(conversationAnalyser);
     }
 
-    function stopConversationStream() {
+    function stopConversationMonitor() {
       if (conversationMonitorId) {
         window.cancelAnimationFrame(conversationMonitorId);
         conversationMonitorId = null;
       }
+    }
+
+    function stopConversationStream() {
+      stopConversationMonitor();
       if (conversationAudioContext) {
         conversationAudioContext.close().catch(() => {});
         conversationAudioContext = null;
@@ -3046,37 +3051,58 @@ INDEX_HTML = """<!doctype html>
       conversationRecorder = null;
     }
 
-    function stopConversationRecording(discard = false) {
+    function stopConversationSegment() {
+      stopConversationMonitor();
+      conversationRecorder = null;
+    }
+
+    function stopConversationRecording(discard = false, closeStream = false) {
       conversationDiscard = discard;
+      conversationStopStreamAfterSegment = Boolean(closeStream);
       if (conversationRecorder && conversationRecorder.state !== "inactive") {
         conversationRecorder.stop();
       } else {
-        stopConversationStream();
+        if (conversationStopStreamAfterSegment) stopConversationStream();
+        else stopConversationSegment();
+        conversationStopStreamAfterSegment = false;
       }
+    }
+
+    async function ensureConversationMicrophone() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder || !AudioContextClass) {
+        throw new Error("conversation mode unavailable in this browser");
+      }
+
+      const hasLiveStream = conversationStream
+        && conversationStream.getAudioTracks().some((track) => track.readyState === "live");
+      if (hasLiveStream && conversationAudioContext && conversationAnalyser) {
+        if (conversationAudioContext.state === "suspended") {
+          await conversationAudioContext.resume();
+        }
+        return;
+      }
+
+      stopConversationStream();
+      conversationStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      conversationAudioContext = new AudioContextClass();
+      const source = conversationAudioContext.createMediaStreamSource(conversationStream);
+      conversationAnalyser = conversationAudioContext.createAnalyser();
+      conversationAnalyser.fftSize = 2048;
+      source.connect(conversationAnalyser);
     }
 
     async function startConversationListening() {
       if (!conversationEnabled || composerLocked || webTtsPlaying || !webAudio.stt_enabled || conversationRecorder) return;
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder || !AudioContextClass) {
-        metaEl.textContent = "conversation mode unavailable in this browser";
-        conversationEnabled = false;
-        updateConversationButton();
-        return;
-      }
 
       try {
+        await ensureConversationMicrophone();
         conversationChunks = [];
         conversationSpeechDetected = false;
         conversationSilenceStartedAt = null;
         conversationDiscard = false;
+        conversationStopStreamAfterSegment = false;
         conversationStartedAt = Date.now();
-        conversationStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        conversationAudioContext = new AudioContextClass();
-        const source = conversationAudioContext.createMediaStreamSource(conversationStream);
-        conversationAnalyser = conversationAudioContext.createAnalyser();
-        conversationAnalyser.fftSize = 2048;
-        source.connect(conversationAnalyser);
         conversationRecorder = new MediaRecorder(conversationStream);
         conversationRecorder.addEventListener("dataavailable", (event) => {
           if (event.data && event.data.size > 0) conversationChunks.push(event.data);
@@ -3084,7 +3110,11 @@ INDEX_HTML = """<!doctype html>
         conversationRecorder.addEventListener("stop", () => {
           const shouldDiscard = conversationDiscard || !conversationSpeechDetected;
           const blob = new Blob(conversationChunks, { type: conversationRecorder.mimeType || "audio/webm" });
-          stopConversationStream();
+          const shouldCloseStream = conversationStopStreamAfterSegment;
+          if (shouldCloseStream) stopConversationStream();
+          else stopConversationSegment();
+          conversationStopStreamAfterSegment = false;
+          if (shouldCloseStream) return;
           if (!shouldDiscard) {
             handleRecordedAudio(blob, { applyWakeWord: true, conversation: true }).finally(() => {
               scheduleConversationRestart();
@@ -3099,7 +3129,8 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         stopConversationStream();
         metaEl.textContent = `conversation microphone unavailable: ${error}`;
-        scheduleConversationRestart(1500);
+        conversationEnabled = false;
+        updateConversationButton();
       }
     }
 
@@ -3150,7 +3181,8 @@ INDEX_HTML = """<!doctype html>
         scheduleConversationRestart(0);
       } else {
         clearConversationRestartTimer();
-        stopConversationRecording(true);
+        stopConversationRecording(true, true);
+        stopConversationStream();
       }
     }
 
