@@ -2697,7 +2697,7 @@ INDEX_HTML = """<!doctype html>
         const audioBuffer = await webTtsAudioContext.decodeAudioData(arrayBuffer.slice(0));
         const source = webTtsAudioContext.createBufferSource();
         source.buffer = audioBuffer;
-        source.playbackRate.value = Math.max(0.6, Math.min(1.8, Number(webAudio.tts_speed || 1)));
+        source.playbackRate.value = 1;
         source.connect(webTtsAudioContext.destination);
         currentWebTtsSource = source;
         await new Promise((resolve, reject) => {
@@ -2722,6 +2722,9 @@ INDEX_HTML = """<!doctype html>
       const audio = new Audio(objectUrl);
       currentWebTtsAudio = audio;
       audio.playbackRate = Math.max(0.6, Math.min(1.8, Number(webAudio.tts_speed || 1)));
+      audio.preservesPitch = true;
+      audio.mozPreservesPitch = true;
+      audio.webkitPreservesPitch = true;
       try {
         await new Promise((resolve, reject) => {
           audio.addEventListener("ended", resolve, { once: true });
@@ -3153,8 +3156,12 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         if (!data.audio_base64 || !data.mime_type) return;
-        const playedWithContext = await playWebTtsBuffer(data.audio_base64);
-        if (!playedWithContext) await playWebTtsElement(data.audio_base64, data.mime_type);
+        try {
+          await playWebTtsElement(data.audio_base64, data.mime_type);
+        } catch (audioElementError) {
+          const playedWithContext = await playWebTtsBuffer(data.audio_base64);
+          if (!playedWithContext) throw audioElementError;
+        }
       } catch (error) {
         metaEl.textContent = `web TTS unavailable: ${error}. Tap send, mic, or conversation once to enable iPhone audio.`;
       } finally {
