@@ -1717,17 +1717,6 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
       cursor: not-allowed;
     }
-    #inject-submit {
-      width: 40px;
-      height: 40px;
-      min-height: 40px;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: var(--surface-soft);
-      color: var(--text);
-      font-size: 18px;
-      line-height: 1;
-    }
     #web-mic,
     #web-conversation,
     #inject-stop {
@@ -1765,17 +1754,6 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
       cursor: not-allowed;
       opacity: 0.55;
-    }
-    #inject-submit:disabled {
-      color: var(--muted);
-      cursor: not-allowed;
-      opacity: 0.55;
-    }
-    #inject-submit.stop-mode {
-      background: var(--surface-soft);
-      color: #000000;
-      border: 1px solid var(--border);
-      font-size: 13px;
     }
     .overlay {
       position: fixed;
