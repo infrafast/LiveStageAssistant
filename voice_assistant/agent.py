@@ -621,7 +621,7 @@ class VoiceAssistant:
             mcp_prompt_merge_mode: How to merge remote instructions: append or replace
             mcp_agent_memory_enabled: Whether MCPAgent should keep conversation memory
             mcp_agent_timeout_seconds: Maximum seconds to wait for one LLM/MCP agent response
-            mcp_tool_routing_enabled: Whether assistantPrompt.routing keywords restrict a turn to one MCP server
+            mcp_tool_routing_enabled: Whether assistantOptions.routing keywords restrict a turn to one MCP server
             session_context_store: Persistent chat session store
             session_context_size: Maximum active session summary characters injected into each LLM/MCP turn; 0 disables injection
             voice_cancel_during_thinking: Listen for short spoken cancel words while the LLM/MCP agent is processing
@@ -927,7 +927,7 @@ class VoiceAssistant:
     def _build_mcp_prompt_sources(self, config: dict) -> list[dict]:
         sources = []
         for server_name, server_config in config.get("mcpServers", {}).items():
-            prompt_config = server_config.get("assistantPrompt") or server_config.get("agentPrompt")
+            prompt_config = server_config.get("assistantOptions") or server_config.get("assistantPrompt") or server_config.get("agentPrompt")
             if isinstance(prompt_config, dict):
                 source = dict(prompt_config)
                 source["server"] = server_name
@@ -976,7 +976,7 @@ class VoiceAssistant:
         for server_name, server_config in (config.get("mcpServers") or {}).items():
             if not isinstance(server_config, dict):
                 continue
-            prompt_config = server_config.get("assistantPrompt") or server_config.get("agentPrompt")
+            prompt_config = server_config.get("assistantOptions") or server_config.get("assistantPrompt") or server_config.get("agentPrompt")
             if not isinstance(prompt_config, dict):
                 continue
             keywords = self._split_routing_keywords(prompt_config.get("routing"))
@@ -992,7 +992,7 @@ class VoiceAssistant:
         for server_name, server_config in (config.get("mcpServers") or {}).items():
             if not isinstance(server_config, dict):
                 continue
-            prompt_config = server_config.get("assistantPrompt") or server_config.get("agentPrompt")
+            prompt_config = server_config.get("assistantOptions") or server_config.get("assistantPrompt") or server_config.get("agentPrompt")
             if not isinstance(prompt_config, dict):
                 continue
 

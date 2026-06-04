@@ -11,7 +11,7 @@
         "OSC_PROTOCOL": "OSCX32M32",
         "DEBUG": "${DEBUG}"
       },
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
       }
     }

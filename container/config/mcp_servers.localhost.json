@@ -6,7 +6,7 @@
       "headers": {
         "Authorization": "Bearer change-me"
       },
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus"
       }
     }

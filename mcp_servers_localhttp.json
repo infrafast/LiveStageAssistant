@@ -4,7 +4,7 @@
       "type": "streamable-http",
       "url": "http://192.168.0.1:8787/mcp",
       "headers": {},
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
       }
     },
@@ -26,7 +26,7 @@
         "LOG_LEVEL": "debug",
         "NODE_ENV": "development"
       },
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
       }
     }

@@ -273,7 +273,7 @@ WAKE_WORD=                                      # Empty keeps current behavior; 
 ASSISTANT_SYSTEM_PROMPT="You are a helpful voice assistant..."  # Customize personality
 MCP_AGENT_MEMORY_ENABLED=true                  # Keep conversational memory; live external state still requires MCP reads
 MCP_AGENT_TIMEOUT_SECONDS=45                   # Max seconds for one LLM/MCP response before timeout
-MCP_TOOL_ROUTING_ENABLED=false                 # Use assistantPrompt.routing keywords to expose only one MCP server's tools
+MCP_TOOL_ROUTING_ENABLED=false                 # Use assistantOptions.routing keywords to expose only one MCP server's tools
 SESSION_CONTEXT_SIZE=6000                      # Inject up to this many session-summary chars; 0 disables injection
 SESSION_CONTEXT_DIR=.contexts                  # Local directory for .context JSON session files
 MCP_CONFIG=mcp_servers.offline.json             # Optional config override
@@ -490,7 +490,7 @@ Enable it with:
 MCP_LOAD_SERVER_PROMPT=true
 ```
 
-Then add an `assistantPrompt` block to each MCP server that should contribute startup instructions. The server name is already the key under `mcpServers`, so it does not need to be repeated in the env file.
+Then add an `assistantOptions` block to each MCP server that should contribute startup instructions. The server name is already the key under `mcpServers`, so it does not need to be repeated in the env file.
 
 ```json
 {
@@ -498,7 +498,7 @@ Then add an `assistantPrompt` block to each MCP server that should contribute st
     "mixer": {
       "command": "node",
       "args": ["path/to/server.js"],
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus"
       }
     }
@@ -506,7 +506,7 @@ Then add an `assistantPrompt` block to each MCP server that should contribute st
 }
 ```
 
-For each server with an `assistantPrompt` block, the assistant tries standard prompt sources in this order unless custom values are configured:
+For each server with an `assistantOptions` block, the assistant tries standard prompt sources in this order unless custom values are configured:
 
 1. `promptName` or default `agent_prompt`: fetch an MCP prompt with `prompts/get`
 2. `resourceUri` or default `agent://prompt/system`: read an MCP resource with `resources/read`
@@ -529,21 +529,21 @@ Multi-server MCP configuration:
     "mixer": {
       "command": "node",
       "args": ["path/to/mixer-server.js"],
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "mixer,mix,console,volume,bus"
       }
     },
     "lights": {
       "command": "node",
       "args": ["path/to/lights-server.js"],
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "light,scène,dmx"
       }
     },
     "stage": {
       "command": "node",
       "args": ["path/to/stage-server.js"],
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "stage,show"
       }
     }
@@ -551,7 +551,7 @@ Multi-server MCP configuration:
 }
 ```
 
-Each `assistantPrompt` block can define:
+Each `assistantOptions` block can define:
 
 1. `routing`: optional comma-separated business keywords used when `MCP_TOOL_ROUTING_ENABLED=true`
 2. `promptName`: optional custom MCP prompt name; omit it for standard `agent_prompt`
@@ -560,11 +560,11 @@ Each `assistantPrompt` block can define:
 
 The prompts are loaded in the order of the servers under `mcpServers`. A failing server prompt logs a warning and does not block the others.
 
-When MCP tool routing is enabled from the web config or with `MCP_TOOL_ROUTING_ENABLED=true`, the assistant checks each command against `assistantPrompt.routing`. If a keyword matches, that single turn is run with only that MCP server's tools and the console log includes `[MCP CALL: <server> only]`. If the routed turn fails or returns an empty response, the assistant restores the original tool list and retries with the current default behavior when the full tool list is still within the provider limit.
+When MCP tool routing is enabled from the web config or with `MCP_TOOL_ROUTING_ENABLED=true`, the assistant checks each command against `assistantOptions.routing`. If a keyword matches, that single turn is run with only that MCP server's tools and the console log includes `[MCP CALL: <server> only]`. If the routed turn fails or returns an empty response, the assistant restores the original tool list and retries with the current default behavior when the full tool list is still within the provider limit.
 
-Routing keywords must be unique across all configured MCP servers, and each server can define at most 10 routing words. If two `assistantPrompt.routing` lists share the same normalized word, startup stops with `routing word duplicate: <word>` so ambiguous routing cannot silently send a command to the wrong domain. If a server defines too many words, startup stops with `routing words limit exceeded: <server> has <count> words, max 10`.
+Routing keywords must be unique across all configured MCP servers, and each server can define at most 10 routing words. If two `assistantOptions.routing` lists share the same normalized word, startup stops with `routing word duplicate: <word>` so ambiguous routing cannot silently send a command to the wrong domain. If a server defines too many words, startup stops with `routing words limit exceeded: <server> has <count> words, max 10`.
 
-OpenAI currently accepts at most 128 tools in one request. When several MCP servers are enabled and their combined tool count exceeds that limit, Live Stage Assistant keeps routing enabled as a guard rail: routed turns still use only the matching server, and unrouted turns use the first configured MCP server whose tool list fits under the limit. If no safe fallback server exists, the unrouted turn runs without MCP tools instead of sending an invalid oversized tool array. Put the most common/default server first in `mcpServers`, and give every additional server a precise `assistantPrompt.routing` keyword list. For example, a mixer server can route on `mixer, volume, bus`, while a QLC+ lighting server can route on `qlc, lumière, éclairage, scène, dmx, blackout`.
+OpenAI currently accepts at most 128 tools in one request. When several MCP servers are enabled and their combined tool count exceeds that limit, Live Stage Assistant keeps routing enabled as a guard rail: routed turns still use only the matching server, and unrouted turns use the first configured MCP server whose tool list fits under the limit. If no safe fallback server exists, the unrouted turn runs without MCP tools instead of sending an invalid oversized tool array. Put the most common/default server first in `mcpServers`, and give every additional server a precise `assistantOptions.routing` keyword list. For example, a mixer server can route on `mixer, volume, bus`, while a QLC+ lighting server can route on `qlc, lumière, éclairage, scène, dmx, blackout`.
 
 If a routed server asks for confirmation, a short confirmation reply such as `oui`, `ok`, or `yes` reuses the same MCP server route for the next turn. This keeps flows such as `blackout` followed by `oui` on the lighting server instead of falling back to the default mixer route.
 
@@ -626,7 +626,7 @@ After the announcement, the current voice loop is interrupted if needed, the act
 
 If you run `python voice_assistant/agent.py` without `--env-file`, the assistant loads `.env` when present. If `.env` does not exist, internal defaults are used: OpenAI with `gpt-4o-mini` for the LLM, OpenAI Whisper for STT, ElevenLabs as the legacy backend TTS default, `CLOUD_TTS_PROVIDER=openai` for the TTS dropdown, `thinking.wav` for the processing sound, and `mcp_servers.json` when no explicit MCP config is provided. In that default mode, `OPENAI_API_KEY` is required because both the LLM and STT providers use OpenAI.
 
-For short stage commands, `STT_PROMPT` can give Whisper mixer-specific context. The bundled default biases French mixer commands such as `mets Claude`, `baisse snare`, `mute Voc-Claude`, and the assistant also fixes the narrow transcription artifact where a leading `mets` command is fused with the following channel name. At runtime, any `assistantPrompt.routing` keywords from the active `MCP_CONFIG` are appended to the STT prompt without rewriting the env file. The web config exposes the base value under **Config -> STT/TTS**.
+For short stage commands, `STT_PROMPT` can give Whisper mixer-specific context. The bundled default biases French mixer commands such as `mets Claude`, `baisse snare`, `mute Voc-Claude`, and the assistant also fixes the narrow transcription artifact where a leading `mets` command is fused with the following channel name. At runtime, any `assistantOptions.routing` keywords from the active `MCP_CONFIG` are appended to the STT prompt without rewriting the env file. The web config exposes the base value under **Config -> STT/TTS**.
 
 ### Changing Model Provider
 
@@ -760,7 +760,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
 
 6. **MCP Startup Instructions Not Loaded**
    - Confirm `MCP_LOAD_SERVER_PROMPT=true` in the selected env file
-   - Confirm the selected `MCP_CONFIG` file has at least one server with an `assistantPrompt` block
+   - Confirm the selected `MCP_CONFIG` file has at least one server with an `assistantOptions` block
    - Confirm each configured MCP server exposes standard `agent_prompt`, `agent://prompt/system`, or `get_agent_prompt`
    - Check the startup warnings for unsupported prompts/resources or a missing fallback tool
    - If the prompt source belongs to a server instance that could not start, such as `mixer`, fix that server's command or script path in the selected MCP JSON file

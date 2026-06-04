@@ -34,7 +34,7 @@
         "OSC_DCA_COUNT": "4",
         "DEBUG": "${DEBUG}"
       },
-      "assistantPrompt": {
+      "assistantOptions": {
         "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
       }
     }
