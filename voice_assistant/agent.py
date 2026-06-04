@@ -254,6 +254,23 @@ def read_secret_from_env_values(values: dict, name: str) -> str | None:
     return secret or None
 
 
+def mask_secret_tail(secret: str | None, visible_tail: int = 4) -> str:
+    if not secret:
+        return "non configurée"
+    tail = secret[-visible_tail:] if len(secret) > visible_tail else secret
+    return f"{'•' * 18}{tail}"
+
+
+def read_json_url(url: str, headers: dict[str, str], timeout: float = 6.0) -> dict[str, Any]:
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = response.read().decode("utf-8")
+    parsed = json.loads(body or "{}")
+    if not isinstance(parsed, dict):
+        raise ValueError("API response is not a JSON object")
+    return parsed
+
+
 def env_float_from_mapping(values: dict, name: str, default: float) -> float:
     value = values.get(name)
     if value is None or str(value).strip() == "":
@@ -2446,6 +2463,94 @@ async def main():
             web_monitor.update(remote_screen={"vnc_url": cleaned_url})
         return {"saved": True, "vnc_url": cleaned_url}
 
+    def build_cloud_api_status(env_file: Path) -> dict[str, Any]:
+        values = dict(dotenv_values(env_file))
+        openai_api_key = read_secret_from_env_values(values, "OPENAI_API_KEY")
+        elevenlabs_api_key = read_secret_from_env_values(values, "ELEVENLABS_API_KEY")
+        result: dict[str, Any] = {
+            "openai": {
+                "status": "missing" if not openai_api_key else "unavailable",
+                "masked_key": mask_secret_tail(openai_api_key),
+                "lines": [
+                    "Crédit restant: non exposé par l'API publique OpenAI.",
+                    "Le coût récent exige une clé autorisée pour les endpoints organisation.",
+                ],
+            },
+            "elevenlabs": {
+                "status": "missing" if not elevenlabs_api_key else "unavailable",
+                "masked_key": mask_secret_tail(elevenlabs_api_key),
+                "lines": [],
+            },
+        }
+
+        if openai_api_key:
+            start_time = int(time.time()) - 7 * 24 * 60 * 60
+            url = f"https://api.openai.com/v1/organization/costs?start_time={start_time}&bucket_width=1d&limit=7"
+            try:
+                data = read_json_url(url, {"Authorization": f"Bearer {openai_api_key}"})
+                total_value = 0.0
+                currency = "usd"
+                for bucket in data.get("data") or []:
+                    for item in bucket.get("results") or []:
+                        amount = item.get("amount") or {}
+                        total_value += float(amount.get("value") or 0)
+                        currency = str(amount.get("currency") or currency)
+                result["openai"] = {
+                    "status": "ok",
+                    "masked_key": mask_secret_tail(openai_api_key),
+                    "cost_7d": {"value": round(total_value, 4), "currency": currency},
+                    "lines": [
+                        "Crédit restant: non exposé par l'API publique OpenAI.",
+                        "Costs API accessible avec cette clé.",
+                    ],
+                }
+            except urllib.error.HTTPError as e:
+                detail = f"Costs API indisponible avec cette clé: HTTP {e.code}."
+                if e.code in {401, 403}:
+                    detail = "Costs API non autorisée avec cette clé. Utilise une clé admin/org pour afficher le coût."
+                result["openai"]["lines"].append(detail)
+            except Exception as e:
+                result["openai"]["lines"].append(f"Costs API indisponible: {e}")
+
+        if elevenlabs_api_key:
+            try:
+                data = read_json_url(
+                    "https://api.elevenlabs.io/v1/user/subscription",
+                    {"xi-api-key": elevenlabs_api_key},
+                )
+                used = int(data.get("character_count") or 0)
+                limit = int(data.get("character_limit") or 0)
+                remaining = max(0, limit - used) if limit else 0
+                tier = str(data.get("tier") or "unknown")
+                subscription_status = str(data.get("status") or "unknown")
+                overage = data.get("current_overage") or {}
+                lines = [f"Plan: {tier}", f"Statut: {subscription_status}"]
+                if overage:
+                    lines.append(f"Overage: {overage.get('amount', '0')} {overage.get('currency', 'usd')}")
+                result["elevenlabs"] = {
+                    "status": "ok",
+                    "masked_key": mask_secret_tail(elevenlabs_api_key),
+                    "characters": {"used": used, "limit": limit, "remaining": remaining},
+                    "lines": lines,
+                }
+            except urllib.error.HTTPError as e:
+                detail = f"Subscription API indisponible: HTTP {e.code}."
+                if e.code in {401, 403}:
+                    detail = "Clé ElevenLabs refusée pour la lecture de subscription."
+                result["elevenlabs"] = {
+                    "status": "error",
+                    "masked_key": mask_secret_tail(elevenlabs_api_key),
+                    "lines": [detail],
+                }
+            except Exception as e:
+                result["elevenlabs"] = {
+                    "status": "error",
+                    "masked_key": mask_secret_tail(elevenlabs_api_key),
+                    "lines": [f"Subscription API indisponible: {e}"],
+                }
+
+        return result
+
     def resolve_selected_env_file(selection: str, current_env_file: Path) -> Path:
         selection_path = Path(selection)
         candidate = selection_path if selection_path.is_absolute() else Path.cwd() / selection_path
@@ -3178,6 +3283,7 @@ async def main():
         web_monitor.set_remote_screen_handler(
             lambda vnc_url: save_remote_screen_config(get_active_env_file(), vnc_url, web_monitor)
         )
+        web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
             save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(

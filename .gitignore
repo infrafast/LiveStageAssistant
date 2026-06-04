@@ -248,3 +248,4 @@ LSA-LSA-Codebase-OPENAI_API_KEY.txt
 LSA-LSA-Localhost-OPENAI_API_KEY.txt
 .env.cbtoinfrafast
 mcp_servers_cbtoinfrafast.json
+LSA-admin-OPENAI_API_KEY.txt

@@ -147,7 +147,11 @@ class WebMonitor:
         self._stderr_original: TextIO | None = None
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
-        self._llm_config_save_handler: Callable[[str, str, str, str, str, str, str, str, int, str, str, str, float], dict[str, Any]] | None = None
+        self._llm_config_save_handler: Callable[
+            [str, str, str, str, str, str, str, str, int, bool, str, str, str, float],
+            dict[str, Any],
+        ] | None = None
+        self._cloud_api_status_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
         self._remote_screen_save_handler: Callable[[str], dict[str, Any]] | None = None
@@ -189,6 +193,11 @@ class WebMonitor:
         with self._lock:
             self._llm_options_handler = options_handler
             self._llm_config_save_handler = save_handler
+
+    def set_cloud_api_status_handler(self, handler: Callable[[], dict[str, Any]]) -> None:
+        """Register callback used by the web UI to inspect cloud API quota/status."""
+        with self._lock:
+            self._cloud_api_status_handler = handler
 
     def set_env_profile_handlers(
         self,
@@ -317,6 +326,9 @@ class WebMonitor:
                         return
                     if parsed.path == "/api/llm-options":
                         self._handle_llm_options(parsed.query)
+                        return
+                    if parsed.path == "/api/cloud-api-status":
+                        self._handle_cloud_api_status()
                         return
                     if parsed.path == "/api/env-profiles":
                         self._handle_env_profiles()
@@ -718,6 +730,21 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self.send_error(500, f"Could not save LLM configuration: {e}")
+                        return
+                    self._send_json(result)
+
+                def _handle_cloud_api_status(self) -> None:
+                    handler = monitor._cloud_api_status_handler
+                    if handler is None:
+                        self.send_error(503, "Cloud API status is not available")
+                        return
+                    try:
+                        result = handler()
+                    except Exception as e:
+                        self._send_json_error(
+                            500,
+                            {"ok": False, "error": {"message": f"Could not inspect cloud API status: {e}"}},
+                        )
                         return
                     self._send_json(result)
 
@@ -2043,6 +2070,54 @@ INDEX_HTML = """<!doctype html>
     .offline-audio-summary.hidden {
       display: none;
     }
+    .cloud-api-panel {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .cloud-api-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .cloud-api-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .cloud-api-card {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--surface);
+      display: grid;
+      gap: 8px;
+    }
+    .cloud-api-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-weight: 700;
+    }
+    .cloud-api-status {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .cloud-api-status.ok { color: var(--ok); }
+    .cloud-api-status.warn { color: var(--warn); }
+    .cloud-api-status.bad { color: var(--bad); }
+    .cloud-api-line {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .cloud-api-key {
+      color: var(--text);
+      font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
     .segmented {
       min-height: 38px;
       display: grid;
@@ -2167,6 +2242,7 @@ INDEX_HTML = """<!doctype html>
       .overlay { padding: 8px; }
       .settings-panel { height: 100%; }
       .config-controls { grid-template-columns: 1fr; }
+      .cloud-api-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -2296,6 +2372,18 @@ INDEX_HTML = """<!doctype html>
           </details>
         </section>
         <section>
+          <details id="cloud-api-details">
+            <summary>Cloud API</summary>
+            <div class="cloud-api-panel">
+              <div class="cloud-api-header">
+                <div class="detail">API keys stay on the backend. OpenAI credit remaining is not exposed by the public API.</div>
+                <button class="small-button" id="cloud-api-refresh" type="button">Refresh</button>
+              </div>
+              <div class="cloud-api-grid" id="cloud-api-grid"></div>
+            </div>
+          </details>
+        </section>
+        <section>
           <details open>
             <summary>IA model</summary>
             <div class="config-controls">
@@ -2421,6 +2509,9 @@ INDEX_HTML = """<!doctype html>
     const ttsSpeedField = document.querySelector("#tts-speed-field");
     const openaiTtsSpeed = document.querySelector("#openai-tts-speed");
     const openaiTtsSpeedLabel = document.querySelector("#openai-tts-speed-label");
+    const cloudApiDetails = document.querySelector("#cloud-api-details");
+    const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
+    const cloudApiGrid = document.querySelector("#cloud-api-grid");
     const thinkingSound = document.querySelector("#thinking-sound");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
@@ -2471,6 +2562,8 @@ INDEX_HTML = """<!doctype html>
     let webTtsPlaying = false;
     let webTtsAudioContext = null;
     let webTtsUnlocked = false;
+    let cloudApiLoaded = false;
+    let cloudApiLoading = false;
     let currentWebTtsSource = null;
     let currentWebTtsAudio = null;
     let thinkingAudio = null;
@@ -2522,6 +2615,79 @@ INDEX_HTML = """<!doctype html>
       }
       const text = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
       return text ? `Erreur TTS web: ${text.slice(0, 140)}` : "Erreur TTS web.";
+    }
+
+    function formatNumber(value) {
+      if (value === null || value === undefined || value === "") return "n/a";
+      const number = Number(value);
+      if (!Number.isFinite(number)) return String(value);
+      return new Intl.NumberFormat(undefined).format(number);
+    }
+
+    function formatCurrency(value, currency = "usd") {
+      const number = Number(value || 0);
+      if (!Number.isFinite(number)) return "n/a";
+      try {
+        return new Intl.NumberFormat(undefined, { style: "currency", currency: String(currency || "usd").toUpperCase() }).format(number);
+      } catch (_) {
+        return `${number.toFixed(2)} ${String(currency || "usd").toUpperCase()}`;
+      }
+    }
+
+    function cloudApiCard(provider, item) {
+      const status = item && item.status ? item.status : "unknown";
+      const statusClass = status === "ok" ? "ok" : status === "missing" || status === "unavailable" ? "warn" : "bad";
+      const lines = Array.isArray(item && item.lines) ? item.lines : [];
+      const maskedKey = item && item.masked_key ? item.masked_key : "non configurée";
+      return `
+        <div class="cloud-api-card">
+          <div class="cloud-api-title">
+            <span>${escapeHtml(provider)}</span>
+            <span class="cloud-api-status ${statusClass}">${escapeHtml(status)}</span>
+          </div>
+          <div class="cloud-api-key">Key: ${escapeHtml(maskedKey)}</div>
+          ${lines.map((line) => `<div class="cloud-api-line">${escapeHtml(line)}</div>`).join("")}
+        </div>
+      `;
+    }
+
+    function renderCloudApiStatus(data) {
+      const openai = data.openai || {};
+      const elevenlabs = data.elevenlabs || {};
+      const openaiLines = Array.isArray(openai.lines) ? openai.lines.slice() : [];
+      if (openai.cost_7d) {
+        openaiLines.unshift(`Coût 7 jours: ${formatCurrency(openai.cost_7d.value, openai.cost_7d.currency)}`);
+      }
+      const elevenLines = Array.isArray(elevenlabs.lines) ? elevenlabs.lines.slice() : [];
+      if (elevenlabs.characters) {
+        elevenLines.unshift(
+          `Caractères restants: ${formatNumber(elevenlabs.characters.remaining)} / ${formatNumber(elevenlabs.characters.limit)}`
+        );
+        elevenLines.unshift(`Caractères utilisés: ${formatNumber(elevenlabs.characters.used)}`);
+      }
+      cloudApiGrid.innerHTML = [
+        cloudApiCard("OpenAI", { ...openai, lines: openaiLines }),
+        cloudApiCard("ElevenLabs", { ...elevenlabs, lines: elevenLines })
+      ].join("");
+    }
+
+    async function loadCloudApiStatus(force = false) {
+      if (cloudApiLoading || (!force && cloudApiLoaded)) return;
+      cloudApiLoading = true;
+      cloudApiRefresh.disabled = true;
+      cloudApiGrid.innerHTML = '<div class="cloud-api-line">Chargement...</div>';
+      try {
+        const response = await fetch("/api/cloud-api-status", { cache: "no-store" });
+        const text = await response.text();
+        if (!response.ok) throw new Error(text);
+        renderCloudApiStatus(JSON.parse(text));
+        cloudApiLoaded = true;
+      } catch (error) {
+        cloudApiGrid.innerHTML = `<div class="cloud-api-line">${escapeHtml(`Cloud API unavailable: ${error}`)}</div>`;
+      } finally {
+        cloudApiLoading = false;
+        cloudApiRefresh.disabled = false;
+      }
     }
 
     function escapeHtml(value) {
@@ -3926,6 +4092,7 @@ INDEX_HTML = """<!doctype html>
         if (envProfileChanged) {
           llmControlsInitialized = false;
           configBaseline = "";
+          cloudApiLoaded = false;
         }
         await syncLlmControls(data);
         promptEl.value = data.prompt || "";
@@ -4150,6 +4317,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     envProfile.addEventListener("change", () => {
+      cloudApiLoaded = false;
       switchEnvProfile(envProfile.value);
     });
 
@@ -4164,6 +4332,10 @@ INDEX_HTML = """<!doctype html>
     for (const input of mcpToolRoutingInputs) {
       input.addEventListener("change", () => {});
     }
+    cloudApiDetails.addEventListener("toggle", () => {
+      if (cloudApiDetails.open) loadCloudApiStatus();
+    });
+    cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
 
     llmSave.addEventListener("click", async () => {
       const provider = llmProvider.value;
@@ -4208,6 +4380,7 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         llmMessage.textContent = data.message || "Saved.";
+        cloudApiLoaded = false;
         setEnvironmentLoading(true, "rafraichissement de l'environnement");
         markConfigClean();
         await refresh();
