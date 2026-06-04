@@ -10,5 +10,14 @@
         "routing": "mixer,mix,mixage,son,volume,façade,moniteur,retour,bus"
       }
     }
+  },
+  "qlcplus": {
+    "type": "streamable-http",
+    "url": "https://qlcplusmcp.infrafast.fr/mcp",
+    "headers": {},
+    "assistantOptions": {
+      "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
+    }
   }
-}
+}  
+
