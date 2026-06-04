@@ -11,6 +11,7 @@ import json
 import logging
 import mimetypes
 from pathlib import Path
+import re
 import select
 import socket
 import struct
@@ -43,6 +44,55 @@ def redact_config_value(key: str, value: Any) -> Any:
     if isinstance(value, list):
         return [redact_config_value(key, item) for item in value]
     return value
+
+
+def concise_web_tts_error(error: Exception | str) -> dict[str, str]:
+    """Return a short user-facing message for browser TTS failures."""
+    raw = str(error or "").strip()
+    lowered = raw.lower()
+    detail_match = re.search(r"['\"]message['\"]\s*:\s*['\"]([^'\"]+)['\"]", raw)
+    detail = detail_match.group(1).strip() if detail_match else ""
+
+    if any(marker in lowered for marker in ("quota_exceeded", "insufficient_quota", "exceeds your quota")):
+        return {
+            "kind": "quota",
+            "message": "Plus de crédit TTS disponible.",
+            "detail": detail or "Le fournisseur TTS indique que le quota ou les crédits sont épuisés.",
+        }
+    if any(
+        marker in lowered
+        for marker in ("invalid_api_key", "invalid api key", "unauthorized", "status_code: 401", "status code: 401")
+    ):
+        return {
+            "kind": "auth",
+            "message": "Clé API TTS invalide ou refusée.",
+            "detail": detail or "Le fournisseur TTS a refusé l'authentification.",
+        }
+    if any(
+        marker in lowered
+        for marker in ("rate_limit", "rate limit", "too many requests", "status_code: 429", "status code: 429")
+    ):
+        return {
+            "kind": "rate_limit",
+            "message": "Limite TTS atteinte, réessaie dans un moment.",
+            "detail": detail or "Le fournisseur TTS limite temporairement les requêtes.",
+        }
+    if any(marker in lowered for marker in ("billing", "payment", "credit", "credits remaining")):
+        return {
+            "kind": "billing",
+            "message": "Problème de crédit ou facturation TTS.",
+            "detail": detail or "Le fournisseur TTS signale un problème de crédit ou facturation.",
+        }
+
+    text = re.sub(r"<[^>]+>", " ", raw)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > 180:
+        text = text[:177].rstrip() + "..."
+    return {
+        "kind": "error",
+        "message": "Erreur TTS web.",
+        "detail": text or "Le TTS web n'a pas pu générer l'audio.",
+    }
 
 
 def redact_mapping(values: dict[str, Any]) -> dict[str, Any]:
@@ -355,6 +405,15 @@ class WebMonitor:
                 def _send_json(self, value: dict[str, Any]) -> None:
                     encoded = json.dumps(value, ensure_ascii=False).encode("utf-8")
                     self.send_response(200)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", str(len(encoded)))
+                    self.end_headers()
+                    self.wfile.write(encoded)
+
+                def _send_json_error(self, status: int, value: dict[str, Any]) -> None:
+                    encoded = json.dumps(value, ensure_ascii=False).encode("utf-8")
+                    self.send_response(status)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("Content-Length", str(len(encoded)))
@@ -929,10 +988,20 @@ class WebMonitor:
                     try:
                         result = handler(text)
                     except ValueError as e:
-                        self.send_error(400, str(e))
+                        error = concise_web_tts_error(e)
+                        self._send_json_error(400, {"ok": False, "error": error})
                         return
                     except Exception as e:
-                        self.send_error(500, f"Could not generate web TTS: {e}")
+                        error = concise_web_tts_error(e)
+                        if error.get("kind") in {"quota", "billing"}:
+                            status = 402
+                        elif error.get("kind") == "auth":
+                            status = 401
+                        elif error.get("kind") == "rate_limit":
+                            status = 429
+                        else:
+                            status = 500
+                        self._send_json_error(status, {"ok": False, "error": error})
                         return
                     self._send_json(result)
 
@@ -1471,6 +1540,10 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
       overflow-wrap: anywhere;
+    }
+    .meta.error {
+      color: var(--bad);
+      font-weight: 650;
     }
     .icon-button {
       width: 38px;
@@ -2361,6 +2434,7 @@ INDEX_HTML = """<!doctype html>
     let environmentLoadingActive = false;
     let vncConnectTimer = null;
     let vncUrlDirty = false;
+    let metaErrorUntil = 0;
     let lastServerMessages = [];
     let pendingMessages = [];
     let composerLocked = false;
@@ -2402,6 +2476,53 @@ INDEX_HTML = """<!doctype html>
     let thinkingAudio = null;
     let thinkingAudioUrl = "";
     let thinkingAudioPlaying = false;
+
+    function setMeta(text, mode = "normal", holdMs = 0) {
+      metaEl.textContent = text;
+      metaEl.classList.toggle("error", mode === "error");
+      metaErrorUntil = mode === "error" && holdMs > 0 ? Date.now() + holdMs : 0;
+    }
+
+    function conciseClientTtsError(error) {
+      const raw = String(error && error.message ? error.message : error || "").trim();
+      const lowered = raw.toLowerCase();
+      try {
+        const parsed = JSON.parse(raw);
+        const payload = parsed.error || parsed;
+        if (payload && payload.message) return String(payload.message);
+      } catch (_) {}
+      if (
+        lowered.includes("quota_exceeded") ||
+        lowered.includes("insufficient_quota") ||
+        lowered.includes("exceeds your quota") ||
+        lowered.includes("0 credits remaining")
+      ) {
+        return "Plus de crédit TTS disponible.";
+      }
+      if (
+        lowered.includes("invalid_api_key") ||
+        lowered.includes("invalid api key") ||
+        lowered.includes("unauthorized") ||
+        lowered.includes("status_code: 401") ||
+        lowered.includes("status code: 401")
+      ) {
+        return "Clé API TTS invalide ou refusée.";
+      }
+      if (
+        lowered.includes("rate_limit") ||
+        lowered.includes("rate limit") ||
+        lowered.includes("too many requests") ||
+        lowered.includes("status_code: 429") ||
+        lowered.includes("status code: 429")
+      ) {
+        return "Limite TTS atteinte, réessaie dans un moment.";
+      }
+      if (lowered.includes("credit") || lowered.includes("billing") || lowered.includes("payment")) {
+        return "Problème de crédit ou facturation TTS.";
+      }
+      const text = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      return text ? `Erreur TTS web: ${text.slice(0, 140)}` : "Erreur TTS web.";
+    }
 
     function escapeHtml(value) {
       return String(value || "")
@@ -3195,7 +3316,10 @@ INDEX_HTML = """<!doctype html>
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text })
         });
-        if (!response.ok) throw new Error(await response.text());
+        if (!response.ok) {
+          const responseText = await response.text();
+          throw new Error(responseText);
+        }
         const data = await response.json();
         if (!data.audio_base64 || !data.mime_type) return;
         try {
@@ -3205,7 +3329,7 @@ INDEX_HTML = """<!doctype html>
           if (!playedWithContext) throw audioElementError;
         }
       } catch (error) {
-        metaEl.textContent = `web TTS unavailable: ${error}. Tap send, mic, or conversation once to enable iPhone audio.`;
+        setMeta(conciseClientTtsError(error), "error", 12000);
       } finally {
         currentWebTtsSource = null;
         currentWebTtsAudio = null;
@@ -3848,9 +3972,11 @@ INDEX_HTML = """<!doctype html>
           scheduleConversationRestart(delay);
         }
         const updated = data.updated_at ? new Date(data.updated_at * 1000).toLocaleTimeString() : "unknown";
-        metaEl.textContent = `updated ${updated} · uptime ${data.uptime_seconds || 0}s`;
+        if (Date.now() >= metaErrorUntil) {
+          setMeta(`updated ${updated} · uptime ${data.uptime_seconds || 0}s`);
+        }
       } catch (error) {
-        metaEl.textContent = `disconnected: ${error}`;
+        setMeta(`disconnected: ${error}`, "error", 5000);
       }
     }
 

@@ -381,7 +381,7 @@ The conversation button next to the microphone enables continuous browser listen
 
 Backend TTS has priority over web TTS. If `TTS_PROVIDER` is `openai`, `elevenlabs`, or `pyttsx3`, the monitor still allows browser STT, but web TTS is disabled to avoid double audio. To let the browser play assistant responses, set `TTS_PROVIDER=none`, enable `WEB_AUDIO_ENABLED=true`, and set `WEB_TTS_PROVIDER` to the same cloud value as `CLOUD_TTS_PROVIDER`.
 
-Browser/web TTS never falls back to pyttsx3. If the selected web cloud provider cannot be used, browser audio falls back to silent text chat. Backend/non-web cloud TTS can fall back to pyttsx3 when `TTS_PROVIDER` is `openai` or `elevenlabs`.
+Browser/web TTS never falls back to pyttsx3. If the selected web cloud provider cannot be used, browser audio falls back to silent text chat and the monitor shows a short red status message, such as exhausted credits, API-key refusal, or rate limit, instead of the raw provider error. Backend/non-web cloud TTS can fall back to pyttsx3 when `TTS_PROVIDER` is `openai` or `elevenlabs`.
 
 The config page shows only the voice selector for the selected TTS provider: OpenAI voices when `openai` is selected, ElevenLabs voices when `elevenlabs` is selected, and no voice selector when `none` is selected. It also exposes `WEB_TTS_SPEED`, used as browser playback speed for web TTS and passed to the cloud provider for backend cloud TTS. Saving the config triggers the existing runtime reload, so the active web/backend TTS handlers are replaced after the assistant reloads. OpenAI voice choices are built-in values rather than fetched dynamically like ElevenLabs voice IDs.
 
