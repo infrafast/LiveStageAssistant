@@ -64,6 +64,7 @@ DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "alloy"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
+OPENAI_MAX_TOOLS_PER_REQUEST = 128
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("mcp_use").propagate = False
 AUTO_ENV_ONLINE = Path(".env.online")
@@ -109,6 +110,25 @@ DEFAULT_VOICE_CANCEL_WORDS = (
     "arrêter",
     "cancel",
 )
+MCP_CONFIRMATION_WORDS = {
+    "oui",
+    "yes",
+    "y",
+    "ok",
+    "okay",
+    "daccord",
+    "d'accord",
+    "d accord",
+    "vas y",
+    "vas-y",
+    "allez y",
+    "allez-y",
+    "confirme",
+    "confirm",
+    "execute",
+    "exécute",
+    "go",
+}
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
     "You are a helpful voice named Live Stage Assistant with access to MCP tools for live stage devices "
     "such as lights, digital mixers, and MIDI devices. "
@@ -690,6 +710,7 @@ class VoiceAssistant:
         self.reload_event = reload_event
         self.web_monitor = web_monitor
         self.pending_injected_command: str | None = None
+        self.pending_mcp_confirmation_route: dict[str, Any] | None = None
         self.microphone_available = True
         self.microphone_warning_shown = False
         
@@ -1012,6 +1033,12 @@ class VoiceAssistant:
                 f"{route['server']}({', '.join(route['keywords'])})" for route in self.mcp_tool_routes
             )
             print(f"MCP tool routing configured: {configured}")
+            if len(self.mcp_all_tools) > OPENAI_MAX_TOOLS_PER_REQUEST:
+                print(
+                    "MCP tool routing guard enabled: "
+                    f"{len(self.mcp_all_tools)} tools loaded, OpenAI request limit is {OPENAI_MAX_TOOLS_PER_REQUEST}. "
+                    "Unrouted turns will use the first safe MCP server route, or no MCP tools if none is available."
+                )
 
     def _source_value(self, source: dict, *keys: str) -> str | None:
         for key in keys:
@@ -1892,6 +1919,31 @@ class VoiceAssistant:
             return keyword in normalized_text
         return re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", normalized_text, flags=re.IGNORECASE) is not None
 
+    def _is_mcp_confirmation_reply(self, text: str) -> bool:
+        normalized = re.sub(r"[^\w' -]+", " ", str(text or "").strip().lower(), flags=re.UNICODE)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized in MCP_CONFIRMATION_WORDS
+
+    def _assistant_response_requests_confirmation(self, response: str) -> bool:
+        normalized = str(response or "").strip().lower()
+        if "?" not in normalized:
+            return False
+        return any(
+            marker in normalized
+            for marker in (
+                "confirme",
+                "confirmez",
+                "confirmation",
+                "voulez-vous",
+                "veux-tu",
+                "êtes-vous sûr",
+                "etes-vous sur",
+                "are you sure",
+                "do you confirm",
+                "confirm",
+            )
+        )
+
     async def _set_agent_tool_subset(self, tools: list[Any]) -> None:
         if not self.agent:
             return
@@ -1902,13 +1954,69 @@ class VoiceAssistant:
         if hasattr(self.agent, "_create_agent"):
             self.agent._agent_executor = self.agent._create_agent()
 
+    def _all_mcp_tools_exceed_request_limit(self) -> bool:
+        return len(self.mcp_all_tools or []) > OPENAI_MAX_TOOLS_PER_REQUEST
+
+    def _default_mcp_tool_route_for_overflow(self) -> tuple[str, list[Any]] | None:
+        for route in self.mcp_tool_routes or []:
+            server_name = str(route.get("server") or "")
+            tools = self.mcp_tools_by_server.get(server_name) or []
+            if tools and len(tools) <= OPENAI_MAX_TOOLS_PER_REQUEST:
+                return server_name, tools
+        return None
+
+    async def _run_agent_with_tools(
+        self,
+        agent_input: str,
+        tools: list[Any],
+        route_for_confirmation: dict[str, Any] | None = None,
+    ) -> str:
+        original_tools = list(getattr(self.agent, "_tools", []) or [])
+        try:
+            await self._set_agent_tool_subset(tools)
+            response = await asyncio.wait_for(
+                self.agent.run(agent_input),
+                timeout=self.mcp_agent_timeout_seconds,
+            )
+            response_text = response if isinstance(response, str) else str(response)
+            if route_for_confirmation and self._assistant_response_requests_confirmation(response_text):
+                self.pending_mcp_confirmation_route = route_for_confirmation
+            elif route_for_confirmation:
+                self.pending_mcp_confirmation_route = None
+            return response_text
+        finally:
+            await self._set_agent_tool_subset(original_tools or self.mcp_all_tools)
+
     async def _run_agent_with_optional_tool_routing(self, text: str) -> str:
         if not self.agent:
             return "Sorry, the assistant is not properly initialized."
 
         agent_input = self._with_runtime_instructions(text)
         route = self._select_mcp_tool_route(text)
+        confirmation_route = False
+        if not route and self.pending_mcp_confirmation_route and self._is_mcp_confirmation_reply(text):
+            route = self.pending_mcp_confirmation_route
+            confirmation_route = True
+            print(f"[MCP ROUTE: confirmation -> {route.get('server')}]")
+        if not confirmation_route and not self._is_mcp_confirmation_reply(text):
+            self.pending_mcp_confirmation_route = None
         if not route:
+            if self.mcp_tool_routing_enabled and self._all_mcp_tools_exceed_request_limit():
+                default_route = self._default_mcp_tool_route_for_overflow()
+                if default_route:
+                    server_name, tools = default_route
+                    print(f"[MCP CALL: no route, default {server_name}]")
+                    default_route_config = next(
+                        (
+                            route_config
+                            for route_config in self.mcp_tool_routes
+                            if str(route_config.get("server") or "") == server_name
+                        ),
+                        None,
+                    )
+                    return await self._run_agent_with_tools(agent_input, tools, default_route_config)
+                print("[MCP CALL: no route, no tools]")
+                return await self._run_agent_with_tools(agent_input, [])
             response = await asyncio.wait_for(
                 self.agent.run(agent_input),
                 timeout=self.mcp_agent_timeout_seconds,
@@ -1918,6 +2026,9 @@ class VoiceAssistant:
         server_name = str(route["server"])
         routed_tools = self.mcp_tools_by_server.get(server_name) or []
         if not routed_tools:
+            if self.mcp_tool_routing_enabled and self._all_mcp_tools_exceed_request_limit():
+                print("[MCP CALL: route has no tools, no tools]")
+                return await self._run_agent_with_tools(agent_input, [])
             response = await asyncio.wait_for(
                 self.agent.run(agent_input),
                 timeout=self.mcp_agent_timeout_seconds,
@@ -1935,9 +2046,18 @@ class VoiceAssistant:
                 timeout=self.mcp_agent_timeout_seconds,
             )
             if isinstance(response, str) and response.strip():
+                if self._assistant_response_requests_confirmation(response):
+                    self.pending_mcp_confirmation_route = route
+                else:
+                    self.pending_mcp_confirmation_route = None
                 return response
             if response:
-                return str(response)
+                response_text = str(response)
+                if self._assistant_response_requests_confirmation(response_text):
+                    self.pending_mcp_confirmation_route = route
+                else:
+                    self.pending_mcp_confirmation_route = None
+                return response_text
             print(f"[MCP CALL: {server_name} only] empty response, falling back to all tools")
             routed_failed = True
         except Exception as e:
@@ -1949,6 +2069,9 @@ class VoiceAssistant:
 
         if self.agent and routed_failed:
             self.agent._conversation_history = original_history
+
+        if self.mcp_tool_routing_enabled and self._all_mcp_tools_exceed_request_limit():
+            return "Je n'ai pas pu exécuter cette demande avec le serveur MCP routé. Merci de reformuler en précisant le domaine, par exemple lumière, QLC, mixeur, volume ou bus."
 
         response = await asyncio.wait_for(
             self.agent.run(agent_input),

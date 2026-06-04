@@ -565,7 +565,11 @@ Each `assistantPrompt` block can define:
 
 The prompts are loaded in the order of the servers under `mcpServers`. A failing server prompt logs a warning and does not block the others.
 
-When MCP tool routing is enabled from the web config or with `MCP_TOOL_ROUTING_ENABLED=true`, the assistant checks each command against `assistantPrompt.routing`. If a keyword matches, that single turn is run with only that MCP server's tools and the console log includes `[MCP CALL: <server> only]`. If the routed turn fails or returns an empty response, the assistant restores the full tool list and retries with the current default behavior.
+When MCP tool routing is enabled from the web config or with `MCP_TOOL_ROUTING_ENABLED=true`, the assistant checks each command against `assistantPrompt.routing`. If a keyword matches, that single turn is run with only that MCP server's tools and the console log includes `[MCP CALL: <server> only]`. If the routed turn fails or returns an empty response, the assistant restores the original tool list and retries with the current default behavior when the full tool list is still within the provider limit.
+
+OpenAI currently accepts at most 128 tools in one request. When several MCP servers are enabled and their combined tool count exceeds that limit, Live Stage Assistant keeps routing enabled as a guard rail: routed turns still use only the matching server, and unrouted turns use the first configured MCP server whose tool list fits under the limit. If no safe fallback server exists, the unrouted turn runs without MCP tools instead of sending an invalid oversized tool array. Put the most common/default server first in `mcpServers`, and give every additional server a precise `assistantPrompt.routing` keyword list. For example, a mixer server can route on `mixer, volume, bus`, while a QLC+ lighting server can route on `qlc, lumière, éclairage, scène, dmx, blackout`.
+
+If a routed server asks for confirmation, a short confirmation reply such as `oui`, `ok`, or `yes` reuses the same MCP server route for the next turn. This keeps flows such as `blackout` followed by `oui` on the lighting server instead of falling back to the default mixer route.
 
 At startup, when instructions are loaded, the assistant writes a console log entry listing the MCP prompt sources that were actually merged, for example:
 
