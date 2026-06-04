@@ -25,8 +25,15 @@
         "QLC_WIDGETS_FILE": "/Users/ts/Documents/PlatformIO/Projects/QLCPlus-MCP/config/widgets.json",
         "QLC_ALLOW_RAW_OSC": "false",
         "QLC_DRY_RUN": "false",
+        "MCP_PROMPT_FILE": "/Users/ts/Documents/PlatformIO/Projects/QLCPlus-MCP/PROMPT.md",
         "LOG_LEVEL": "info",
         "NODE_ENV": "development"
+      },
+      "assistantPrompt": {
+        "promptName": "qlcplus_lighting_assistant",
+        "resourceUri": "qlcplus://prompt/system",
+        "tool": "qlc_get_agent_prompt",
+        "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,wash,couleur,blackout,panic"
       }
     }
   }
