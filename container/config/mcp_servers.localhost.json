@@ -9,14 +9,14 @@
       "assistantOptions": {
         "routing": "mixer,mix,mixage,son,volume,façade,moniteur,retour,bus"
       }
+    },
+    "qlcplus": {
+      "type": "streamable-http",
+      "url": "http://192.168.0.1:8788/mcp",
+      "headers": {},
+      "assistantOptions": {
+        "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
+      }
     }
-  },
-  "qlcplus": {
-    "type": "streamable-http",
-    "url": "http://192.168.0.1:8788/mcp",
-    "headers": {},
-    "assistantOptions": {
-      "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
-    }
-  }  
+  }
 }
