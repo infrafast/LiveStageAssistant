@@ -10,6 +10,24 @@
         "tool": "osc_get_agent_prompt",
         "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus, décibel, db, tranche"
       }
+    },
+    "qlcplus": {
+      "command": "node",
+      "args": [
+        "/Users/ts/Documents/PlatformIO/Projects/QLCPlus-MCP/dist/src/index.js"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "QLC_HOST": "192.168.0.160",
+        "QLC_OSC_INPUT_PORT": "7700",
+        "QLC_OSC_OUTPUT_PORT": "9000",
+        "QLC_UNIVERSE": "1",
+        "QLC_WIDGETS_FILE": "/Users/ts/Documents/PlatformIO/Projects/QLCPlus-MCP/config/widgets.json",
+        "QLC_ALLOW_RAW_OSC": "false",
+        "QLC_DRY_RUN": "false",
+        "LOG_LEVEL": "info",
+        "NODE_ENV": "development"
+      }
     }
   }
 }
