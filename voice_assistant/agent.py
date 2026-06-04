@@ -981,6 +981,27 @@ class VoiceAssistant:
                 routes.append({"server": server_name, "keywords": keywords})
         return routes
 
+    def _validate_unique_mcp_routing_keywords(self, config: dict | None) -> None:
+        if not config:
+            return
+
+        keyword_owner: dict[str, str] = {}
+        for server_name, server_config in (config.get("mcpServers") or {}).items():
+            if not isinstance(server_config, dict):
+                continue
+            prompt_config = server_config.get("assistantPrompt") or server_config.get("agentPrompt")
+            if not isinstance(prompt_config, dict):
+                continue
+
+            keywords = self._split_routing_keywords(prompt_config.get("routing"))
+            if len(keywords) > 10:
+                raise ValueError(f"routing words limit exceeded: {server_name} has {len(keywords)} words, max 10")
+
+            for keyword in keywords:
+                if keyword in keyword_owner and keyword_owner[keyword] != server_name:
+                    raise ValueError(f"routing word duplicate: {keyword}")
+                keyword_owner[keyword] = server_name
+
     def _mcp_routing_keywords(self) -> list[str]:
         keywords = []
         seen = set()
@@ -1344,6 +1365,8 @@ class VoiceAssistant:
         self.mcp_config = config
 
         try:
+            self._validate_unique_mcp_routing_keywords(config)
+
             # Create MCP client
             self.mcp_client = MCPClient.from_dict(config)
             merged_prompt = await self._load_mcp_server_prompt(config)

@@ -10,7 +10,7 @@
         "promptName": "xmseries_mixer_assistant",
         "resourceUri": "xmseries://prompt/system",
         "tool": "osc_get_agent_prompt",
-        "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus, décibel, db, tranche"
+        "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
       }
     }
   }
