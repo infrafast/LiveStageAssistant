@@ -35,7 +35,7 @@
         "DEBUG": "${DEBUG}"
       },
       "assistantOptions": {
-        "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
+        "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"
       }
     }
   }

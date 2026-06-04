@@ -269,7 +269,7 @@ WEB_TTS_VOICE=alloy
 WEB_TTS_SPEED=1.00                              # Cloud TTS speed for web playback and backend cloud TTS
 
 # Optional - Assistant Configuration
-WAKE_WORD=                                      # Empty keeps current behavior; set e.g. "Mixeur" to gate commands
+WAKE_WORD="régie,console"
 ASSISTANT_SYSTEM_PROMPT="You are a helpful voice assistant..."  # Customize personality
 MCP_AGENT_MEMORY_ENABLED=true                  # Keep conversational memory; live external state still requires MCP reads
 MCP_AGENT_TIMEOUT_SECONDS=45                   # Max seconds for one LLM/MCP response before timeout
@@ -298,18 +298,18 @@ Web chat sessions are persisted as `.context.json` files under `SESSION_CONTEXT_
 
 `WAKE_WORD` is optional. When it is empty, the assistant processes every successful transcription. When it is set, spoken transcriptions are processed only if the wake word appears at the start of the phrase or very close to it.
 
-For example, with `WAKE_WORD=Mixeur`, all of these are accepted and the command text after the wake word is sent to the agent:
+For example, with `WAKE_WORD="régie,console"`, all of these are accepted and the command text after the wake word is sent to the agent:
 
 ```text
-Mixeur, increase volume
-Hi Mixeur, increase volume
-Wakeup Mixeur, increase volume
+Régie, increase volume
+Hi Régie, increase volume
+Wakeup Régie, increase volume
 ```
 
 If multiple variants are needed, separate them with a comma, semicolon, or pipe:
 
 ```bash
-WAKE_WORD=Mixeur,Mixer
+WAKE_WORD="régie,console"
 ```
 
 The web config exposes the same value in the STT/TTS section. Saving the config writes `WAKE_WORD` to the active env file and reloads the assistant, so the new wake-word gate applies after the runtime reload.
@@ -499,7 +499,7 @@ Then add an `assistantOptions` block to each MCP server that should contribute s
       "command": "node",
       "args": ["path/to/server.js"],
       "assistantOptions": {
-        "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus"
+        "routing": "mixer,mix,mixage,son,volume,façade,moniteur,retour,bus"
       }
     }
   }
@@ -530,7 +530,7 @@ Multi-server MCP configuration:
       "command": "node",
       "args": ["path/to/mixer-server.js"],
       "assistantOptions": {
-        "routing": "mixer,mix,console,volume,bus"
+        "routing": "mixer,mix,mixage,volume,bus"
       }
     },
     "lights": {

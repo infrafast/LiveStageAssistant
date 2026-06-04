@@ -7,7 +7,7 @@
         "Authorization": "Bearer change-me"
       },
       "assistantOptions": {
-        "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
+        "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"
       }
     }
   }

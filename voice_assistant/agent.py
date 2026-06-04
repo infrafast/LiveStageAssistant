@@ -68,6 +68,7 @@ OPENAI_MAX_TOOLS_PER_REQUEST = 128
 DEFAULT_MCP_PROMPT_NAME = "agent_prompt"
 DEFAULT_MCP_PROMPT_RESOURCE_URI = "agent://prompt/system"
 DEFAULT_MCP_PROMPT_TOOL = "get_agent_prompt"
+DUPLICATE_COMMAND_SUPPRESS_SECONDS = 5.0
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("mcp_use").propagate = False
 AUTO_ENV_ONLINE = Path(".env.online")
@@ -236,7 +237,7 @@ CURRENT_STATE_QUERY_MARKERS = (
     "à combien",
 )
 DEFAULT_STT_PROMPT = (
-    "Commandes courtes en français pour une console de mixage. "
+    "Commandes courtes en français pour du mixage live. "
     "Mots fréquents: mets, met, règle, baisse, monte, coupe, mute, active, réactive, "
     "bus, retour, façade, dB, moins trois dB, Voc-Claude, snare, kick, Laurent. "
     "Ne colle pas le verbe 'mets' au nom qui suit: écris 'mets Claude', 'mets Voc-Claude', 'mets snare'. "
@@ -713,6 +714,8 @@ class VoiceAssistant:
         self.reload_event = reload_event
         self.web_monitor = web_monitor
         self.pending_injected_command: str | None = None
+        self.last_processed_command_key: str | None = None
+        self.last_processed_command_at: float = 0.0
         self.pending_mcp_confirmation_route: dict[str, Any] | None = None
         self.microphone_available = True
         self.microphone_warning_shown = False
@@ -1070,6 +1073,25 @@ class VoiceAssistant:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+    def _command_dedupe_key(self, text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+    def _should_skip_duplicate_command(self, text: str) -> bool:
+        key = self._command_dedupe_key(text)
+        if not key:
+            return False
+
+        now = time.monotonic()
+        if (
+            self.last_processed_command_key == key
+            and now - self.last_processed_command_at <= DUPLICATE_COMMAND_SUPPRESS_SECONDS
+        ):
+            return True
+
+        self.last_processed_command_key = key
+        self.last_processed_command_at = now
+        return False
 
     def _log_configured_mcp_prompt_sources(self) -> None:
         if not self.mcp_config:
@@ -2251,6 +2273,10 @@ class VoiceAssistant:
                             if command_text != text:
                                 print(f"Command after wake word: {command_text}")
                         text = command_text
+
+                if self._should_skip_duplicate_command(text):
+                    print(f"Duplicate command ignored: {text}")
+                    continue
 
                 # Process command
                 process_task = asyncio.create_task(self.process_command(text))
