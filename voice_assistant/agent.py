@@ -65,6 +65,7 @@ DEFAULT_OPENAI_TTS_VOICE = "alloy"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 OPENAI_MAX_TOOLS_PER_REQUEST = 128
+DEFAULT_MCP_PROMPT_TOOL = "get_agent_prompt"
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("mcp_use").propagate = False
 AUTO_ENV_ONLINE = Path(".env.online")
@@ -1092,7 +1093,7 @@ class VoiceAssistant:
         server_name = self._source_value(source, "server", "server_name") or "unspecified"
         prompt_name = self._source_value(source, "promptName", "prompt_name", "prompt", "name")
         resource_uri = self._source_value(source, "resourceUri", "resource_uri", "resource")
-        tool_name = self._source_value(source, "tool", "toolName", "tool_name")
+        tool_name = self._source_value(source, "tool", "toolName", "tool_name") or DEFAULT_MCP_PROMPT_TOOL
         parts = [f"server='{server_name}'"]
         if prompt_name:
             parts.append(f"prompt='{prompt_name}'")
@@ -1240,7 +1241,7 @@ class VoiceAssistant:
         server_name = self._source_value(source, "server", "server_name")
         prompt_name = self._source_value(source, "promptName", "prompt_name", "prompt", "name")
         resource_uri = self._source_value(source, "resourceUri", "resource_uri", "resource")
-        tool_name = self._source_value(source, "tool", "toolName", "tool_name")
+        tool_name = self._source_value(source, "tool", "toolName", "tool_name") or DEFAULT_MCP_PROMPT_TOOL
 
         if not server_name:
             self._log_mcp_prompt_warning("Skipping MCP prompt source without a server name.")

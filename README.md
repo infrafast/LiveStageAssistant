@@ -501,7 +501,6 @@ Then add an `assistantPrompt` block to each MCP server that should contribute st
       "assistantPrompt": {
         "promptName": "xmseries_mixer_assistant",
         "resourceUri": "xmseries://prompt/system",
-        "tool": "osc_get_agent_prompt",
         "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus"
       }
     }
@@ -534,8 +533,7 @@ Multi-server MCP configuration:
       "args": ["path/to/mixer-server.js"],
       "assistantPrompt": {
         "promptName": "xmseries_mixer_assistant",
-        "resourceUri": "xmseries://prompt/system",
-        "tool": "osc_get_agent_prompt"
+        "resourceUri": "xmseries://prompt/system"
       }
     },
     "lights": {
@@ -549,7 +547,7 @@ Multi-server MCP configuration:
       "command": "node",
       "args": ["path/to/stage-server.js"],
       "assistantPrompt": {
-        "tool": "stage_get_agent_prompt"
+        "resourceUri": "stage://prompt/system"
       }
     }
   }
@@ -766,7 +764,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
 6. **MCP Startup Instructions Not Loaded**
    - Confirm `MCP_LOAD_SERVER_PROMPT=true` in the selected env file
    - Confirm the selected `MCP_CONFIG` file has at least one server with an `assistantPrompt` block
-   - Confirm each `assistantPrompt` block defines at least one of `promptName`, `resourceUri`, or `tool`
+   - Confirm each `assistantPrompt` block defines `promptName`, `resourceUri`, or exposes the standard `get_agent_prompt` tool
    - Check the startup warnings for unsupported prompts/resources or a missing fallback tool
    - If the prompt source belongs to a server instance that could not start, such as `mixer`, fix that server's command or script path in the selected MCP JSON file
    - Use `MCP_PROMPT_MERGE_MODE=append` when you want to keep the local voice and TTS constraints

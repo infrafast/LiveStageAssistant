@@ -7,7 +7,6 @@
       "assistantPrompt": {
         "promptName": "xmseries_mixer_assistant",
         "resourceUri": "xmseries://prompt/system",
-        "tool": "osc_get_agent_prompt",
         "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
       }
     },
@@ -32,7 +31,6 @@
       "assistantPrompt": {
         "promptName": "qlcplus_lighting_assistant",
         "resourceUri": "qlcplus://prompt/system",
-        "tool": "qlc_get_agent_prompt",
         "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
       }
     }
