@@ -5,8 +5,6 @@
       "url": "http://192.168.0.1:8787/mcp",
       "headers": {},
       "assistantPrompt": {
-        "promptName": "xmseries_mixer_assistant",
-        "resourceUri": "xmseries://prompt/system",
         "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
       }
     },
@@ -29,8 +27,6 @@
         "NODE_ENV": "development"
       },
       "assistantPrompt": {
-        "promptName": "qlcplus_lighting_assistant",
-        "resourceUri": "qlcplus://prompt/system",
         "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
       }
     }

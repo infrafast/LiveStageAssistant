@@ -65,6 +65,8 @@ DEFAULT_OPENAI_TTS_VOICE = "alloy"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 OPENAI_MAX_TOOLS_PER_REQUEST = 128
+DEFAULT_MCP_PROMPT_NAME = "agent_prompt"
+DEFAULT_MCP_PROMPT_RESOURCE_URI = "agent://prompt/system"
 DEFAULT_MCP_PROMPT_TOOL = "get_agent_prompt"
 LOGGER = logging.getLogger(__name__)
 logging.getLogger("mcp_use").propagate = False
@@ -1091,8 +1093,8 @@ class VoiceAssistant:
 
     def _describe_mcp_prompt_source(self, source: dict) -> str:
         server_name = self._source_value(source, "server", "server_name") or "unspecified"
-        prompt_name = self._source_value(source, "promptName", "prompt_name", "prompt", "name")
-        resource_uri = self._source_value(source, "resourceUri", "resource_uri", "resource")
+        prompt_name = self._source_value(source, "promptName", "prompt_name", "prompt", "name") or DEFAULT_MCP_PROMPT_NAME
+        resource_uri = self._source_value(source, "resourceUri", "resource_uri", "resource") or DEFAULT_MCP_PROMPT_RESOURCE_URI
         tool_name = self._source_value(source, "tool", "toolName", "tool_name") or DEFAULT_MCP_PROMPT_TOOL
         parts = [f"server='{server_name}'"]
         if prompt_name:
@@ -1239,8 +1241,8 @@ class VoiceAssistant:
 
     async def _load_prompt_from_mcp_source(self, source: dict, config: dict) -> dict | None:
         server_name = self._source_value(source, "server", "server_name")
-        prompt_name = self._source_value(source, "promptName", "prompt_name", "prompt", "name")
-        resource_uri = self._source_value(source, "resourceUri", "resource_uri", "resource")
+        prompt_name = self._source_value(source, "promptName", "prompt_name", "prompt", "name") or DEFAULT_MCP_PROMPT_NAME
+        resource_uri = self._source_value(source, "resourceUri", "resource_uri", "resource") or DEFAULT_MCP_PROMPT_RESOURCE_URI
         tool_name = self._source_value(source, "tool", "toolName", "tool_name") or DEFAULT_MCP_PROMPT_TOOL
 
         if not server_name:

@@ -7,8 +7,6 @@
         "Authorization": "Bearer change-me"
       },
       "assistantPrompt": {
-        "promptName": "xmseries_mixer_assistant",
-        "resourceUri": "xmseries://prompt/system",
         "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus"
       }
     }

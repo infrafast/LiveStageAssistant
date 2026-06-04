@@ -499,8 +499,6 @@ Then add an `assistantPrompt` block to each MCP server that should contribute st
       "command": "node",
       "args": ["path/to/server.js"],
       "assistantPrompt": {
-        "promptName": "xmseries_mixer_assistant",
-        "resourceUri": "xmseries://prompt/system",
         "routing": "mixer,mix,console,son,volume,façade,moniteur,retour,bus"
       }
     }
@@ -508,13 +506,13 @@ Then add an `assistantPrompt` block to each MCP server that should contribute st
 }
 ```
 
-For each server with an `assistantPrompt` block, the assistant tries only the configured sources, in this order:
+For each server with an `assistantPrompt` block, the assistant tries standard prompt sources in this order unless custom values are configured:
 
-1. `promptName`: fetch an MCP prompt with `prompts/get`
-2. `resourceUri`: read an MCP resource with `resources/read`
-3. `tool`: call exactly this fallback tool with empty arguments
+1. `promptName` or default `agent_prompt`: fetch an MCP prompt with `prompts/get`
+2. `resourceUri` or default `agent://prompt/system`: read an MCP resource with `resources/read`
+3. `tool` or default `get_agent_prompt`: call a fallback MCP tool with empty arguments
 
-It never calls arbitrary tools while loading startup instructions. If the server is missing, does not support prompts/resources, does not expose the configured fallback tool, or returns an error, the assistant logs a warning and continues with the local prompt.
+It never calls arbitrary tools while loading startup instructions. If the server is missing, does not support prompts/resources, does not expose the configured or standard fallback tool, or returns an error, the assistant logs a warning and continues with the local prompt.
 
 Single-server env configuration:
 
@@ -532,22 +530,21 @@ Multi-server MCP configuration:
       "command": "node",
       "args": ["path/to/mixer-server.js"],
       "assistantPrompt": {
-        "promptName": "xmseries_mixer_assistant",
-        "resourceUri": "xmseries://prompt/system"
+        "routing": "mixer,mix,console,volume,bus"
       }
     },
     "lights": {
       "command": "node",
       "args": ["path/to/lights-server.js"],
       "assistantPrompt": {
-        "resourceUri": "lights://prompt/system"
+        "routing": "light,scène,dmx"
       }
     },
     "stage": {
       "command": "node",
       "args": ["path/to/stage-server.js"],
       "assistantPrompt": {
-        "resourceUri": "stage://prompt/system"
+        "routing": "stage,show"
       }
     }
   }
@@ -556,10 +553,10 @@ Multi-server MCP configuration:
 
 Each `assistantPrompt` block can define:
 
-1. `promptName`: optional MCP prompt name
-2. `resourceUri`: optional MCP resource URI
-3. `tool`: optional explicit fallback tool name
-4. `routing`: optional comma-separated business keywords used when `MCP_TOOL_ROUTING_ENABLED=true`
+1. `routing`: optional comma-separated business keywords used when `MCP_TOOL_ROUTING_ENABLED=true`
+2. `promptName`: optional custom MCP prompt name; omit it for standard `agent_prompt`
+3. `resourceUri`: optional custom MCP resource URI; omit it for standard `agent://prompt/system`
+4. `tool`: optional custom fallback tool name; omit it for standard `get_agent_prompt`
 
 The prompts are loaded in the order of the servers under `mcpServers`. A failing server prompt logs a warning and does not block the others.
 
@@ -574,7 +571,7 @@ If a routed server asks for confirmation, a short confirmation reply such as `ou
 At startup, when instructions are loaded, the assistant writes a console log entry listing the MCP prompt sources that were actually merged, for example:
 
 ```text
-Loaded and merged 2 MCP prompt source(s) with merge mode 'append': mixer via prompt 'xmseries_mixer_assistant'; lights via resource 'lights://prompt/system'
+Loaded and merged 2 MCP prompt source(s) with merge mode 'append': mixer via prompt 'agent_prompt'; lights via resource 'agent://prompt/system'
 ```
 
 With `MCP_PROMPT_MERGE_MODE=append`, the local prompt stays first and the remote instructions are appended under:
@@ -764,7 +761,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
 6. **MCP Startup Instructions Not Loaded**
    - Confirm `MCP_LOAD_SERVER_PROMPT=true` in the selected env file
    - Confirm the selected `MCP_CONFIG` file has at least one server with an `assistantPrompt` block
-   - Confirm each `assistantPrompt` block defines `promptName`, `resourceUri`, or exposes the standard `get_agent_prompt` tool
+   - Confirm each configured MCP server exposes standard `agent_prompt`, `agent://prompt/system`, or `get_agent_prompt`
    - Check the startup warnings for unsupported prompts/resources or a missing fallback tool
    - If the prompt source belongs to a server instance that could not start, such as `mixer`, fix that server's command or script path in the selected MCP JSON file
    - Use `MCP_PROMPT_MERGE_MODE=append` when you want to keep the local voice and TTS constraints

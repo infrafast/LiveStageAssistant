@@ -35,8 +35,6 @@
         "DEBUG": "${DEBUG}"
       },
       "assistantPrompt": {
-        "promptName": "xmseries_mixer_assistant",
-        "resourceUri": "xmseries://prompt/system",
         "routing": "mixer,mix,console,volume,façade,moniteur,retour,bus,db,tranche"
       }
     }
