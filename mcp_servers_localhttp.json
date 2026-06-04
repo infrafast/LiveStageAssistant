@@ -26,7 +26,7 @@
         "QLC_ALLOW_RAW_OSC": "false",
         "QLC_DRY_RUN": "false",
         "MCP_PROMPT_FILE": "/Users/ts/Documents/PlatformIO/Projects/QLCPlus-MCP/PROMPT.md",
-        "LOG_LEVEL": "info",
+        "LOG_LEVEL": "debug",
         "NODE_ENV": "development"
       },
       "assistantPrompt": {
