@@ -1498,9 +1498,40 @@ INDEX_HTML = """<!doctype html>
       font-weight: 700;
       letter-spacing: 0;
     }
+    .session-summary-button {
+      width: 32px;
+      border: 0;
+      border-radius: 0 8px 8px 0;
+      background: transparent;
+      color: var(--accent);
+      font-weight: 700;
+      display: none;
+    }
     .session-menu-button:hover,
+    .session-summary-button:hover,
     .session-main:hover {
       background: color-mix(in srgb, var(--surface) 62%, transparent);
+    }
+    .session-summary-popover {
+      position: fixed;
+      z-index: 35;
+      width: min(360px, calc(100vw - 24px));
+      max-height: min(320px, calc(100vh - 24px));
+      overflow: auto;
+      display: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px 12px;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .session-summary-popover.open {
+      display: block;
     }
     .session-menu {
       position: absolute;
@@ -2244,6 +2275,17 @@ INDEX_HTML = """<!doctype html>
       .config-controls { grid-template-columns: 1fr; }
       .cloud-api-grid { grid-template-columns: 1fr; }
     }
+    @media (hover: none), (pointer: coarse) {
+      .session-row.has-summary {
+        grid-template-columns: minmax(0, 1fr) 32px 32px;
+      }
+      .session-row.has-summary .session-menu-button {
+        border-radius: 0;
+      }
+      .session-row.has-summary .session-summary-button {
+        display: block;
+      }
+    }
   </style>
 </head>
 <body>
@@ -2459,6 +2501,8 @@ INDEX_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="session-summary-popover" id="session-summary-popover" role="status" aria-live="polite"></div>
+
   <script>
     const stateEl = document.querySelector("#state");
     const configEl = document.querySelector("#config");
@@ -2487,6 +2531,7 @@ INDEX_HTML = """<!doctype html>
     const settingsOverlay = document.querySelector("#settings-overlay");
     const sessionLoading = document.querySelector("#session-loading");
     const sessionLoadingTitle = document.querySelector("#session-loading-title");
+    const sessionSummaryPopover = document.querySelector("#session-summary-popover");
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const panels = Array.from(document.querySelectorAll(".tab-panel"));
 	    const llmProvider = document.querySelector("#llm-provider");
@@ -2531,6 +2576,13 @@ INDEX_HTML = """<!doctype html>
     let composerLocked = false;
     let cancelRequestInFlight = false;
     let openSessionMenuId = "";
+    let openSessionSummaryId = "";
+    let sessionSummaryPinned = false;
+    let sessionSummaryHoverTimer = null;
+    let sessionSummaryAnchor = null;
+    let sessionSummaryHoverId = "";
+    let sessionSummaryCache = new Map();
+    let lastPointer = { x: -1, y: -1 };
     let webAudio = { enabled: false, stt_enabled: false, tts_enabled: false };
     let mediaRecorder = null;
     let mediaStream = null;
@@ -2809,19 +2861,151 @@ INDEX_HTML = """<!doctype html>
       </div>`;
     }
 
+    function canHoverSessionSummary() {
+      return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    }
+
+    function sessionSummaryForId(sessionId) {
+      return String(sessionSummaryCache.get(sessionId) || "").trim();
+    }
+
+    function clearSessionSummaryHoverTimer() {
+      if (sessionSummaryHoverTimer) {
+        window.clearTimeout(sessionSummaryHoverTimer);
+        sessionSummaryHoverTimer = null;
+      }
+    }
+
+    function setSessionSummaryButtonsExpanded(sessionId, expanded) {
+      for (const button of sessionList.querySelectorAll(".session-summary-button")) {
+        const row = button.closest(".session-row");
+        button.setAttribute("aria-expanded", expanded && row?.dataset.sessionId === sessionId ? "true" : "false");
+      }
+    }
+
+    function placeSessionSummaryPopover(anchorRect) {
+      if (!anchorRect) return;
+      const compact = window.matchMedia("(max-width: 720px), (hover: none), (pointer: coarse)").matches;
+      const gap = 8;
+      const margin = 12;
+      const rect = sessionSummaryPopover.getBoundingClientRect();
+      let left = compact ? anchorRect.left : anchorRect.right + gap;
+      let top = compact ? anchorRect.bottom + gap : anchorRect.top;
+      left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+      top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
+      sessionSummaryPopover.style.left = `${left}px`;
+      sessionSummaryPopover.style.top = `${top}px`;
+    }
+
+    function openSessionSummary(sessionId, anchorElement, { pinned = false } = {}) {
+      const summary = sessionSummaryForId(sessionId);
+      if (!summary || !anchorElement) return;
+      closeSessionMenus();
+      clearSessionSummaryHoverTimer();
+      if (openSessionSummaryId === sessionId && sessionSummaryPopover.classList.contains("open")) {
+        sessionSummaryPinned = sessionSummaryPinned || Boolean(pinned);
+        sessionSummaryPopover.textContent = summary;
+        setSessionSummaryButtonsExpanded(sessionId, true);
+        return;
+      }
+      openSessionSummaryId = sessionId;
+      sessionSummaryPinned = Boolean(pinned);
+      sessionSummaryHoverId = "";
+      const rect = anchorElement.getBoundingClientRect();
+      sessionSummaryAnchor = {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom
+      };
+      sessionSummaryPopover.textContent = summary;
+      sessionSummaryPopover.classList.add("open");
+      placeSessionSummaryPopover(sessionSummaryAnchor);
+      setSessionSummaryButtonsExpanded(sessionId, true);
+    }
+
+    function closeSessionSummary() {
+      clearSessionSummaryHoverTimer();
+      openSessionSummaryId = "";
+      sessionSummaryPinned = false;
+      sessionSummaryAnchor = null;
+      sessionSummaryHoverId = "";
+      sessionSummaryPopover.classList.remove("open");
+      sessionSummaryPopover.textContent = "";
+      sessionSummaryPopover.style.left = "";
+      sessionSummaryPopover.style.top = "";
+      setSessionSummaryButtonsExpanded("", false);
+    }
+
+    function pointerIsOnSessionSummaryTarget(sessionId) {
+      if (lastPointer.x < 0 || lastPointer.y < 0) return false;
+      const target = document.elementFromPoint(lastPointer.x, lastPointer.y);
+      if (!target) return false;
+      if (target.closest("#session-summary-popover")) return true;
+      const row = target.closest(".session-row");
+      return row?.dataset.sessionId === sessionId;
+    }
+
+    function scheduleSessionSummary(sessionId) {
+      if (openSessionSummaryId === sessionId && sessionSummaryPopover.classList.contains("open")) {
+        return;
+      }
+      clearSessionSummaryHoverTimer();
+      sessionSummaryHoverId = sessionId;
+      sessionSummaryHoverTimer = window.setTimeout(() => {
+        if (openSessionSummaryId === sessionId && sessionSummaryPopover.classList.contains("open")) return;
+        const row = Array.from(sessionList.querySelectorAll(".session-row"))
+          .find((candidate) => candidate.dataset.sessionId === sessionId);
+        if (!row || !pointerIsOnSessionSummaryTarget(sessionId)) return;
+        openSessionSummary(sessionId, row);
+      }, 650);
+    }
+
+    function closeSessionSummaryAfterPointerCheck(sessionId) {
+      window.setTimeout(() => {
+        if (
+          (openSessionSummaryId === sessionId || sessionSummaryHoverId === sessionId) &&
+          !pointerIsOnSessionSummaryTarget(sessionId)
+        ) {
+          closeSessionSummary();
+        }
+      }, 80);
+    }
+
+    function syncOpenSessionSummaryAfterRender() {
+      if (openSessionSummaryId && !sessionSummaryForId(openSessionSummaryId)) {
+        closeSessionSummary();
+        return;
+      }
+      if (openSessionSummaryId) {
+        sessionSummaryPopover.textContent = sessionSummaryForId(openSessionSummaryId);
+        setSessionSummaryButtonsExpanded(openSessionSummaryId, true);
+        if (!sessionSummaryPinned && !pointerIsOnSessionSummaryTarget(openSessionSummaryId)) {
+          closeSessionSummary();
+        }
+      }
+    }
+
     function sessionButton(session, activeId) {
       const active = session.id === activeId ? " active" : "";
       const menuOpen = session.id === openSessionMenuId ? " menu-open" : "";
+      const llmSummary = String(session.llm_summary || "").trim();
+      const hasSummary = Boolean(llmSummary);
+      const summaryClass = hasSummary ? " has-summary" : "";
+      const summaryButton = hasSummary
+        ? `<button class="session-summary-button" type="button" title="Afficher le llm_summary" aria-label="Afficher le llm_summary" aria-expanded="${session.id === openSessionSummaryId ? "true" : "false"}">i</button>`
+        : "";
       const summaryTime = Number(session.llm_summary_updated_at || 0);
       const summaryLabel = summaryTime
         ? new Date(summaryTime * 1000).toLocaleString("fr-FR")
         : "No summary";
-      return `<div class="session-row${active}${menuOpen}" data-session-id="${escapeHtml(session.id)}" data-session-title="${escapeHtml(session.title || "Untitled session")}">
+      return `<div class="session-row${active}${menuOpen}${summaryClass}" data-session-id="${escapeHtml(session.id)}" data-session-title="${escapeHtml(session.title || "Untitled session")}">
         <button class="session-main" type="button">
           <span class="session-title">${escapeHtml(session.title || "Untitled session")}</span>
           <span class="session-meta">${escapeHtml(summaryLabel)}</span>
         </button>
         <button class="session-menu-button" type="button" title="Session actions" aria-label="Session actions">...</button>
+        ${summaryButton}
         <div class="session-menu">
           <button class="session-menu-action" type="button" data-session-action="rename">Rename</button>
           <button class="session-menu-action" type="button" data-session-action="clear">Clear conversation</button>
@@ -2835,15 +3019,25 @@ INDEX_HTML = """<!doctype html>
       const context = sessionContext || {};
       const sessions = context.sessions || [];
       const activeId = context.active_id || "";
+      sessionSummaryCache = new Map(
+        sessions
+          .map((session) => [String(session.id || ""), String(session.llm_summary || "").trim()])
+          .filter(([sessionId, summary]) => sessionId && summary)
+      );
       if (sessions.length === 0) {
         openSessionMenuId = "";
+        closeSessionSummary();
         sessionList.innerHTML = `<div class="session-meta">No session</div>`;
         return;
       }
       if (openSessionMenuId && !sessions.some((session) => session.id === openSessionMenuId)) {
         openSessionMenuId = "";
       }
+      if (openSessionSummaryId && !sessions.some((session) => session.id === openSessionSummaryId)) {
+        closeSessionSummary();
+      }
       sessionList.innerHTML = sessions.map((session) => sessionButton(session, activeId)).join("");
+      syncOpenSessionSummaryAfterRender();
     }
 
     function syncSessionContextSizeLabel() {
@@ -3811,7 +4005,7 @@ INDEX_HTML = """<!doctype html>
 
     function setSessionLoading(loading, title = "Loading session") {
       sessionNew.disabled = Boolean(loading);
-      for (const button of sessionList.querySelectorAll(".session-main, .session-menu-button, .session-menu-action")) {
+      for (const button of sessionList.querySelectorAll(".session-main, .session-menu-button, .session-summary-button, .session-menu-action")) {
         button.disabled = Boolean(loading);
       }
       if (environmentLoadingActive && !loading) return;
@@ -4215,6 +4409,10 @@ INDEX_HTML = """<!doctype html>
       setConversationEnabled(!conversationEnabled);
     });
 
+    document.addEventListener("mousemove", (event) => {
+      lastPointer = { x: event.clientX, y: event.clientY };
+    });
+
     sessionNew.addEventListener("click", async () => {
       setSessionLoading(true, "Creating session");
       try {
@@ -4233,9 +4431,30 @@ INDEX_HTML = """<!doctype html>
       }
     });
 
+    sessionList.addEventListener("mouseover", (event) => {
+      if (!canHoverSessionSummary()) return;
+      lastPointer = { x: event.clientX, y: event.clientY };
+      const row = event.target.closest(".session-row.has-summary");
+      if (!row || row.contains(event.relatedTarget)) return;
+      const sessionId = row.dataset.sessionId || "";
+      if (!sessionId) return;
+      scheduleSessionSummary(sessionId);
+    });
+
+    sessionList.addEventListener("mouseout", (event) => {
+      if (!canHoverSessionSummary()) return;
+      lastPointer = { x: event.clientX, y: event.clientY };
+      const row = event.target.closest(".session-row.has-summary");
+      if (!row || row.contains(event.relatedTarget)) return;
+      if (openSessionSummaryId === row.dataset.sessionId || sessionSummaryHoverId === row.dataset.sessionId) {
+        closeSessionSummaryAfterPointerCheck(row.dataset.sessionId);
+      }
+    });
+
     sessionList.addEventListener("click", async (event) => {
       const actionButton = event.target.closest(".session-menu-action");
       const menuButton = event.target.closest(".session-menu-button");
+      const summaryButton = event.target.closest(".session-summary-button");
       const mainButton = event.target.closest(".session-main");
       const row = event.target.closest(".session-row");
       if (!row || composerLocked) return;
@@ -4246,6 +4465,7 @@ INDEX_HTML = """<!doctype html>
         const action = actionButton.dataset.sessionAction;
         const title = row.dataset.sessionTitle || "Untitled session";
         closeSessionMenus();
+        closeSessionSummary();
         if (action === "rename") {
           await renameSession(sessionId, title);
         } else if (action === "clear") {
@@ -4261,6 +4481,7 @@ INDEX_HTML = """<!doctype html>
       if (menuButton) {
         const wasOpen = row.classList.contains("menu-open");
         closeSessionMenus();
+        closeSessionSummary();
         if (!wasOpen) {
           openSessionMenuId = sessionId;
           row.classList.add("menu-open");
@@ -4268,8 +4489,16 @@ INDEX_HTML = """<!doctype html>
         return;
       }
 
+      if (summaryButton) {
+        const wasOpen = openSessionSummaryId === sessionId && sessionSummaryPinned;
+        closeSessionSummary();
+        if (!wasOpen) openSessionSummary(sessionId, row, { pinned: true });
+        return;
+      }
+
       if (!mainButton) return;
       closeSessionMenus();
+      closeSessionSummary();
       setSessionLoading(true, "Loading session");
       try {
         const response = await fetch("/api/session-context/select", {
@@ -4288,7 +4517,16 @@ INDEX_HTML = """<!doctype html>
     });
 
     document.addEventListener("click", (event) => {
-      if (!event.target.closest(".session-row")) closeSessionMenus();
+      if (!event.target.closest(".session-row") && !event.target.closest("#session-summary-popover")) {
+        closeSessionMenus();
+        closeSessionSummary();
+      }
+    });
+    sessionList.addEventListener("scroll", () => closeSessionSummary());
+    window.addEventListener("resize", () => {
+      if (openSessionSummaryId && sessionSummaryAnchor) {
+        placeSessionSummaryPopover(sessionSummaryAnchor);
+      }
     });
 
     settingsOpen.addEventListener("click", () => setSettingsOpen(true));
