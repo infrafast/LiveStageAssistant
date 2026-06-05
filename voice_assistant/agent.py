@@ -27,6 +27,7 @@ import tempfile
 import threading
 import time
 from typing import Any
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -134,28 +135,17 @@ MCP_CONFIRMATION_WORDS = {
     "go",
 }
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
-    "You are a helpful voice named Live Stage Assistant with access to MCP tools for live stage devices "
-    "such as lights, digital mixers, and MIDI devices. "
+    "You are a helpful voice assistant named is Live Stage Assistant with access to various tools. "
     "Be precise, conservative, and tool-driven in your responses since they will be spoken aloud and have "
-    "to be suitable for text-to-speech and API calls. Summarize your results. "
+    "to be suitable for text-to-speech and API calls. Don't be verbose but summarize your results. "
     "Reply in the same language as the user's latest request whenever possible. "
     "Use plain text only. Do not use emojis, emoticons, markdown, bullets, symbols, or decorative characters. "
-    "For spoken numeric values, write negative numbers with words: say 'moins 11 décibels' in French "
-    "and 'minus 11 decibels' in English instead of '-11 dB'. "
-    "Write measurement units in words for text-to-speech: say 'décibels' in French or 'decibels' "
-    "in English instead of 'dB', and 'volts' instead of 'V'. "
-    "Use only the MCP tools and capabilities that are actually available. Do not invent tools, OSC paths, "
-    "widgets, scenes, device names, channel indexes, mappings, or unavailable features. "
-    "When the user asks about the current state of anything outside this conversation, call the relevant "
-    "read, get, or status tool before answering; never answer live external state from memory, previous tool "
-    "results, or assumptions. Prefer read-before-write when a request is broad, ambiguous, safety-critical, "
-    "relative, or asks for current state. Do not read before a write when the request gives a clear absolute "
-    "target value and the target has been resolved. If a target, name, mapping, or requested capability is "
-    "missing or ambiguous, ask for clarification instead of guessing. Confirm before broad or safety-critical "
-    "live changes unless the user clearly asks for immediate execution. After a successful write, do not add "
-    "verification reads or extra related tool calls unless the user asks you to verify, read back, compare, "
-    "or diagnose. Keep spoken responses short: say what you will do, call the tool, then summarize the result. "
-    "Behave like a friendly calm and motivating assistant."
+    "Behave like a friendly calm and motivating assistant. Use conversation memory for context, preferences, "
+    "and follow-up references, but not as the source of truth for live external state. When the user asks about "
+    "the current state of anything outside this conversation, treat the answer as time-sensitive. Use the relevant "
+    "MCP read tool before answering. Do not answer current external state from memory, previous tool results, "
+    "or assumptions. If no suitable read tool is available, say that you cannot verify the current state and use "
+    "only tools exposed by the MCP servers."
 )
 OPENAI_TTS_VOICE_OPTIONS = [
     {"id": "alloy", "label": "Alloy (masculine)"},
@@ -244,6 +234,106 @@ DEFAULT_STT_PROMPT = (
     "Garde les noms de pistes courts et précis."
 )
 FUSED_SET_COMMAND_RE = re.compile(r"^\s*(mets|met|me)([a-zà-ÿ][a-zà-ÿ0-9_-]{3,})(\b|$)", re.IGNORECASE)
+STT_SILENCE_HALLUCINATION_PHRASES = (
+    "Sous-titres réalisés par la communauté d'Amara.org",
+    "Sous-titres réalisés para la communauté d'Amara.org",
+    "Sous-titres créés par la communauté d'Amara.org",
+    "Sous-titres par Amara.org",
+    "Sous-titrage Société Radio-Canada",
+    "Sous-titrage par Société Radio-Canada",
+    "Sous-titrage fourni par la Société Radio-Canada",
+    "Sous-titrage fournis par la Société Radio-Canada",
+    "Sous-titrage ST' 501",
+    "Sous-titrage par SousTitreur.com",
+    "Subtitles created by the Amara.org community",
+    "Subtitles by the Amara.org community",
+    "Captioning by CBC Radio-Canada",
+    "Merci d'avoir regardé cette vidéo",
+    "Merci d'avoir regardé cette vidéo, n'hésitez pas à vous abonner pour ne manquer aucune de mes vidéos",
+    "Merci d'avoir regardé la vidéo",
+    "Merci d'avoir regardé",
+    "Merci d'avoir visionné cette vidéo",
+    "N'hésitez pas à vous abonner pour ne manquer aucune de mes vidéos",
+    "Thanks for watching this video",
+    "Thanks for watching",
+    "Please subscribe so you don't miss any of my videos",
+)
+
+
+def normalize_stt_hallucination_candidate(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", text or "")
+    normalized = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+    normalized = normalized.lower()
+    normalized = normalized.replace("’", "'").replace("`", "'").replace("´", "'")
+    normalized = re.sub(r"\b(d|l|j|m|t|s|c|n|qu)'", r"\1 ", normalized)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+STT_SILENCE_HALLUCINATION_KEYS = {
+    normalize_stt_hallucination_candidate(phrase) for phrase in STT_SILENCE_HALLUCINATION_PHRASES
+}
+STT_SUBTITLE_HALLUCINATION_TERMS = (
+    "sous titre",
+    "sous titres",
+    "sous titrage",
+    "subtitle",
+    "subtitles",
+    "caption",
+    "captioning",
+    "closed caption",
+)
+STT_SUBTITLE_CREDIT_TERMS = (
+    "amara",
+    "communaute",
+    "community",
+    "societe radio canada",
+    "radio canada",
+    "cbc radio canada",
+    "soustitreur",
+    "st 501",
+)
+STT_VIDEO_HALLUCINATION_STARTS = (
+    "merci d avoir regarde",
+    "merci d avoir visionne",
+    "thanks for watching",
+)
+STT_VIDEO_HALLUCINATION_TERMS = (
+    "video",
+    "videos",
+    "chaine",
+    "channel",
+    "abonne",
+    "abonner",
+    "abonnez",
+    "subscribe",
+    "subscribed",
+    "like",
+    "commentaire",
+    "commentaires",
+)
+
+
+def is_likely_stt_silence_hallucination(text: str) -> bool:
+    normalized = normalize_stt_hallucination_candidate(text)
+    if not normalized:
+        return False
+    if normalized in STT_SILENCE_HALLUCINATION_KEYS:
+        return True
+
+    has_subtitle_term = any(term in normalized for term in STT_SUBTITLE_HALLUCINATION_TERMS)
+    has_credit_term = any(term in normalized for term in STT_SUBTITLE_CREDIT_TERMS)
+    if has_subtitle_term and has_credit_term:
+        return True
+
+    starts_like_video_credit = any(
+        normalized.startswith(prefix) for prefix in STT_VIDEO_HALLUCINATION_STARTS
+    )
+    has_video_credit_term = any(term in normalized for term in STT_VIDEO_HALLUCINATION_TERMS)
+    if starts_like_video_credit and has_video_credit_term:
+        return True
+
+    return False
 
 
 def check_internet_connection(
@@ -572,6 +662,8 @@ class VoiceAssistant:
         thinking_sound_file: str = "thinking.wav",
         silence_threshold: int = 500,
         silence_duration: float = 1.5,
+        min_speech_ms: int = 350,
+        min_speech_frames: int = 5,
         tts_speed: float = 1.0,
         wake_words: list[str] | None = None,
         mcp_config: dict | None = None,
@@ -610,6 +702,8 @@ class VoiceAssistant:
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
             silence_threshold: Audio silence detection threshold
             silence_duration: How long to wait after speech stops
+            min_speech_ms: Minimum non-silent speech duration before backend STT is accepted
+            min_speech_frames: Minimum non-silent audio frames before backend STT is accepted
             tts_speed: Cloud TTS speed for backend/non-web speech
             wake_words: Optional global wake word variants used to gate command processing
             mcp_config: Optional MCP server configuration dict
@@ -638,6 +732,8 @@ class VoiceAssistant:
         self.chunk = 1024
         self.silence_threshold = silence_threshold
         self.silence_duration = silence_duration
+        self.min_speech_ms = max(0, int(min_speech_ms or 0))
+        self.min_speech_frames = max(0, int(min_speech_frames or 0))
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
@@ -1455,6 +1551,14 @@ class VoiceAssistant:
             frames = []
             silence_frames = 0
             silence_frame_threshold = int(self.rate / self.chunk * self.silence_duration)
+            min_speech_duration_frames = int(
+                (self.rate / self.chunk * (self.min_speech_ms / 1000.0)) + 0.999
+            )
+            min_speech_frames = max(
+                self.min_speech_frames,
+                min_speech_duration_frames,
+            )
+            speech_candidate_frames = 0
             has_speech = False
 
             while True:
@@ -1473,12 +1577,16 @@ class VoiceAssistant:
                 frames.append(data)
 
                 if self.detect_silence(data):
-                    silence_frames += 1
-                    if has_speech and silence_frames > silence_frame_threshold:
-                        break
+                    speech_candidate_frames = 0
+                    if has_speech:
+                        silence_frames += 1
+                        if silence_frames > silence_frame_threshold:
+                            break
                 else:
                     silence_frames = 0
-                    has_speech = True
+                    speech_candidate_frames += 1
+                    if not has_speech and speech_candidate_frames >= min_speech_frames:
+                        has_speech = True
 
                 if len(frames) > self.rate / self.chunk * 30:
                     break
@@ -1692,7 +1800,11 @@ class VoiceAssistant:
             canonical_verb = "mets" if verb.lower() in {"me", "met", "mets"} else verb
             return f"{canonical_verb} {target}"
 
-        return FUSED_SET_COMMAND_RE.sub(split_fused_set_command, cleaned, count=1)
+        cleaned = FUSED_SET_COMMAND_RE.sub(split_fused_set_command, cleaned, count=1)
+        if is_likely_stt_silence_hallucination(cleaned):
+            print(f"Ignored likely Whisper silence hallucination: {cleaned!r}")
+            return ""
+        return cleaned
 
     def audio_to_text_openai_whisper(self, audio_data: bytes) -> str | None:
         """Convert audio to text using OpenAI Whisper API."""
@@ -3073,6 +3185,8 @@ async def main():
         thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
         silence_threshold = env_int("VOICE_SILENCE_THRESHOLD", 500)
         silence_duration = env_float("VOICE_SILENCE_DURATION", 1.5)
+        min_speech_ms = env_int("VOICE_MIN_SPEECH_MS", 350)
+        min_speech_frames = env_int("VOICE_MIN_SPEECH_FRAMES", 5)
         voice_cancel_during_thinking = env_bool("VOICE_CANCEL_DURING_THINKING", False)
         web_audio_enabled = env_bool("WEB_AUDIO_ENABLED", False)
         web_stt_provider = os.getenv("WEB_STT_PROVIDER", "openai").strip().lower()
@@ -3097,9 +3211,11 @@ async def main():
         web_tts_speed = max(0.6, min(1.8, env_float("WEB_TTS_SPEED", 1.0)))
         web_stt_model = os.getenv("WEB_STT_MODEL", "whisper-1").strip()
         web_recording_max_seconds = env_float("WEB_RECORDING_MAX_SECONDS", 8.0)
-        web_conversation_silence_ms = env_int("WEB_CONVERSATION_SILENCE_MS", 900)
+        web_conversation_silence_ms = env_int("WEB_CONVERSATION_SILENCE_MS", 1200)
         web_conversation_idle_seconds = env_float("WEB_CONVERSATION_IDLE_SECONDS", 25.0)
-        web_conversation_threshold = env_float("WEB_CONVERSATION_THRESHOLD", 0.035)
+        web_conversation_threshold = env_float("WEB_CONVERSATION_THRESHOLD", 0.05)
+        web_conversation_min_speech_ms = env_int("WEB_CONVERSATION_MIN_SPEECH_MS", 350)
+        web_conversation_min_speech_frames = env_int("WEB_CONVERSATION_MIN_SPEECH_FRAMES", 8)
         wake_words = parse_wake_words(env_optional("WAKE_WORD"))
         system_prompt = env_optional("ASSISTANT_SYSTEM_PROMPT")
         mcp_config_path = env_optional("MCP_CONFIG")
@@ -3191,6 +3307,8 @@ async def main():
             "conversation_silence_ms": web_conversation_silence_ms,
             "conversation_idle_seconds": web_conversation_idle_seconds,
             "conversation_threshold": web_conversation_threshold,
+            "conversation_min_speech_ms": web_conversation_min_speech_ms,
+            "conversation_min_speech_frames": web_conversation_min_speech_frames,
         }
 
         mcp_config = None
@@ -3251,6 +3369,8 @@ async def main():
             thinking_sound_file=thinking_sound_file,
             silence_threshold=silence_threshold,
             silence_duration=silence_duration,
+            min_speech_ms=min_speech_ms,
+            min_speech_frames=min_speech_frames,
             tts_speed=web_tts_speed,
             wake_words=wake_words,
             mcp_config=mcp_config,

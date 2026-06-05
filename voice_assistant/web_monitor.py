@@ -2595,6 +2595,8 @@ INDEX_HTML = """<!doctype html>
     let recordingSpeechDetected = false;
     let recordingSilenceStartedAt = null;
     let recordingStartedAt = 0;
+    let recordingSpeechCandidateStartedAt = null;
+    let recordingSpeechFrames = 0;
     let soundwaveAnimationId = null;
     let soundwaveStartedAt = 0;
     let conversationEnabled = false;
@@ -2607,6 +2609,8 @@ INDEX_HTML = """<!doctype html>
     let conversationSpeechDetected = false;
     let conversationSilenceStartedAt = null;
     let conversationStartedAt = 0;
+    let conversationSpeechCandidateStartedAt = null;
+    let conversationSpeechFrames = 0;
     let conversationRestartTimer = null;
     let conversationDiscard = false;
     let conversationStopStreamAfterSegment = false;
@@ -3264,6 +3268,19 @@ INDEX_HTML = """<!doctype html>
       return analyserRms(recordingAnalyser);
     }
 
+    function activeSoundwaveAnalyser() {
+      if (isRecording && recordingAnalyser) return recordingAnalyser;
+      if (
+        conversationEnabled &&
+        conversationRecorder &&
+        conversationRecorder.state !== "inactive" &&
+        conversationAnalyser
+      ) {
+        return conversationAnalyser;
+      }
+      return null;
+    }
+
     function resizeSoundwaveCanvas() {
       const rect = soundwave.getBoundingClientRect();
       const scale = window.devicePixelRatio || 1;
@@ -3291,7 +3308,7 @@ INDEX_HTML = """<!doctype html>
       const centerY = cssHeight / 2;
       const padding = 10;
       const usableWidth = Math.max(1, cssWidth - padding * 2);
-      const analyser = recordingAnalyser;
+      const analyser = activeSoundwaveAnalyser();
       const samples = analyser ? new Uint8Array(analyser.fftSize) : null;
       if (analyser && samples) analyser.getByteTimeDomainData(samples);
 
@@ -3438,6 +3455,8 @@ INDEX_HTML = """<!doctype html>
         recordingSpeechDetected = false;
         recordingSilenceStartedAt = null;
         recordingStartedAt = Date.now();
+        recordingSpeechCandidateStartedAt = null;
+        recordingSpeechFrames = 0;
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         if (AudioContextClass) {
           recordingAudioContext = new AudioContextClass();
@@ -3452,7 +3471,14 @@ INDEX_HTML = """<!doctype html>
         });
         mediaRecorder.addEventListener("stop", () => {
           const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+          const hadRecordingAnalyser = Boolean(recordingAnalyser);
           stopMediaStream();
+          if (hadRecordingAnalyser && !recordingSpeechDetected) {
+            injectCommand.placeholder = "Message";
+            setRecording(false);
+            metaEl.textContent = "voice ignored: not enough speech";
+            return;
+          }
           injectCommand.placeholder = "Transcribing...";
           handleRecordedAudio(blob);
         });
@@ -3481,11 +3507,24 @@ INDEX_HTML = """<!doctype html>
       if (!mediaRecorder || mediaRecorder.state === "inactive" || !recordingAnalyser) return;
       const now = Date.now();
       const rms = recordingRms();
-      const threshold = Number(webAudio.conversation_threshold || 0.035);
-      const silenceMs = Math.max(250, Number(webAudio.conversation_silence_ms || 900));
+      const threshold = Number(webAudio.conversation_threshold || 0.05);
+      const silenceMs = Math.max(250, Number(webAudio.conversation_silence_ms || 1200));
+      const minSpeechMs = Math.max(0, Number(webAudio.conversation_min_speech_ms || 350));
+      const minSpeechFrames = Math.max(0, Number(webAudio.conversation_min_speech_frames || 8));
 
       if (rms > threshold) {
-        recordingSpeechDetected = true;
+        if (!recordingSpeechCandidateStartedAt) {
+          recordingSpeechCandidateStartedAt = now;
+          recordingSpeechFrames = 0;
+        }
+        recordingSpeechFrames += 1;
+        if (
+          !recordingSpeechDetected &&
+          now - recordingSpeechCandidateStartedAt >= minSpeechMs &&
+          recordingSpeechFrames >= minSpeechFrames
+        ) {
+          recordingSpeechDetected = true;
+        }
         recordingSilenceStartedAt = null;
       } else if (recordingSpeechDetected) {
         if (!recordingSilenceStartedAt) recordingSilenceStartedAt = now;
@@ -3493,6 +3532,9 @@ INDEX_HTML = """<!doctype html>
           stopWebRecording();
           return;
         }
+      } else {
+        recordingSpeechCandidateStartedAt = null;
+        recordingSpeechFrames = 0;
       }
 
       recordingMonitorId = window.requestAnimationFrame(monitorPushToTalkAudio);
@@ -3518,6 +3560,7 @@ INDEX_HTML = """<!doctype html>
 
     function stopConversationStream() {
       stopConversationMonitor();
+      stopSoundwave();
       if (conversationAudioContext) {
         conversationAudioContext.close().catch(() => {});
         conversationAudioContext = null;
@@ -3534,6 +3577,7 @@ INDEX_HTML = """<!doctype html>
 
     function stopConversationSegment() {
       stopConversationMonitor();
+      stopSoundwave();
       conversationRecorder = null;
     }
 
@@ -3581,6 +3625,8 @@ INDEX_HTML = """<!doctype html>
         conversationChunks = [];
         conversationSpeechDetected = false;
         conversationSilenceStartedAt = null;
+        conversationSpeechCandidateStartedAt = null;
+        conversationSpeechFrames = 0;
         conversationDiscard = false;
         conversationStopStreamAfterSegment = false;
         conversationStartedAt = Date.now();
@@ -3605,6 +3651,7 @@ INDEX_HTML = """<!doctype html>
           }
         });
         conversationRecorder.start();
+        startSoundwave();
         monitorConversationAudio();
         metaEl.textContent = "conversation listening...";
       } catch (error) {
@@ -3619,13 +3666,26 @@ INDEX_HTML = """<!doctype html>
       if (!conversationRecorder || conversationRecorder.state === "inactive") return;
       const now = Date.now();
       const rms = conversationRms();
-      const threshold = Number(webAudio.conversation_threshold || 0.035);
-      const silenceMs = Math.max(250, Number(webAudio.conversation_silence_ms || 900));
+      const threshold = Number(webAudio.conversation_threshold || 0.05);
+      const silenceMs = Math.max(250, Number(webAudio.conversation_silence_ms || 1200));
+      const minSpeechMs = Math.max(0, Number(webAudio.conversation_min_speech_ms || 350));
+      const minSpeechFrames = Math.max(0, Number(webAudio.conversation_min_speech_frames || 8));
       const maxRecordMs = Math.max(1000, Number(webAudio.max_record_seconds || 8) * 1000);
       const maxIdleMs = Math.max(3000, Number(webAudio.conversation_idle_seconds || 25) * 1000);
 
       if (rms > threshold) {
-        conversationSpeechDetected = true;
+        if (!conversationSpeechCandidateStartedAt) {
+          conversationSpeechCandidateStartedAt = now;
+          conversationSpeechFrames = 0;
+        }
+        conversationSpeechFrames += 1;
+        if (
+          !conversationSpeechDetected &&
+          now - conversationSpeechCandidateStartedAt >= minSpeechMs &&
+          conversationSpeechFrames >= minSpeechFrames
+        ) {
+          conversationSpeechDetected = true;
+        }
         conversationSilenceStartedAt = null;
       } else if (conversationSpeechDetected) {
         if (!conversationSilenceStartedAt) conversationSilenceStartedAt = now;
@@ -3633,6 +3693,9 @@ INDEX_HTML = """<!doctype html>
           stopConversationRecording(false);
           return;
         }
+      } else {
+        conversationSpeechCandidateStartedAt = null;
+        conversationSpeechFrames = 0;
       }
 
       if (conversationSpeechDetected && now - conversationStartedAt >= maxRecordMs) {
