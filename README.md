@@ -70,6 +70,7 @@ For developpers: https://deepwiki.com/infrafast/LiveStageAssistant
                                           │ • Playwright  │
                                           │ • Filesystem  │
                                           │ • XMSeries-MCP│
+                                          │ • QLCPlus-MCP │
                                           └───────────────┘
 ```
 
@@ -158,7 +159,12 @@ Open the monitor from your browser:
 http://NAS_IP:8765
 ```
 
-If you use the mixer MCP server, clone/install/build `XMSeries-MCP` on the host and mount it in `docker-compose.yml`:
+Live Stage Assistant can connect to any MCP server exposed in the selected `MCP_CONFIG`. Two stage-control MCP servers known to be compatible with this agent are:
+
+- XMSeries-MCP for Behringer/X32-style mixer control: https://github.com/infrafast/XMSeries-MCP
+- QLCPlus-MCP for QLC+ lighting/DMX control: https://github.com/infrafast/QLCPlus-MCP
+
+If you use the mixer MCP server in local stdio mode, clone/install/build `XMSeries-MCP` on the host and mount it in `docker-compose.yml`:
 
 ```yaml
 volumes:
@@ -177,7 +183,7 @@ The server script path itself belongs in `container/config/mcp_servers.synology.
 "args": ["/xmseries-mcp/dist/index.js"]
 ```
 
-In stdio mode, mixer connection settings such as `OSC_HOST`, `OSC_PORT`, and `OSC_PROTOCOL` belong in the `env` block of `container/config/mcp_servers.synology.json`; that block is passed to the XMSeries-MCP process. If XMSeries-MCP runs as a separate HTTP service/container, put those OSC settings on the XMSeries-MCP service instead and configure Live Stage Assistant with only the MCP HTTP URL.
+In stdio mode, mixer connection settings such as `OSC_HOST`, `OSC_PORT`, and `OSC_PROTOCOL` belong in the `env` block of `container/config/mcp_servers.synology.json`; that block is passed to the XMSeries-MCP process. If XMSeries-MCP runs as a separate HTTP service/container, put those OSC settings on the XMSeries-MCP service instead and configure Live Stage Assistant with only the MCP HTTP URL. QLCPlus-MCP can be configured the same way: either run it as a local stdio MCP server with its QLC+ host/OSC settings in that server's `env` block, or point the assistant at its streamable HTTP MCP endpoint.
 
 On DSM 7.0, the exact Docker UI depends on the Synology model and installed Docker package. If the Container Manager "Project" interface is not available, use SSH and the `docker compose` command above, or create an equivalent container manually with the same mounts, host network, and port `8765`.
 
@@ -292,7 +298,7 @@ API secrets are read through `OPENAI_API_KEY_FILE` and `ELEVENLABS_API_KEY_FILE`
 
 The assistant treats current external state as time-sensitive. Conversation memory can preserve context and follow-up references, but when the user asks for the current state of anything outside the conversation, the agent is instructed to call the relevant MCP read tool before answering. Set `MCP_AGENT_MEMORY_ENABLED=false` only if you want to disable MCPAgent conversation memory entirely. `MCP_AGENT_TIMEOUT_SECONDS` limits one LLM/MCP turn; if the agent has not produced a response before that delay, the request is cancelled and the assistant says that the request is taking too long.
 
-Web chat sessions are persisted as `.context.json` files under `SESSION_CONTEXT_DIR`. The web monitor shows the sessions in the left sidebar, restores the selected session's message bubbles, and loads the most recently active session on startup. The active session keeps the full message list for UI restore, a bounded `summary` transcript, and an optional `llm_summary` generated from that transcript when the assistant starts or when the web UI switches sessions. The LLM summary is durable memory: it keeps preferences, future instructions, corrections, conventions, unresolved tasks, and project decisions, while ignoring transient one-off requests, momentary state checks, executed commands, temporary values, live external state, connected device identity, and routine tool results unless the user explicitly turns them into a durable note. The session actions menu can rename, delete, clear the visible conversation, or save context; save context forces a fresh `llm_summary` generation for that session. Clearing removes the stored message bubbles and transcript summary but preserves `llm_summary`, so learned continuity can still be injected internally without reappearing as a visible chat bubble. `SESSION_CONTEXT_SIZE` controls how many characters from the injectable summary are added to each LLM/MCP turn, but the injected context is not added to the Final Prompt shown in the Config tab. The web range accepts `0` to `12000`; set it to `0`, or use **Config -> IA model -> Session Context**, if a prior session is steering the assistant too strongly. Restored chat bubbles that fit inside the selected context window are highlighted in green, and the preview updates immediately when the range changes. If `llm_summary` cannot be generated, the assistant falls back to the deterministic `summary` transcript. Even when session context is enabled, live external state still must be read again through MCP tools.
+Web chat sessions are persisted as `.context.json` files under `SESSION_CONTEXT_DIR`. The web monitor shows the sessions in the left sidebar, restores the selected session's message bubbles, and loads the most recently active session on startup. The active session keeps the full message list for UI restore, a bounded `summary` transcript, and an optional `llm_summary` generated from that transcript when the assistant starts or when the web UI switches sessions. The LLM summary is durable memory: it keeps preferences, future instructions, corrections, conventions, unresolved tasks, and project decisions, while ignoring transient one-off requests, momentary state checks, executed commands, temporary values, live external state, connected device identity, and routine tool results unless the user explicitly turns them into a durable note. In the web sidebar, hover a session on desktop to preview its `llm_summary`; on touch/mobile, tap the small `i` button when a session has a summary. The session actions menu can rename, delete, clear the visible conversation, or save context; save context forces a fresh `llm_summary` generation for that session. Clearing removes the stored message bubbles and transcript summary but preserves `llm_summary`, so learned continuity can still be injected internally without reappearing as a visible chat bubble. `SESSION_CONTEXT_SIZE` controls how many characters from the injectable summary are added to each LLM/MCP turn, but the injected context is not added to the Final Prompt shown in the Config tab. The web range accepts `0` to `12000`; set it to `0`, or use **Config -> IA model -> Session Context**, if a prior session is steering the assistant too strongly. Restored chat bubbles that fit inside the selected context window are highlighted in green, and the preview updates immediately when the range changes. If `llm_summary` cannot be generated, the assistant falls back to the deterministic `summary` transcript. Even when session context is enabled, live external state still must be read again through MCP tools.
 
 ### Wake Word
 
@@ -443,7 +449,7 @@ ollama pull qwen3:8b
 
 ### MCP Server Configuration
 
-The assistant loads MCP server configurations indicated in your environment file (see Online and Offline Profiles and Environment Variables) in the project root. By default, it includes:
+The assistant loads MCP server configurations indicated in your environment file (see Online and Offline Profiles and Environment Variables) in the project root. The bundled examples commonly include:
 
 - **playwright**: Web automation and browser control
 - **linear**: Task and project management
@@ -457,7 +463,9 @@ For offline mode, use `mcp_servers.offline.json`:
 
 Set `MCP_CONFIG=mcp_servers.offline.json` in the selected env file.
 
-Server-specific paths belong in the selected MCP JSON file. For a local mixer server, set the `mixer.args` entry directly to the full `XMSeries-MCP/dist/index.js` path for that machine. Environment placeholders can still appear inside JSON string values for secrets or shared settings. If a configured command or Node script cannot be found, the assistant prints that the MCP server instance could not be started and continues with the remaining available servers.
+Compatible stage-control MCP servers include **XMSeries-MCP** for mixer control and **QLCPlus-MCP** for QLC+ lighting/DMX control. Add QLCPlus-MCP by adding a `qlcplus` server entry to the selected MCP JSON file, either as a local stdio command or as a streamable HTTP endpoint.
+
+Server-specific paths belong in the selected MCP JSON file. For a local mixer server, set the `mixer.args` entry directly to the full `XMSeries-MCP/dist/index.js` path for that machine. For a local QLC+ lighting server, set the `qlcplus.args` entry to the built `QLCPlus-MCP` entrypoint for that machine and put QLC+ connection settings in that server's `env` block. Environment placeholders can still appear inside JSON string values for secrets or shared settings. If a configured command or Node script cannot be found, the assistant prints that the MCP server instance could not be started and continues with the remaining available servers.
 
 To add more servers, edit `mcp_servers.json` or copy `mcp_servers.example.json` which includes additional servers like:
 - filesystem, github, gitlab, google-drive, postgres, sqlite, slack, memory, puppeteer, brave-search, fetch
@@ -512,7 +520,7 @@ For each server with an `assistantOptions` block, the assistant tries standard p
 2. `resourceUri` or default `agent://prompt/system`: read an MCP resource with `resources/read`
 3. `tool` or default `get_agent_prompt`: call a fallback MCP tool with empty arguments
 
-It never calls arbitrary tools while loading startup instructions. If the server is missing, does not support prompts/resources, does not expose the configured or standard fallback tool, or returns an error, the assistant logs a warning and continues with the local prompt.
+It no longer uses legacy server-specific prompt names or URIs by default. If a server still needs an older custom `promptName`, `resourceUri`, or fallback `tool`, put that explicit override in its `assistantOptions`; otherwise expose the standard `agent_prompt`, `agent://prompt/system`, or `get_agent_prompt`. The assistant never calls arbitrary tools while loading startup instructions. If the server is missing, does not support prompts/resources, does not expose the configured or standard fallback tool, or returns an error, the assistant logs a warning and continues with the local prompt.
 
 Single-server env configuration:
 
@@ -745,6 +753,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
    - Use `MCP_CONFIG=mcp_servers.offline.json` in the selected env file for local-only MCP servers
    - Verify API keys for specific servers
    - For mixer control, set the `mixer` script path in the selected MCP JSON file to the real `XMSeries-MCP/dist/index.js` path
+   - For QLC+ lighting control, set the `qlcplus` script path or HTTP endpoint in the selected MCP JSON file to your QLCPlus-MCP server
    - If a configured command or script path is missing, the assistant reports that this MCP server instance could not be started and keeps running with the remaining servers
 
 4. **Thinking Sound Or Audio Output Unavailable**

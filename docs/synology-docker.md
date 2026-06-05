@@ -11,7 +11,7 @@ The harder parts are runtime integrations:
 - Microphone and speaker access require `/dev/snd` passthrough and working ALSA support on the NAS.
 - The mixer MCP server needs LAN access to the mixer, so `network_mode: host` is the simplest Synology setup.
 - Offline mode needs Ollama and local Whisper model caches available to the container.
-- The XMSeries-MCP repository must be mounted after it has been installed and built.
+- Local stdio MCP servers such as XMSeries-MCP or QLCPlus-MCP must be mounted after they have been installed and built.
 
 For a first Synology deployment, use the web monitor and text command injection with `TTS_PROVIDER=none`. This leaves backend speaker output disabled and allows browser/web TTS to speak when `WEB_AUDIO_ENABLED=true`.
 
@@ -20,7 +20,7 @@ For a first Synology deployment, use the web monitor and text command injection 
 - `Dockerfile`: builds the Python app image with audio, ffmpeg, Node.js, and npm support.
 - `docker-compose.yml`: host-network Synology compose file.
 - `container/config/.env.infrafast`: edit for the NAS/deployment folder.
-- `container/config/mcp_servers.synology.json`: mixer-only MCP config for a mounted XMSeries-MCP checkout.
+- `container/config/mcp_servers.synology.json`: MCP config for mounted or HTTP stage-control MCP servers.
 - `.dockerignore`: keeps local virtualenvs, caches, and API key files out of the image.
 
 ## Folder Layout On The NAS
@@ -39,6 +39,7 @@ Create a project folder such as:
     data/
   assets/
   XMSeries-MCP/
+  QLCPlus-MCP/
 ```
 
 The `container/` folder contains runtime files and persistent container data:
@@ -61,9 +62,14 @@ Put API keys in the two text files. You can leave the ElevenLabs file empty only
 
 The compose file mounts `./container/config` to `/config:ro` and `./container/data` to `/data`. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Persisted web chat sessions should use a writable mounted path such as `SESSION_CONTEXT_DIR=/data/contexts`.
 
-## XMSeries-MCP
+## Compatible Stage MCP Servers
 
-If you use the mixer server, clone/install/build XMSeries-MCP before starting the assistant, then mount it as `/xmseries-mcp`.
+Live Stage Assistant can use any MCP server listed in the selected `MCP_CONFIG`. Two stage-control MCP servers known to be compatible are:
+
+- XMSeries-MCP for Behringer/X32-style mixer control: https://github.com/infrafast/XMSeries-MCP
+- QLCPlus-MCP for QLC+ lighting/DMX control: https://github.com/infrafast/QLCPlus-MCP
+
+If you use the mixer server in local stdio mode, clone/install/build XMSeries-MCP before starting the assistant, then mount it as `/xmseries-mcp`.
 The compose file already includes the commented volume line:
 
 ```yaml
@@ -94,6 +100,8 @@ If XMSeries-MCP runs as a separate HTTP service/container, put `OSC_HOST`, `OSC_
   }
 }
 ```
+
+QLCPlus-MCP follows the same pattern. For local stdio mode, mount the built QLCPlus-MCP checkout, set the `qlcplus.args` entry to its built entrypoint, and put QLC+ host/OSC settings in that server's `env` block. If it runs as a separate HTTP service/container, configure Live Stage Assistant with only the QLCPlus-MCP HTTP MCP endpoint.
 
 ## Start
 
@@ -135,6 +143,6 @@ SESSION_CONTEXT_DIR=/data/contexts
 
 In the web config, keep the connectivity switch on `Online` and use `TTS Output = Browser` for this first-run shape. Saving browser output keeps `WEB_AUDIO_ENABLED=true` and stores the chosen cloud provider in `WEB_TTS_PROVIDER`. `Backend` is useful only when the container has usable speaker/audio passthrough; `Silent` sets both backend and browser TTS to `none`.
 
-`SESSION_CONTEXT_SIZE` controls how much of the active `.context.json` session summary is reinjected for continuity. The assistant stores both a deterministic `summary` transcript and, when an LLM is available at startup or session switch, a compact `llm_summary` generated from it. In the web chat, restored bubbles highlighted in green are the messages that fit in the current context window; moving the **Session Context** range updates that preview immediately. Use `0` to disable context injection.
+`SESSION_CONTEXT_SIZE` controls how much of the active `.context.json` session summary is reinjected for continuity. The assistant stores both a deterministic `summary` transcript and, when an LLM is available at startup or session switch, a compact `llm_summary` generated from it. In the web chat, restored bubbles highlighted in green are the messages that fit in the current context window; moving the **Session Context** range updates that preview immediately. In the session sidebar, hover a session on desktop to preview its `llm_summary`, or tap the small `i` button on touch/mobile when a summary exists. Use `0` to disable context injection.
 
 Once the monitor path is stable, try microphone/speaker passthrough if needed.
