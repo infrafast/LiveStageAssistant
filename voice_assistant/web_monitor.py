@@ -148,7 +148,7 @@ class WebMonitor:
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._llm_config_save_handler: Callable[
-            [str, str, str, str, str, str, str, str, int, bool, str, str, str, float],
+            [str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, float],
             dict[str, Any],
         ] | None = None
         self._cloud_api_status_handler: Callable[[], dict[str, Any]] | None = None
@@ -187,7 +187,7 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, str, str, int, bool, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[[str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, float], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -699,6 +699,7 @@ class WebMonitor:
                         self.send_error(400, "Session context size must be an integer")
                         return
                     mcp_tool_routing_enabled = bool(payload.get("mcp_tool_routing_enabled"))
+                    interrupt_conversation_enabled = bool(payload.get("interrupt_conversation_enabled"))
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
@@ -720,6 +721,7 @@ class WebMonitor:
                             system_prompt,
                             session_context_size,
                             mcp_tool_routing_enabled,
+                            interrupt_conversation_enabled,
                             voice_id,
                             thinking_sound_file,
                             openai_tts_voice,
@@ -2385,6 +2387,13 @@ INDEX_HTML = """<!doctype html>
                 <label for="stt-prompt">STT_PROMPT</label>
                 <textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea>
               </div>
+              <div class="field">
+                <label>Interrompre une conversation</label>
+                <div class="segmented" id="interrupt-conversation" role="radiogroup" aria-label="Interrompre une conversation">
+                  <label><input type="radio" name="interrupt-conversation" value="off">Off</label>
+                  <label><input type="radio" name="interrupt-conversation" value="on">On</label>
+                </div>
+              </div>
 	              <div class="field cloud-audio-control">
 	                <label for="cloud-tts-provider">TTS</label>
 	                <select id="cloud-tts-provider"></select>
@@ -2539,6 +2548,7 @@ INDEX_HTML = """<!doctype html>
 	    const sessionContextSize = document.querySelector("#session-context-size");
     const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
     const mcpToolRoutingInputs = Array.from(document.querySelectorAll('input[name="mcp-tool-routing"]'));
+    const interruptConversationInputs = Array.from(document.querySelectorAll('input[name="interrupt-conversation"]'));
     const envProfile = document.querySelector("#env-profile");
     const connectivityAutoBadge = document.querySelector("#connectivity-auto-badge");
     const connectivityModeInputs = Array.from(document.querySelectorAll('input[name="connectivity-mode"]'));
@@ -2575,6 +2585,7 @@ INDEX_HTML = """<!doctype html>
     let pendingMessages = [];
     let composerLocked = false;
     let cancelRequestInFlight = false;
+    let interruptConversationEnabled = false;
     let openSessionMenuId = "";
     let openSessionSummaryId = "";
     let sessionSummaryPinned = false;
@@ -3115,7 +3126,7 @@ INDEX_HTML = """<!doctype html>
       injectStop.classList.toggle("visible", composerLocked);
       injectStop.disabled = !composerLocked || cancelRequestInFlight;
       webConversation.disabled = !webAudio.stt_enabled;
-      webMic.disabled = composerLocked || !webAudio.stt_enabled || isRecording || conversationEnabled;
+      webMic.disabled = (composerLocked && !interruptConversationEnabled) || !webAudio.stt_enabled || isRecording || conversationEnabled;
       injectCommand.placeholder = composerLocked ? "Assistant is thinking..." : "Message";
       if (wasLocked && !composerLocked && !settingsOverlay.classList.contains("open")) {
         window.setTimeout(() => injectCommand.focus({ preventScroll: true }), 0);
@@ -3128,7 +3139,7 @@ INDEX_HTML = """<!doctype html>
       webMic.innerHTML = isRecording ? "&#9632;" : "🎙️";
       webMic.title = isRecording ? "Stop recording" : "Voice input";
       webMic.setAttribute("aria-label", isRecording ? "Stop recording" : "Voice input");
-      webMic.disabled = (composerLocked && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
       injectCommand.placeholder = isRecording ? "Recording..." : (composerLocked ? "Assistant is thinking..." : "Message");
     }
 
@@ -3137,7 +3148,7 @@ INDEX_HTML = """<!doctype html>
       webConversation.title = conversationEnabled ? "Stop conversation mode" : "Conversation mode";
       webConversation.setAttribute("aria-label", conversationEnabled ? "Stop conversation mode" : "Conversation mode");
       webConversation.disabled = !webAudio.stt_enabled;
-      webMic.disabled = (composerLocked && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
     }
 
     function clearRecordingTimer() {
@@ -3357,9 +3368,30 @@ INDEX_HTML = """<!doctype html>
       if (ctx) ctx.clearRect(0, 0, soundwave.width, soundwave.height);
     }
 
-    async function submitCommand(command) {
+    async function requestSilentCancel() {
+      stopWebTts();
+      if (cancelRequestInFlight) return;
+      cancelRequestInFlight = true;
+      try {
+        const response = await fetch("/api/cancel-command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        if (!response.ok) throw new Error(await response.text());
+      } finally {
+        cancelRequestInFlight = false;
+      }
+    }
+
+    async function submitCommand(command, options = {}) {
       const cleanedCommand = command.trim();
-      if (!cleanedCommand || composerLocked) return;
+      if (!cleanedCommand) return;
+      const shouldInterrupt = Boolean(options.interrupt) && interruptConversationEnabled && (composerLocked || webTtsPlaying);
+      if (composerLocked && !shouldInterrupt) return;
+      if (shouldInterrupt) {
+        await requestSilentCancel();
+      }
 
       pendingMessages.push({
         id: `pending-${Date.now()}`,
@@ -3390,6 +3422,13 @@ INDEX_HTML = """<!doctype html>
 
     async function submitComposerCommand() {
       await unlockWebTtsAudio();
+      if (composerLocked && interruptConversationEnabled) {
+        const command = injectCommand.value.trim();
+        if (command) {
+          await submitCommand(command, { interrupt: true });
+          return;
+        }
+      }
       if (composerLocked) {
         await cancelCommand();
         return;
@@ -3402,7 +3441,7 @@ INDEX_HTML = """<!doctype html>
         autoSizeComposer();
         return;
       }
-      await submitCommand(command);
+      await submitCommand(command, { interrupt: interruptConversationEnabled });
     }
 
     async function handleRecordedAudio(blob, options = {}) {
@@ -3431,7 +3470,7 @@ INDEX_HTML = """<!doctype html>
         if (text) {
           if (!options.conversation) injectCommand.value = text;
           autoSizeComposer();
-          await submitCommand(text);
+          await submitCommand(text, { interrupt: Boolean(options.conversation) });
         } else if (options.conversation) {
           scheduleConversationRestart();
         }
@@ -3443,7 +3482,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function startWebRecording() {
-      if (!webAudio.stt_enabled || composerLocked || isRecording) return;
+      if (!webAudio.stt_enabled || isRecording) return;
+      if (composerLocked && !interruptConversationEnabled) return;
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
         metaEl.textContent = "voice input unavailable in this browser";
@@ -3618,7 +3658,8 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function startConversationListening() {
-      if (!conversationEnabled || composerLocked || webTtsPlaying || !webAudio.stt_enabled || conversationRecorder) return;
+      if (!conversationEnabled || !webAudio.stt_enabled || conversationRecorder) return;
+      if ((composerLocked || webTtsPlaying) && !interruptConversationEnabled) return;
 
       try {
         await ensureConversationMicrophone();
@@ -3713,7 +3754,7 @@ INDEX_HTML = """<!doctype html>
     function scheduleConversationRestart(delayMs = 250) {
       clearConversationRestartTimer();
       if (!conversationEnabled) return;
-      if (composerLocked || webTtsPlaying) return;
+      if ((composerLocked || webTtsPlaying) && !interruptConversationEnabled) return;
       conversationRestartTimer = window.setTimeout(() => startConversationListening(), delayMs);
     }
 
@@ -3864,6 +3905,7 @@ INDEX_HTML = """<!doctype html>
         model: llmModel.value || "",
         session_context_size: Number(sessionContextSize.value || 0),
         mcp_tool_routing_enabled: selectedMcpToolRoutingEnabled(),
+        interrupt_conversation_enabled: selectedInterruptConversationEnabled(),
         wake_word: wakeWord.value.trim(),
         stt_prompt: sttPromptEl.value.trim(),
         system_prompt: assistantSystemPromptEl.value.trim(),
@@ -3874,6 +3916,11 @@ INDEX_HTML = """<!doctype html>
         openai_tts_voice: openaiTtsVoice.value || "",
         openai_tts_speed: Number(openaiTtsSpeed.value || 1)
       });
+    }
+
+    function selectedInterruptConversationEnabled() {
+      const selected = interruptConversationInputs.find((input) => input.checked);
+      return selected ? selected.value === "on" : false;
     }
 
     function markConfigClean() {
@@ -4007,6 +4054,13 @@ INDEX_HTML = """<!doctype html>
     function setSelectedMcpToolRoutingEnabled(enabled) {
       const nextValue = enabled ? "true" : "false";
       for (const input of mcpToolRoutingInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function setSelectedInterruptConversationEnabled(enabled) {
+      const nextValue = enabled ? "on" : "off";
+      for (const input of interruptConversationInputs) {
         input.checked = input.value === nextValue;
       }
     }
@@ -4183,6 +4237,7 @@ INDEX_HTML = """<!doctype html>
       for (const input of connectivityModeInputs) input.disabled = true;
 	        sessionContextSize.disabled = true;
       for (const input of mcpToolRoutingInputs) input.disabled = true;
+      for (const input of interruptConversationInputs) input.disabled = true;
       wakeWord.disabled = true;
       sttPromptEl.disabled = true;
       assistantSystemPromptEl.disabled = true;
@@ -4214,6 +4269,8 @@ INDEX_HTML = """<!doctype html>
         }
         setSessionContextSize(data.selected_session_context_size || 0);
         setSelectedMcpToolRoutingEnabled(Boolean(data.selected_mcp_tool_routing_enabled));
+        setSelectedInterruptConversationEnabled(Boolean(data.selected_interrupt_conversation_enabled));
+        interruptConversationEnabled = selectedInterruptConversationEnabled();
         wakeWord.value = data.selected_wake_word || "";
         sttPromptEl.value = data.selected_stt_prompt || "";
         assistantSystemPromptEl.value = data.selected_system_prompt || "";
@@ -4299,6 +4356,7 @@ INDEX_HTML = """<!doctype html>
         for (const input of connectivityModeInputs) input.disabled = connectivityLocked;
 	        sessionContextSize.disabled = false;
         for (const input of mcpToolRoutingInputs) input.disabled = false;
+        for (const input of interruptConversationInputs) input.disabled = false;
         wakeWord.disabled = false;
         sttPromptEl.disabled = false;
         assistantSystemPromptEl.disabled = false;
@@ -4361,6 +4419,7 @@ INDEX_HTML = """<!doctype html>
         logsEl.value = data.logs || "";
         if (shouldStick) logsEl.scrollTop = logsEl.scrollHeight;
         webAudio = data.web_audio || { enabled: false, stt_enabled: false, tts_enabled: false };
+        interruptConversationEnabled = Boolean(webAudio.interrupt_conversation_enabled);
         thinkingAudioUrl = data.thinking_sound_url || "";
         if (!webAudio.stt_enabled && conversationEnabled) {
           setConversationEnabled(false);
@@ -4390,7 +4449,9 @@ INDEX_HTML = """<!doctype html>
           lastSpokenAssistantMessageId = latestAssistantMessage.id;
           playWebTts(latestAssistantMessage.text || "");
         } else if (previousBusy && !showThinking && conversationEnabled) {
-          const delay = webAudio.tts_blocked_by_backend && latestAssistantMessage
+          const delay = interruptConversationEnabled
+            ? 250
+            : webAudio.tts_blocked_by_backend && latestAssistantMessage
             ? Math.min(10000, 1200 + String(latestAssistantMessage.text || "").length * 55)
             : 250;
           scheduleConversationRestart(delay);
@@ -4633,6 +4694,11 @@ INDEX_HTML = """<!doctype html>
     for (const input of mcpToolRoutingInputs) {
       input.addEventListener("change", () => {});
     }
+    for (const input of interruptConversationInputs) {
+      input.addEventListener("change", () => {
+        interruptConversationEnabled = selectedInterruptConversationEnabled();
+      });
+    }
     cloudApiDetails.addEventListener("toggle", () => {
       if (cloudApiDetails.open) loadCloudApiStatus();
     });
@@ -4643,6 +4709,7 @@ INDEX_HTML = """<!doctype html>
       const model = llmModel.value;
       const sessionContextSizeValue = Number(sessionContextSize.value || 0);
       const mcpToolRoutingEnabled = selectedMcpToolRoutingEnabled();
+      const interruptConversation = selectedInterruptConversationEnabled();
       const wakeWordValue = wakeWord.value.trim();
 	      const sttPromptValue = sttPromptEl.value.trim();
 	      const systemPromptValue = assistantSystemPromptEl.value.trim();
@@ -4664,8 +4731,9 @@ INDEX_HTML = """<!doctype html>
           body: JSON.stringify({
             provider,
             model,
-	            session_context_size: sessionContextSizeValue,
+            session_context_size: sessionContextSizeValue,
             mcp_tool_routing_enabled: mcpToolRoutingEnabled,
+            interrupt_conversation_enabled: interruptConversation,
             connectivity_mode: connectivityModeValue,
 	            cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,

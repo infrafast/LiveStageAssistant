@@ -680,6 +680,7 @@ class VoiceAssistant:
         session_context_store: SessionContextStore | None = None,
         session_context_size: int = 6000,
         voice_cancel_during_thinking: bool = False,
+        interrupt_conversation_enabled: bool = False,
         notes_dir: str | None = None,
         system_prompt: str | None = None,
         reload_event: threading.Event | None = None,
@@ -720,6 +721,7 @@ class VoiceAssistant:
             session_context_store: Persistent chat session store
             session_context_size: Maximum active session summary characters injected into each LLM/MCP turn; 0 disables injection
             voice_cancel_during_thinking: Listen for short spoken cancel words while the LLM/MCP agent is processing
+            interrupt_conversation_enabled: Allow new text/STT commands to silently cancel current work before running
             notes_dir: Directory for storing notes (default: temp dir)
             system_prompt: Optional custom system prompt for the assistant
             reload_event: Optional event used by auto mode to interrupt and reload the assistant
@@ -737,6 +739,7 @@ class VoiceAssistant:
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
+        self.interrupt_conversation_enabled = interrupt_conversation_enabled
         self.voice_cancel_words = DEFAULT_VOICE_CANCEL_WORDS
 
         # Initialize audio components
@@ -1769,6 +1772,41 @@ class VoiceAssistant:
 
         return False
 
+    async def listen_for_voice_interrupt_during_activity(
+        self,
+        stop_event: threading.Event,
+        activity_task: asyncio.Task,
+    ) -> str | None:
+        """Return a new spoken command or an empty string for cancel-only interruption."""
+        if not self.microphone_available:
+            return None
+
+        print("Voice interrupt listener active.")
+        while not stop_event.is_set() and not activity_task.done():
+            audio_data = await asyncio.to_thread(self.record_voice_cancel_audio, stop_event)
+            if stop_event.is_set() or activity_task.done():
+                return None
+            if not audio_data:
+                await asyncio.sleep(0.05)
+                continue
+
+            text = await asyncio.to_thread(self.audio_to_text, audio_data)
+            if not text:
+                continue
+            print(f"Voice interrupt listener heard: {text}")
+            if self.is_voice_cancel_phrase(text):
+                return ""
+
+            should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
+            if not should_process:
+                print("Wake word not detected for interrupt command. Ignoring transcription.")
+                continue
+            if matched_wake_word and command_text != text:
+                print(f"Interrupt command after wake word: {command_text}")
+            return command_text
+
+        return None
+
     def _load_local_whisper_model(self):
         """Lazy-load faster-whisper so online-only users do not pay the import cost."""
         if self.local_whisper_model:
@@ -2394,14 +2432,25 @@ class VoiceAssistant:
                 process_task = asyncio.create_task(self.process_command(text))
                 voice_cancel_stop_event = None
                 voice_cancel_task = None
-                if self.voice_cancel_during_thinking and self.microphone_available:
+                interrupt_command: str | None = None
+                if self.microphone_available and (
+                    self.interrupt_conversation_enabled or self.voice_cancel_during_thinking
+                ):
                     voice_cancel_stop_event = threading.Event()
-                    voice_cancel_task = asyncio.create_task(
-                        self.listen_for_voice_cancel_during_thinking(
-                            voice_cancel_stop_event,
-                            process_task,
+                    if self.interrupt_conversation_enabled:
+                        voice_cancel_task = asyncio.create_task(
+                            self.listen_for_voice_interrupt_during_activity(
+                                voice_cancel_stop_event,
+                                process_task,
+                            )
                         )
-                    )
+                    else:
+                        voice_cancel_task = asyncio.create_task(
+                            self.listen_for_voice_cancel_during_thinking(
+                                voice_cancel_stop_event,
+                                process_task,
+                            )
+                        )
                 command_cancelled = False
                 try:
                     while not process_task.done():
@@ -2412,7 +2461,13 @@ class VoiceAssistant:
                                 print(f"Voice cancel listener stopped: {voice_cancel_error}")
                                 voice_cancel_task = None
                             else:
-                                voice_cancel_detected = voice_cancel_task.result()
+                                voice_result = voice_cancel_task.result()
+                                if self.interrupt_conversation_enabled:
+                                    if voice_result is not None:
+                                        interrupt_command = voice_result or None
+                                        voice_cancel_detected = True
+                                else:
+                                    voice_cancel_detected = bool(voice_result)
                         if self.web_monitor and self.web_monitor.pop_cancel_requested():
                             print("Web monitor cancel requested. Cancelling current command.")
                             self.stop_tts()
@@ -2425,7 +2480,10 @@ class VoiceAssistant:
                             command_cancelled = True
                             break
                         if voice_cancel_detected:
-                            print("Voice cancel phrase detected. Cancelling current command.")
+                            if interrupt_command:
+                                print(f"Voice interrupt command detected. Cancelling current command: {interrupt_command}")
+                            else:
+                                print("Voice cancel phrase detected. Cancelling current command.")
                             self.stop_tts()
                             process_task.cancel()
                             try:
@@ -2434,6 +2492,8 @@ class VoiceAssistant:
                                 pass
                             if self.web_monitor:
                                 self.web_monitor.set_assistant_busy(False)
+                            if interrupt_command:
+                                self.pending_injected_command = interrupt_command
                             command_cancelled = True
                             break
                         if self.reload_event and self.reload_event.is_set():
@@ -2485,7 +2545,48 @@ class VoiceAssistant:
                     break
 
                 # Try to speak the response
-                await self.text_to_speech(response)
+                if self.interrupt_conversation_enabled and self.microphone_available and self.tts_provider != "none":
+                    tts_task = asyncio.create_task(
+                        asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(response)))
+                    )
+                    voice_tts_stop_event = threading.Event()
+                    voice_tts_task = asyncio.create_task(
+                        self.listen_for_voice_interrupt_during_activity(
+                            voice_tts_stop_event,
+                            tts_task,
+                        )
+                    )
+                    try:
+                        while not tts_task.done():
+                            if voice_tts_task.done() and not voice_tts_task.cancelled():
+                                voice_tts_error = voice_tts_task.exception()
+                                if voice_tts_error:
+                                    print(f"Voice interrupt listener stopped during TTS: {voice_tts_error}")
+                                    break
+                                voice_result = voice_tts_task.result()
+                                if voice_result is not None:
+                                    self.stop_tts()
+                                    if voice_result:
+                                        print(f"Voice interrupt command detected during TTS: {voice_result}")
+                                        self.pending_injected_command = voice_result
+                                    else:
+                                        print("Voice cancel phrase detected during TTS.")
+                                    break
+                            if self.reload_event and self.reload_event.is_set():
+                                self.stop_tts()
+                                break
+                            await asyncio.sleep(0.1)
+                        await tts_task
+                    finally:
+                        voice_tts_stop_event.set()
+                        if not voice_tts_task.done():
+                            voice_tts_task.cancel()
+                            try:
+                                await voice_tts_task
+                            except asyncio.CancelledError:
+                                pass
+                else:
+                    await self.text_to_speech(response)
 
         except KeyboardInterrupt:
             print("\n\nInterrupted by user.")
@@ -2882,6 +2983,7 @@ async def main():
         current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip()
         current_session_context_size = env_int_from_values(values, "SESSION_CONTEXT_SIZE", 6000)
         current_mcp_tool_routing_enabled = env_bool_from_values(values, "MCP_TOOL_ROUTING_ENABLED", False)
+        current_interrupt_conversation_enabled = env_bool_from_values(values, "INTERRUPT_CONVERSATION_ENABLED", False)
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
@@ -2930,6 +3032,7 @@ async def main():
             "selected_system_prompt": current_system_prompt,
             "selected_session_context_size": current_session_context_size,
             "selected_mcp_tool_routing_enabled": current_mcp_tool_routing_enabled,
+            "selected_interrupt_conversation_enabled": current_interrupt_conversation_enabled,
             "voices": list_elevenlabs_voice_options(values),
             "selected_voice_id": current_voice_id,
             "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
@@ -2952,6 +3055,7 @@ async def main():
         system_prompt: str,
         session_context_size: int,
         mcp_tool_routing_enabled: bool,
+        interrupt_conversation_enabled: bool,
         voice_id: str,
         thinking_sound_file: str,
         openai_tts_voice: str,
@@ -2970,6 +3074,7 @@ async def main():
         system_prompt = (system_prompt or "").strip()
         session_context_size = max(0, min(12000, int(session_context_size or 0)))
         mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
+        interrupt_conversation_enabled = bool(interrupt_conversation_enabled)
         voice_id = voice_id.strip()
         thinking_sound_file = thinking_sound_file.strip()
         openai_tts_voice = (openai_tts_voice or "").strip()
@@ -3099,6 +3204,7 @@ async def main():
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
                 "SESSION_CONTEXT_SIZE": str(session_context_size),
                 "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",
+                "INTERRUPT_CONVERSATION_ENABLED": "true" if interrupt_conversation_enabled else "false",
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
                 "WEB_TTS_VOICE": openai_tts_voice,
@@ -3188,6 +3294,7 @@ async def main():
         min_speech_ms = env_int("VOICE_MIN_SPEECH_MS", 350)
         min_speech_frames = env_int("VOICE_MIN_SPEECH_FRAMES", 5)
         voice_cancel_during_thinking = env_bool("VOICE_CANCEL_DURING_THINKING", False)
+        interrupt_conversation_enabled = env_bool("INTERRUPT_CONVERSATION_ENABLED", False)
         web_audio_enabled = env_bool("WEB_AUDIO_ENABLED", False)
         web_stt_provider = os.getenv("WEB_STT_PROVIDER", "openai").strip().lower()
         raw_web_tts_provider = os.getenv("WEB_TTS_PROVIDER")
@@ -3260,6 +3367,8 @@ async def main():
         print(f"Using thinking sound file: {thinking_sound_file}")
         if voice_cancel_during_thinking:
             print("Using voice cancel during thinking: enabled")
+        if interrupt_conversation_enabled:
+            print("Using interrupt conversation mode: enabled")
         if web_audio_enabled:
             print(f"Using web audio: STT={web_stt_provider}, TTS={web_tts_provider}")
         print(f"Using wake word: {', '.join(wake_words) if wake_words else 'disabled'}")
@@ -3309,6 +3418,7 @@ async def main():
             "conversation_threshold": web_conversation_threshold,
             "conversation_min_speech_ms": web_conversation_min_speech_ms,
             "conversation_min_speech_frames": web_conversation_min_speech_frames,
+            "interrupt_conversation_enabled": interrupt_conversation_enabled,
         }
 
         mcp_config = None
@@ -3382,6 +3492,7 @@ async def main():
             session_context_store=session_context_store,
             session_context_size=session_context_size,
             voice_cancel_during_thinking=voice_cancel_during_thinking,
+            interrupt_conversation_enabled=interrupt_conversation_enabled,
             system_prompt=system_prompt,
             reload_event=reload_event,
             web_monitor=web_monitor,
@@ -3593,7 +3704,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -3605,6 +3716,7 @@ async def main():
                 system_prompt,
                 session_context_size,
                 mcp_tool_routing_enabled,
+                interrupt_conversation_enabled,
                 voice_id,
                 thinking_sound_file,
                 openai_tts_voice,
