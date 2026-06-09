@@ -2368,16 +2368,19 @@ INDEX_HTML = """<!doctype html>
 	      </div>
 	      <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
         <section>
-          <div class="config-controls">
-            <div class="field full-row">
-              <label>Connectivity <span class="inline-badge hidden" id="connectivity-auto-badge">Auto</span></label>
-              <select id="env-profile"></select>
-              <div class="segmented" id="connectivity-mode" role="radiogroup" aria-label="Connectivity">
-                <label><input type="radio" name="connectivity-mode" value="online">Online</label>
-                <label><input type="radio" name="connectivity-mode" value="offline">Offline</label>
+          <details open>
+            <summary>Connectivity</summary>
+            <div class="config-controls">
+              <div class="field full-row">
+                <label>Profile <span class="inline-badge hidden" id="connectivity-auto-badge">Auto</span></label>
+                <select id="env-profile"></select>
+                <div class="segmented" id="connectivity-mode" role="radiogroup" aria-label="Connectivity">
+                  <label><input type="radio" name="connectivity-mode" value="online">Online</label>
+                  <label><input type="radio" name="connectivity-mode" value="offline">Offline</label>
+                </div>
               </div>
             </div>
-          </div>
+          </details>
         </section>
 	        <section>
 	          <details open>
