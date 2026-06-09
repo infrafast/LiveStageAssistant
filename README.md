@@ -55,15 +55,36 @@ For developpers: https://deepwiki.com/infrafast/LiveStageAssistant
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
-│ User Voice  │ --> │ Speech-to-   │ --> │  LLM with   │ --> │ Text-to-     │
-│   Input     │     │ Text (STT)   │     │  MCPAgent   │     │ Speech (TTS) │
-└─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
-                     Whisper             OpenAI  │                OpenAI,
-                     API or local      or local  |                ElevenLabs,
-                                        (Ollama) │                or pyttsx3
-                                                 │
-                                          ┌──────▼────────┐
+                    ┌──────────────────────────────────────┐
+                    │        Live Stage Assistant          │
+                    │        backend Python agent          │
+                    └──────────────────────────────────────┘
+                                      ▲
+                                      │
+       ┌──────────────────────────────┴──────────────────────────────┐
+       │                                                             │
+┌──────┴────────┐                                           ┌────────┴───────┐
+│ Backend local │                                           │ Remote web UI  │
+│ control       │                                           │ browser client │
+├───────────────┤                                           ├────────────────┤
+│ • local mic   │                                           │ • text command │
+│ • local TTS   │                                           │ • browser mic  │
+│ • terminal    │                                           │ • browser TTS  │
+└──────┬────────┘                                           └────────┬───────┘
+       │                                                             │
+       │                           HTTP/web monitor                  │
+       └──────────────────────────────┬──────────────────────────────┘
+                                      │
+                                      ▼
+┌──────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
+│ Command text │ --> │ Speech-to-   │ --> │  LLM with   │ --> │ Text-to-     │
+│ or audio     │     │ Text (STT)   │     │  MCPAgent   │     │ Speech (TTS) │
+└──────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
+                       Whisper            OpenAI  │              Browser,
+                       API or local     or local  │              OpenAI,
+                                        (Ollama)  │              ElevenLabs,
+                                                  │              or pyttsx3
+                                          ┌───────▼───────┐
                                           │ MCP Servers   │
                                           ├───────────────┤
                                           │ • Linear      │
