@@ -260,6 +260,8 @@ VOICE_MIN_SPEECH_FRAMES=5                       # Minimum backend mic non-silent
 INTERRUPT_CONVERSATION_ENABLED=false            # Let new text/STT commands cancel current processing/TTS first
 VOICE_CANCEL_DURING_THINKING=false             # Optional spoken stop/annule cancel listener while processing
 THINKING_SOUND_FILE=thinking.wav                # WAV loop while the LLM/MCP agent processes the command
+BACKEND_AUDIO_INPUT_DEVICE=                     # Optional PyAudio input device index; empty uses default
+BACKEND_AUDIO_OUTPUT_DEVICE=                    # Optional PyAudio output device index; empty uses default
 
 # Optional - local web monitor
 WEB_MONITOR_ENABLED=true                        # Serve chat UI, runtime state, config, logs, and final prompt
@@ -394,7 +396,9 @@ Backend microphone STT and browser microphone STT have separate voice-activity g
 
 `INTERRUPT_CONVERSATION_ENABLED=false` keeps the conservative default: text, web STT, and backend STT do not start a new normal command while the assistant is processing. When set to `true`, a new text command or accepted STT command silently cancels current processing or TTS first, then runs the new command. Browser conversation mode also keeps listening during processing and web TTS.
 
-Backend interruption is implemented too: backend microphone input starts a parallel interrupt listener during command processing and backend TTS. If it hears a cancel phrase such as `stop` or `annule`, it only cancels; if it hears a full command that passes the wake-word gate, it cancels the current work and queues that command next. Remaining caveats are operational rather than TODOs in the code: backend barge-in depends on microphone availability, can be affected by the assistant's own speaker output leaking into the mic, and pyttsx3 interruption is less reliable than cloud TTS playback through ffplay. For the cleanest backend interruption, use headphones, echo control, or browser TTS instead of open speakers.
+Backend interruption is implemented too: backend microphone input starts a parallel interrupt listener during command processing and backend TTS. If it hears a cancel phrase such as `stop` or `annule`, it only cancels; if it hears a full command that passes the wake-word gate, it cancels the current work and queues that command next. Remaining caveats are operational rather than TODOs in the code: backend barge-in depends on microphone availability and can be affected by the assistant's own speaker output leaking into the mic. For the cleanest backend interruption, use headphones, echo control, or browser TTS instead of open speakers.
+
+Backend audio devices can be selected from Settings -> Config -> Audio In/Out. The dropdown values are PyAudio device indexes saved as `BACKEND_AUDIO_INPUT_DEVICE` and `BACKEND_AUDIO_OUTPUT_DEVICE`; leave either value empty to use the system default. If a saved index is unavailable at startup, the backend falls back to the default device and reports the fallback in Settings -> Monitor -> State as `Backend audio`. The older separate `Audio input` state tile is replaced by this single backend audio tile. Backend microphone recording uses the selected input device. Backend cloud TTS and the thinking sound both play through the selected output device using the shared PyAudio playback path; MP3 cloud TTS is decoded with `ffmpeg` before playback. Local `pyttsx3` is first rendered to a file and played through the same output path when possible, with direct system TTS as the last fallback.
 
 `CLOUD_TTS_PROVIDER` is the TTS dropdown shown in the config page. Set it to `none`, `openai`, or `elevenlabs`. The separate `TTS Output` control chooses `Browser`, `Backend`, or `Silent`; it saves that choice by updating `TTS_PROVIDER`, `WEB_TTS_PROVIDER`, and the required web audio flags. Browser output saves `TTS_PROVIDER=none`, `WEB_AUDIO_ENABLED=true`, and `WEB_TTS_PROVIDER=<cloud provider>`. Backend output saves `TTS_PROVIDER=<cloud provider>` and `WEB_TTS_PROVIDER=none`. Silent output saves both as `none`. Selecting `TTS=none` forces silent output.
 
@@ -758,7 +762,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
    - Backend cloud TTS falls back to pyttsx3 if OpenAI or ElevenLabs fails
    - Browser/web TTS does not fall back to pyttsx3; set `TTS_PROVIDER=none`, `WEB_AUDIO_ENABLED=true`, and `WEB_TTS_PROVIDER=openai` or `elevenlabs`
    - On Ubuntu/Debian/Raspberry Pi OS, install the system TTS/audio packages: `sudo apt-get install alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1`
-   - In headless environments without ALSA, `ffplay`, or `aplay`, spoken output is skipped without noisy playback errors. Use `TTS_PROVIDER=none` to make silent mode explicit.
+   - In headless environments without ALSA/PyAudio output, `ffmpeg`, or `aplay`, spoken output is skipped or falls back without noisy playback errors. Use `TTS_PROVIDER=none` to make silent mode explicit.
 
 3. **MCP Server Connection Issues**
    - Ensure Node.js is installed
@@ -770,7 +774,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
    - If a configured command or script path is missing, the assistant reports that this MCP server instance could not be started and keeps running with the remaining servers
 
 4. **Thinking Sound Or Audio Output Unavailable**
-   - If `pygame` cannot open an audio device, the assistant continues without the thinking sound
+   - If PyAudio cannot open the selected backend output device, clear `BACKEND_AUDIO_OUTPUT_DEVICE` to use the system default
    - Set `THINKING_SOUND_FILE=` to leave the thinking sound unset
    - Install an audio backend such as `ffmpeg` or `alsa-utils` only if you need local audio playback
 

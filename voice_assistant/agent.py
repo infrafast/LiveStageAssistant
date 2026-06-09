@@ -36,10 +36,8 @@ import wave
 import numpy as np
 import openai
 import pyaudio
-import pygame
 import pyttsx3
 from elevenlabs.client import ElevenLabs
-from elevenlabs.play import play
 from elevenlabs.types.voice_settings import VoiceSettings
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
@@ -164,6 +162,8 @@ TTS_OUTPUT_OPTIONS = [
     {"id": "backend", "label": "Backend"},
     {"id": "silent", "label": "Silent"},
 ]
+DEFAULT_BACKEND_MP3_SAMPLE_RATE = 24000
+DEFAULT_BACKEND_MP3_CHANNELS = 1
 
 
 @contextmanager
@@ -408,8 +408,8 @@ def env_float_from_mapping(values: dict, name: str, default: float) -> float:
 
 
 def elevenlabs_playback_available() -> bool:
-    """Return whether elevenlabs.play can play generated audio locally."""
-    return shutil.which("ffplay") is not None
+    """Return whether generated MP3 audio can be played or decoded locally."""
+    return ffmpeg_decode_available() or shutil.which("ffplay") is not None
 
 
 def local_tts_playback_available() -> bool:
@@ -417,6 +417,115 @@ def local_tts_playback_available() -> bool:
     if sys.platform.startswith("linux"):
         return shutil.which("aplay") is not None
     return True
+
+
+def ffmpeg_decode_available() -> bool:
+    """Return whether MP3 TTS can be decoded for backend-controlled playback."""
+    return shutil.which("ffmpeg") is not None
+
+
+def _pyaudio_device_is_default(audio: pyaudio.PyAudio, index: int, *, input_device: bool) -> bool:
+    try:
+        method = audio.get_default_input_device_info if input_device else audio.get_default_output_device_info
+        return int(method().get("index", -1)) == index
+    except Exception:
+        return False
+
+
+def list_pyaudio_devices(audio: pyaudio.PyAudio | None = None) -> dict[str, list[dict[str, Any]]]:
+    """List usable PyAudio input/output devices for web config selection."""
+    own_audio = audio is None
+    if audio is None:
+        try:
+            with suppress_native_stderr():
+                audio = pyaudio.PyAudio()
+        except Exception:
+            return {"inputs": [], "outputs": []}
+
+    try:
+        devices = {"inputs": [], "outputs": []}
+        for index in range(audio.get_device_count()):
+            try:
+                info = audio.get_device_info_by_index(index)
+            except Exception:
+                continue
+
+            name = str(info.get("name") or f"Device {index}").strip()
+            host_api = ""
+            try:
+                host_api_info = audio.get_host_api_info_by_index(int(info.get("hostApi", 0)))
+                host_api = str(host_api_info.get("name") or "").strip()
+            except Exception:
+                pass
+            label = f"{index}: {name}" + (f" ({host_api})" if host_api else "")
+            entry = {
+                "id": str(index),
+                "label": label,
+                "name": name,
+                "default": False,
+            }
+            if int(info.get("maxInputChannels", 0) or 0) > 0:
+                input_entry = dict(entry)
+                input_entry["default"] = _pyaudio_device_is_default(audio, index, input_device=True)
+                devices["inputs"].append(input_entry)
+            if int(info.get("maxOutputChannels", 0) or 0) > 0:
+                output_entry = dict(entry)
+                output_entry["default"] = _pyaudio_device_is_default(audio, index, input_device=False)
+                devices["outputs"].append(output_entry)
+        return devices
+    finally:
+        if own_audio:
+            try:
+                audio.terminate()
+            except Exception:
+                pass
+
+
+def resolve_pyaudio_device_index(
+    audio: pyaudio.PyAudio,
+    selected_device: str | None,
+    *,
+    input_device: bool,
+) -> tuple[int | None, str, str]:
+    """Resolve a configured PyAudio device index, falling back to the system default."""
+    selected = str(selected_device or "").strip()
+    direction = "input" if input_device else "output"
+    max_channels_key = "maxInputChannels" if input_device else "maxOutputChannels"
+    default_method = audio.get_default_input_device_info if input_device else audio.get_default_output_device_info
+
+    if selected:
+        try:
+            index = int(selected.split(":", 1)[0])
+            info = audio.get_device_info_by_index(index)
+            if int(info.get(max_channels_key, 0) or 0) > 0:
+                return index, "configured", f"{index}: {info.get('name') or 'unknown'}"
+            return None, "invalid", f"configured {direction} device has no {direction} channels: {selected}"
+        except Exception as e:
+            return None, "invalid", f"configured {direction} device unavailable ({selected}): {e}"
+
+    try:
+        info = default_method()
+        return None, "default", f"default {direction}: {info.get('index')}: {info.get('name')}"
+    except Exception as e:
+        return None, "unavailable", f"default {direction} unavailable: {e}"
+
+
+def backend_audio_service_state(
+    input_status: str,
+    input_detail: str,
+    output_status: str,
+    output_detail: str,
+) -> dict[str, str]:
+    """Build the single monitor tile for backend audio input/output."""
+    if input_status == "unavailable" and output_status == "unavailable":
+        status = "unavailable"
+    elif "invalid" in {input_status, output_status}:
+        status = "warn"
+    elif "unavailable" in {input_status, output_status}:
+        status = "warn"
+    else:
+        status = "configured" if "configured" in {input_status, output_status} else "default"
+    return {"status": status, "detail": f"In: {input_detail}; Out: {output_detail}"}
 
 
 def cloud_tts_provider_from_values(values: dict) -> str:
@@ -465,9 +574,100 @@ def connectivity_mode_from_values(values: dict, env_file: Path | None = None) ->
     return "online"
 
 
-def play_mp3_bytes(audio_bytes: bytes) -> None:
-    """Play MP3 bytes locally through ffplay."""
-    if not elevenlabs_playback_available():
+def decode_mp3_to_pcm_bytes(
+    audio_bytes: bytes,
+    *,
+    sample_rate: int = DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+    channels: int = DEFAULT_BACKEND_MP3_CHANNELS,
+) -> bytes:
+    """Decode MP3 bytes to signed 16-bit PCM so PyAudio owns playback/output device selection."""
+    if not ffmpeg_decode_available():
+        raise RuntimeError("ffmpeg is not available")
+
+    process = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-f",
+            "s16le",
+            "-ac",
+            str(channels),
+            "-ar",
+            str(sample_rate),
+            "pipe:1",
+        ],
+        input=audio_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg could not decode MP3 audio: {detail}")
+    return process.stdout
+
+
+def play_pcm_bytes(
+    audio: pyaudio.PyAudio,
+    pcm_bytes: bytes,
+    *,
+    sample_rate: int,
+    channels: int,
+    output_device_index: int | None = None,
+    stop_event: threading.Event | None = None,
+) -> None:
+    """Play signed 16-bit PCM through PyAudio, optionally using a configured output device."""
+    stream = None
+    try:
+        with suppress_native_stderr():
+            stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=channels,
+                rate=sample_rate,
+                output=True,
+                output_device_index=output_device_index,
+                frames_per_buffer=1024,
+            )
+        byte_step = 1024 * channels * 2
+        for start in range(0, len(pcm_bytes), byte_step):
+            if stop_event and stop_event.is_set():
+                break
+            stream.write(pcm_bytes[start : start + byte_step])
+    finally:
+        if stream:
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
+
+
+def play_mp3_bytes(
+    audio_bytes: bytes,
+    *,
+    audio: pyaudio.PyAudio | None = None,
+    output_device_index: int | None = None,
+) -> None:
+    """Play MP3 bytes locally, preferring backend-controlled PyAudio playback."""
+    if audio is not None:
+        if not ffmpeg_decode_available():
+            raise RuntimeError("ffmpeg is required for backend-controlled MP3 playback")
+        pcm_bytes = decode_mp3_to_pcm_bytes(audio_bytes)
+        play_pcm_bytes(
+            audio,
+            pcm_bytes,
+            sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+            channels=DEFAULT_BACKEND_MP3_CHANNELS,
+            output_device_index=output_device_index,
+            stop_event=TTS_STOP_EVENT,
+        )
+        return
+
+    if shutil.which("ffplay") is None:
         raise RuntimeError("ffplay is not available")
 
     global TTS_PLAYBACK_PROCESS
@@ -516,6 +716,24 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
         cloud_provider = web_tts_provider
     voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
 
+    def play_auto_mp3(audio_bytes: bytes) -> None:
+        temp_audio = None
+        try:
+            with suppress_native_stderr():
+                temp_audio = pyaudio.PyAudio()
+            output_device_index, _status, _detail = resolve_pyaudio_device_index(
+                temp_audio,
+                values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
+                input_device=False,
+            )
+            play_mp3_bytes(audio_bytes, audio=temp_audio, output_device_index=output_device_index)
+        finally:
+            if temp_audio is not None:
+                try:
+                    temp_audio.terminate()
+                except Exception:
+                    pass
+
     with TTS_LOCK:
         if cloud_provider == "none":
             print(f"Auto network status: {text}")
@@ -526,7 +744,7 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
             if elevenlabs_api_key:
                 try:
                     if not elevenlabs_playback_available():
-                        raise RuntimeError("ffplay is not available")
+                        raise RuntimeError("local MP3 playback is not available")
                     client = ElevenLabs(api_key=elevenlabs_api_key)
                     audio = client.text_to_speech.convert(
                         text=text,
@@ -539,7 +757,7 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
                         ),
                     )
                     audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
-                    play_mp3_bytes(audio_bytes)
+                    play_auto_mp3(audio_bytes)
                     return
                 except Exception as e:
                     if local_tts_playback_available():
@@ -556,7 +774,7 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
             if openai_api_key:
                 try:
                     if not elevenlabs_playback_available():
-                        raise RuntimeError("ffplay is not available")
+                        raise RuntimeError("local MP3 playback is not available")
                     client = openai.OpenAI(api_key=openai_api_key)
                     response = client.audio.speech.create(
                         model=(values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip(),
@@ -565,7 +783,7 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
                         response_format="mp3",
                         speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0),
                     )
-                    play_mp3_bytes(response.read())
+                    play_auto_mp3(response.read())
                     return
                 except Exception as e:
                     if local_tts_playback_available():
@@ -660,6 +878,8 @@ class VoiceAssistant:
         tts_provider: str = "elevenlabs",
         elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
         thinking_sound_file: str = "thinking.wav",
+        backend_audio_input_device: str | None = None,
+        backend_audio_output_device: str | None = None,
         silence_threshold: int = 500,
         silence_duration: float = 1.5,
         min_speech_ms: int = 350,
@@ -701,6 +921,8 @@ class VoiceAssistant:
             tts_provider: Text-to-speech provider (elevenlabs, pyttsx3, or none)
             elevenlabs_voice_id: ElevenLabs voice ID (default: Rachel)
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
+            backend_audio_input_device: Optional PyAudio input device index from BACKEND_AUDIO_INPUT_DEVICE
+            backend_audio_output_device: Optional PyAudio output device index from BACKEND_AUDIO_OUTPUT_DEVICE
             silence_threshold: Audio silence detection threshold
             silence_duration: How long to wait after speech stops
             min_speech_ms: Minimum non-silent speech duration before backend STT is accepted
@@ -745,13 +967,28 @@ class VoiceAssistant:
         # Initialize audio components
         with suppress_native_stderr():
             self.audio = pyaudio.PyAudio()
-        self.pygame_mixer_available = False
-        try:
-            with suppress_native_stderr():
-                pygame.mixer.init()
-            self.pygame_mixer_available = True
-        except pygame.error as e:
-            print(f"Audio output unavailable for thinking sound; continuing without it: {e}")
+        (
+            self.audio_input_device_index,
+            self.audio_input_device_status,
+            self.audio_input_device_detail,
+        ) = resolve_pyaudio_device_index(
+            self.audio,
+            backend_audio_input_device,
+            input_device=True,
+        )
+        (
+            self.audio_output_device_index,
+            self.audio_output_device_status,
+            self.audio_output_device_detail,
+        ) = resolve_pyaudio_device_index(
+            self.audio,
+            backend_audio_output_device,
+            input_device=False,
+        )
+        if self.audio_input_device_status == "invalid":
+            print(f"Backend audio input fallback: {self.audio_input_device_detail}")
+        if self.audio_output_device_status == "invalid":
+            print(f"Backend audio output fallback: {self.audio_output_device_detail}")
 
         # Speech-to-text configuration
         self.openai_api_key = openai_api_key
@@ -779,16 +1016,10 @@ class VoiceAssistant:
         # Short audio feedback while the agent is processing the user's command.
         self.thinking_sound_file = thinking_sound_file or "thinking.wav"
         self.thinking_sound_path = self._resolve_asset_path(self.thinking_sound_file)
-        self.thinking_sound = None
-        self.thinking_sound_channel = None
         self.thinking_sound_warning_shown = False
         self.thinking_sound_lock = threading.Lock()
-        if self.pygame_mixer_available and self.thinking_sound_path:
-            try:
-                self.thinking_sound = pygame.mixer.Sound(str(self.thinking_sound_path))
-            except pygame.error as e:
-                print(f"Could not load thinking sound '{self.thinking_sound_path}': {e}")
-                self.thinking_sound_warning_shown = True
+        self.thinking_sound_stop_event = threading.Event()
+        self.thinking_sound_thread: threading.Thread | None = None
 
         # MCP configuration
         self.mcp_config = mcp_config
@@ -818,6 +1049,19 @@ class VoiceAssistant:
         self.pending_mcp_confirmation_route: dict[str, Any] | None = None
         self.microphone_available = True
         self.microphone_warning_shown = False
+        if self.audio_input_device_status == "unavailable":
+            self.microphone_available = False
+        if self.web_monitor:
+            self.web_monitor.update(
+                services={
+                    "Backend audio": backend_audio_service_state(
+                        self.audio_input_device_status,
+                        self.audio_input_device_detail,
+                        self.audio_output_device_status,
+                        self.audio_output_device_detail,
+                    )
+                }
+            )
         
         base_system_prompt = system_prompt or DEFAULT_ASSISTANT_SYSTEM_PROMPT
         self.system_prompt = with_external_state_freshness_rule(base_system_prompt)
@@ -855,10 +1099,7 @@ class VoiceAssistant:
 
     def start_thinking_sound(self) -> None:
         """Loop the configured thinking sound until stop_thinking_sound is called."""
-        if not self.pygame_mixer_available:
-            return
-
-        if not self.thinking_sound:
+        if not self.thinking_sound_path:
             if not self.thinking_sound_warning_shown:
                 print(
                     f"Thinking sound '{self.thinking_sound_file}' not found. "
@@ -868,19 +1109,68 @@ class VoiceAssistant:
             return
 
         with self.thinking_sound_lock:
-            if self.thinking_sound_channel and self.thinking_sound_channel.get_busy():
+            if self.thinking_sound_thread and self.thinking_sound_thread.is_alive():
                 return
-            self.thinking_sound_channel = self.thinking_sound.play(loops=-1)
+            self.thinking_sound_stop_event.clear()
+            self.thinking_sound_thread = threading.Thread(
+                target=self._play_thinking_sound_loop,
+                name="backend-thinking-sound",
+                daemon=True,
+            )
+            self.thinking_sound_thread.start()
 
     def stop_thinking_sound(self) -> None:
         """Stop the thinking sound if it is currently playing."""
-        if not self.pygame_mixer_available:
-            return
-
+        thread = None
         with self.thinking_sound_lock:
-            if self.thinking_sound_channel:
-                self.thinking_sound_channel.stop()
-                self.thinking_sound_channel = None
+            self.thinking_sound_stop_event.set()
+            thread = self.thinking_sound_thread
+            self.thinking_sound_thread = None
+        if thread and thread.is_alive():
+            thread.join(timeout=0.5)
+
+    def _play_thinking_sound_loop(self) -> None:
+        """Loop the configured WAV through the same PyAudio output path as backend TTS."""
+        if not self.thinking_sound_path:
+            return
+        try:
+            while not self.thinking_sound_stop_event.is_set():
+                with wave.open(str(self.thinking_sound_path), "rb") as wav_file:
+                    sample_width = wav_file.getsampwidth()
+                    if sample_width != 2:
+                        if not self.thinking_sound_warning_shown:
+                            print(
+                                f"Thinking sound '{self.thinking_sound_file}' must be 16-bit PCM WAV for backend playback."
+                            )
+                            self.thinking_sound_warning_shown = True
+                        return
+                    stream = None
+                    try:
+                        with suppress_native_stderr():
+                            stream = self.audio.open(
+                                format=pyaudio.paInt16,
+                                channels=wav_file.getnchannels(),
+                                rate=wav_file.getframerate(),
+                                output=True,
+                                output_device_index=self.audio_output_device_index,
+                                frames_per_buffer=1024,
+                            )
+                        while not self.thinking_sound_stop_event.is_set():
+                            data = wav_file.readframes(1024)
+                            if not data:
+                                break
+                            stream.write(data)
+                    finally:
+                        if stream:
+                            try:
+                                stream.stop_stream()
+                                stream.close()
+                            except Exception:
+                                pass
+        except Exception as e:
+            if not self.thinking_sound_warning_shown:
+                print(f"Could not play thinking sound '{self.thinking_sound_path}': {e}")
+                self.thinking_sound_warning_shown = True
 
     def _substitute_env_vars(self, config):
         """Recursively substitute environment variable placeholders in config."""
@@ -1548,6 +1838,7 @@ class VoiceAssistant:
                     channels=self.channels,
                     rate=self.rate,
                     input=True,
+                    input_device_index=self.audio_input_device_index,
                     frames_per_buffer=self.chunk,
                 )
 
@@ -1639,7 +1930,14 @@ class VoiceAssistant:
         self.microphone_available = False
         if self.web_monitor:
             self.web_monitor.update(
-                services={"Audio input": {"status": "unavailable", "detail": error_text}}
+                services={
+                    "Backend audio": backend_audio_service_state(
+                        "unavailable",
+                        error_text,
+                        self.audio_output_device_status,
+                        self.audio_output_device_detail,
+                    )
+                }
             )
         if not self.microphone_warning_shown:
             print("Microphone unavailable. Falling back to text commands.")
@@ -1686,6 +1984,7 @@ class VoiceAssistant:
                     channels=self.channels,
                     rate=self.rate,
                     input=True,
+                    input_device_index=self.audio_input_device_index,
                     frames_per_buffer=self.chunk,
                 )
 
@@ -1980,7 +2279,11 @@ class VoiceAssistant:
                     with TTS_LOCK:
                         TTS_STOP_EVENT.clear()
                         audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
-                        play_mp3_bytes(audio)
+                        play_mp3_bytes(
+                            audio,
+                            audio=self.audio,
+                            output_device_index=self.audio_output_device_index,
+                        )
                     return True
                 except Exception as e:
                     if local_tts_playback_available():
@@ -1993,14 +2296,18 @@ class VoiceAssistant:
             if self.elevenlabs_client:
                 if not elevenlabs_playback_available():
                     if local_tts_playback_available():
-                        print("ElevenLabs TTS selected but ffplay is unavailable. Falling back to pyttsx3...")
+                        print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
                     return self.text_to_speech_pyttsx3(text)
                 try:
                     with TTS_LOCK:
                         TTS_STOP_EVENT.clear()
                         audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
                         audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
-                        play_mp3_bytes(audio_bytes)
+                        play_mp3_bytes(
+                            audio_bytes,
+                            audio=self.audio,
+                            output_device_index=self.audio_output_device_index,
+                        )
                     return True
                 except Exception as e:
                     if local_tts_playback_available():
@@ -2021,19 +2328,66 @@ class VoiceAssistant:
         return self.text_to_speech_pyttsx3(text)
 
     def text_to_speech_pyttsx3(self, text: str) -> bool:
-        """Speak text through the local system TTS engine."""
+        """Speak text through local TTS, preferring a file rendered into backend PyAudio output."""
         if not local_tts_playback_available():
             return False
 
+        temp_path = None
         try:
             with TTS_LOCK:
                 TTS_STOP_EVENT.clear()
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                    temp_path = temp_file.name
+                TTS_ENGINE.save_to_file(text, temp_path)
+                TTS_ENGINE.runAndWait()
+                if temp_path and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                    self.play_wav_file(temp_path, stop_event=TTS_STOP_EVENT)
+                    return True
+                print("Local pyttsx3 file rendering failed. Falling back to direct system TTS...")
                 TTS_ENGINE.say(text)
                 TTS_ENGINE.runAndWait()
             return True
         except Exception as e:
             print(f"Local pyttsx3 TTS failed: {e}")
             return False
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+    def play_wav_file(self, wav_path: str | Path, *, stop_event: threading.Event | None = None) -> None:
+        """Play a WAV file through backend PyAudio output selection."""
+        with wave.open(str(wav_path), "rb") as wav_file:
+            sample_width = wav_file.getsampwidth()
+            if sample_width != 2:
+                raise RuntimeError("only 16-bit PCM WAV playback is supported")
+            stream = None
+            try:
+                with suppress_native_stderr():
+                    stream = self.audio.open(
+                        format=pyaudio.paInt16,
+                        channels=wav_file.getnchannels(),
+                        rate=wav_file.getframerate(),
+                        output=True,
+                        output_device_index=self.audio_output_device_index,
+                        frames_per_buffer=1024,
+                    )
+                while True:
+                    if stop_event and stop_event.is_set():
+                        break
+                    data = wav_file.readframes(1024)
+                    if not data:
+                        break
+                    stream.write(data)
+            finally:
+                if stream:
+                    try:
+                        stream.stop_stream()
+                        stream.close()
+                    except Exception:
+                        pass
 
     def generate_openai_tts_audio(
         self,
@@ -2601,11 +2955,6 @@ class VoiceAssistant:
                 self.audio.terminate()
             except Exception:
                 pass
-            if self.pygame_mixer_available:
-                try:
-                    pygame.mixer.quit()
-                except Exception:
-                    pass
             try:
                 TTS_ENGINE.stop()
             except Exception:
@@ -2988,7 +3337,10 @@ async def main():
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
         current_openai_tts_speed = env_float_from_values(values, "WEB_TTS_SPEED", 1.0)
+        current_backend_audio_input_device = (values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
+        current_backend_audio_output_device = (values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
         internet_online = check_internet_connection()
+        backend_audio_devices = list_pyaudio_devices()
 
         provider_entries = [
             {
@@ -3038,6 +3390,10 @@ async def main():
             "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
             "selected_openai_tts_voice": current_openai_tts_voice,
             "selected_openai_tts_speed": current_openai_tts_speed,
+            "backend_audio_inputs": backend_audio_devices["inputs"],
+            "backend_audio_outputs": backend_audio_devices["outputs"],
+            "selected_backend_audio_input_device": current_backend_audio_input_device,
+            "selected_backend_audio_output_device": current_backend_audio_output_device,
             "thinking_sounds": list_thinking_sound_options(),
             "selected_thinking_sound_file": current_thinking_sound_file,
             "message": message,
@@ -3056,6 +3412,8 @@ async def main():
         session_context_size: int,
         mcp_tool_routing_enabled: bool,
         interrupt_conversation_enabled: bool,
+        backend_audio_input_device: str,
+        backend_audio_output_device: str,
         voice_id: str,
         thinking_sound_file: str,
         openai_tts_voice: str,
@@ -3075,6 +3433,8 @@ async def main():
         session_context_size = max(0, min(12000, int(session_context_size or 0)))
         mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
         interrupt_conversation_enabled = bool(interrupt_conversation_enabled)
+        backend_audio_input_device = str(backend_audio_input_device or "").strip()
+        backend_audio_output_device = str(backend_audio_output_device or "").strip()
         voice_id = voice_id.strip()
         thinking_sound_file = thinking_sound_file.strip()
         openai_tts_voice = (openai_tts_voice or "").strip()
@@ -3185,6 +3545,16 @@ async def main():
         if openai_tts_voice not in {item["id"] for item in OPENAI_TTS_VOICE_OPTIONS}:
             raise ValueError(f"OpenAI TTS voice '{openai_tts_voice}' is not available in the web config")
 
+        backend_audio_devices = list_pyaudio_devices()
+        if backend_audio_input_device and backend_audio_input_device not in {
+            item["id"] for item in backend_audio_devices["inputs"]
+        }:
+            raise ValueError(f"backend audio input device '{backend_audio_input_device}' is not available")
+        if backend_audio_output_device and backend_audio_output_device not in {
+            item["id"] for item in backend_audio_devices["outputs"]
+        }:
+            raise ValueError(f"backend audio output device '{backend_audio_output_device}' is not available")
+
         update_env_file_values(
             env_file,
             {
@@ -3205,6 +3575,8 @@ async def main():
                 "SESSION_CONTEXT_SIZE": str(session_context_size),
                 "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",
                 "INTERRUPT_CONVERSATION_ENABLED": "true" if interrupt_conversation_enabled else "false",
+                "BACKEND_AUDIO_INPUT_DEVICE": backend_audio_input_device,
+                "BACKEND_AUDIO_OUTPUT_DEVICE": backend_audio_output_device,
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
                 "WEB_TTS_VOICE": openai_tts_voice,
@@ -3247,6 +3619,8 @@ async def main():
             "wake_word": wake_word,
             "system_prompt": system_prompt,
             "session_context_size": session_context_size,
+            "backend_audio_input_device": backend_audio_input_device,
+            "backend_audio_output_device": backend_audio_output_device,
             "voice_id": voice_id,
             "thinking_sound_file": thinking_sound_file,
             "openai_tts_voice": openai_tts_voice,
@@ -3289,6 +3663,8 @@ async def main():
         tts_provider = os.getenv("TTS_PROVIDER", "elevenlabs").lower()
         voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
         thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
+        backend_audio_input_device = os.getenv("BACKEND_AUDIO_INPUT_DEVICE", "").strip()
+        backend_audio_output_device = os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE", "").strip()
         silence_threshold = env_int("VOICE_SILENCE_THRESHOLD", 500)
         silence_duration = env_float("VOICE_SILENCE_DURATION", 1.5)
         min_speech_ms = env_int("VOICE_MIN_SPEECH_MS", 350)
@@ -3365,6 +3741,8 @@ async def main():
         print(f"Using cloud TTS provider: {cloud_tts_provider}")
         print(f"Using TTS provider: {tts_provider}")
         print(f"Using thinking sound file: {thinking_sound_file}")
+        print(f"Using backend audio input: {backend_audio_input_device or 'default'}")
+        print(f"Using backend audio output: {backend_audio_output_device or 'default'}")
         if voice_cancel_during_thinking:
             print("Using voice cancel during thinking: enabled")
         if interrupt_conversation_enabled:
@@ -3477,6 +3855,8 @@ async def main():
             tts_provider=tts_provider,
             elevenlabs_voice_id=voice_id,
             thinking_sound_file=thinking_sound_file,
+            backend_audio_input_device=backend_audio_input_device,
+            backend_audio_output_device=backend_audio_output_device,
             silence_threshold=silence_threshold,
             silence_duration=silence_duration,
             min_speech_ms=min_speech_ms,
@@ -3704,7 +4084,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -3717,6 +4097,8 @@ async def main():
                 session_context_size,
                 mcp_tool_routing_enabled,
                 interrupt_conversation_enabled,
+                backend_audio_input_device,
+                backend_audio_output_device,
                 voice_id,
                 thinking_sound_file,
                 openai_tts_voice,

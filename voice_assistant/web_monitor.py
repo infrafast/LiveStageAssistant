@@ -148,7 +148,7 @@ class WebMonitor:
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._llm_config_save_handler: Callable[
-            [str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, float],
+            [str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, str, str, float],
             dict[str, Any],
         ] | None = None
         self._cloud_api_status_handler: Callable[[], dict[str, Any]] | None = None
@@ -187,7 +187,7 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[[str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, str, str, float], dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -700,6 +700,8 @@ class WebMonitor:
                         return
                     mcp_tool_routing_enabled = bool(payload.get("mcp_tool_routing_enabled"))
                     interrupt_conversation_enabled = bool(payload.get("interrupt_conversation_enabled"))
+                    backend_audio_input_device = str(payload.get("backend_audio_input_device") or "").strip()
+                    backend_audio_output_device = str(payload.get("backend_audio_output_device") or "").strip()
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
@@ -722,6 +724,8 @@ class WebMonitor:
                             session_context_size,
                             mcp_tool_routing_enabled,
                             interrupt_conversation_enabled,
+                            backend_audio_input_device,
+                            backend_audio_output_device,
                             voice_id,
                             thinking_sound_file,
                             openai_tts_voice,
@@ -2435,6 +2439,21 @@ INDEX_HTML = """<!doctype html>
           </details>
         </section>
         <section>
+          <details>
+            <summary>Audio In/Out</summary>
+            <div class="config-controls">
+              <div class="field">
+                <label for="backend-audio-input">Backend Audio Input</label>
+                <select id="backend-audio-input"></select>
+              </div>
+              <div class="field">
+                <label for="backend-audio-output">Backend Audio Output</label>
+                <select id="backend-audio-output"></select>
+              </div>
+            </div>
+          </details>
+        </section>
+        <section>
           <details open>
             <summary>IA model</summary>
             <div class="config-controls">
@@ -2567,6 +2586,8 @@ INDEX_HTML = """<!doctype html>
     const cloudApiDetails = document.querySelector("#cloud-api-details");
     const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
     const cloudApiGrid = document.querySelector("#cloud-api-grid");
+    const backendAudioInput = document.querySelector("#backend-audio-input");
+    const backendAudioOutput = document.querySelector("#backend-audio-output");
     const thinkingSound = document.querySelector("#thinking-sound");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
@@ -3911,6 +3932,8 @@ INDEX_HTML = """<!doctype html>
         system_prompt: assistantSystemPromptEl.value.trim(),
         cloud_tts_provider: cloudTtsProvider.value || "",
         tts_output: selectedTtsOutput(),
+        backend_audio_input_device: backendAudioInput.value || "",
+        backend_audio_output_device: backendAudioOutput.value || "",
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
         openai_tts_voice: openaiTtsVoice.value || "",
@@ -4246,6 +4269,8 @@ INDEX_HTML = """<!doctype html>
       elevenlabsVoice.disabled = true;
       openaiTtsVoice.disabled = true;
       openaiTtsSpeed.disabled = true;
+      backendAudioInput.disabled = true;
+      backendAudioOutput.disabled = true;
       thinkingSound.disabled = true;
       llmSave.disabled = true;
       llmMessage.textContent = "Loading LLM options...";
@@ -4330,6 +4355,28 @@ INDEX_HTML = """<!doctype html>
 	        syncOpenAiSpeedLabel();
 	        syncConnectivityControls();
 
+        backendAudioInput.replaceChildren();
+        const selectedBackendAudioInput = data.selected_backend_audio_input_device || "";
+        backendAudioInput.appendChild(option("Default input", "", false, !selectedBackendAudioInput));
+        for (const device of data.backend_audio_inputs || []) {
+          const label = device.default ? `${device.label || device.id} (default)` : (device.label || device.id);
+          backendAudioInput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioInput));
+        }
+        if (selectedBackendAudioInput && ![...backendAudioInput.options].some((item) => item.value === selectedBackendAudioInput)) {
+          backendAudioInput.appendChild(option(`${selectedBackendAudioInput} (current unavailable)`, selectedBackendAudioInput, false, true));
+        }
+
+        backendAudioOutput.replaceChildren();
+        const selectedBackendAudioOutput = data.selected_backend_audio_output_device || "";
+        backendAudioOutput.appendChild(option("Default output", "", false, !selectedBackendAudioOutput));
+        for (const device of data.backend_audio_outputs || []) {
+          const label = device.default ? `${device.label || device.id} (default)` : (device.label || device.id);
+          backendAudioOutput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioOutput));
+        }
+        if (selectedBackendAudioOutput && ![...backendAudioOutput.options].some((item) => item.value === selectedBackendAudioOutput)) {
+          backendAudioOutput.appendChild(option(`${selectedBackendAudioOutput} (current unavailable)`, selectedBackendAudioOutput, false, true));
+        }
+
         thinkingSound.replaceChildren();
         const selectedThinkingSound = data.selected_thinking_sound_file || "";
         const sounds = data.thinking_sounds || [];
@@ -4363,6 +4410,8 @@ INDEX_HTML = """<!doctype html>
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
 	        syncConnectivityControls();
+        backendAudioInput.disabled = backendAudioInput.options.length === 0;
+        backendAudioOutput.disabled = backendAudioOutput.options.length === 0;
         thinkingSound.disabled = thinkingSound.options.length === 0 || !thinkingSound.value;
         llmSave.disabled = !llmProvider.value;
         llmOptionsLoading = false;
@@ -4716,6 +4765,8 @@ INDEX_HTML = """<!doctype html>
       const connectivityModeValue = selectedConnectivityMode();
 	      const cloudTtsProviderValue = cloudTtsProvider.value;
       const ttsOutputValue = selectedTtsOutput();
+      const backendAudioInputDevice = backendAudioInput.value;
+      const backendAudioOutputDevice = backendAudioOutput.value;
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
       const openAiTtsVoiceValue = openaiTtsVoice.value;
@@ -4735,8 +4786,10 @@ INDEX_HTML = """<!doctype html>
             mcp_tool_routing_enabled: mcpToolRoutingEnabled,
             interrupt_conversation_enabled: interruptConversation,
             connectivity_mode: connectivityModeValue,
-	            cloud_tts_provider: cloudTtsProviderValue,
+            cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,
+            backend_audio_input_device: backendAudioInputDevice,
+            backend_audio_output_device: backendAudioOutputDevice,
             wake_word: wakeWordValue,
             stt_prompt: sttPromptValue,
             system_prompt: systemPromptValue,
