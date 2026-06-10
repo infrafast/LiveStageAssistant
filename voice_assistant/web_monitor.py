@@ -2309,6 +2309,12 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       gap: 12px;
     }
+    .mcp-server-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(210px, 260px);
+      gap: 12px;
+      align-items: center;
+    }
     .mcp-server-grid {
       display: grid;
       gap: 12px;
@@ -2479,6 +2485,9 @@ INDEX_HTML = """<!doctype html>
     #connectivity-mode {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+    #mcp-admin-route {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
     label {
       font-size: 12px;
       color: var(--muted);
@@ -2562,6 +2571,7 @@ INDEX_HTML = """<!doctype html>
       .settings-panel { height: 100%; }
       .config-controls { grid-template-columns: 1fr; }
       .cloud-api-grid { grid-template-columns: 1fr; }
+      .mcp-server-toolbar { grid-template-columns: 1fr; }
       .mcp-server-head { align-items: stretch; flex-direction: column; }
       .mcp-server-actions { justify-content: space-between; }
       .mcp-server-frame { height: min(70vh, 560px); }
@@ -2671,7 +2681,13 @@ INDEX_HTML = """<!doctype html>
           <details id="mcp-servers-details">
             <summary>MCP Servers</summary>
             <div class="mcp-server-panel">
-              <div class="detail">HTTP MCP admin pages are proxied through LiveStageAssistant, so the browser only needs access to this monitor.</div>
+              <div class="mcp-server-toolbar">
+                <div class="detail">HTTP MCP admin pages can load through LiveStageAssistant or directly from this browser.</div>
+                <div class="segmented" id="mcp-admin-route" role="radiogroup" aria-label="MCP admin route">
+                  <label><input type="radio" name="mcp-admin-route" value="proxy">HTTP proxy</label>
+                  <label><input type="radio" name="mcp-admin-route" value="direct">Direct</label>
+                </div>
+              </div>
               <div class="mcp-server-grid" id="mcp-server-grid"></div>
             </div>
           </details>
@@ -2884,6 +2900,7 @@ INDEX_HTML = """<!doctype html>
     const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
     const cloudApiGrid = document.querySelector("#cloud-api-grid");
     const mcpServerGrid = document.querySelector("#mcp-server-grid");
+    const mcpAdminRouteInputs = Array.from(document.querySelectorAll('input[name="mcp-admin-route"]'));
     const backendAudioInput = document.querySelector("#backend-audio-input");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
     const thinkingSound = document.querySelector("#thinking-sound");
@@ -2951,6 +2968,7 @@ INDEX_HTML = """<!doctype html>
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
     let mcpServersSignature = "";
+    let lastMcpServers = [];
     let currentWebTtsSource = null;
     let currentWebTtsAudio = null;
     let thinkingAudio = null;
@@ -3086,8 +3104,34 @@ INDEX_HTML = """<!doctype html>
         .replaceAll("'", "&#039;");
     }
 
+    function selectedMcpAdminRoute() {
+      const checked = mcpAdminRouteInputs.find((input) => input.checked);
+      return checked && checked.value === "direct" ? "direct" : "proxy";
+    }
+
+    function setSelectedMcpAdminRoute(value) {
+      const normalized = value === "direct" ? "direct" : "proxy";
+      for (const input of mcpAdminRouteInputs) {
+        input.checked = input.value === normalized;
+      }
+    }
+
+    function mcpServerAdminUrl(server, route) {
+      if (route === "direct") return server.admin_url || "";
+      return server.proxy_admin_url || server.admin_url || "";
+    }
+
+    function mcpServerRouteDetail(route) {
+      if (route === "direct") {
+        return "Direct mode loads the MCP server from this browser. Use it only when this device can reach that address.";
+      }
+      return "HTTP proxy mode loads the MCP admin page through LiveStageAssistant, so only the backend needs access.";
+    }
+
     function renderMcpServers(servers) {
       const items = Array.isArray(servers) ? servers : [];
+      lastMcpServers = items;
+      const route = selectedMcpAdminRoute();
       const signature = JSON.stringify(items.map((item) => [
         item.name || "",
         item.type || "",
@@ -3096,7 +3140,7 @@ INDEX_HTML = """<!doctype html>
         Boolean(item.embeddable),
         Boolean(item.auth_required),
         item.detail || ""
-      ]));
+      ])) + "|" + route;
       if (signature === mcpServersSignature) return;
       mcpServersSignature = signature;
       mcpServerGrid.replaceChildren();
@@ -3132,35 +3176,37 @@ INDEX_HTML = """<!doctype html>
         badge.className = "inline-badge";
         badge.textContent = server.auth_required ? "Auth" : (server.type || "MCP");
         actions.append(badge);
-        if (server.proxy_admin_url) {
+        const selectedUrl = mcpServerAdminUrl(server, route);
+        if (selectedUrl) {
           const open = document.createElement("a");
           open.className = "mcp-server-open";
-          open.href = server.proxy_admin_url;
+          open.href = selectedUrl;
           open.target = "_blank";
           open.rel = "noreferrer";
-          open.textContent = "Open via NAS";
+          open.textContent = route === "direct" ? "Open direct" : "Open via proxy";
           actions.append(open);
         }
-        if (server.admin_url) {
-          const direct = document.createElement("a");
-          direct.className = "mcp-server-open";
-          direct.href = server.admin_url;
-          direct.target = "_blank";
-          direct.rel = "noreferrer";
-          direct.textContent = "Direct";
-          actions.append(direct);
+        const alternateUrl = route === "direct" ? server.proxy_admin_url : server.admin_url;
+        if (alternateUrl && alternateUrl !== selectedUrl) {
+          const alternate = document.createElement("a");
+          alternate.className = "mcp-server-open";
+          alternate.href = alternateUrl;
+          alternate.target = "_blank";
+          alternate.rel = "noreferrer";
+          alternate.textContent = route === "direct" ? "Proxy" : "Direct";
+          actions.append(alternate);
         }
 
         head.append(title, actions);
         card.append(head);
 
-        if (server.embeddable && server.proxy_admin_url) {
+        if (server.embeddable && selectedUrl) {
           const placeholder = document.createElement("div");
           placeholder.className = "mcp-server-placeholder";
 
           const note = document.createElement("div");
           note.className = "detail";
-          note.textContent = "The admin page will be proxied through LiveStageAssistant, so only the backend needs access to the MCP server.";
+          note.textContent = mcpServerRouteDetail(route);
 
           const load = document.createElement("button");
           load.className = "mcp-server-load";
@@ -3171,7 +3217,7 @@ INDEX_HTML = """<!doctype html>
             frame.className = "mcp-server-frame";
             frame.title = `${server.name || "MCP server"} admin`;
             frame.referrerPolicy = "no-referrer";
-            frame.src = server.proxy_admin_url;
+            frame.src = selectedUrl;
             placeholder.replaceWith(frame);
           });
 
@@ -5144,6 +5190,15 @@ INDEX_HTML = """<!doctype html>
     });
     for (const input of mcpToolRoutingInputs) {
       input.addEventListener("change", () => {});
+    }
+    setSelectedMcpAdminRoute(window.localStorage.getItem("mcp-admin-route") || "proxy");
+    for (const input of mcpAdminRouteInputs) {
+      input.addEventListener("change", () => {
+        const route = selectedMcpAdminRoute();
+        window.localStorage.setItem("mcp-admin-route", route);
+        mcpServersSignature = "";
+        renderMcpServers(lastMcpServers);
+      });
     }
     for (const input of interruptConversationInputs) {
       input.addEventListener("change", () => {

@@ -109,7 +109,7 @@ If XMSeries-MCP runs as a separate HTTP service/container, put `OSC_HOST`, `OSC_
 
 QLCPlus-MCP follows the same pattern. For local stdio mode, mount the built QLCPlus-MCP checkout, set the `qlcplus.args` entry to its built entrypoint, and put QLC+ host/OSC settings in that server's `env` block. If it runs as a separate HTTP service/container, configure Live Stage Assistant with only the QLCPlus-MCP HTTP MCP endpoint.
 
-The web monitor Config tab includes a **MCP Servers** collapsible. HTTP MCP entries from the active `MCP_CONFIG` are listed with **Open via NAS**, **Direct**, and manual **Load frame** controls. The iframe and **Open via NAS** route through the Live Stage Assistant backend at `/api/mcp-admin/<server>/...`, so admin pages can work from a browser that only reaches the NAS while the NAS reaches the MCP server over Tailscale. Local stdio MCP entries are shown without a frame. Bearer headers from the MCP config are applied by the backend proxy and are not exposed to the browser.
+The web monitor Config tab includes a **MCP Servers** collapsible with an **HTTP proxy / Direct** route switch. In proxy mode, HTTP MCP admin pages route through the Live Stage Assistant backend at `/api/mcp-admin/<server>/...`, so admin pages can work from a browser that only reaches the NAS while the NAS reaches the MCP server over Tailscale. In direct mode, the browser opens the MCP server URL itself. Local stdio MCP entries are shown without a frame. Bearer headers from the MCP config are applied by the backend proxy and are not exposed to the browser.
 
 ## Start
 
