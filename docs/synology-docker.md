@@ -109,6 +109,8 @@ If XMSeries-MCP runs as a separate HTTP service/container, put `OSC_HOST`, `OSC_
 
 QLCPlus-MCP follows the same pattern. For local stdio mode, mount the built QLCPlus-MCP checkout, set the `qlcplus.args` entry to its built entrypoint, and put QLC+ host/OSC settings in that server's `env` block. If it runs as a separate HTTP service/container, configure Live Stage Assistant with only the QLCPlus-MCP HTTP MCP endpoint.
 
+The web monitor Config tab includes a **MCP Servers** collapsible. HTTP MCP entries from the active `MCP_CONFIG` are embedded as iframes pointing to each server's `/mcp` page, which lets compatible services expose their own runtime/admin UI from inside Live Stage Assistant. Local stdio MCP entries are shown without a frame. Bearer-protected MCP admin pages may need to be opened separately because browser iframes cannot add custom `Authorization` headers.
+
 ## Start
 
 From SSH:

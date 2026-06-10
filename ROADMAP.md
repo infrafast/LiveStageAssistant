@@ -202,3 +202,6 @@ mode web audio: optionnel via WEB_AUDIO_ENABLED, avec STT/TTS OpenAI proxifiés 
 
 Comportement MCP dégradé
 Si l'initialisation MCP échoue au démarrage, l'assistant ne quitte plus immédiatement. Le web monitor reste disponible, l'état MCP passe en erreur dans Settings > Monitor > State, et l'utilisateur peut corriger le profil env/MCP depuis Config puis sauvegarder pour déclencher un reload.
+
+MCP Servers dans Config
+Le web monitor expose maintenant un collapsible Settings > Config > MCP Servers. Les serveurs MCP HTTP du profil actif y sont listés avec une iframe vers leur page /mcp, afin d'accéder aux pages runtime/admin de XMSeries-MCP, QLCPlus-MCP ou d'autres serveurs compatibles. Les serveurs stdio restent visibles comme non embarquables; les pages protégées par Bearer peuvent nécessiter une ouverture séparée car une iframe ne peut pas ajouter d'en-tête Authorization.

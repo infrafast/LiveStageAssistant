@@ -1816,6 +1816,8 @@ class VoiceAssistant:
         config = self._substitute_env_vars(config)
         config = self._filter_unavailable_mcp_servers(config)
         self.mcp_config = config
+        if self.web_monitor:
+            self.web_monitor.update(mcp_config=config)
 
         try:
             self.mcp_initialization_error = None

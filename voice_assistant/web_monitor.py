@@ -99,6 +99,63 @@ def redact_mapping(values: dict[str, Any]) -> dict[str, Any]:
     return {key: redact_config_value(key, value) for key, value in values.items()}
 
 
+def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return browser-embeddable MCP admin page targets from the active config."""
+    servers = (mcp_config or {}).get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+
+    frames: list[dict[str, Any]] = []
+    for name, server_config in sorted(servers.items()):
+        entry: dict[str, Any] = {
+            "name": str(name),
+            "type": "unknown",
+            "url": "",
+            "admin_url": "",
+            "embeddable": False,
+            "auth_required": False,
+            "detail": "",
+        }
+        if not isinstance(server_config, dict):
+            entry["detail"] = "invalid MCP server config"
+            frames.append(entry)
+            continue
+
+        server_type = str(server_config.get("type") or "stdio")
+        entry["type"] = server_type
+        url = str(server_config.get("url") or "").strip()
+        if not url:
+            entry["detail"] = "stdio/local MCP server; no browser admin URL"
+            frames.append(entry)
+            continue
+
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            entry["url"] = url
+            entry["detail"] = "unsupported MCP URL"
+            frames.append(entry)
+            continue
+
+        admin_url = parsed._replace(path="/mcp", query="", fragment="").geturl()
+        headers = server_config.get("headers")
+        auth_required = False
+        if isinstance(headers, dict):
+            auth_required = any(str(key).lower() == "authorization" and value for key, value in headers.items())
+
+        entry.update(
+            {
+                "url": url,
+                "admin_url": admin_url,
+                "embeddable": True,
+                "auth_required": auth_required,
+                "detail": "Bearer auth may block iframe access" if auth_required else "opens the server /mcp page",
+            }
+        )
+        frames.append(entry)
+
+    return frames
+
+
 class TeeStream:
     """Mirror writes to the original stream and to the monitor log buffer."""
 
@@ -173,6 +230,7 @@ class WebMonitor:
             "services": {},
             "config": {},
             "config_text": "{}",
+            "mcp_servers": [],
             "prompt": "",
             "session_context": {"active_id": "", "sessions": [], "current": {}, "messages": []},
             "session_context_size": 6000,
@@ -1231,6 +1289,7 @@ class WebMonitor:
                     config["env"] = redact_mapping(env_values)
                 if mcp_config is not None:
                     config["mcp"] = redact_mapping(mcp_config)
+                    self._snapshot["mcp_servers"] = build_mcp_server_admin_frames(mcp_config)
                 self._snapshot["config"] = config
                 self._snapshot["config_text"] = json.dumps(config, ensure_ascii=False, indent=2)
             if prompt is not None:
@@ -2112,6 +2171,78 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       gap: 10px;
     }
+    .mcp-server-panel {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .mcp-server-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .mcp-server-card {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .mcp-server-head {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-soft);
+    }
+    .mcp-server-title {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+    .mcp-server-name {
+      color: var(--text);
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .mcp-server-url {
+      color: var(--muted);
+      font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .mcp-server-actions {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .mcp-server-open {
+      min-height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: var(--accent);
+      background: var(--surface);
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .mcp-server-frame {
+      display: block;
+      width: 100%;
+      height: min(62vh, 620px);
+      border: 0;
+      background: var(--surface-soft);
+    }
+    .mcp-server-empty {
+      padding: 12px;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      background: var(--surface-soft);
+    }
     .cloud-api-header {
       display: flex;
       justify-content: space-between;
@@ -2280,6 +2411,9 @@ INDEX_HTML = """<!doctype html>
       .settings-panel { height: 100%; }
       .config-controls { grid-template-columns: 1fr; }
       .cloud-api-grid { grid-template-columns: 1fr; }
+      .mcp-server-head { align-items: stretch; flex-direction: column; }
+      .mcp-server-actions { justify-content: space-between; }
+      .mcp-server-frame { height: min(70vh, 560px); }
     }
     @media (hover: none), (pointer: coarse) {
       .session-row.has-summary {
@@ -2379,6 +2513,15 @@ INDEX_HTML = """<!doctype html>
                   <label><input type="radio" name="connectivity-mode" value="offline">Offline</label>
                 </div>
               </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details id="mcp-servers-details">
+            <summary>MCP Servers</summary>
+            <div class="mcp-server-panel">
+              <div class="detail">HTTP MCP servers with a browser admin page can be opened here. Servers that require Bearer headers may need to be opened separately.</div>
+              <div class="mcp-server-grid" id="mcp-server-grid"></div>
             </div>
           </details>
         </section>
@@ -2589,6 +2732,7 @@ INDEX_HTML = """<!doctype html>
     const cloudApiDetails = document.querySelector("#cloud-api-details");
     const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
     const cloudApiGrid = document.querySelector("#cloud-api-grid");
+    const mcpServerGrid = document.querySelector("#mcp-server-grid");
     const backendAudioInput = document.querySelector("#backend-audio-input");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
     const thinkingSound = document.querySelector("#thinking-sound");
@@ -2655,6 +2799,7 @@ INDEX_HTML = """<!doctype html>
     let webTtsUnlocked = false;
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
+    let mcpServersSignature = "";
     let currentWebTtsSource = null;
     let currentWebTtsAudio = null;
     let thinkingAudio = null;
@@ -2788,6 +2933,83 @@ INDEX_HTML = """<!doctype html>
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+    }
+
+    function renderMcpServers(servers) {
+      const items = Array.isArray(servers) ? servers : [];
+      const signature = JSON.stringify(items.map((item) => [
+        item.name || "",
+        item.type || "",
+        item.admin_url || "",
+        Boolean(item.embeddable),
+        Boolean(item.auth_required),
+        item.detail || ""
+      ]));
+      if (signature === mcpServersSignature) return;
+      mcpServersSignature = signature;
+      mcpServerGrid.replaceChildren();
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "mcp-server-empty";
+        empty.textContent = "No MCP servers loaded from the active config.";
+        mcpServerGrid.append(empty);
+        return;
+      }
+
+      for (const server of items) {
+        const card = document.createElement("div");
+        card.className = "mcp-server-card";
+
+        const head = document.createElement("div");
+        head.className = "mcp-server-head";
+
+        const title = document.createElement("div");
+        title.className = "mcp-server-title";
+        const name = document.createElement("div");
+        name.className = "mcp-server-name";
+        name.textContent = server.name || "MCP server";
+        const url = document.createElement("div");
+        url.className = "mcp-server-url";
+        url.textContent = server.admin_url || server.detail || "No browser admin URL";
+        title.append(name, url);
+
+        const actions = document.createElement("div");
+        actions.className = "mcp-server-actions";
+        const badge = document.createElement("span");
+        badge.className = "inline-badge";
+        badge.textContent = server.auth_required ? "Auth" : (server.type || "MCP");
+        actions.append(badge);
+        if (server.admin_url) {
+          const open = document.createElement("a");
+          open.className = "mcp-server-open";
+          open.href = server.admin_url;
+          open.target = "_blank";
+          open.rel = "noreferrer";
+          open.textContent = "Open";
+          actions.append(open);
+        }
+
+        head.append(title, actions);
+        card.append(head);
+
+        if (server.embeddable && server.admin_url) {
+          const frame = document.createElement("iframe");
+          frame.className = "mcp-server-frame";
+          frame.title = `${server.name || "MCP server"} admin`;
+          frame.loading = "lazy";
+          frame.referrerPolicy = "no-referrer";
+          frame.src = server.admin_url;
+          card.append(frame);
+        } else {
+          const empty = document.createElement("div");
+          empty.className = "mcp-server-empty";
+          empty.textContent = server.detail || "This MCP server does not expose a browser page.";
+          card.append(empty);
+        }
+
+        mcpServerGrid.append(card);
+      }
     }
 
     function isStopCommand(value) {
@@ -4446,6 +4668,7 @@ INDEX_HTML = """<!doctype html>
         ];
         stateEl.innerHTML = rows.join("");
         configEl.value = data.config_text || "";
+        renderMcpServers(data.mcp_servers || []);
         const remoteScreen = data.remote_screen || {};
         if (!vncUrlDirty && remoteScreen.vnc_url && vncUrl.value !== remoteScreen.vnc_url) {
           vncUrl.value = remoteScreen.vnc_url;
