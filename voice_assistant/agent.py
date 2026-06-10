@@ -2558,7 +2558,12 @@ class VoiceAssistant:
         )
         return response.read()
 
-    def generate_elevenlabs_tts_audio(self, text: str, speed: float | None = None) -> Any:
+    def generate_elevenlabs_tts_audio(
+        self,
+        text: str,
+        speed: float | None = None,
+        voice_id: str | None = None,
+    ) -> Any:
         """Generate MP3 speech with ElevenLabs."""
         if not self.elevenlabs_client:
             raise ValueError("ElevenLabs client is not configured")
@@ -2568,7 +2573,7 @@ class VoiceAssistant:
 
         return self.elevenlabs_client.text_to_speech.convert(
             text=cleaned_text,
-            voice_id=self.elevenlabs_voice_id,
+            voice_id=voice_id or self.elevenlabs_voice_id,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
             optimize_streaming_latency="2",
@@ -2580,17 +2585,23 @@ class VoiceAssistant:
         text: str,
         model: str = DEFAULT_OPENAI_TTS_MODEL,
         voice: str = DEFAULT_OPENAI_TTS_VOICE,
+        speed: float | None = None,
     ) -> dict[str, Any]:
         """Generate browser-playable speech using OpenAI from the backend."""
-        audio_bytes = self.generate_openai_tts_audio(text, model=model, voice=voice)
+        audio_bytes = self.generate_openai_tts_audio(text, model=model, voice=voice, speed=speed)
         return {
             "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
             "mime_type": "audio/mpeg",
         }
 
-    def web_text_to_speech_elevenlabs(self, text: str) -> dict[str, Any]:
+    def web_text_to_speech_elevenlabs(
+        self,
+        text: str,
+        voice_id: str | None = None,
+        speed: float | None = None,
+    ) -> dict[str, Any]:
         """Generate browser-playable speech using ElevenLabs from the backend."""
-        audio = self.generate_elevenlabs_tts_audio(text)
+        audio = self.generate_elevenlabs_tts_audio(text, speed=speed, voice_id=voice_id)
         audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
         return {
             "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
@@ -3502,6 +3513,15 @@ async def main():
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
         current_openai_tts_speed = env_float_from_values(values, "WEB_TTS_SPEED", 1.0)
+        current_web_conversation_threshold = env_float_from_values(values, "WEB_CONVERSATION_THRESHOLD", 0.05)
+        current_web_conversation_min_speech_ms = env_int_from_values(values, "WEB_CONVERSATION_MIN_SPEECH_MS", 350)
+        current_web_conversation_min_speech_frames = env_int_from_values(values, "WEB_CONVERSATION_MIN_SPEECH_FRAMES", 8)
+        current_web_conversation_silence_ms = env_int_from_values(values, "WEB_CONVERSATION_SILENCE_MS", 1200)
+        current_web_conversation_idle_seconds = env_float_from_values(values, "WEB_CONVERSATION_IDLE_SECONDS", 25.0)
+        current_voice_silence_threshold = env_int_from_values(values, "VOICE_SILENCE_THRESHOLD", 500)
+        current_voice_min_speech_ms = env_int_from_values(values, "VOICE_MIN_SPEECH_MS", 350)
+        current_voice_min_speech_frames = env_int_from_values(values, "VOICE_MIN_SPEECH_FRAMES", 5)
+        current_voice_silence_duration = env_float_from_values(values, "VOICE_SILENCE_DURATION", 1.5)
         current_backend_audio_input_device = (values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
         current_backend_audio_output_device = (values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
         internet_online = check_internet_connection()
@@ -3555,6 +3575,15 @@ async def main():
             "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
             "selected_openai_tts_voice": current_openai_tts_voice,
             "selected_openai_tts_speed": current_openai_tts_speed,
+            "selected_web_conversation_threshold": current_web_conversation_threshold,
+            "selected_web_conversation_min_speech_ms": current_web_conversation_min_speech_ms,
+            "selected_web_conversation_min_speech_frames": current_web_conversation_min_speech_frames,
+            "selected_web_conversation_silence_ms": current_web_conversation_silence_ms,
+            "selected_web_conversation_idle_seconds": current_web_conversation_idle_seconds,
+            "selected_voice_silence_threshold": current_voice_silence_threshold,
+            "selected_voice_min_speech_ms": current_voice_min_speech_ms,
+            "selected_voice_min_speech_frames": current_voice_min_speech_frames,
+            "selected_voice_silence_duration": current_voice_silence_duration,
             "backend_audio_inputs": backend_audio_devices["inputs"],
             "backend_audio_outputs": backend_audio_devices["outputs"],
             "selected_backend_audio_input_device": current_backend_audio_input_device,
@@ -3583,6 +3612,15 @@ async def main():
         thinking_sound_file: str,
         openai_tts_voice: str,
         openai_tts_speed: float,
+        web_conversation_threshold: float,
+        web_conversation_min_speech_ms: int,
+        web_conversation_min_speech_frames: int,
+        web_conversation_silence_ms: int,
+        web_conversation_idle_seconds: float,
+        voice_silence_threshold: int,
+        voice_min_speech_ms: int,
+        voice_min_speech_frames: int,
+        voice_silence_duration: float,
         web_monitor: WebMonitor | None,
         reload_event: threading.Event | None,
         auto_env_mode: bool = False,
@@ -3604,6 +3642,15 @@ async def main():
         thinking_sound_file = thinking_sound_file.strip()
         openai_tts_voice = (openai_tts_voice or "").strip()
         openai_tts_speed = max(0.6, min(1.8, float(openai_tts_speed or 1.0)))
+        web_conversation_threshold = max(0.01, min(0.2, float(web_conversation_threshold or 0.05)))
+        web_conversation_min_speech_ms = max(50, min(2000, int(web_conversation_min_speech_ms or 350)))
+        web_conversation_min_speech_frames = max(1, min(40, int(web_conversation_min_speech_frames or 8)))
+        web_conversation_silence_ms = max(250, min(5000, int(web_conversation_silence_ms or 1200)))
+        web_conversation_idle_seconds = max(3.0, min(120.0, float(web_conversation_idle_seconds or 25.0)))
+        voice_silence_threshold = max(50, min(5000, int(voice_silence_threshold or 500)))
+        voice_min_speech_ms = max(50, min(2000, int(voice_min_speech_ms or 350)))
+        voice_min_speech_frames = max(1, min(40, int(voice_min_speech_frames or 5)))
+        voice_silence_duration = max(0.2, min(5.0, float(voice_silence_duration or 1.5)))
         if provider not in {"openai", "ollama"}:
             raise ValueError(f"unsupported LLM provider: {provider}")
         values = dict(dotenv_values(env_file))
@@ -3740,6 +3787,15 @@ async def main():
                 "WEB_STT_MODEL": (values.get("WEB_STT_MODEL") or "whisper-1").strip() or "whisper-1",
                 "WEB_TTS_PROVIDER": updated_web_tts_provider,
                 "WEB_TTS_MODEL": (values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip() or DEFAULT_OPENAI_TTS_MODEL,
+                "WEB_CONVERSATION_THRESHOLD": f"{web_conversation_threshold:.3f}".rstrip("0").rstrip("."),
+                "WEB_CONVERSATION_MIN_SPEECH_MS": str(web_conversation_min_speech_ms),
+                "WEB_CONVERSATION_MIN_SPEECH_FRAMES": str(web_conversation_min_speech_frames),
+                "WEB_CONVERSATION_SILENCE_MS": str(web_conversation_silence_ms),
+                "WEB_CONVERSATION_IDLE_SECONDS": f"{web_conversation_idle_seconds:.1f}".rstrip("0").rstrip("."),
+                "VOICE_SILENCE_THRESHOLD": str(voice_silence_threshold),
+                "VOICE_MIN_SPEECH_MS": str(voice_min_speech_ms),
+                "VOICE_MIN_SPEECH_FRAMES": str(voice_min_speech_frames),
+                "VOICE_SILENCE_DURATION": f"{voice_silence_duration:.2f}".rstrip("0").rstrip("."),
                 "WAKE_WORD": wake_word,
                 "STT_PROMPT": stt_prompt,
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
@@ -3796,6 +3852,15 @@ async def main():
             "thinking_sound_file": thinking_sound_file,
             "openai_tts_voice": openai_tts_voice,
             "openai_tts_speed": openai_tts_speed,
+            "web_conversation_threshold": web_conversation_threshold,
+            "web_conversation_min_speech_ms": web_conversation_min_speech_ms,
+            "web_conversation_min_speech_frames": web_conversation_min_speech_frames,
+            "web_conversation_silence_ms": web_conversation_silence_ms,
+            "web_conversation_idle_seconds": web_conversation_idle_seconds,
+            "voice_silence_threshold": voice_silence_threshold,
+            "voice_min_speech_ms": voice_min_speech_ms,
+            "voice_min_speech_frames": voice_min_speech_frames,
+            "voice_silence_duration": voice_silence_duration,
             "message": "Configuration saved. Restarting assistant with the new settings.",
         }
 
@@ -4110,22 +4175,44 @@ async def main():
                 delete_handler=delete_session_context,
             )
 
-            if web_audio_state["tts_enabled"] and web_tts_provider == "openai" and assistant.openai_client is None:
+            if openai_api_key and assistant.openai_client is None:
                 assistant.openai_client = openai.OpenAI(api_key=openai_api_key)
-            if web_audio_state["tts_enabled"] and web_tts_provider == "elevenlabs" and assistant.elevenlabs_client is None:
+            if elevenlabs_api_key and assistant.elevenlabs_client is None:
                 assistant.elevenlabs_client = ElevenLabs(api_key=elevenlabs_api_key)
 
             web_tts_handler = None
-            if web_audio_state["tts_enabled"] and web_tts_provider == "openai":
-                web_tts_handler = lambda text, active_assistant=assistant: active_assistant.web_text_to_speech_openai(
-                    text,
-                    model=web_tts_model,
-                    voice=web_tts_voice,
-                )
-            elif web_audio_state["tts_enabled"] and web_tts_provider == "elevenlabs":
-                web_tts_handler = (
-                    lambda text, active_assistant=assistant: active_assistant.web_text_to_speech_elevenlabs(text)
-                )
+            if openai_api_key or elevenlabs_api_key:
+                def web_tts_handler(
+                    text: str,
+                    options: dict[str, Any] | None = None,
+                    active_assistant: VoiceAssistant = assistant,
+                ) -> dict[str, Any]:
+                    requested = options or {}
+                    requested_provider = str(requested.get("provider") or "").strip().lower()
+                    configured_provider = (
+                        web_tts_provider if web_tts_provider in {"openai", "elevenlabs"} else cloud_tts_provider
+                    )
+                    provider = requested_provider or configured_provider
+                    speed = max(0.6, min(1.8, float(requested.get("speed") or web_tts_speed or 1.0)))
+
+                    if provider == "openai":
+                        if active_assistant.openai_client is None:
+                            raise ValueError("OpenAI client is not configured")
+                        return active_assistant.web_text_to_speech_openai(
+                            text,
+                            model=str(requested.get("model") or web_tts_model or DEFAULT_OPENAI_TTS_MODEL),
+                            voice=str(requested.get("voice") or web_tts_voice or DEFAULT_OPENAI_TTS_VOICE),
+                            speed=speed,
+                        )
+                    if provider == "elevenlabs":
+                        if active_assistant.elevenlabs_client is None:
+                            raise ValueError("ElevenLabs client is not configured")
+                        return active_assistant.web_text_to_speech_elevenlabs(
+                            text,
+                            voice_id=str(requested.get("voice") or active_assistant.elevenlabs_voice_id),
+                            speed=speed,
+                        )
+                    raise ValueError("Web audio TTS is not available")
 
             web_monitor.set_web_audio_handlers(
                 transcribe_handler=(
@@ -4255,7 +4342,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, web_conversation_threshold, web_conversation_min_speech_ms, web_conversation_min_speech_frames, web_conversation_silence_ms, web_conversation_idle_seconds, voice_silence_threshold, voice_min_speech_ms, voice_min_speech_frames, voice_silence_duration: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -4274,6 +4361,15 @@ async def main():
                 thinking_sound_file,
                 openai_tts_voice,
                 openai_tts_speed,
+                web_conversation_threshold,
+                web_conversation_min_speech_ms,
+                web_conversation_min_speech_frames,
+                web_conversation_silence_ms,
+                web_conversation_idle_seconds,
+                voice_silence_threshold,
+                voice_min_speech_ms,
+                voice_min_speech_frames,
+                voice_silence_duration,
                 web_monitor,
                 reload_event,
                 auto_env_mode,

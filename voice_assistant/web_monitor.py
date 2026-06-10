@@ -237,7 +237,34 @@ class WebMonitor:
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._llm_config_save_handler: Callable[
-            [str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, str, str, float],
+            [
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                int,
+                bool,
+                bool,
+                str,
+                str,
+                str,
+                str,
+                str,
+                float,
+                float,
+                int,
+                int,
+                int,
+                float,
+                int,
+                int,
+                int,
+                float,
+            ],
             dict[str, Any],
         ] | None = None
         self._cloud_api_status_handler: Callable[[], dict[str, Any]] | None = None
@@ -253,7 +280,7 @@ class WebMonitor:
         self._session_context_delete_handler: Callable[[str], dict[str, Any]] | None = None
         self._cancel_handler: Callable[[], None] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
-        self._web_audio_tts_handler: Callable[[str], dict[str, Any]] | None = None
+        self._web_audio_tts_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._mcp_admin_proxy_targets: dict[str, dict[str, Any]] = {}
         self._started_at = time.time()
         self._snapshot: dict[str, Any] = {
@@ -278,7 +305,37 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[
+            [
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                int,
+                bool,
+                bool,
+                str,
+                str,
+                str,
+                str,
+                str,
+                float,
+                float,
+                int,
+                int,
+                int,
+                float,
+                int,
+                int,
+                int,
+                float,
+            ],
+            dict[str, Any],
+        ],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -331,7 +388,7 @@ class WebMonitor:
         self,
         *,
         transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None,
-        tts_handler: Callable[[str], dict[str, Any]] | None = None,
+        tts_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None,
     ) -> None:
         """Register callbacks used by the web UI for optional browser audio."""
         with self._lock:
@@ -900,6 +957,23 @@ class WebMonitor:
                     except (TypeError, ValueError):
                         self.send_error(400, "OpenAI TTS speed must be a number")
                         return
+                    try:
+                        web_conversation_threshold = float(payload.get("web_conversation_threshold") or 0.05)
+                        web_conversation_min_speech_ms = int(payload.get("web_conversation_min_speech_ms") or 350)
+                        web_conversation_min_speech_frames = int(
+                            payload.get("web_conversation_min_speech_frames") or 8
+                        )
+                        web_conversation_silence_ms = int(payload.get("web_conversation_silence_ms") or 1200)
+                        web_conversation_idle_seconds = float(
+                            payload.get("web_conversation_idle_seconds") or 25.0
+                        )
+                        voice_silence_threshold = int(payload.get("voice_silence_threshold") or 500)
+                        voice_min_speech_ms = int(payload.get("voice_min_speech_ms") or 350)
+                        voice_min_speech_frames = int(payload.get("voice_min_speech_frames") or 5)
+                        voice_silence_duration = float(payload.get("voice_silence_duration") or 1.5)
+                    except (TypeError, ValueError):
+                        self.send_error(400, "Voice detection settings must be numeric")
+                        return
 
                     try:
                         result = handler(
@@ -920,6 +994,15 @@ class WebMonitor:
                             thinking_sound_file,
                             openai_tts_voice,
                             openai_tts_speed,
+                            web_conversation_threshold,
+                            web_conversation_min_speech_ms,
+                            web_conversation_min_speech_frames,
+                            web_conversation_silence_ms,
+                            web_conversation_idle_seconds,
+                            voice_silence_threshold,
+                            voice_min_speech_ms,
+                            voice_min_speech_frames,
+                            voice_silence_duration,
                         )
                     except ValueError as e:
                         self.send_error(400, str(e))
@@ -1207,9 +1290,15 @@ class WebMonitor:
                     if not text:
                         self.send_error(400, "text is required")
                         return
+                    options = {
+                        "provider": str(payload.get("provider") or "").strip().lower(),
+                        "model": str(payload.get("model") or "").strip(),
+                        "voice": str(payload.get("voice") or "").strip(),
+                        "speed": payload.get("speed"),
+                    }
 
                     try:
-                        result = handler(text)
+                        result = handler(text, options)
                     except ValueError as e:
                         error = concise_web_tts_error(e)
                         self._send_json_error(400, {"ok": False, "error": error})
@@ -2213,6 +2302,46 @@ INDEX_HTML = """<!doctype html>
       border-bottom: 1px solid var(--border);
     }
     details:not([open]) summary { border-bottom: 0; }
+    .nested-details {
+      grid-column: 1 / -1;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      overflow: hidden;
+    }
+    .nested-details summary {
+      padding: 9px 11px;
+      border-bottom-color: var(--border);
+      font-size: 13px;
+    }
+    .vad-examples {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+    }
+    .vad-example {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px;
+      display: grid;
+      gap: 6px;
+      background: var(--surface);
+    }
+    .vad-example-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-weight: 650;
+    }
+    .vad-example-values {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
     .state {
       padding: 14px;
       display: grid;
@@ -2736,6 +2865,81 @@ INDEX_HTML = """<!doctype html>
                 <label for="openai-tts-speed">TTS Speed <span id="openai-tts-speed-label">1.0x</span></label>
                 <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
               </div>
+              <div class="field" id="tts-test-field">
+                <label>Voice Test</label>
+                <button class="small-button" id="tts-test" type="button">Test</button>
+              </div>
+              <div class="field">
+                <label for="web-conversation-threshold" title="WEB_CONVERSATION_THRESHOLD">Sensibilité micro browser <span id="web-conversation-threshold-label">0.05</span></label>
+                <input class="vad-control" id="web-conversation-threshold" type="range" min="0.01" max="0.2" step="0.005" value="0.05">
+              </div>
+              <div class="field">
+                <label for="web-conversation-min-speech-ms" title="WEB_CONVERSATION_MIN_SPEECH_MS">Mot court browser <span id="web-conversation-min-speech-ms-label">350 ms</span></label>
+                <input class="vad-control" id="web-conversation-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
+              </div>
+              <div class="field">
+                <label for="web-conversation-min-speech-frames" title="WEB_CONVERSATION_MIN_SPEECH_FRAMES">Confirmation browser <span id="web-conversation-min-speech-frames-label">8 frames</span></label>
+                <input class="vad-control" id="web-conversation-min-speech-frames" type="range" min="1" max="30" step="1" value="8">
+              </div>
+              <div class="field">
+                <label for="web-conversation-silence-ms" title="WEB_CONVERSATION_SILENCE_MS">Fin de phrase browser <span id="web-conversation-silence-ms-label">1200 ms</span></label>
+                <input class="vad-control" id="web-conversation-silence-ms" type="range" min="300" max="4000" step="50" value="1200">
+              </div>
+              <div class="field">
+                <label for="web-conversation-idle-seconds" title="WEB_CONVERSATION_IDLE_SECONDS">Relance écoute browser <span id="web-conversation-idle-seconds-label">25 s</span></label>
+                <input class="vad-control" id="web-conversation-idle-seconds" type="range" min="3" max="90" step="1" value="25">
+              </div>
+              <div class="field">
+                <label for="voice-silence-threshold" title="VOICE_SILENCE_THRESHOLD">Sensibilité micro backend <span id="voice-silence-threshold-label">500</span></label>
+                <input class="vad-control" id="voice-silence-threshold" type="range" min="50" max="3000" step="25" value="500">
+              </div>
+              <div class="field">
+                <label for="voice-min-speech-ms" title="VOICE_MIN_SPEECH_MS">Mot court backend <span id="voice-min-speech-ms-label">350 ms</span></label>
+                <input class="vad-control" id="voice-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
+              </div>
+              <div class="field">
+                <label for="voice-min-speech-frames" title="VOICE_MIN_SPEECH_FRAMES">Confirmation backend <span id="voice-min-speech-frames-label">5 frames</span></label>
+                <input class="vad-control" id="voice-min-speech-frames" type="range" min="1" max="30" step="1" value="5">
+              </div>
+              <div class="field">
+                <label for="voice-silence-duration" title="VOICE_SILENCE_DURATION">Fin de phrase backend <span id="voice-silence-duration-label">1.5 s</span></label>
+                <input class="vad-control" id="voice-silence-duration" type="range" min="0.2" max="5" step="0.1" value="1.5">
+              </div>
+              <details class="nested-details">
+                <summary>Exemples de réglages STT</summary>
+                <div class="vad-examples">
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Mot rapide isolé, attaque nette</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="quick-word">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Browser: sensibilité 0.035, mot court 120 ms, confirmation 3 frames, fin 650 ms, relance 18 s</div>
+                      <div>Backend: sensibilité 300, mot court 120 ms, confirmation 2 frames, fin 0.7 s</div>
+                    </div>
+                  </div>
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Filtrer le souffle, quelques mots rapprochés</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="noise-filter">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Browser: sensibilité 0.075, mot court 300 ms, confirmation 8 frames, fin 1000 ms, relance 25 s</div>
+                      <div>Backend: sensibilité 700, mot court 300 ms, confirmation 6 frames, fin 1.2 s</div>
+                    </div>
+                  </div>
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Longue phrase lente, voix faible</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="slow-soft">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Browser: sensibilité 0.03, mot court 220 ms, confirmation 5 frames, fin 2200 ms, relance 45 s</div>
+                      <div>Backend: sensibilité 250, mot court 220 ms, confirmation 4 frames, fin 2.4 s</div>
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
           </details>
         </section>
@@ -2908,6 +3112,38 @@ INDEX_HTML = """<!doctype html>
     const ttsSpeedField = document.querySelector("#tts-speed-field");
     const openaiTtsSpeed = document.querySelector("#openai-tts-speed");
     const openaiTtsSpeedLabel = document.querySelector("#openai-tts-speed-label");
+    const ttsTestField = document.querySelector("#tts-test-field");
+    const ttsTest = document.querySelector("#tts-test");
+    const webConversationThreshold = document.querySelector("#web-conversation-threshold");
+    const webConversationThresholdLabel = document.querySelector("#web-conversation-threshold-label");
+    const webConversationMinSpeechMs = document.querySelector("#web-conversation-min-speech-ms");
+    const webConversationMinSpeechMsLabel = document.querySelector("#web-conversation-min-speech-ms-label");
+    const webConversationMinSpeechFrames = document.querySelector("#web-conversation-min-speech-frames");
+    const webConversationMinSpeechFramesLabel = document.querySelector("#web-conversation-min-speech-frames-label");
+    const webConversationSilenceMs = document.querySelector("#web-conversation-silence-ms");
+    const webConversationSilenceMsLabel = document.querySelector("#web-conversation-silence-ms-label");
+    const webConversationIdleSeconds = document.querySelector("#web-conversation-idle-seconds");
+    const webConversationIdleSecondsLabel = document.querySelector("#web-conversation-idle-seconds-label");
+    const voiceSilenceThreshold = document.querySelector("#voice-silence-threshold");
+    const voiceSilenceThresholdLabel = document.querySelector("#voice-silence-threshold-label");
+    const voiceMinSpeechMs = document.querySelector("#voice-min-speech-ms");
+    const voiceMinSpeechMsLabel = document.querySelector("#voice-min-speech-ms-label");
+    const voiceMinSpeechFrames = document.querySelector("#voice-min-speech-frames");
+    const voiceMinSpeechFramesLabel = document.querySelector("#voice-min-speech-frames-label");
+    const voiceSilenceDuration = document.querySelector("#voice-silence-duration");
+    const voiceSilenceDurationLabel = document.querySelector("#voice-silence-duration-label");
+    const vadPresetButtons = Array.from(document.querySelectorAll(".vad-preset"));
+    const vadControls = [
+      webConversationThreshold,
+      webConversationMinSpeechMs,
+      webConversationMinSpeechFrames,
+      webConversationSilenceMs,
+      webConversationIdleSeconds,
+      voiceSilenceThreshold,
+      voiceMinSpeechMs,
+      voiceMinSpeechFrames,
+      voiceSilenceDuration
+    ];
     const cloudApiDetails = document.querySelector("#cloud-api-details");
     const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
     const cloudApiGrid = document.querySelector("#cloud-api-grid");
@@ -2923,6 +3159,42 @@ INDEX_HTML = """<!doctype html>
     const thinkingSound = document.querySelector("#thinking-sound");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
+    const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
+    const vadPresets = {
+      "quick-word": {
+        webConversationThreshold: 0.035,
+        webConversationMinSpeechMs: 120,
+        webConversationMinSpeechFrames: 3,
+        webConversationSilenceMs: 650,
+        webConversationIdleSeconds: 18,
+        voiceSilenceThreshold: 300,
+        voiceMinSpeechMs: 120,
+        voiceMinSpeechFrames: 2,
+        voiceSilenceDuration: 0.7
+      },
+      "noise-filter": {
+        webConversationThreshold: 0.075,
+        webConversationMinSpeechMs: 300,
+        webConversationMinSpeechFrames: 8,
+        webConversationSilenceMs: 1000,
+        webConversationIdleSeconds: 25,
+        voiceSilenceThreshold: 700,
+        voiceMinSpeechMs: 300,
+        voiceMinSpeechFrames: 6,
+        voiceSilenceDuration: 1.2
+      },
+      "slow-soft": {
+        webConversationThreshold: 0.03,
+        webConversationMinSpeechMs: 220,
+        webConversationMinSpeechFrames: 5,
+        webConversationSilenceMs: 2200,
+        webConversationIdleSeconds: 45,
+        voiceSilenceThreshold: 250,
+        voiceMinSpeechMs: 220,
+        voiceMinSpeechFrames: 4,
+        voiceSilenceDuration: 2.4
+      }
+    };
     let llmControlsInitialized = false;
     let llmOptionsLoading = false;
     let envProfilesLoading = false;
@@ -4357,14 +4629,20 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function playWebTts(text) {
-      if (!webAudio.tts_enabled || !text) return;
+    async function playWebTts(text, options = {}) {
+      const force = options.force === true;
+      if ((!force && !webAudio.tts_enabled) || !text) return;
       try {
         webTtsPlaying = true;
+        const payload = { text };
+        if (options.provider) payload.provider = options.provider;
+        if (options.model) payload.model = options.model;
+        if (options.voice) payload.voice = options.voice;
+        if (options.speed) payload.speed = options.speed;
         const response = await fetch("/api/web-tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text })
+          body: JSON.stringify(payload)
         });
         if (!response.ok) {
           const responseText = await response.text();
@@ -4380,6 +4658,7 @@ INDEX_HTML = """<!doctype html>
         }
       } catch (error) {
         setMeta(conciseClientTtsError(error), "error", 12000);
+        if (force) throw error;
       } finally {
         currentWebTtsSource = null;
         currentWebTtsAudio = null;
@@ -4503,7 +4782,16 @@ INDEX_HTML = """<!doctype html>
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
         openai_tts_voice: openaiTtsVoice.value || "",
-        openai_tts_speed: Number(openaiTtsSpeed.value || 1)
+        openai_tts_speed: Number(openaiTtsSpeed.value || 1),
+        web_conversation_threshold: Number(webConversationThreshold.value || 0.05),
+        web_conversation_min_speech_ms: Number(webConversationMinSpeechMs.value || 350),
+        web_conversation_min_speech_frames: Number(webConversationMinSpeechFrames.value || 8),
+        web_conversation_silence_ms: Number(webConversationSilenceMs.value || 1200),
+        web_conversation_idle_seconds: Number(webConversationIdleSeconds.value || 25),
+        voice_silence_threshold: Number(voiceSilenceThreshold.value || 500),
+        voice_min_speech_ms: Number(voiceMinSpeechMs.value || 350),
+        voice_min_speech_frames: Number(voiceMinSpeechFrames.value || 5),
+        voice_silence_duration: Number(voiceSilenceDuration.value || 1.5)
       });
     }
 
@@ -4605,6 +4893,70 @@ INDEX_HTML = """<!doctype html>
       openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
     }
 
+    function syncVadLabels() {
+      webConversationThresholdLabel.textContent = Number(webConversationThreshold.value || 0.05).toFixed(3);
+      webConversationMinSpeechMsLabel.textContent = `${Number(webConversationMinSpeechMs.value || 350)} ms`;
+      webConversationMinSpeechFramesLabel.textContent = `${Number(webConversationMinSpeechFrames.value || 8)} frames`;
+      webConversationSilenceMsLabel.textContent = `${Number(webConversationSilenceMs.value || 1200)} ms`;
+      webConversationIdleSecondsLabel.textContent = `${Number(webConversationIdleSeconds.value || 25)} s`;
+      voiceSilenceThresholdLabel.textContent = `${Number(voiceSilenceThreshold.value || 500)}`;
+      voiceMinSpeechMsLabel.textContent = `${Number(voiceMinSpeechMs.value || 350)} ms`;
+      voiceMinSpeechFramesLabel.textContent = `${Number(voiceMinSpeechFrames.value || 5)} frames`;
+      voiceSilenceDurationLabel.textContent = `${Number(voiceSilenceDuration.value || 1.5).toFixed(1)} s`;
+    }
+
+    function setVadControls(data) {
+      webConversationThreshold.value = String(data.selected_web_conversation_threshold ?? 0.05);
+      webConversationMinSpeechMs.value = String(data.selected_web_conversation_min_speech_ms ?? 350);
+      webConversationMinSpeechFrames.value = String(data.selected_web_conversation_min_speech_frames ?? 8);
+      webConversationSilenceMs.value = String(data.selected_web_conversation_silence_ms ?? 1200);
+      webConversationIdleSeconds.value = String(data.selected_web_conversation_idle_seconds ?? 25);
+      voiceSilenceThreshold.value = String(data.selected_voice_silence_threshold ?? 500);
+      voiceMinSpeechMs.value = String(data.selected_voice_min_speech_ms ?? 350);
+      voiceMinSpeechFrames.value = String(data.selected_voice_min_speech_frames ?? 5);
+      voiceSilenceDuration.value = String(data.selected_voice_silence_duration ?? 1.5);
+      syncVadLabels();
+    }
+
+    function applyVadPreset(name) {
+      const preset = vadPresets[name];
+      if (!preset) return;
+      webConversationThreshold.value = String(preset.webConversationThreshold);
+      webConversationMinSpeechMs.value = String(preset.webConversationMinSpeechMs);
+      webConversationMinSpeechFrames.value = String(preset.webConversationMinSpeechFrames);
+      webConversationSilenceMs.value = String(preset.webConversationSilenceMs);
+      webConversationIdleSeconds.value = String(preset.webConversationIdleSeconds);
+      voiceSilenceThreshold.value = String(preset.voiceSilenceThreshold);
+      voiceMinSpeechMs.value = String(preset.voiceMinSpeechMs);
+      voiceMinSpeechFrames.value = String(preset.voiceMinSpeechFrames);
+      voiceSilenceDuration.value = String(preset.voiceSilenceDuration);
+      syncVadLabels();
+      llmMessage.textContent = "STT example applied. Save to persist.";
+    }
+
+    async function testSelectedTtsVoice() {
+      const provider = cloudTtsProvider.value || "none";
+      if (!["openai", "elevenlabs"].includes(provider)) return;
+      const voice = provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value;
+      const speed = Number(openaiTtsSpeed.value || 1);
+      ttsTest.disabled = true;
+      llmMessage.textContent = "Testing voice...";
+      try {
+        await playWebTts(ttsTestPhrase, {
+          force: true,
+          provider,
+          model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+          voice,
+          speed
+        });
+        llmMessage.textContent = "Voice test played.";
+      } catch (error) {
+        llmMessage.textContent = `Voice test failed: ${error}`;
+      } finally {
+        syncTtsProviderControls();
+      }
+    }
+
     function syncAudioDeviceVisibility() {
       const output = selectedTtsOutput();
       browserAudioOutputField.classList.toggle("hidden", output !== "browser");
@@ -4626,9 +4978,11 @@ INDEX_HTML = """<!doctype html>
 	      elevenlabsVoiceField.classList.toggle("hidden", offline || provider !== "elevenlabs");
 	      openaiTtsVoiceField.classList.toggle("hidden", offline || provider !== "openai");
 	      ttsSpeedField.classList.toggle("hidden", offline || provider === "none");
+	      ttsTestField.classList.toggle("hidden", offline || provider === "none");
 	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
 	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
 	      openaiTtsSpeed.disabled = offline || provider === "none";
+	      ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
       syncAudioDeviceVisibility();
 	    }
 
@@ -4844,6 +5198,9 @@ INDEX_HTML = """<!doctype html>
       elevenlabsVoice.disabled = true;
       openaiTtsVoice.disabled = true;
       openaiTtsSpeed.disabled = true;
+      ttsTest.disabled = true;
+      for (const control of vadControls) control.disabled = true;
+      for (const button of vadPresetButtons) button.disabled = true;
       backendAudioInput.disabled = true;
       backendAudioOutput.disabled = true;
       thinkingSound.disabled = true;
@@ -4928,6 +5285,7 @@ INDEX_HTML = """<!doctype html>
         }
 	        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
 	        syncOpenAiSpeedLabel();
+        setVadControls(data);
 	        syncConnectivityControls();
 
         backendAudioInput.replaceChildren();
@@ -4986,6 +5344,8 @@ INDEX_HTML = """<!doctype html>
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
+        for (const control of vadControls) control.disabled = false;
+        for (const button of vadPresetButtons) button.disabled = false;
 	        syncConnectivityControls();
         backendAudioInput.disabled = backendAudioInput.options.length === 0;
         backendAudioOutput.disabled = backendAudioOutput.options.length === 0;
@@ -5332,6 +5692,8 @@ INDEX_HTML = """<!doctype html>
     });
 
 	    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
+    elevenlabsVoice.addEventListener("change", syncTtsProviderControls);
+    openaiTtsVoice.addEventListener("change", syncTtsProviderControls);
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
     }
@@ -5398,6 +5760,15 @@ INDEX_HTML = """<!doctype html>
       const thinkingSoundFile = thinkingSound.value;
       const openAiTtsVoiceValue = openaiTtsVoice.value;
       const openAiTtsSpeedValue = Number(openaiTtsSpeed.value || 1);
+      const webConversationThresholdValue = Number(webConversationThreshold.value || 0.05);
+      const webConversationMinSpeechMsValue = Number(webConversationMinSpeechMs.value || 350);
+      const webConversationMinSpeechFramesValue = Number(webConversationMinSpeechFrames.value || 8);
+      const webConversationSilenceMsValue = Number(webConversationSilenceMs.value || 1200);
+      const webConversationIdleSecondsValue = Number(webConversationIdleSeconds.value || 25);
+      const voiceSilenceThresholdValue = Number(voiceSilenceThreshold.value || 500);
+      const voiceMinSpeechMsValue = Number(voiceMinSpeechMs.value || 350);
+      const voiceMinSpeechFramesValue = Number(voiceMinSpeechFrames.value || 5);
+      const voiceSilenceDurationValue = Number(voiceSilenceDuration.value || 1.5);
       if (!provider) return;
 
       llmSave.disabled = true;
@@ -5423,7 +5794,16 @@ INDEX_HTML = """<!doctype html>
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
             openai_tts_voice: openAiTtsVoiceValue,
-            openai_tts_speed: openAiTtsSpeedValue
+            openai_tts_speed: openAiTtsSpeedValue,
+            web_conversation_threshold: webConversationThresholdValue,
+            web_conversation_min_speech_ms: webConversationMinSpeechMsValue,
+            web_conversation_min_speech_frames: webConversationMinSpeechFramesValue,
+            web_conversation_silence_ms: webConversationSilenceMsValue,
+            web_conversation_idle_seconds: webConversationIdleSecondsValue,
+            voice_silence_threshold: voiceSilenceThresholdValue,
+            voice_min_speech_ms: voiceMinSpeechMsValue,
+            voice_min_speech_frames: voiceMinSpeechFramesValue,
+            voice_silence_duration: voiceSilenceDurationValue
           })
         });
         if (!response.ok) throw new Error(await response.text());
@@ -5442,6 +5822,13 @@ INDEX_HTML = """<!doctype html>
     });
 
     openaiTtsSpeed.addEventListener("input", syncOpenAiSpeedLabel);
+    for (const control of vadControls) {
+      control.addEventListener("input", syncVadLabels);
+    }
+    for (const button of vadPresetButtons) {
+      button.addEventListener("click", () => applyVadPreset(button.dataset.vadPreset || ""));
+    }
+    ttsTest.addEventListener("click", testSelectedTtsVoice);
     loadBrowserAudioDevices(false);
   </script>
 </body>
