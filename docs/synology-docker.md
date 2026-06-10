@@ -9,7 +9,7 @@ The application itself is not hard to containerize: it is a Python service with 
 The harder parts are runtime integrations:
 
 - Microphone and speaker access require `/dev/snd` passthrough and working ALSA support on the NAS.
-- The mixer MCP server needs LAN access to the mixer, so `network_mode: host` is the simplest Synology setup.
+- The mixer MCP server needs LAN access to the mixer. Bridge networking works when the required HTTP ports are published and MCP endpoints use reachable host/LAN/Tailscale addresses instead of container-local `127.0.0.1`.
 - Offline mode needs Ollama and local Whisper model caches available to the container.
 - Local stdio MCP servers such as XMSeries-MCP or QLCPlus-MCP must be mounted after they have been installed and built.
 
@@ -18,7 +18,7 @@ For a first Synology deployment, use the web monitor and text command injection 
 ## Files
 
 - `Dockerfile`: builds the Python app image with audio, ffmpeg, Node.js, and npm support.
-- `docker-compose.yml`: host-network Synology compose file.
+- `docker-compose.yml`: Synology compose file using bridge networking with the web monitor port published.
 - `container/config/.env.infrafast`: edit for the NAS/deployment folder.
 - `container/config/mcp_servers.synology.json`: MCP config for mounted or HTTP stage-control MCP servers.
 - `.dockerignore`: keeps local virtualenvs, caches, and API key files out of the image.
@@ -60,7 +60,11 @@ Edit `container/config/.env.infrafast`.
 Keep `container/config/mcp_servers.synology.json` in the same folder.
 Put API keys in the two text files. You can leave the ElevenLabs file empty only when neither `CLOUD_TTS_PROVIDER=elevenlabs` nor `WEB_TTS_PROVIDER=elevenlabs` is used.
 
-The compose file mounts `./container/config` to `/config:ro` and `./container/data` to `/data`. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Persisted web chat sessions should use a writable mounted path such as `SESSION_CONTEXT_DIR=/data/contexts`.
+The compose file mounts `./container/config` to `/config` and `./container/data` to `/data`, and publishes `${WEB_MONITOR_HOST_PORT:-8765}:8765/tcp` so the web monitor is reachable through bridge networking. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Persisted web chat sessions should use a writable mounted path such as `SESSION_CONTEXT_DIR=/data/contexts`.
+
+`WEB_MONITOR_HOST_PORT` is read by Docker Compose before the container starts. It changes only the host/NAS published port. The assistant's internal listening port still comes from `WEB_MONITOR_PORT` in the selected `/config/.env*` file and should remain `8765` unless you also update the compose container-side port or run Compose with a matching interpolation environment.
+
+If you intentionally switch the assistant back to `network_mode: host`, remove the `ports` block because published ports are not used with host networking. In bridge mode, do not point MCP or Ollama URLs at `127.0.0.1` unless that service runs inside the same container; use the NAS LAN IP, Tailscale IP, or another reachable service name/address.
 
 ## Compatible Stage MCP Servers
 

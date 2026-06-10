@@ -163,7 +163,7 @@ host:      ./container/config/ELEVENLABS_API_KEY.txt
 container: /config/ELEVENLABS_API_KEY.txt
 ```
 
-The Docker image entrypoint uses `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and if that file is missing it auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Vendored noVNC files are copied into the image at build time; do not mount `./static` over `/app/static` unless the host folder contains the complete `static/novnc` tree, including `vendor/pako/lib`.
+The Docker image entrypoint uses `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and if that file is missing it auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. The bundled compose file uses bridge networking and publishes the web monitor as `${WEB_MONITOR_HOST_PORT:-8765}:8765/tcp`; keep that port mapping when you want to open the monitor from the NAS/LAN. Vendored noVNC files are copied into the image at build time; do not mount `./static` over `/app/static` unless the host folder contains the complete `static/novnc` tree, including `vendor/pako/lib`.
 
 The assistant can run without working audio devices: if microphone capture fails because no input device is available, it falls back to text commands from the web monitor or terminal; if speech playback is unavailable, responses are still printed in the console and monitor. For a first run on Synology or another headless Docker host, `TTS_PROVIDER=none` is only the quietest starting point while you validate the container, MCP, and web monitor. Microphone and speaker passthrough can be tested later.
 
@@ -206,7 +206,7 @@ The server script path itself belongs in `container/config/mcp_servers.synology.
 
 In stdio mode, mixer connection settings such as `OSC_HOST`, `OSC_PORT`, and `OSC_PROTOCOL` belong in the `env` block of `container/config/mcp_servers.synology.json`; that block is passed to the XMSeries-MCP process. If XMSeries-MCP runs as a separate HTTP service/container, put those OSC settings on the XMSeries-MCP service instead and configure Live Stage Assistant with only the MCP HTTP URL. QLCPlus-MCP can be configured the same way: either run it as a local stdio MCP server with its QLC+ host/OSC settings in that server's `env` block, or point the assistant at its streamable HTTP MCP endpoint.
 
-On DSM 7.0, the exact Docker UI depends on the Synology model and installed Docker package. If the Container Manager "Project" interface is not available, use SSH and the `docker compose` command above, or create an equivalent container manually with the same mounts, host network, and port `8765`.
+On DSM 7.0, the exact Docker UI depends on the Synology model and installed Docker package. If the Container Manager "Project" interface is not available, use SSH and the `docker compose` command above, or create an equivalent container manually with the same mounts and published port `8765`.
 
 ### Offline Preparation
 

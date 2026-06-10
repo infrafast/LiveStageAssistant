@@ -6,6 +6,8 @@ services:
     image: live-stage-assistant:local
     container_name: live-stage-assistant
     restart: unless-stopped
+    ports:
+      - "${WEB_MONITOR_HOST_PORT:-8765}:8765/tcp"
     volumes:
       - ./container/config:/config
       - ./container/data:/data
