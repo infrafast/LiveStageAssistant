@@ -19,7 +19,9 @@ import sys
 import threading
 import time
 from typing import Any, Callable, TextIO
-from urllib.parse import parse_qs, urlparse
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
 SECRET_KEY_MARKERS = (
@@ -137,6 +139,7 @@ def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dic
             continue
 
         admin_url = parsed._replace(path="/mcp", query="", fragment="").geturl()
+        proxy_admin_url = f"/api/mcp-admin/{quote(str(name), safe='')}/mcp"
         headers = server_config.get("headers")
         auth_required = False
         if isinstance(headers, dict):
@@ -146,14 +149,43 @@ def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dic
             {
                 "url": url,
                 "admin_url": admin_url,
+                "proxy_admin_url": proxy_admin_url,
                 "embeddable": True,
                 "auth_required": auth_required,
-                "detail": "Bearer auth may block iframe access" if auth_required else "opens the server /mcp page",
+                "detail": "proxied through LiveStageAssistant backend",
             }
         )
         frames.append(entry)
 
     return frames
+
+
+def build_mcp_admin_proxy_targets(mcp_config: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Build backend-only proxy targets for configured HTTP MCP servers."""
+    servers = (mcp_config or {}).get("mcpServers")
+    if not isinstance(servers, dict):
+        return {}
+
+    targets: dict[str, dict[str, Any]] = {}
+    for name, server_config in servers.items():
+        if not isinstance(server_config, dict):
+            continue
+        url = str(server_config.get("url") or "").strip()
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        headers: dict[str, str] = {}
+        raw_headers = server_config.get("headers")
+        if isinstance(raw_headers, dict):
+            for key, value in raw_headers.items():
+                if value is not None:
+                    headers[str(key)] = str(value)
+        targets[str(name)] = {
+            "scheme": parsed.scheme,
+            "netloc": parsed.netloc,
+            "headers": headers,
+        }
+    return targets
 
 
 class TeeStream:
@@ -222,6 +254,7 @@ class WebMonitor:
         self._cancel_handler: Callable[[], None] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
         self._web_audio_tts_handler: Callable[[str], dict[str, Any]] | None = None
+        self._mcp_admin_proxy_targets: dict[str, dict[str, Any]] = {}
         self._started_at = time.time()
         self._snapshot: dict[str, Any] = {
             "mode": "unknown",
@@ -379,6 +412,9 @@ class WebMonitor:
                     if parsed.path == "/api/vnc-check":
                         self._handle_vnc_check(parsed.query)
                         return
+                    if parsed.path.startswith("/api/mcp-admin/"):
+                        self._handle_mcp_admin_proxy("GET", parsed.path, parsed.query)
+                        return
                     if parsed.path == "/api/snapshot":
                         self._send_json(monitor.snapshot())
                         return
@@ -410,6 +446,9 @@ class WebMonitor:
                     if parsed.path == "/vnc.html":
                         self._send_text(VNC_HTML, "text/html; charset=utf-8", send_body=False)
                         return
+                    if parsed.path.startswith("/api/mcp-admin/"):
+                        self._handle_mcp_admin_proxy("HEAD", parsed.path, parsed.query, send_body=False)
+                        return
                     if parsed.path.startswith("/static/"):
                         self._handle_static(parsed.path, send_body=False)
                         return
@@ -419,6 +458,10 @@ class WebMonitor:
                     self.send_error(404)
 
                 def do_POST(self) -> None:
+                    parsed = urlparse(self.path)
+                    if parsed.path.startswith("/api/mcp-admin/"):
+                        self._handle_mcp_admin_proxy("POST", parsed.path, parsed.query)
+                        return
                     if self.path == "/api/inject-command":
                         self._handle_inject_command()
                         return
@@ -557,6 +600,95 @@ class WebMonitor:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     if send_body:
+                        self.wfile.write(data)
+
+                def _handle_mcp_admin_proxy(
+                    self,
+                    method: str,
+                    request_path: str,
+                    query: str,
+                    *,
+                    send_body: bool = True,
+                ) -> None:
+                    prefix = "/api/mcp-admin/"
+                    raw_tail = request_path.removeprefix(prefix)
+                    server_part, _, target_part = raw_tail.partition("/")
+                    server_name = unquote(server_part)
+                    if not server_name or not target_part:
+                        self.send_error(404)
+                        return
+
+                    with monitor._lock:
+                        target = dict(monitor._mcp_admin_proxy_targets.get(server_name) or {})
+                    if not target:
+                        self.send_error(404, "MCP admin proxy target is not configured")
+                        return
+
+                    target_path = "/" + target_part
+                    target_url = f"{target['scheme']}://{target['netloc']}{target_path}"
+                    if query:
+                        target_url += "?" + query
+
+                    body = None
+                    if method == "POST":
+                        try:
+                            length = int(self.headers.get("Content-Length", "0"))
+                        except ValueError:
+                            length = 0
+                        if length > 2 * 1024 * 1024:
+                            self.send_error(413, "MCP admin proxy request is too large")
+                            return
+                        body = self.rfile.read(length) if length else b""
+
+                    headers: dict[str, str] = {
+                        "Accept": self.headers.get("Accept", "*/*"),
+                        "User-Agent": "LiveStageAssistant-MCPAdminProxy/1.0",
+                    }
+                    content_type = self.headers.get("Content-Type")
+                    if content_type:
+                        headers["Content-Type"] = content_type
+                    for key, value in (target.get("headers") or {}).items():
+                        headers[str(key)] = str(value)
+
+                    proxy_request = urllib_request.Request(target_url, data=body, headers=headers, method=method)
+                    try:
+                        with urllib_request.urlopen(proxy_request, timeout=8) as response:
+                            data = response.read() if send_body else b""
+                            status = response.status
+                            reason = response.reason
+                            content_type = response.headers.get("Content-Type", "application/octet-stream")
+                    except urllib_error.HTTPError as e:
+                        data = e.read() if send_body else b""
+                        status = e.code
+                        reason = e.reason
+                        content_type = e.headers.get("Content-Type", "text/plain; charset=utf-8")
+                    except (urllib_error.URLError, TimeoutError, OSError) as e:
+                        self.send_error(502, f"MCP admin proxy could not reach {server_name}: {e}")
+                        return
+
+                    if send_body and "text/html" in content_type.lower():
+                        try:
+                            text = data.decode("utf-8")
+                        except UnicodeDecodeError:
+                            text = data.decode("utf-8", errors="replace")
+                        proxy_base = f"/api/mcp-admin/{quote(server_name, safe='')}"
+                        text = (
+                            text.replace('"/mcp', f'"{proxy_base}/mcp')
+                            .replace("'/mcp", f"'{proxy_base}/mcp")
+                            .replace('"/health', f'"{proxy_base}/health')
+                            .replace("'/health", f"'{proxy_base}/health")
+                            .replace("</head>", f'<base href="{proxy_base}/">\n</head>')
+                        )
+                        data = text.encode("utf-8")
+                        content_type = "text/html; charset=utf-8"
+
+                    self.send_response(status, reason)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Frame-Options", "SAMEORIGIN")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    if send_body and data:
                         self.wfile.write(data)
 
                 def _handle_vnc_proxy(self, query: str) -> None:
@@ -1290,6 +1422,7 @@ class WebMonitor:
                 if mcp_config is not None:
                     config["mcp"] = redact_mapping(mcp_config)
                     self._snapshot["mcp_servers"] = build_mcp_server_admin_frames(mcp_config)
+                    self._mcp_admin_proxy_targets = build_mcp_admin_proxy_targets(mcp_config)
                 self._snapshot["config"] = config
                 self._snapshot["config_text"] = json.dumps(config, ensure_ascii=False, indent=2)
             if prompt is not None:
@@ -2538,7 +2671,7 @@ INDEX_HTML = """<!doctype html>
           <details id="mcp-servers-details">
             <summary>MCP Servers</summary>
             <div class="mcp-server-panel">
-              <div class="detail">HTTP MCP servers with a browser admin page can be opened here. Use Load frame only when the server is reachable from this browser.</div>
+              <div class="detail">HTTP MCP admin pages are proxied through LiveStageAssistant, so the browser only needs access to this monitor.</div>
               <div class="mcp-server-grid" id="mcp-server-grid"></div>
             </div>
           </details>
@@ -2959,6 +3092,7 @@ INDEX_HTML = """<!doctype html>
         item.name || "",
         item.type || "",
         item.admin_url || "",
+        item.proxy_admin_url || "",
         Boolean(item.embeddable),
         Boolean(item.auth_required),
         item.detail || ""
@@ -2998,26 +3132,35 @@ INDEX_HTML = """<!doctype html>
         badge.className = "inline-badge";
         badge.textContent = server.auth_required ? "Auth" : (server.type || "MCP");
         actions.append(badge);
-        if (server.admin_url) {
+        if (server.proxy_admin_url) {
           const open = document.createElement("a");
           open.className = "mcp-server-open";
-          open.href = server.admin_url;
+          open.href = server.proxy_admin_url;
           open.target = "_blank";
           open.rel = "noreferrer";
-          open.textContent = "Open";
+          open.textContent = "Open via NAS";
           actions.append(open);
+        }
+        if (server.admin_url) {
+          const direct = document.createElement("a");
+          direct.className = "mcp-server-open";
+          direct.href = server.admin_url;
+          direct.target = "_blank";
+          direct.rel = "noreferrer";
+          direct.textContent = "Direct";
+          actions.append(direct);
         }
 
         head.append(title, actions);
         card.append(head);
 
-        if (server.embeddable && server.admin_url) {
+        if (server.embeddable && server.proxy_admin_url) {
           const placeholder = document.createElement("div");
           placeholder.className = "mcp-server-placeholder";
 
           const note = document.createElement("div");
           note.className = "detail";
-          note.textContent = "The admin page is loaded by this browser. It must be reachable from this device, not only from the assistant backend.";
+          note.textContent = "The admin page will be proxied through LiveStageAssistant, so only the backend needs access to the MCP server.";
 
           const load = document.createElement("button");
           load.className = "mcp-server-load";
@@ -3028,7 +3171,7 @@ INDEX_HTML = """<!doctype html>
             frame.className = "mcp-server-frame";
             frame.title = `${server.name || "MCP server"} admin`;
             frame.referrerPolicy = "no-referrer";
-            frame.src = server.admin_url;
+            frame.src = server.proxy_admin_url;
             placeholder.replaceWith(frame);
           });
 
