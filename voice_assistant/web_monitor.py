@@ -2319,6 +2319,49 @@ INDEX_HTML = """<!doctype html>
       gap: 8px;
       padding: 10px;
     }
+    .vad-groups {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 10px;
+    }
+    .vad-group {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px;
+      display: grid;
+      gap: 10px;
+      background: var(--surface-soft);
+    }
+    .vad-group-title {
+      display: grid;
+      gap: 2px;
+      font-weight: 700;
+    }
+    .vad-group-title .detail {
+      font-weight: 400;
+      font-size: 12px;
+    }
+    .vad-field {
+      gap: 3px;
+    }
+    .vad-label {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .vad-value {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .field-hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
     .vad-example {
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -2869,41 +2912,91 @@ INDEX_HTML = """<!doctype html>
                 <label>Voice Test</label>
                 <button class="small-button" id="tts-test" type="button">Test</button>
               </div>
-              <div class="field">
-                <label for="web-conversation-threshold" title="WEB_CONVERSATION_THRESHOLD">Sensibilité micro browser <span id="web-conversation-threshold-label">0.05</span></label>
-                <input class="vad-control" id="web-conversation-threshold" type="range" min="0.01" max="0.2" step="0.005" value="0.05">
-              </div>
-              <div class="field">
-                <label for="web-conversation-min-speech-ms" title="WEB_CONVERSATION_MIN_SPEECH_MS">Mot court browser <span id="web-conversation-min-speech-ms-label">350 ms</span></label>
-                <input class="vad-control" id="web-conversation-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
-              </div>
-              <div class="field">
-                <label for="web-conversation-min-speech-frames" title="WEB_CONVERSATION_MIN_SPEECH_FRAMES">Confirmation browser <span id="web-conversation-min-speech-frames-label">8 frames</span></label>
-                <input class="vad-control" id="web-conversation-min-speech-frames" type="range" min="1" max="30" step="1" value="8">
-              </div>
-              <div class="field">
-                <label for="web-conversation-silence-ms" title="WEB_CONVERSATION_SILENCE_MS">Fin de phrase browser <span id="web-conversation-silence-ms-label">1200 ms</span></label>
-                <input class="vad-control" id="web-conversation-silence-ms" type="range" min="300" max="4000" step="50" value="1200">
-              </div>
-              <div class="field">
-                <label for="web-conversation-idle-seconds" title="WEB_CONVERSATION_IDLE_SECONDS">Relance écoute browser <span id="web-conversation-idle-seconds-label">25 s</span></label>
-                <input class="vad-control" id="web-conversation-idle-seconds" type="range" min="3" max="90" step="1" value="25">
-              </div>
-              <div class="field">
-                <label for="voice-silence-threshold" title="VOICE_SILENCE_THRESHOLD">Sensibilité micro backend <span id="voice-silence-threshold-label">500</span></label>
-                <input class="vad-control" id="voice-silence-threshold" type="range" min="50" max="3000" step="25" value="500">
-              </div>
-              <div class="field">
-                <label for="voice-min-speech-ms" title="VOICE_MIN_SPEECH_MS">Mot court backend <span id="voice-min-speech-ms-label">350 ms</span></label>
-                <input class="vad-control" id="voice-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
-              </div>
-              <div class="field">
-                <label for="voice-min-speech-frames" title="VOICE_MIN_SPEECH_FRAMES">Confirmation backend <span id="voice-min-speech-frames-label">5 frames</span></label>
-                <input class="vad-control" id="voice-min-speech-frames" type="range" min="1" max="30" step="1" value="5">
-              </div>
-              <div class="field">
-                <label for="voice-silence-duration" title="VOICE_SILENCE_DURATION">Fin de phrase backend <span id="voice-silence-duration-label">1.5 s</span></label>
-                <input class="vad-control" id="voice-silence-duration" type="range" min="0.2" max="5" step="0.1" value="1.5">
+              <div class="vad-groups">
+                <div class="vad-group">
+                  <div class="vad-group-title">
+                    <span>Browser</span>
+                    <span class="detail">Réglages du micro utilisé par le navigateur.</span>
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-threshold" title="WEB_CONVERSATION_THRESHOLD">
+                      <span>Déclenchement de la voix</span>
+                      <span class="vad-value" id="web-conversation-threshold-label">0.05</span>
+                    </label>
+                    <div class="field-hint">Plus bas capte une voix faible; plus haut ignore mieux le souffle et les bruits.</div>
+                    <input class="vad-control" id="web-conversation-threshold" type="range" min="0.01" max="0.2" step="0.005" value="0.05">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-min-speech-ms" title="WEB_CONVERSATION_MIN_SPEECH_MS">
+                      <span>Durée minimale d'un mot</span>
+                      <span class="vad-value" id="web-conversation-min-speech-ms-label">350 ms</span>
+                    </label>
+                    <div class="field-hint">Plus court accepte des mots très rapides; plus long évite les petits bruits isolés.</div>
+                    <input class="vad-control" id="web-conversation-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-min-speech-frames" title="WEB_CONVERSATION_MIN_SPEECH_FRAMES">
+                      <span>Stabilité avant validation</span>
+                      <span class="vad-value" id="web-conversation-min-speech-frames-label">8 frames</span>
+                    </label>
+                    <div class="field-hint">Plus bas réagit vite; plus haut demande plusieurs instants de voix avant d'envoyer.</div>
+                    <input class="vad-control" id="web-conversation-min-speech-frames" type="range" min="1" max="30" step="1" value="8">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-silence-ms" title="WEB_CONVERSATION_SILENCE_MS">
+                      <span>Pause qui termine la phrase</span>
+                      <span class="vad-value" id="web-conversation-silence-ms-label">1200 ms</span>
+                    </label>
+                    <div class="field-hint">Plus court envoie vite; plus long laisse le temps de parler lentement sans couper.</div>
+                    <input class="vad-control" id="web-conversation-silence-ms" type="range" min="300" max="4000" step="50" value="1200">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-idle-seconds" title="WEB_CONVERSATION_IDLE_SECONDS">
+                      <span>Relance si personne ne parle</span>
+                      <span class="vad-value" id="web-conversation-idle-seconds-label">25 s</span>
+                    </label>
+                    <div class="field-hint">Redémarre l'écoute après une période calme pour éviter un micro bloqué.</div>
+                    <input class="vad-control" id="web-conversation-idle-seconds" type="range" min="3" max="90" step="1" value="25">
+                  </div>
+                </div>
+                <div class="vad-group">
+                  <div class="vad-group-title">
+                    <span>Backend</span>
+                    <span class="detail">Réglages du micro PyAudio côté assistant.</span>
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="voice-silence-threshold" title="VOICE_SILENCE_THRESHOLD">
+                      <span>Déclenchement de la voix</span>
+                      <span class="vad-value" id="voice-silence-threshold-label">500</span>
+                    </label>
+                    <div class="field-hint">Plus bas capte plus facilement; plus haut filtre mieux souffle, salle et retours.</div>
+                    <input class="vad-control" id="voice-silence-threshold" type="range" min="50" max="3000" step="25" value="500">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="voice-min-speech-ms" title="VOICE_MIN_SPEECH_MS">
+                      <span>Durée minimale d'un mot</span>
+                      <span class="vad-value" id="voice-min-speech-ms-label">350 ms</span>
+                    </label>
+                    <div class="field-hint">Plus court accepte une commande brève; plus long évite les clics et respirations.</div>
+                    <input class="vad-control" id="voice-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="voice-min-speech-frames" title="VOICE_MIN_SPEECH_FRAMES">
+                      <span>Stabilité avant validation</span>
+                      <span class="vad-value" id="voice-min-speech-frames-label">5 frames</span>
+                    </label>
+                    <div class="field-hint">Plus bas démarre vite; plus haut attend que la voix soit vraiment présente.</div>
+                    <input class="vad-control" id="voice-min-speech-frames" type="range" min="1" max="30" step="1" value="5">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="voice-silence-duration" title="VOICE_SILENCE_DURATION">
+                      <span>Pause qui termine la phrase</span>
+                      <span class="vad-value" id="voice-silence-duration-label">1.5 s</span>
+                    </label>
+                    <div class="field-hint">Plus court répond vite; plus long protège les phrases lentes ou hésitantes.</div>
+                    <input class="vad-control" id="voice-silence-duration" type="range" min="0.2" max="5" step="0.1" value="1.5">
+                  </div>
+                </div>
               </div>
               <details class="nested-details">
                 <summary>Exemples de réglages STT</summary>
