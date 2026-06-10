@@ -64,6 +64,8 @@ The compose file mounts `./container/config` to `/config` and `./container/data`
 
 `WEB_MONITOR_HOST_PORT` is read by Docker Compose before the container starts. It changes only the host/NAS published port. The assistant's internal listening port still comes from `WEB_MONITOR_PORT` in the selected `/config/.env*` file and should remain `8765` unless you also update the compose container-side port or run Compose with a matching interpolation environment.
 
+The web config profile dropdown lists `.env*` files from both the app working directory and the active env file's directory. In Docker, this means mounted profiles such as `/config/.env.infrafast` and `/config/.env.tailscale` appear when the container is started with `ASSISTANT_ENV_FILE=/config/...`. Manual switching is disabled only when the assistant is started with `--env-file auto`.
+
 If you intentionally switch the assistant back to `network_mode: host`, remove the `ports` block because published ports are not used with host networking. In bridge mode, do not point MCP or Ollama URLs at `127.0.0.1` unless that service runs inside the same container; use the NAS LAN IP, Tailscale IP, or another reachable service name/address.
 
 ## Compatible Stage MCP Servers

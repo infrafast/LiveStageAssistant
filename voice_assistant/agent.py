@@ -3239,9 +3239,13 @@ async def main():
 
     def list_available_env_files(current_env_file: Path, auto_env_mode: bool) -> dict[str, Any]:
         candidates: dict[str, Path] = {}
-        for candidate in Path.cwd().glob(".env*"):
-            if candidate.is_file():
-                candidates[display_env_path(candidate)] = candidate
+        search_dirs = [Path.cwd()]
+        if current_env_file.parent not in search_dirs:
+            search_dirs.append(current_env_file.parent)
+        for search_dir in search_dirs:
+            for candidate in search_dir.glob(".env*"):
+                if candidate.is_file():
+                    candidates[display_env_path(candidate)] = candidate
         if current_env_file.exists():
             candidates[display_env_path(current_env_file)] = current_env_file
 
@@ -3384,7 +3388,15 @@ async def main():
         if not resolved_candidate.name.startswith(".env"):
             raise ValueError("only .env* files can be selected")
 
-        allowed = {path.resolve() for path in Path.cwd().glob(".env*") if path.is_file()}
+        search_dirs = [Path.cwd()]
+        if current_env_file.parent not in search_dirs:
+            search_dirs.append(current_env_file.parent)
+        allowed = {
+            path.resolve()
+            for search_dir in search_dirs
+            for path in search_dir.glob(".env*")
+            if path.is_file()
+        }
         if current_env_file.exists():
             allowed.add(current_env_file.resolve())
         if resolved_candidate not in allowed:
