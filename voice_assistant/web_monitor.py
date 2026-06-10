@@ -2229,6 +2229,17 @@ INDEX_HTML = """<!doctype html>
       font-weight: 700;
       text-decoration: none;
     }
+    .mcp-server-load {
+      min-height: 30px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: #fff;
+      background: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
     .mcp-server-frame {
       display: block;
       width: 100%;
@@ -2242,6 +2253,13 @@ INDEX_HTML = """<!doctype html>
       border-radius: 8px;
       color: var(--muted);
       background: var(--surface-soft);
+    }
+    .mcp-server-placeholder {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      color: var(--muted);
+      background: var(--surface);
     }
     .cloud-api-header {
       display: flex;
@@ -2520,7 +2538,7 @@ INDEX_HTML = """<!doctype html>
           <details id="mcp-servers-details">
             <summary>MCP Servers</summary>
             <div class="mcp-server-panel">
-              <div class="detail">HTTP MCP servers with a browser admin page can be opened here. Servers that require Bearer headers may need to be opened separately.</div>
+              <div class="detail">HTTP MCP servers with a browser admin page can be opened here. Use Load frame only when the server is reachable from this browser.</div>
               <div class="mcp-server-grid" id="mcp-server-grid"></div>
             </div>
           </details>
@@ -2994,13 +3012,28 @@ INDEX_HTML = """<!doctype html>
         card.append(head);
 
         if (server.embeddable && server.admin_url) {
-          const frame = document.createElement("iframe");
-          frame.className = "mcp-server-frame";
-          frame.title = `${server.name || "MCP server"} admin`;
-          frame.loading = "lazy";
-          frame.referrerPolicy = "no-referrer";
-          frame.src = server.admin_url;
-          card.append(frame);
+          const placeholder = document.createElement("div");
+          placeholder.className = "mcp-server-placeholder";
+
+          const note = document.createElement("div");
+          note.className = "detail";
+          note.textContent = "The admin page is loaded by this browser. It must be reachable from this device, not only from the assistant backend.";
+
+          const load = document.createElement("button");
+          load.className = "mcp-server-load";
+          load.type = "button";
+          load.textContent = "Load frame";
+          load.addEventListener("click", () => {
+            const frame = document.createElement("iframe");
+            frame.className = "mcp-server-frame";
+            frame.title = `${server.name || "MCP server"} admin`;
+            frame.referrerPolicy = "no-referrer";
+            frame.src = server.admin_url;
+            placeholder.replaceWith(frame);
+          });
+
+          placeholder.append(note, load);
+          card.append(placeholder);
         } else {
           const empty = document.createElement("div");
           empty.className = "mcp-server-empty";
