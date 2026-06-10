@@ -611,6 +611,42 @@ def decode_mp3_to_pcm_bytes(
     return process.stdout
 
 
+def decode_audio_file_to_pcm_bytes(
+    audio_path: str | Path,
+    *,
+    sample_rate: int = DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+    channels: int = DEFAULT_BACKEND_MP3_CHANNELS,
+) -> bytes:
+    """Decode a local audio file to signed 16-bit PCM for PyAudio playback."""
+    if not ffmpeg_decode_available():
+        raise RuntimeError("ffmpeg is not available")
+
+    process = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(audio_path),
+            "-f",
+            "s16le",
+            "-ac",
+            str(channels),
+            "-ar",
+            str(sample_rate),
+            "pipe:1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg could not decode local TTS audio: {detail}")
+    return process.stdout
+
+
 def play_pcm_bytes(
     audio: pyaudio.PyAudio,
     pcm_bytes: bytes,
@@ -989,6 +1025,8 @@ class VoiceAssistant:
             print(f"Backend audio input fallback: {self.audio_input_device_detail}")
         if self.audio_output_device_status == "invalid":
             print(f"Backend audio output fallback: {self.audio_output_device_detail}")
+        print(f"Resolved backend audio input: {self.audio_input_device_detail}")
+        print(f"Resolved backend audio output: {self.audio_output_device_detail}")
 
         # Speech-to-text configuration
         self.openai_api_key = openai_api_key
@@ -2340,10 +2378,21 @@ class VoiceAssistant:
                     temp_path = temp_file.name
                 TTS_ENGINE.save_to_file(text, temp_path)
                 TTS_ENGINE.runAndWait()
-                if temp_path and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-                    self.play_wav_file(temp_path, stop_event=TTS_STOP_EVENT)
-                    return True
-                print("Local pyttsx3 file rendering failed. Falling back to direct system TTS...")
+                file_rendered = temp_path and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
+                if file_rendered:
+                    try:
+                        self.play_local_tts_file(temp_path, stop_event=TTS_STOP_EVENT)
+                        return True
+                    except Exception as e:
+                        if self.audio_output_device_index is not None:
+                            print(f"Local pyttsx3 backend playback failed on selected output: {e}")
+                            return False
+                        print(f"Local pyttsx3 backend playback failed: {e}. Falling back to direct system TTS...")
+                if self.audio_output_device_index is not None:
+                    print("Local pyttsx3 file rendering failed; direct system TTS skipped because a backend output device is selected.")
+                    return False
+                if not file_rendered:
+                    print("Local pyttsx3 file rendering failed. Falling back to direct system TTS...")
                 TTS_ENGINE.say(text)
                 TTS_ENGINE.runAndWait()
             return True
@@ -2356,6 +2405,29 @@ class VoiceAssistant:
                     os.unlink(temp_path)
                 except OSError:
                     pass
+
+    def play_local_tts_file(self, audio_path: str | Path, *, stop_event: threading.Event | None = None) -> None:
+        """Play a pyttsx3-rendered file through the selected backend output device."""
+        try:
+            self.play_wav_file(audio_path, stop_event=stop_event)
+            return
+        except Exception as wav_error:
+            if not ffmpeg_decode_available():
+                if self.audio_output_device_index is not None:
+                    raise RuntimeError(
+                        f"local TTS file is not directly playable and ffmpeg is unavailable: {wav_error}"
+                    ) from wav_error
+                raise
+
+        pcm_bytes = decode_audio_file_to_pcm_bytes(audio_path)
+        play_pcm_bytes(
+            self.audio,
+            pcm_bytes,
+            sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+            channels=DEFAULT_BACKEND_MP3_CHANNELS,
+            output_device_index=self.audio_output_device_index,
+            stop_event=stop_event,
+        )
 
     def play_wav_file(self, wav_path: str | Path, *, stop_event: threading.Event | None = None) -> None:
         """Play a WAV file through backend PyAudio output selection."""
