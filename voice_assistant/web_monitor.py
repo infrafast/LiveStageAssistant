@@ -2933,6 +2933,8 @@ INDEX_HTML = """<!doctype html>
     let environmentLoadingActive = false;
     let vncConnectTimer = null;
     let vncUrlDirty = false;
+    let currentVncFrameUrl = "";
+    let currentSnapshotEnvFile = "";
     let metaErrorUntil = 0;
     let lastServerMessages = [];
     let pendingMessages = [];
@@ -3301,7 +3303,14 @@ INDEX_HTML = """<!doctype html>
       return response.json();
     }
 
-    async function connectVnc({ save = false } = {}) {
+    function disconnectVnc(status = "hors ligne") {
+      window.clearTimeout(vncConnectTimer);
+      currentVncFrameUrl = "";
+      vncFrame.src = "about:blank";
+      setVncStatus(status);
+    }
+
+    async function connectVnc({ save = false, force = false } = {}) {
       let frameUrl = "";
       try {
         if (save) await saveRemoteScreenUrl();
@@ -3313,6 +3322,9 @@ INDEX_HTML = """<!doctype html>
       }
       if (!frameUrl) {
         setVncStatus("hors ligne");
+        return;
+      }
+      if (!force && frameUrl === currentVncFrameUrl && vncFrame.src) {
         return;
       }
       setVncStatus("connexion...");
@@ -3335,6 +3347,11 @@ INDEX_HTML = """<!doctype html>
         metaEl.textContent = `noVNC indisponible: ${error}`;
         return;
       }
+      if (currentVncFrameUrl && (force || currentVncFrameUrl !== frameUrl)) {
+        vncFrame.src = "about:blank";
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+      currentVncFrameUrl = frameUrl;
       vncFrame.src = frameUrl;
     }
 
@@ -4555,6 +4572,7 @@ INDEX_HTML = """<!doctype html>
       envProfile.disabled = true;
       llmSave.disabled = true;
       setEnvironmentLoading(true, "rafraichissement de l'environnement");
+      disconnectVnc("reconnexion VNC...");
       llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
       try {
         const response = await fetch("/api/env-profile", {
@@ -4576,6 +4594,7 @@ INDEX_HTML = """<!doctype html>
         setEnvironmentLoading(false);
         envProfile.value = activeEnvProfile;
         llmMessage.textContent = `Env switch failed: ${error}`;
+        connectVnc({ force: true });
       } finally {
         envProfile.disabled = !envProfileSwitchingEnabled || envProfile.options.length <= 1;
         llmSave.disabled = !llmProvider.value;
@@ -4919,7 +4938,8 @@ INDEX_HTML = """<!doctype html>
           backendAudioInput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioInput));
         }
         if (selectedBackendAudioInput && ![...backendAudioInput.options].some((item) => item.value === selectedBackendAudioInput)) {
-          backendAudioInput.appendChild(option(`${selectedBackendAudioInput} (current unavailable)`, selectedBackendAudioInput, false, true));
+          backendAudioInput.options[0].textContent = `Default input (current unavailable: ${selectedBackendAudioInput})`;
+          backendAudioInput.value = "";
         }
 
         backendAudioOutput.replaceChildren();
@@ -4930,7 +4950,8 @@ INDEX_HTML = """<!doctype html>
           backendAudioOutput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioOutput));
         }
         if (selectedBackendAudioOutput && ![...backendAudioOutput.options].some((item) => item.value === selectedBackendAudioOutput)) {
-          backendAudioOutput.appendChild(option(`${selectedBackendAudioOutput} (current unavailable)`, selectedBackendAudioOutput, false, true));
+          backendAudioOutput.options[0].textContent = `Default output (current unavailable: ${selectedBackendAudioOutput})`;
+          backendAudioOutput.value = "";
         }
 
         thinkingSound.replaceChildren();
@@ -4991,6 +5012,11 @@ INDEX_HTML = """<!doctype html>
         const response = await fetch("/api/snapshot", { cache: "no-store" });
         const data = await response.json();
         const previousBusy = composerLocked;
+        const snapshotEnvFile = data.env_file || "";
+        const snapshotEnvChanged = Boolean(currentSnapshotEnvFile) && snapshotEnvFile && snapshotEnvFile !== currentSnapshotEnvFile;
+        if (snapshotEnvFile) {
+          currentSnapshotEnvFile = snapshotEnvFile;
+        }
         const services = data.services || {};
         const rows = [
           tile("Internet", data.internet, data.mode === "auto" ? "auto profile detection" : "fixed profile"),
@@ -5001,8 +5027,23 @@ INDEX_HTML = """<!doctype html>
         configEl.value = data.config_text || "";
         renderMcpServers(data.mcp_servers || []);
         const remoteScreen = data.remote_screen || {};
-        if (!vncUrlDirty && remoteScreen.vnc_url && vncUrl.value !== remoteScreen.vnc_url) {
-          vncUrl.value = remoteScreen.vnc_url;
+        if (!vncUrlDirty && snapshotEnvChanged && currentVncFrameUrl) {
+          disconnectVnc("reconnexion VNC...");
+        }
+        if (!vncUrlDirty && remoteScreen.vnc_url) {
+          const remoteScreenUrlChanged = vncUrl.value !== remoteScreen.vnc_url;
+          if (remoteScreenUrlChanged) {
+            vncUrl.value = remoteScreen.vnc_url;
+          }
+          let remoteScreenFrameUrl = "";
+          try {
+            remoteScreenFrameUrl = noVncUrlFromInput(remoteScreen.vnc_url);
+          } catch (error) {
+            remoteScreenFrameUrl = "";
+          }
+          if (remoteScreenFrameUrl && (remoteScreenUrlChanged || snapshotEnvChanged || !currentVncFrameUrl)) {
+            await connectVnc({ force: true });
+          }
         }
         const environmentLoading = data.environment_loading || {};
         setEnvironmentLoading(
@@ -5073,7 +5114,6 @@ INDEX_HTML = """<!doctype html>
 
     refresh();
     setInterval(refresh, 1500);
-    connectVnc();
 
     vncUrl.addEventListener("input", () => {
       vncUrlDirty = true;
@@ -5086,7 +5126,9 @@ INDEX_HTML = """<!doctype html>
       }
     });
     vncFrame.addEventListener("load", () => {
-      setVncStatus("connexion...");
+      if (currentVncFrameUrl) {
+        setVncStatus("connexion...");
+      }
     });
     vncFrame.addEventListener("error", () => {
       window.clearTimeout(vncConnectTimer);

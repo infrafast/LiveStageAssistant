@@ -3711,14 +3711,20 @@ async def main():
             raise ValueError(f"OpenAI TTS voice '{openai_tts_voice}' is not available in the web config")
 
         backend_audio_devices = list_pyaudio_devices()
-        if backend_audio_input_device and backend_audio_input_device not in {
-            item["id"] for item in backend_audio_devices["inputs"]
-        }:
-            raise ValueError(f"backend audio input device '{backend_audio_input_device}' is not available")
-        if backend_audio_output_device and backend_audio_output_device not in {
-            item["id"] for item in backend_audio_devices["outputs"]
-        }:
-            raise ValueError(f"backend audio output device '{backend_audio_output_device}' is not available")
+        backend_audio_input_ids = {item["id"] for item in backend_audio_devices["inputs"]}
+        backend_audio_output_ids = {item["id"] for item in backend_audio_devices["outputs"]}
+        if backend_audio_input_device and backend_audio_input_device not in backend_audio_input_ids:
+            LOGGER.warning(
+                "Backend audio input device %r is not available; clearing saved selection",
+                backend_audio_input_device,
+            )
+            backend_audio_input_device = ""
+        if backend_audio_output_device and backend_audio_output_device not in backend_audio_output_ids:
+            LOGGER.warning(
+                "Backend audio output device %r is not available; clearing saved selection",
+                backend_audio_output_device,
+            )
+            backend_audio_output_device = ""
 
         update_env_file_values(
             env_file,
