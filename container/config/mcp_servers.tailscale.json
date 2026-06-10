@@ -10,7 +10,7 @@
     },
     "qlcplus": {
       "type": "streamable-http",
-      "url": "https://100.96.255.63:8788/mcp",
+      "url": "http://100.96.255.63:8788/mcp",
       "headers": {},
       "assistantOptions": {
         "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"

@@ -1793,6 +1793,50 @@ class VoiceAssistant:
             if server_name not in self.mcp_client.sessions:
                 await self.mcp_client.create_session(server_name)
 
+    def _mcp_config_subset(self, config: dict, server_names: list[str]) -> dict:
+        """Return a shallow MCP config copy containing only selected servers."""
+        server_configs = config.get("mcpServers") or {}
+        subset = dict(config)
+        subset["mcpServers"] = {
+            name: server_configs[name]
+            for name in server_names
+            if name in server_configs
+        }
+        return subset
+
+    async def _close_probe_mcp_client(self, client: MCPClient) -> None:
+        try:
+            await asyncio.wait_for(client.close_all_sessions(), timeout=3.0)
+        except Exception:
+            pass
+
+    async def _filter_connectable_mcp_servers(self, config: dict) -> tuple[dict, dict[str, str]]:
+        """Keep startup usable when one configured MCP server is temporarily down."""
+        server_configs = config.get("mcpServers") or {}
+        if len(server_configs) <= 1:
+            return config, {}
+
+        available_servers: list[str] = []
+        failed_servers: dict[str, str] = {}
+        for server_name in server_configs:
+            probe_config = self._mcp_config_subset(config, [server_name])
+            probe_client = MCPClient.from_dict(probe_config)
+            try:
+                await probe_client.create_session(server_name)
+                available_servers.append(server_name)
+            except Exception as e:
+                failed_servers[server_name] = str(e)
+            finally:
+                await self._close_probe_mcp_client(probe_client)
+
+        if not failed_servers:
+            return config, {}
+
+        if not available_servers:
+            return config, failed_servers
+
+        return self._mcp_config_subset(config, available_servers), failed_servers
+
     async def initialize_mcp(self):
         """Initialize MCP client and agent with proper error handling."""
         print("Initializing MCP servers...")
@@ -1822,6 +1866,31 @@ class VoiceAssistant:
         try:
             self.mcp_initialization_error = None
             self._validate_unique_mcp_routing_keywords(config)
+            runtime_config, failed_servers = await self._filter_connectable_mcp_servers(config)
+            if failed_servers:
+                failed_detail = "; ".join(f"{name}: {error}" for name, error in failed_servers.items())
+                if runtime_config is config:
+                    self._log_mcp_prompt_warning(
+                        "All configured MCP servers failed startup probe; continuing with normal initialization "
+                        f"to preserve the original error. Detail: {failed_detail}"
+                    )
+                else:
+                    available = ", ".join(sorted((runtime_config.get("mcpServers") or {}).keys()))
+                    skipped = ", ".join(sorted(failed_servers.keys()))
+                    self._log_mcp_prompt_warning(
+                        f"Skipping unavailable MCP server(s) for this run: {skipped}. Available MCP server(s): {available}."
+                    )
+                    if self.web_monitor:
+                        self.web_monitor.update(
+                            services={
+                                "MCP": {
+                                    "status": "warning",
+                                    "detail": f"available: {available}; skipped: {skipped}",
+                                }
+                            }
+                        )
+                    config = runtime_config
+                    self.mcp_config = runtime_config
 
             # Create MCP client
             self.mcp_client = MCPClient.from_dict(config)

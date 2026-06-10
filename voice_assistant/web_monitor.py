@@ -3322,7 +3322,7 @@ INDEX_HTML = """<!doctype html>
     function ledClass(status) {
       const value = String(status || "unknown").toLowerCase();
       if (["online", "initialized", "ready", "ok", "configured"].includes(value)) return "ok";
-      if (["initializing", "reload", "unknown"].includes(value)) return "warn";
+      if (["initializing", "reload", "unknown", "warning"].includes(value)) return "warn";
       if (["offline", "error", "failed"].includes(value)) return "bad";
       return "idle";
     }

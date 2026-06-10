@@ -95,6 +95,16 @@ For developpers: https://deepwiki.com/infrafast/LiveStageAssistant
                                           └───────────────┘
 ```
 
+## Runtime Modes
+
+Live Stage Assistant now has three complementary operating paths:
+
+- **Backend embedded audio**: local microphone capture and backend TTS are driven by `STT_PROVIDER`, `TTS_PROVIDER`, `BACKEND_AUDIO_INPUT_DEVICE`, and `BACKEND_AUDIO_OUTPUT_DEVICE`.
+- **Web text/chat**: always available when the web monitor is enabled; the browser sends text commands, can cancel active work, and shows state, logs, sessions, config, and final prompt.
+- **Web audio**: optional with `WEB_AUDIO_ENABLED=true`; browser microphone and browser TTS are proxied through the backend so API keys stay server-side.
+
+The Python backend remains the MCP/LLM control plane in every mode. Browser controls queue commands and cancellation requests; the agent owns wake-word handling, MCP tool calls, runtime reloads, and final responses.
+
 ## Installation
 
 ### Prerequisites
@@ -503,7 +513,7 @@ Set `MCP_CONFIG=mcp_servers.offline.json` in the selected env file.
 
 Compatible stage-control MCP servers include **XMSeries-MCP** for mixer control and **QLCPlus-MCP** for QLC+ lighting/DMX control. Add QLCPlus-MCP by adding a `qlcplus` server entry to the selected MCP JSON file, either as a local stdio command or as a streamable HTTP endpoint.
 
-Server-specific paths belong in the selected MCP JSON file. For a local mixer server, set the `mixer.args` entry directly to the full `XMSeries-MCP/dist/index.js` path for that machine. For a local QLC+ lighting server, set the `qlcplus.args` entry to the built `QLCPlus-MCP` entrypoint for that machine and put QLC+ connection settings in that server's `env` block. Environment placeholders can still appear inside JSON string values for secrets or shared settings. If a configured command or Node script cannot be found, the assistant prints that the MCP server instance could not be started and continues with the remaining available servers.
+Server-specific paths belong in the selected MCP JSON file. For a local mixer server, set the `mixer.args` entry directly to the full `XMSeries-MCP/dist/index.js` path for that machine. For a local QLC+ lighting server, set the `qlcplus.args` entry to the built `QLCPlus-MCP` entrypoint for that machine and put QLC+ connection settings in that server's `env` block. Environment placeholders can still appear inside JSON string values for secrets or shared settings. If a configured command or Node script cannot be found, the assistant prints that the MCP server instance could not be started and continues with the remaining available servers. When multiple MCP servers are configured, startup probes them individually; if one HTTP/stdio server is unreachable but another one works, the assistant starts with the available servers and reports the skipped server in the monitor state instead of disabling MCP entirely.
 
 For HTTP/Streamable MCP servers, the web monitor Config tab shows a **MCP Servers** collapsible with an **HTTP proxy / Direct** route switch. In proxy mode, **Open** and manual **Load frame** route through `/api/mcp-admin/<server>/...`, so compatible servers such as XMSeries-MCP or QLCPlus-MCP can expose their own runtime/admin UI even when only the LiveStageAssistant backend/NAS can reach the MCP server over Tailscale. In direct mode, the browser opens the MCP server URL itself. Local stdio servers are listed as non-embeddable because they do not have a browser endpoint. Bearer headers from the MCP config are applied by the backend proxy and are not exposed to the browser.
 
@@ -766,6 +776,27 @@ ELEVENLABS_VOICE_ID=1EmYoP3UnnnwhlJKovEy
 Each entry uses `voice_id (Display name)`. The dropdown shows the display name and saves the selected voice ID to `ELEVENLABS_VOICE_ID`.
 
 The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Output` control decides whether speech comes from the browser, from the backend speaker, or nowhere. When the browser is the active speech output (`TTS_PROVIDER=none` and `WEB_TTS_PROVIDER=openai|elevenlabs`), saving also keeps `WEB_AUDIO_ENABLED=true`; browser responses use that cloud provider with no pyttsx3 fallback. When backend speech is active (`TTS_PROVIDER=openai|elevenlabs`), backend speech uses that cloud provider and can fall back to pyttsx3. Selecting `none` sets cloud/browser TTS to silent and hides cloud voice controls. In `CONNECTIVITY_MODE=offline`, the web config hides cloud STT/TTS controls and forces local output with `TTS_PROVIDER=pyttsx3`.
+
+## Development And Maintenance Notes
+
+The recent web monitor work turned the monitor into the primary operator UI while keeping backend audio and terminal fallback intact. When continuing development, keep these boundaries in mind:
+
+- `voice_assistant/web_monitor.py` owns the browser UI, snapshot state, console-log mirroring, browser audio endpoints, noVNC bridge, MCP admin-page proxy, and settings overlay.
+- `voice_assistant/agent.py` owns runtime config loading, STT/TTS selection, wake-word handling, MCP initialization, prompt loading, tool routing, cancellation, and assistant reloads.
+- Runtime/config/audio/web/MCP/Docker behavior changes should update this README, relevant `docs/*.md`, `.env.example`, and active profile examples when meanings or defaults change.
+- Active local/container profiles such as `container/config/.env.infrafast` and `container/config/.env.tailscale` may contain deployment-specific values; inspect them before normalizing or overwriting.
+
+Useful lightweight checks after changes:
+
+```bash
+.venv/bin/python -m py_compile voice_assistant/web_monitor.py voice_assistant/agent.py
+git diff --check
+git status --short
+```
+
+For web monitor changes, verify the affected endpoint or UI path in a browser when possible. Important paths include `/api/snapshot`, `/api/cancel-command`, `/api/web-transcribe`, `/api/web-tts`, `/api/llm-config`, `/api/mcp-admin/<server>/...`, `/assets/<thinking-sound>`, and `/vnc.html`.
+
+Operational checks worth repeating on real hardware are browser push-to-talk silence stop, web conversation mode, wake-word gating, thinking sound playback, backend audio device selection, MCP startup with one server down, and MCP admin pages through both HTTP proxy and direct mode.
 
 ## Troubleshooting
 
