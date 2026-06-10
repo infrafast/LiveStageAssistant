@@ -793,6 +793,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
    - For mixer control, set the `mixer` script path in the selected MCP JSON file to the real `XMSeries-MCP/dist/index.js` path
    - For QLC+ lighting control, set the `qlcplus` script path or HTTP endpoint in the selected MCP JSON file to your QLCPlus-MCP server
    - If a configured command or script path is missing, the assistant reports that this MCP server instance could not be started and keeps running with the remaining servers
+   - If MCP initialization still fails, the assistant keeps the web monitor running in degraded mode so you can open Config, fix the selected env/MCP profile, and save to reload
 
 4. **Thinking Sound Or Audio Output Unavailable**
    - If PyAudio cannot open the selected backend output device, clear `BACKEND_AUDIO_OUTPUT_DEVICE` to use the system default

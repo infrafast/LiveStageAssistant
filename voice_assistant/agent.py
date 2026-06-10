@@ -1079,6 +1079,7 @@ class VoiceAssistant:
         self.stt_prompt = self._with_mcp_routing_stt_keywords(base_stt_prompt)
         self.mcp_client = None
         self.agent = None
+        self.mcp_initialization_error: str | None = None
         self.reload_event = reload_event
         self.web_monitor = web_monitor
         self.pending_injected_command: str | None = None
@@ -1817,6 +1818,7 @@ class VoiceAssistant:
         self.mcp_config = config
 
         try:
+            self.mcp_initialization_error = None
             self._validate_unique_mcp_routing_keywords(config)
 
             # Create MCP client
@@ -1851,6 +1853,7 @@ class VoiceAssistant:
             return True
 
         except Exception as e:
+            self.mcp_initialization_error = str(e)
             print(f"✗ Error initializing MCP: {e}")
             if self.web_monitor:
                 self.web_monitor.update(services={"MCP": {"status": "error", "detail": str(e)}})
@@ -2740,7 +2743,12 @@ class VoiceAssistant:
 
         # Process with MCP agent
         if not self.agent:
-            return "Sorry, the assistant is not properly initialized."
+            detail = self.mcp_initialization_error or "MCP initialization failed"
+            return (
+                "L'assistant web reste disponible, mais les outils MCP ne sont pas initialisés. "
+                "Corrige la configuration dans l'onglet Config puis sauvegarde pour redémarrer. "
+                f"Détail: {detail}"
+            )
 
         self.start_thinking_sound()
         try:
@@ -2791,9 +2799,11 @@ class VoiceAssistant:
 
         # Initialize MCP
         if not await self.initialize_mcp():
-            print("Failed to initialize MCP. Exiting.")
-            return "exit"
-        await self.refresh_session_llm_summary()
+            print("Failed to initialize MCP. Continuing without MCP tools; use the web config to fix and reload.")
+            if self.web_monitor:
+                self.web_monitor.set_environment_loading(False)
+        else:
+            await self.refresh_session_llm_summary()
 
         try:
             while True:

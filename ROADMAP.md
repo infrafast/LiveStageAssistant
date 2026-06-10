@@ -199,3 +199,6 @@ Le système a maintenant 3 modes complémentaires:
 mode embarqué backend audio: STT_PROVIDER / TTS_PROVIDER;
 mode web texte/chat: toujours disponible si web monitor actif;
 mode web audio: optionnel via WEB_AUDIO_ENABLED, avec STT/TTS OpenAI proxifiés par backend.
+
+Comportement MCP dégradé
+Si l'initialisation MCP échoue au démarrage, l'assistant ne quitte plus immédiatement. Le web monitor reste disponible, l'état MCP passe en erreur dans Settings > Monitor > State, et l'utilisateur peut corriger le profil env/MCP depuis Config puis sauvegarder pour déclencher un reload.
