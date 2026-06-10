@@ -2756,10 +2756,22 @@ INDEX_HTML = """<!doctype html>
             <summary>Audio In/Out</summary>
             <div class="config-controls">
               <div class="field">
+                <label for="browser-audio-input">Browser Audio Input</label>
+                <select id="browser-audio-input"></select>
+              </div>
+              <div class="field" id="browser-audio-output-field">
+                <label for="browser-audio-output">Browser Audio Output</label>
+                <select id="browser-audio-output"></select>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="small-button" id="browser-audio-refresh" type="button">Refresh</button>
+              </div>
+              <div class="field">
                 <label for="backend-audio-input">Backend Audio Input</label>
                 <select id="backend-audio-input"></select>
               </div>
-              <div class="field">
+              <div class="field" id="backend-audio-output-field">
                 <label for="backend-audio-output">Backend Audio Output</label>
                 <select id="backend-audio-output"></select>
               </div>
@@ -2901,7 +2913,12 @@ INDEX_HTML = """<!doctype html>
     const cloudApiGrid = document.querySelector("#cloud-api-grid");
     const mcpServerGrid = document.querySelector("#mcp-server-grid");
     const mcpAdminRouteInputs = Array.from(document.querySelectorAll('input[name="mcp-admin-route"]'));
+    const browserAudioInput = document.querySelector("#browser-audio-input");
+    const browserAudioOutputField = document.querySelector("#browser-audio-output-field");
+    const browserAudioOutput = document.querySelector("#browser-audio-output");
+    const browserAudioRefresh = document.querySelector("#browser-audio-refresh");
     const backendAudioInput = document.querySelector("#backend-audio-input");
+    const backendAudioOutputField = document.querySelector("#backend-audio-output-field");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
     const thinkingSound = document.querySelector("#thinking-sound");
     const llmSave = document.querySelector("#llm-save");
@@ -2965,6 +2982,8 @@ INDEX_HTML = """<!doctype html>
     let webTtsPlaying = false;
     let webTtsAudioContext = null;
     let webTtsUnlocked = false;
+    let selectedBrowserAudioInput = window.localStorage.getItem("browser-audio-input") || "";
+    let selectedBrowserAudioOutput = window.localStorage.getItem("browser-audio-output") || "";
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
     let mcpServersSignature = "";
@@ -3638,6 +3657,85 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function browserAudioConstraints() {
+      if (!selectedBrowserAudioInput) return { audio: true };
+      return { audio: { deviceId: { exact: selectedBrowserAudioInput } } };
+    }
+
+    function supportsBrowserAudioOutputSelection() {
+      return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+    }
+
+    async function applyBrowserAudioOutput(audio) {
+      if (!audio || !selectedBrowserAudioOutput || typeof audio.setSinkId !== "function") return;
+      await audio.setSinkId(selectedBrowserAudioOutput);
+    }
+
+    async function loadBrowserAudioDevices(requestPermission = false) {
+      browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
+      browserAudioOutput.replaceChildren(option("Default browser output", "", false, !selectedBrowserAudioOutput));
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        browserAudioInput.replaceChildren(option("Browser devices unavailable", "", true, true));
+        browserAudioOutput.replaceChildren(option("Browser devices unavailable", "", true, true));
+        browserAudioInput.disabled = true;
+        browserAudioOutput.disabled = true;
+        browserAudioRefresh.disabled = true;
+        return;
+      }
+
+      let permissionStream = null;
+      if (requestPermission && navigator.mediaDevices.getUserMedia) {
+        try {
+          permissionStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        } catch (error) {
+          metaEl.textContent = `browser audio devices unavailable: ${error}`;
+        } finally {
+          if (permissionStream) {
+            for (const track of permissionStream.getTracks()) track.stop();
+          }
+        }
+      }
+
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devices.filter((device) => device.kind === "audioinput");
+        const outputs = devices.filter((device) => device.kind === "audiooutput");
+
+        browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
+        inputs.forEach((device, index) => {
+          const label = device.label || `Microphone ${index + 1}`;
+          browserAudioInput.appendChild(option(label, device.deviceId, false, device.deviceId === selectedBrowserAudioInput));
+        });
+        if (selectedBrowserAudioInput && ![...browserAudioInput.options].some((item) => item.value === selectedBrowserAudioInput)) {
+          browserAudioInput.appendChild(option(`${selectedBrowserAudioInput} (current unavailable)`, selectedBrowserAudioInput, false, true));
+        }
+
+        const canSelectOutput = supportsBrowserAudioOutputSelection();
+        if (!canSelectOutput) {
+          browserAudioOutput.replaceChildren(option("Output selection unsupported", "", true, true));
+        } else {
+          browserAudioOutput.replaceChildren(option("Default browser output", "", false, !selectedBrowserAudioOutput));
+          outputs.forEach((device, index) => {
+            const label = device.label || `Speaker ${index + 1}`;
+            browserAudioOutput.appendChild(option(label, device.deviceId, false, device.deviceId === selectedBrowserAudioOutput));
+          });
+          if (selectedBrowserAudioOutput && ![...browserAudioOutput.options].some((item) => item.value === selectedBrowserAudioOutput)) {
+            browserAudioOutput.appendChild(option(`${selectedBrowserAudioOutput} (current unavailable)`, selectedBrowserAudioOutput, false, true));
+          }
+        }
+
+        browserAudioInput.disabled = inputs.length === 0;
+        browserAudioOutput.disabled = !canSelectOutput || browserAudioOutput.options.length === 0;
+        browserAudioRefresh.disabled = false;
+      } catch (error) {
+        browserAudioInput.replaceChildren(option("Could not list devices", "", true, true));
+        browserAudioOutput.replaceChildren(option("Could not list devices", "", true, true));
+        browserAudioInput.disabled = true;
+        browserAudioOutput.disabled = true;
+        metaEl.textContent = `browser audio devices unavailable: ${error}`;
+      }
+    }
+
     function base64ToArrayBuffer(base64) {
       const binary = window.atob(base64);
       const bytes = new Uint8Array(binary.length);
@@ -3700,6 +3798,7 @@ INDEX_HTML = """<!doctype html>
       audio.preservesPitch = true;
       audio.mozPreservesPitch = true;
       audio.webkitPreservesPitch = true;
+      await applyBrowserAudioOutput(audio);
       try {
         await new Promise((resolve, reject) => {
           audio.addEventListener("ended", resolve, { once: true });
@@ -3965,7 +4064,8 @@ INDEX_HTML = """<!doctype html>
         recordingStartedAt = Date.now();
         recordingSpeechCandidateStartedAt = null;
         recordingSpeechFrames = 0;
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        loadBrowserAudioDevices(false);
         if (AudioContextClass) {
           recordingAudioContext = new AudioContextClass();
           const source = recordingAudioContext.createMediaStreamSource(mediaStream);
@@ -4117,7 +4217,8 @@ INDEX_HTML = """<!doctype html>
       }
 
       stopConversationStream();
-      conversationStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      conversationStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+      loadBrowserAudioDevices(false);
       conversationAudioContext = new AudioContextClass();
       const source = conversationAudioContext.createMediaStreamSource(conversationStream);
       conversationAnalyser = conversationAudioContext.createAnalyser();
@@ -4295,6 +4396,7 @@ INDEX_HTML = """<!doctype html>
           thinkingAudio.loop = true;
           thinkingAudio.volume = 0.75;
         }
+        await applyBrowserAudioOutput(thinkingAudio);
         thinkingAudioPlaying = true;
         thinkingAudio.currentTime = 0;
         await thinkingAudio.play();
@@ -4484,6 +4586,12 @@ INDEX_HTML = """<!doctype html>
       openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
     }
 
+    function syncAudioDeviceVisibility() {
+      const output = selectedTtsOutput();
+      browserAudioOutputField.classList.toggle("hidden", output !== "browser");
+      backendAudioOutputField.classList.toggle("hidden", output !== "backend");
+    }
+
 	    function syncTtsProviderControls() {
       const connectivityMode = selectedConnectivityMode();
       const offline = connectivityMode === "offline";
@@ -4502,6 +4610,7 @@ INDEX_HTML = """<!doctype html>
 	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
 	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
 	      openaiTtsSpeed.disabled = offline || provider === "none";
+      syncAudioDeviceVisibility();
 	    }
 
     function selectedConnectivityMode() {
@@ -5184,6 +5293,25 @@ INDEX_HTML = """<!doctype html>
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
     }
+    browserAudioInput.addEventListener("change", () => {
+      selectedBrowserAudioInput = browserAudioInput.value;
+      window.localStorage.setItem("browser-audio-input", selectedBrowserAudioInput);
+      if (conversationEnabled) {
+        stopConversationRecording(true, true);
+        scheduleConversationRestart(0);
+      }
+    });
+    browserAudioOutput.addEventListener("change", async () => {
+      selectedBrowserAudioOutput = browserAudioOutput.value;
+      window.localStorage.setItem("browser-audio-output", selectedBrowserAudioOutput);
+      try {
+        await applyBrowserAudioOutput(thinkingAudio);
+        await applyBrowserAudioOutput(currentWebTtsAudio);
+      } catch (error) {
+        metaEl.textContent = `browser audio output unavailable: ${error}`;
+      }
+    });
+    browserAudioRefresh.addEventListener("click", () => loadBrowserAudioDevices(true));
     sessionContextSize.addEventListener("input", () => {
       syncSessionContextSizeLabel();
       renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
@@ -5272,6 +5400,7 @@ INDEX_HTML = """<!doctype html>
     });
 
     openaiTtsSpeed.addEventListener("input", syncOpenAiSpeedLabel);
+    loadBrowserAudioDevices(false);
   </script>
 </body>
 </html>

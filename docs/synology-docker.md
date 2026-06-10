@@ -153,6 +153,8 @@ SESSION_CONTEXT_DIR=/data/contexts
 
 In the web config, keep the connectivity switch on `Online` and use `TTS Output = Browser` for this first-run shape. Saving browser output keeps `WEB_AUDIO_ENABLED=true` and stores the chosen cloud provider in `WEB_TTS_PROVIDER`. `Backend` is useful only when the container has usable speaker/audio passthrough; `Silent` sets both backend and browser TTS to `none`.
 
+Browser audio device selection is per browser and saved in browser `localStorage`. The monitor can select a browser microphone for web STT and, when the browser supports `setSinkId()`, a browser output device for web TTS/thinking sound. Output selectors follow the selected `TTS Output`: silent hides outputs, browser shows browser output, and backend shows backend output. Device labels may remain generic until microphone permission is granted. On LAN/NAS access, browser microphone permission may require HTTPS through a reverse proxy.
+
 `SESSION_CONTEXT_SIZE` controls how much of the active `.context.json` session summary is reinjected for continuity. The assistant stores both a deterministic `summary` transcript and, when an LLM is available at startup or session switch, a compact `llm_summary` generated from it. In the web chat, restored bubbles highlighted in green are the messages that fit in the current context window; moving the **Session Context** range updates that preview immediately. In the session sidebar, hover a session on desktop to preview its `llm_summary`, or tap the small `i` button on touch/mobile when a summary exists. Use `0` to disable context injection.
 
 Once the monitor path is stable, try microphone/speaker passthrough if needed.
