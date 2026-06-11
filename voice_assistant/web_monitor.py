@@ -32,6 +32,7 @@ SECRET_KEY_MARKERS = (
     "PASS",
     "CONNECTION_STRING",
 )
+LOGGER = logging.getLogger(__name__)
 
 
 def redact_config_value(key: str, value: Any) -> Any:
@@ -562,6 +563,17 @@ class WebMonitor:
                     self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
                     self.send_header("Cross-Origin-Resource-Policy", "same-origin")
 
+                def _write_body(self, data: bytes) -> bool:
+                    try:
+                        self.wfile.write(data)
+                        return True
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+                        LOGGER.info("HTTP client disconnected while sending %s: %s", self.path, e)
+                        return False
+                    except OSError as e:
+                        LOGGER.info("HTTP response aborted while sending %s: %s", self.path, e)
+                        return False
+
                 def _send_text(self, value: str, content_type: str, *, send_body: bool = True) -> None:
                     encoded = value.encode("utf-8")
                     self.send_response(200)
@@ -570,7 +582,7 @@ class WebMonitor:
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
                     if send_body:
-                        self.wfile.write(encoded)
+                        self._write_body(encoded)
 
                 def _send_json(self, value: dict[str, Any]) -> None:
                     encoded = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -580,7 +592,7 @@ class WebMonitor:
                     self._send_isolation_headers()
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
-                    self.wfile.write(encoded)
+                    self._write_body(encoded)
 
                 def _send_json_error(self, status: int, value: dict[str, Any]) -> None:
                     encoded = json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -590,7 +602,7 @@ class WebMonitor:
                     self._send_isolation_headers()
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
-                    self.wfile.write(encoded)
+                    self._write_body(encoded)
 
                 def _handle_asset(self, request_path: str, *, send_body: bool = True) -> None:
                     raw_name = request_path.removeprefix("/assets/")
@@ -618,7 +630,7 @@ class WebMonitor:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     if send_body:
-                        self.wfile.write(data)
+                        self._write_body(data)
 
                 def _handle_static(self, request_path: str, *, send_body: bool = True) -> None:
                     raw_path = request_path.removeprefix("/static/")
@@ -660,7 +672,7 @@ class WebMonitor:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     if send_body:
-                        self.wfile.write(data)
+                        self._write_body(data)
 
                 def _handle_mcp_admin_proxy(
                     self,
@@ -749,7 +761,7 @@ class WebMonitor:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     if send_body and data:
-                        self.wfile.write(data)
+                        self._write_body(data)
 
                 def _handle_vnc_proxy(self, query: str) -> None:
                     target_params = self._parse_vnc_target(query)
