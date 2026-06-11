@@ -9,7 +9,7 @@ The application itself is not hard to containerize: it is a Python service with 
 The harder parts are runtime integrations:
 
 - Microphone and speaker access require `/dev/snd` passthrough and working ALSA support on the NAS.
-- The mixer MCP server needs LAN access to the mixer, so `network_mode: host` is the simplest Synology setup.
+- The mixer MCP server needs LAN access to the mixer. Bridge networking works when the required HTTP ports are published and MCP endpoints use reachable host/LAN/Tailscale addresses instead of container-local `127.0.0.1`.
 - Offline mode needs Ollama and local Whisper model caches available to the container.
 - Local stdio MCP servers such as XMSeries-MCP or QLCPlus-MCP must be mounted after they have been installed and built.
 
@@ -18,7 +18,7 @@ For a first Synology deployment, use the web monitor and text command injection 
 ## Files
 
 - `Dockerfile`: builds the Python app image with audio, ffmpeg, Node.js, and npm support.
-- `docker-compose.yml`: host-network Synology compose file.
+- `docker-compose.yml`: Synology compose file using bridge networking with the web monitor port published.
 - `container/config/.env.infrafast`: edit for the NAS/deployment folder.
 - `container/config/mcp_servers.synology.json`: MCP config for mounted or HTTP stage-control MCP servers.
 - `.dockerignore`: keeps local virtualenvs, caches, and API key files out of the image.
@@ -60,7 +60,13 @@ Edit `container/config/.env.infrafast`.
 Keep `container/config/mcp_servers.synology.json` in the same folder.
 Put API keys in the two text files. You can leave the ElevenLabs file empty only when neither `CLOUD_TTS_PROVIDER=elevenlabs` nor `WEB_TTS_PROVIDER=elevenlabs` is used.
 
-The compose file mounts `./container/config` to `/config:ro` and `./container/data` to `/data`. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Persisted web chat sessions should use a writable mounted path such as `SESSION_CONTEXT_DIR=/data/contexts`.
+The compose file mounts `./container/config` to `/config` and `./container/data` to `/data`, and publishes `${WEB_MONITOR_HOST_PORT:-8765}:8765/tcp` so the web monitor is reachable through bridge networking. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Persisted web chat sessions should use a writable mounted path such as `SESSION_CONTEXT_DIR=/data/contexts`.
+
+`WEB_MONITOR_HOST_PORT` is read by Docker Compose before the container starts. It changes only the host/NAS published port. The assistant's internal listening port still comes from `WEB_MONITOR_PORT` in the selected `/config/.env*` file and should remain `8765` unless you also update the compose container-side port or run Compose with a matching interpolation environment.
+
+The web config profile dropdown lists `.env*` files from both the app working directory and the active env file's directory. In Docker, this means mounted profiles such as `/config/.env.infrafast` and `/config/.env.tailscale` appear when the container is started with `ASSISTANT_ENV_FILE=/config/...`. Manual switching is disabled only when the assistant is started with `--env-file auto`.
+
+If you intentionally switch the assistant back to `network_mode: host`, remove the `ports` block because published ports are not used with host networking. In bridge mode, do not point MCP or Ollama URLs at `127.0.0.1` unless that service runs inside the same container; use the NAS LAN IP, Tailscale IP, or another reachable service name/address.
 
 ## Compatible Stage MCP Servers
 
@@ -103,6 +109,10 @@ If XMSeries-MCP runs as a separate HTTP service/container, put `OSC_HOST`, `OSC_
 
 QLCPlus-MCP follows the same pattern. For local stdio mode, mount the built QLCPlus-MCP checkout, set the `qlcplus.args` entry to its built entrypoint, and put QLC+ host/OSC settings in that server's `env` block. If it runs as a separate HTTP service/container, configure Live Stage Assistant with only the QLCPlus-MCP HTTP MCP endpoint.
 
+When pointing at a raw LAN or Tailscale IP such as `100.x.y.z:8788`, use `http://` unless that MCP service is actually behind a TLS reverse proxy. A `https://` URL against a plain HTTP Node service usually fails with `SSL: WRONG_VERSION_NUMBER`.
+
+The web monitor Config tab includes a **MCP Servers** collapsible with an **HTTP proxy / Direct** route switch. In proxy mode, HTTP MCP admin pages route through the Live Stage Assistant backend at `/api/mcp-admin/<server>/...`, so admin pages can work from a browser that only reaches the NAS while the NAS reaches the MCP server over Tailscale. In direct mode, the browser opens the MCP server URL itself. Local stdio MCP entries are shown without a frame. Bearer headers from the MCP config are applied by the backend proxy and are not exposed to the browser.
+
 ## Start
 
 From SSH:
@@ -142,6 +152,10 @@ SESSION_CONTEXT_DIR=/data/contexts
 ```
 
 In the web config, keep the connectivity switch on `Online` and use `TTS Output = Browser` for this first-run shape. Saving browser output keeps `WEB_AUDIO_ENABLED=true` and stores the chosen cloud provider in `WEB_TTS_PROVIDER`. `Backend` is useful only when the container has usable speaker/audio passthrough; `Silent` sets both backend and browser TTS to `none`.
+
+Browser audio device selection is per browser and saved in browser `localStorage`. The monitor can select a browser microphone for web STT and, when the browser supports `setSinkId()`, a browser output device for web TTS/thinking sound. Output selectors follow the selected `TTS Output`: silent hides outputs, browser shows browser output, and backend shows backend output. Device labels may remain generic until microphone permission is granted. On LAN/NAS access, browser microphone permission may require HTTPS through a reverse proxy.
+
+The web Config -> STT/TTS section also exposes friendly sliders for browser and backend voice detection. They write the active profile's `WEB_CONVERSATION_*` and `VOICE_*` sensitivity, minimum-speech, and end-of-phrase settings; hover a slider label to see the exact `.env` key.
 
 `SESSION_CONTEXT_SIZE` controls how much of the active `.context.json` session summary is reinjected for continuity. The assistant stores both a deterministic `summary` transcript and, when an LLM is available at startup or session switch, a compact `llm_summary` generated from it. In the web chat, restored bubbles highlighted in green are the messages that fit in the current context window; moving the **Session Context** range updates that preview immediately. In the session sidebar, hover a session on desktop to preview its `llm_summary`, or tap the small `i` button on touch/mobile when a summary exists. Use `0` to disable context injection.
 

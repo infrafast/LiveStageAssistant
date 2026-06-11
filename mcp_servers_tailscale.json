@@ -1,11 +1,9 @@
 {
   "mcpServers": {
-    "xmseries-http": {
+    "mixer": {
       "type": "streamable-http",
-      "url": "https://xmseriesmcp.infrafast.fr/mcp",
-      "headers": {
-        "Authorization": "Bearer change-me"
-      },
+      "url": "http://100.96.255.63:8787/mcp",
+      "headers": {},
       "assistantOptions": {
         "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"
       }

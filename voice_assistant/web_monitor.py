@@ -19,7 +19,9 @@ import sys
 import threading
 import time
 from typing import Any, Callable, TextIO
-from urllib.parse import parse_qs, urlparse
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 
 SECRET_KEY_MARKERS = (
@@ -99,6 +101,93 @@ def redact_mapping(values: dict[str, Any]) -> dict[str, Any]:
     return {key: redact_config_value(key, value) for key, value in values.items()}
 
 
+def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return browser-embeddable MCP admin page targets from the active config."""
+    servers = (mcp_config or {}).get("mcpServers")
+    if not isinstance(servers, dict):
+        return []
+
+    frames: list[dict[str, Any]] = []
+    for name, server_config in sorted(servers.items()):
+        entry: dict[str, Any] = {
+            "name": str(name),
+            "type": "unknown",
+            "url": "",
+            "admin_url": "",
+            "embeddable": False,
+            "auth_required": False,
+            "detail": "",
+        }
+        if not isinstance(server_config, dict):
+            entry["detail"] = "invalid MCP server config"
+            frames.append(entry)
+            continue
+
+        server_type = str(server_config.get("type") or "stdio")
+        entry["type"] = server_type
+        url = str(server_config.get("url") or "").strip()
+        if not url:
+            entry["detail"] = "stdio/local MCP server; no browser admin URL"
+            frames.append(entry)
+            continue
+
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            entry["url"] = url
+            entry["detail"] = "unsupported MCP URL"
+            frames.append(entry)
+            continue
+
+        admin_url = parsed._replace(path="/mcp", query="", fragment="").geturl()
+        proxy_admin_url = f"/api/mcp-admin/{quote(str(name), safe='')}/mcp"
+        headers = server_config.get("headers")
+        auth_required = False
+        if isinstance(headers, dict):
+            auth_required = any(str(key).lower() == "authorization" and value for key, value in headers.items())
+
+        entry.update(
+            {
+                "url": url,
+                "admin_url": admin_url,
+                "proxy_admin_url": proxy_admin_url,
+                "embeddable": True,
+                "auth_required": auth_required,
+                "detail": "proxied through LiveStageAssistant backend",
+            }
+        )
+        frames.append(entry)
+
+    return frames
+
+
+def build_mcp_admin_proxy_targets(mcp_config: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Build backend-only proxy targets for configured HTTP MCP servers."""
+    servers = (mcp_config or {}).get("mcpServers")
+    if not isinstance(servers, dict):
+        return {}
+
+    targets: dict[str, dict[str, Any]] = {}
+    for name, server_config in servers.items():
+        if not isinstance(server_config, dict):
+            continue
+        url = str(server_config.get("url") or "").strip()
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        headers: dict[str, str] = {}
+        raw_headers = server_config.get("headers")
+        if isinstance(raw_headers, dict):
+            for key, value in raw_headers.items():
+                if value is not None:
+                    headers[str(key)] = str(value)
+        targets[str(name)] = {
+            "scheme": parsed.scheme,
+            "netloc": parsed.netloc,
+            "headers": headers,
+        }
+    return targets
+
+
 class TeeStream:
     """Mirror writes to the original stream and to the monitor log buffer."""
 
@@ -148,7 +237,34 @@ class WebMonitor:
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._llm_config_save_handler: Callable[
-            [str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, str, str, float],
+            [
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                int,
+                bool,
+                bool,
+                str,
+                str,
+                str,
+                str,
+                str,
+                float,
+                float,
+                int,
+                int,
+                int,
+                float,
+                int,
+                int,
+                int,
+                float,
+            ],
             dict[str, Any],
         ] | None = None
         self._cloud_api_status_handler: Callable[[], dict[str, Any]] | None = None
@@ -164,7 +280,8 @@ class WebMonitor:
         self._session_context_delete_handler: Callable[[str], dict[str, Any]] | None = None
         self._cancel_handler: Callable[[], None] | None = None
         self._web_audio_transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None
-        self._web_audio_tts_handler: Callable[[str], dict[str, Any]] | None = None
+        self._web_audio_tts_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
+        self._mcp_admin_proxy_targets: dict[str, dict[str, Any]] = {}
         self._started_at = time.time()
         self._snapshot: dict[str, Any] = {
             "mode": "unknown",
@@ -173,6 +290,7 @@ class WebMonitor:
             "services": {},
             "config": {},
             "config_text": "{}",
+            "mcp_servers": [],
             "prompt": "",
             "session_context": {"active_id": "", "sessions": [], "current": {}, "messages": []},
             "session_context_size": 6000,
@@ -187,7 +305,37 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[[str, str, str, str, str, str, str, str, int, bool, bool, str, str, str, str, str, float], dict[str, Any]],
+        save_handler: Callable[
+            [
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                str,
+                int,
+                bool,
+                bool,
+                str,
+                str,
+                str,
+                str,
+                str,
+                float,
+                float,
+                int,
+                int,
+                int,
+                float,
+                int,
+                int,
+                int,
+                float,
+            ],
+            dict[str, Any],
+        ],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -240,7 +388,7 @@ class WebMonitor:
         self,
         *,
         transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None,
-        tts_handler: Callable[[str], dict[str, Any]] | None = None,
+        tts_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None,
     ) -> None:
         """Register callbacks used by the web UI for optional browser audio."""
         with self._lock:
@@ -321,6 +469,9 @@ class WebMonitor:
                     if parsed.path == "/api/vnc-check":
                         self._handle_vnc_check(parsed.query)
                         return
+                    if parsed.path.startswith("/api/mcp-admin/"):
+                        self._handle_mcp_admin_proxy("GET", parsed.path, parsed.query)
+                        return
                     if parsed.path == "/api/snapshot":
                         self._send_json(monitor.snapshot())
                         return
@@ -352,6 +503,9 @@ class WebMonitor:
                     if parsed.path == "/vnc.html":
                         self._send_text(VNC_HTML, "text/html; charset=utf-8", send_body=False)
                         return
+                    if parsed.path.startswith("/api/mcp-admin/"):
+                        self._handle_mcp_admin_proxy("HEAD", parsed.path, parsed.query, send_body=False)
+                        return
                     if parsed.path.startswith("/static/"):
                         self._handle_static(parsed.path, send_body=False)
                         return
@@ -361,6 +515,10 @@ class WebMonitor:
                     self.send_error(404)
 
                 def do_POST(self) -> None:
+                    parsed = urlparse(self.path)
+                    if parsed.path.startswith("/api/mcp-admin/"):
+                        self._handle_mcp_admin_proxy("POST", parsed.path, parsed.query)
+                        return
                     if self.path == "/api/inject-command":
                         self._handle_inject_command()
                         return
@@ -499,6 +657,95 @@ class WebMonitor:
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     if send_body:
+                        self.wfile.write(data)
+
+                def _handle_mcp_admin_proxy(
+                    self,
+                    method: str,
+                    request_path: str,
+                    query: str,
+                    *,
+                    send_body: bool = True,
+                ) -> None:
+                    prefix = "/api/mcp-admin/"
+                    raw_tail = request_path.removeprefix(prefix)
+                    server_part, _, target_part = raw_tail.partition("/")
+                    server_name = unquote(server_part)
+                    if not server_name or not target_part:
+                        self.send_error(404)
+                        return
+
+                    with monitor._lock:
+                        target = dict(monitor._mcp_admin_proxy_targets.get(server_name) or {})
+                    if not target:
+                        self.send_error(404, "MCP admin proxy target is not configured")
+                        return
+
+                    target_path = "/" + target_part
+                    target_url = f"{target['scheme']}://{target['netloc']}{target_path}"
+                    if query:
+                        target_url += "?" + query
+
+                    body = None
+                    if method == "POST":
+                        try:
+                            length = int(self.headers.get("Content-Length", "0"))
+                        except ValueError:
+                            length = 0
+                        if length > 2 * 1024 * 1024:
+                            self.send_error(413, "MCP admin proxy request is too large")
+                            return
+                        body = self.rfile.read(length) if length else b""
+
+                    headers: dict[str, str] = {
+                        "Accept": self.headers.get("Accept", "*/*"),
+                        "User-Agent": "LiveStageAssistant-MCPAdminProxy/1.0",
+                    }
+                    content_type = self.headers.get("Content-Type")
+                    if content_type:
+                        headers["Content-Type"] = content_type
+                    for key, value in (target.get("headers") or {}).items():
+                        headers[str(key)] = str(value)
+
+                    proxy_request = urllib_request.Request(target_url, data=body, headers=headers, method=method)
+                    try:
+                        with urllib_request.urlopen(proxy_request, timeout=8) as response:
+                            data = response.read() if send_body else b""
+                            status = response.status
+                            reason = response.reason
+                            content_type = response.headers.get("Content-Type", "application/octet-stream")
+                    except urllib_error.HTTPError as e:
+                        data = e.read() if send_body else b""
+                        status = e.code
+                        reason = e.reason
+                        content_type = e.headers.get("Content-Type", "text/plain; charset=utf-8")
+                    except (urllib_error.URLError, TimeoutError, OSError) as e:
+                        self.send_error(502, f"MCP admin proxy could not reach {server_name}: {e}")
+                        return
+
+                    if send_body and "text/html" in content_type.lower():
+                        try:
+                            text = data.decode("utf-8")
+                        except UnicodeDecodeError:
+                            text = data.decode("utf-8", errors="replace")
+                        proxy_base = f"/api/mcp-admin/{quote(server_name, safe='')}"
+                        text = (
+                            text.replace('"/mcp', f'"{proxy_base}/mcp')
+                            .replace("'/mcp", f"'{proxy_base}/mcp")
+                            .replace('"/health', f'"{proxy_base}/health')
+                            .replace("'/health", f"'{proxy_base}/health")
+                            .replace("</head>", f'<base href="{proxy_base}/">\n</head>')
+                        )
+                        data = text.encode("utf-8")
+                        content_type = "text/html; charset=utf-8"
+
+                    self.send_response(status, reason)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Frame-Options", "SAMEORIGIN")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    if send_body and data:
                         self.wfile.write(data)
 
                 def _handle_vnc_proxy(self, query: str) -> None:
@@ -710,6 +957,23 @@ class WebMonitor:
                     except (TypeError, ValueError):
                         self.send_error(400, "OpenAI TTS speed must be a number")
                         return
+                    try:
+                        web_conversation_threshold = float(payload.get("web_conversation_threshold") or 0.05)
+                        web_conversation_min_speech_ms = int(payload.get("web_conversation_min_speech_ms") or 350)
+                        web_conversation_min_speech_frames = int(
+                            payload.get("web_conversation_min_speech_frames") or 8
+                        )
+                        web_conversation_silence_ms = int(payload.get("web_conversation_silence_ms") or 1200)
+                        web_conversation_idle_seconds = float(
+                            payload.get("web_conversation_idle_seconds") or 25.0
+                        )
+                        voice_silence_threshold = int(payload.get("voice_silence_threshold") or 500)
+                        voice_min_speech_ms = int(payload.get("voice_min_speech_ms") or 350)
+                        voice_min_speech_frames = int(payload.get("voice_min_speech_frames") or 5)
+                        voice_silence_duration = float(payload.get("voice_silence_duration") or 1.5)
+                    except (TypeError, ValueError):
+                        self.send_error(400, "Voice detection settings must be numeric")
+                        return
 
                     try:
                         result = handler(
@@ -730,6 +994,15 @@ class WebMonitor:
                             thinking_sound_file,
                             openai_tts_voice,
                             openai_tts_speed,
+                            web_conversation_threshold,
+                            web_conversation_min_speech_ms,
+                            web_conversation_min_speech_frames,
+                            web_conversation_silence_ms,
+                            web_conversation_idle_seconds,
+                            voice_silence_threshold,
+                            voice_min_speech_ms,
+                            voice_min_speech_frames,
+                            voice_silence_duration,
                         )
                     except ValueError as e:
                         self.send_error(400, str(e))
@@ -1017,9 +1290,15 @@ class WebMonitor:
                     if not text:
                         self.send_error(400, "text is required")
                         return
+                    options = {
+                        "provider": str(payload.get("provider") or "").strip().lower(),
+                        "model": str(payload.get("model") or "").strip(),
+                        "voice": str(payload.get("voice") or "").strip(),
+                        "speed": payload.get("speed"),
+                    }
 
                     try:
-                        result = handler(text)
+                        result = handler(text, options)
                     except ValueError as e:
                         error = concise_web_tts_error(e)
                         self._send_json_error(400, {"ok": False, "error": error})
@@ -1231,6 +1510,8 @@ class WebMonitor:
                     config["env"] = redact_mapping(env_values)
                 if mcp_config is not None:
                     config["mcp"] = redact_mapping(mcp_config)
+                    self._snapshot["mcp_servers"] = build_mcp_server_admin_frames(mcp_config)
+                    self._mcp_admin_proxy_targets = build_mcp_admin_proxy_targets(mcp_config)
                 self._snapshot["config"] = config
                 self._snapshot["config_text"] = json.dumps(config, ensure_ascii=False, indent=2)
             if prompt is not None:
@@ -2021,6 +2302,89 @@ INDEX_HTML = """<!doctype html>
       border-bottom: 1px solid var(--border);
     }
     details:not([open]) summary { border-bottom: 0; }
+    .nested-details {
+      grid-column: 1 / -1;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      overflow: hidden;
+    }
+    .nested-details summary {
+      padding: 9px 11px;
+      border-bottom-color: var(--border);
+      font-size: 13px;
+    }
+    .vad-examples {
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+    }
+    .vad-groups {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 10px;
+    }
+    .vad-group {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 11px;
+      display: grid;
+      gap: 10px;
+      background: var(--surface-soft);
+    }
+    .vad-group-title {
+      display: grid;
+      gap: 2px;
+      font-weight: 700;
+    }
+    .vad-group-title .detail {
+      font-weight: 400;
+      font-size: 12px;
+    }
+    .vad-field {
+      gap: 3px;
+    }
+    .vad-label {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .vad-value {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .field-hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .vad-example {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px;
+      display: grid;
+      gap: 6px;
+      background: var(--surface);
+    }
+    .vad-example-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-weight: 650;
+    }
+    .vad-example-values {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
     .state {
       padding: 14px;
       display: grid;
@@ -2112,6 +2476,102 @@ INDEX_HTML = """<!doctype html>
       display: grid;
       gap: 10px;
     }
+    .mcp-server-panel {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .mcp-server-toolbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(210px, 260px);
+      gap: 12px;
+      align-items: center;
+    }
+    .mcp-server-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .mcp-server-card {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .mcp-server-head {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-soft);
+    }
+    .mcp-server-title {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+    .mcp-server-name {
+      color: var(--text);
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .mcp-server-url {
+      color: var(--muted);
+      font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .mcp-server-actions {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .mcp-server-open {
+      min-height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: var(--accent);
+      background: var(--surface);
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .mcp-server-load {
+      min-height: 30px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 6px 10px;
+      color: #fff;
+      background: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .mcp-server-frame {
+      display: block;
+      width: 100%;
+      height: min(62vh, 620px);
+      border: 0;
+      background: var(--surface-soft);
+    }
+    .mcp-server-empty {
+      padding: 12px;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      background: var(--surface-soft);
+    }
+    .mcp-server-placeholder {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      color: var(--muted);
+      background: var(--surface);
+    }
     .cloud-api-header {
       display: flex;
       justify-content: space-between;
@@ -2197,6 +2657,9 @@ INDEX_HTML = """<!doctype html>
     #connectivity-mode {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+    #mcp-admin-route {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
     label {
       font-size: 12px;
       color: var(--muted);
@@ -2280,6 +2743,10 @@ INDEX_HTML = """<!doctype html>
       .settings-panel { height: 100%; }
       .config-controls { grid-template-columns: 1fr; }
       .cloud-api-grid { grid-template-columns: 1fr; }
+      .mcp-server-toolbar { grid-template-columns: 1fr; }
+      .mcp-server-head { align-items: stretch; flex-direction: column; }
+      .mcp-server-actions { justify-content: space-between; }
+      .mcp-server-frame { height: min(70vh, 560px); }
     }
     @media (hover: none), (pointer: coarse) {
       .session-row.has-summary {
@@ -2382,6 +2849,21 @@ INDEX_HTML = """<!doctype html>
             </div>
           </details>
         </section>
+        <section>
+          <details id="mcp-servers-details">
+            <summary>MCP Servers</summary>
+            <div class="mcp-server-panel">
+              <div class="mcp-server-toolbar">
+                <div class="detail">HTTP MCP admin pages can load through LiveStageAssistant or directly from this browser.</div>
+                <div class="segmented" id="mcp-admin-route" role="radiogroup" aria-label="MCP admin route">
+                  <label><input type="radio" name="mcp-admin-route" value="proxy">HTTP proxy</label>
+                  <label><input type="radio" name="mcp-admin-route" value="direct">Direct</label>
+                </div>
+              </div>
+              <div class="mcp-server-grid" id="mcp-server-grid"></div>
+            </div>
+          </details>
+        </section>
 	        <section>
 	          <details open>
 	            <summary>STT/TTS</summary>
@@ -2426,6 +2908,131 @@ INDEX_HTML = """<!doctype html>
                 <label for="openai-tts-speed">TTS Speed <span id="openai-tts-speed-label">1.0x</span></label>
                 <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
               </div>
+              <div class="field" id="tts-test-field">
+                <label>Voice Test</label>
+                <button class="small-button" id="tts-test" type="button">Test</button>
+              </div>
+              <div class="vad-groups">
+                <div class="vad-group">
+                  <div class="vad-group-title">
+                    <span>Browser</span>
+                    <span class="detail">Réglages du micro utilisé par le navigateur.</span>
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-threshold" title="WEB_CONVERSATION_THRESHOLD">
+                      <span>Déclenchement de la voix</span>
+                      <span class="vad-value" id="web-conversation-threshold-label">0.05</span>
+                    </label>
+                    <div class="field-hint">Plus bas capte une voix faible; plus haut ignore mieux le souffle et les bruits.</div>
+                    <input class="vad-control" id="web-conversation-threshold" type="range" min="0.01" max="0.2" step="0.005" value="0.05">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-min-speech-ms" title="WEB_CONVERSATION_MIN_SPEECH_MS">
+                      <span>Durée minimale d'un mot</span>
+                      <span class="vad-value" id="web-conversation-min-speech-ms-label">350 ms</span>
+                    </label>
+                    <div class="field-hint">Plus court accepte des mots très rapides; plus long évite les petits bruits isolés.</div>
+                    <input class="vad-control" id="web-conversation-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-min-speech-frames" title="WEB_CONVERSATION_MIN_SPEECH_FRAMES">
+                      <span>Stabilité avant validation</span>
+                      <span class="vad-value" id="web-conversation-min-speech-frames-label">8 frames</span>
+                    </label>
+                    <div class="field-hint">Plus bas réagit vite; plus haut demande plusieurs instants de voix avant d'envoyer.</div>
+                    <input class="vad-control" id="web-conversation-min-speech-frames" type="range" min="1" max="30" step="1" value="8">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-silence-ms" title="WEB_CONVERSATION_SILENCE_MS">
+                      <span>Pause qui termine la phrase</span>
+                      <span class="vad-value" id="web-conversation-silence-ms-label">1200 ms</span>
+                    </label>
+                    <div class="field-hint">Plus court envoie vite; plus long laisse le temps de parler lentement sans couper.</div>
+                    <input class="vad-control" id="web-conversation-silence-ms" type="range" min="300" max="4000" step="50" value="1200">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="web-conversation-idle-seconds" title="WEB_CONVERSATION_IDLE_SECONDS">
+                      <span>Relance si personne ne parle</span>
+                      <span class="vad-value" id="web-conversation-idle-seconds-label">25 s</span>
+                    </label>
+                    <div class="field-hint">Redémarre l'écoute après une période calme pour éviter un micro bloqué.</div>
+                    <input class="vad-control" id="web-conversation-idle-seconds" type="range" min="3" max="90" step="1" value="25">
+                  </div>
+                </div>
+                <div class="vad-group">
+                  <div class="vad-group-title">
+                    <span>Backend</span>
+                    <span class="detail">Réglages du micro PyAudio côté assistant.</span>
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="voice-silence-threshold" title="VOICE_SILENCE_THRESHOLD">
+                      <span>Déclenchement de la voix</span>
+                      <span class="vad-value" id="voice-silence-threshold-label">500</span>
+                    </label>
+                    <div class="field-hint">Plus bas capte plus facilement; plus haut filtre mieux souffle, salle et retours.</div>
+                    <input class="vad-control" id="voice-silence-threshold" type="range" min="50" max="3000" step="25" value="500">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="voice-min-speech-ms" title="VOICE_MIN_SPEECH_MS">
+                      <span>Durée minimale d'un mot</span>
+                      <span class="vad-value" id="voice-min-speech-ms-label">350 ms</span>
+                    </label>
+                    <div class="field-hint">Plus court accepte une commande brève; plus long évite les clics et respirations.</div>
+                    <input class="vad-control" id="voice-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="voice-min-speech-frames" title="VOICE_MIN_SPEECH_FRAMES">
+                      <span>Stabilité avant validation</span>
+                      <span class="vad-value" id="voice-min-speech-frames-label">5 frames</span>
+                    </label>
+                    <div class="field-hint">Plus bas démarre vite; plus haut attend que la voix soit vraiment présente.</div>
+                    <input class="vad-control" id="voice-min-speech-frames" type="range" min="1" max="30" step="1" value="5">
+                  </div>
+                  <div class="field vad-field">
+                    <label class="vad-label" for="voice-silence-duration" title="VOICE_SILENCE_DURATION">
+                      <span>Pause qui termine la phrase</span>
+                      <span class="vad-value" id="voice-silence-duration-label">1.5 s</span>
+                    </label>
+                    <div class="field-hint">Plus court répond vite; plus long protège les phrases lentes ou hésitantes.</div>
+                    <input class="vad-control" id="voice-silence-duration" type="range" min="0.2" max="5" step="0.1" value="1.5">
+                  </div>
+                </div>
+              </div>
+              <details class="nested-details">
+                <summary>Exemples de réglages STT</summary>
+                <div class="vad-examples">
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Mot rapide isolé, attaque nette</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="quick-word">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Browser: sensibilité 0.035, mot court 120 ms, confirmation 3 frames, fin 650 ms, relance 18 s</div>
+                      <div>Backend: sensibilité 300, mot court 120 ms, confirmation 2 frames, fin 0.7 s</div>
+                    </div>
+                  </div>
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Filtrer le souffle, quelques mots rapprochés</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="noise-filter">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Browser: sensibilité 0.075, mot court 300 ms, confirmation 8 frames, fin 1000 ms, relance 25 s</div>
+                      <div>Backend: sensibilité 700, mot court 300 ms, confirmation 6 frames, fin 1.2 s</div>
+                    </div>
+                  </div>
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Longue phrase lente, voix faible</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="slow-soft">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Browser: sensibilité 0.03, mot court 220 ms, confirmation 5 frames, fin 2200 ms, relance 45 s</div>
+                      <div>Backend: sensibilité 250, mot court 220 ms, confirmation 4 frames, fin 2.4 s</div>
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
           </details>
         </section>
@@ -2446,10 +3053,22 @@ INDEX_HTML = """<!doctype html>
             <summary>Audio In/Out</summary>
             <div class="config-controls">
               <div class="field">
+                <label for="browser-audio-input">Browser Audio Input</label>
+                <select id="browser-audio-input"></select>
+              </div>
+              <div class="field" id="browser-audio-output-field">
+                <label for="browser-audio-output">Browser Audio Output</label>
+                <select id="browser-audio-output"></select>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="small-button" id="browser-audio-refresh" type="button">Refresh</button>
+              </div>
+              <div class="field">
                 <label for="backend-audio-input">Backend Audio Input</label>
                 <select id="backend-audio-input"></select>
               </div>
-              <div class="field">
+              <div class="field" id="backend-audio-output-field">
                 <label for="backend-audio-output">Backend Audio Output</label>
                 <select id="backend-audio-output"></select>
               </div>
@@ -2586,14 +3205,89 @@ INDEX_HTML = """<!doctype html>
     const ttsSpeedField = document.querySelector("#tts-speed-field");
     const openaiTtsSpeed = document.querySelector("#openai-tts-speed");
     const openaiTtsSpeedLabel = document.querySelector("#openai-tts-speed-label");
+    const ttsTestField = document.querySelector("#tts-test-field");
+    const ttsTest = document.querySelector("#tts-test");
+    const webConversationThreshold = document.querySelector("#web-conversation-threshold");
+    const webConversationThresholdLabel = document.querySelector("#web-conversation-threshold-label");
+    const webConversationMinSpeechMs = document.querySelector("#web-conversation-min-speech-ms");
+    const webConversationMinSpeechMsLabel = document.querySelector("#web-conversation-min-speech-ms-label");
+    const webConversationMinSpeechFrames = document.querySelector("#web-conversation-min-speech-frames");
+    const webConversationMinSpeechFramesLabel = document.querySelector("#web-conversation-min-speech-frames-label");
+    const webConversationSilenceMs = document.querySelector("#web-conversation-silence-ms");
+    const webConversationSilenceMsLabel = document.querySelector("#web-conversation-silence-ms-label");
+    const webConversationIdleSeconds = document.querySelector("#web-conversation-idle-seconds");
+    const webConversationIdleSecondsLabel = document.querySelector("#web-conversation-idle-seconds-label");
+    const voiceSilenceThreshold = document.querySelector("#voice-silence-threshold");
+    const voiceSilenceThresholdLabel = document.querySelector("#voice-silence-threshold-label");
+    const voiceMinSpeechMs = document.querySelector("#voice-min-speech-ms");
+    const voiceMinSpeechMsLabel = document.querySelector("#voice-min-speech-ms-label");
+    const voiceMinSpeechFrames = document.querySelector("#voice-min-speech-frames");
+    const voiceMinSpeechFramesLabel = document.querySelector("#voice-min-speech-frames-label");
+    const voiceSilenceDuration = document.querySelector("#voice-silence-duration");
+    const voiceSilenceDurationLabel = document.querySelector("#voice-silence-duration-label");
+    const vadPresetButtons = Array.from(document.querySelectorAll(".vad-preset"));
+    const vadControls = [
+      webConversationThreshold,
+      webConversationMinSpeechMs,
+      webConversationMinSpeechFrames,
+      webConversationSilenceMs,
+      webConversationIdleSeconds,
+      voiceSilenceThreshold,
+      voiceMinSpeechMs,
+      voiceMinSpeechFrames,
+      voiceSilenceDuration
+    ];
     const cloudApiDetails = document.querySelector("#cloud-api-details");
     const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
     const cloudApiGrid = document.querySelector("#cloud-api-grid");
+    const mcpServerGrid = document.querySelector("#mcp-server-grid");
+    const mcpAdminRouteInputs = Array.from(document.querySelectorAll('input[name="mcp-admin-route"]'));
+    const browserAudioInput = document.querySelector("#browser-audio-input");
+    const browserAudioOutputField = document.querySelector("#browser-audio-output-field");
+    const browserAudioOutput = document.querySelector("#browser-audio-output");
+    const browserAudioRefresh = document.querySelector("#browser-audio-refresh");
     const backendAudioInput = document.querySelector("#backend-audio-input");
+    const backendAudioOutputField = document.querySelector("#backend-audio-output-field");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
     const thinkingSound = document.querySelector("#thinking-sound");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
+    const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
+    const vadPresets = {
+      "quick-word": {
+        webConversationThreshold: 0.035,
+        webConversationMinSpeechMs: 120,
+        webConversationMinSpeechFrames: 3,
+        webConversationSilenceMs: 650,
+        webConversationIdleSeconds: 18,
+        voiceSilenceThreshold: 300,
+        voiceMinSpeechMs: 120,
+        voiceMinSpeechFrames: 2,
+        voiceSilenceDuration: 0.7
+      },
+      "noise-filter": {
+        webConversationThreshold: 0.075,
+        webConversationMinSpeechMs: 300,
+        webConversationMinSpeechFrames: 8,
+        webConversationSilenceMs: 1000,
+        webConversationIdleSeconds: 25,
+        voiceSilenceThreshold: 700,
+        voiceMinSpeechMs: 300,
+        voiceMinSpeechFrames: 6,
+        voiceSilenceDuration: 1.2
+      },
+      "slow-soft": {
+        webConversationThreshold: 0.03,
+        webConversationMinSpeechMs: 220,
+        webConversationMinSpeechFrames: 5,
+        webConversationSilenceMs: 2200,
+        webConversationIdleSeconds: 45,
+        voiceSilenceThreshold: 250,
+        voiceMinSpeechMs: 220,
+        voiceMinSpeechFrames: 4,
+        voiceSilenceDuration: 2.4
+      }
+    };
     let llmControlsInitialized = false;
     let llmOptionsLoading = false;
     let envProfilesLoading = false;
@@ -2604,6 +3298,8 @@ INDEX_HTML = """<!doctype html>
     let environmentLoadingActive = false;
     let vncConnectTimer = null;
     let vncUrlDirty = false;
+    let currentVncFrameUrl = "";
+    let currentSnapshotEnvFile = "";
     let metaErrorUntil = 0;
     let lastServerMessages = [];
     let pendingMessages = [];
@@ -2653,8 +3349,12 @@ INDEX_HTML = """<!doctype html>
     let webTtsPlaying = false;
     let webTtsAudioContext = null;
     let webTtsUnlocked = false;
+    let selectedBrowserAudioInput = window.localStorage.getItem("browser-audio-input") || "";
+    let selectedBrowserAudioOutput = window.localStorage.getItem("browser-audio-output") || "";
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
+    let mcpServersSignature = "";
+    let lastMcpServers = [];
     let currentWebTtsSource = null;
     let currentWebTtsAudio = null;
     let thinkingAudio = null;
@@ -2790,6 +3490,136 @@ INDEX_HTML = """<!doctype html>
         .replaceAll("'", "&#039;");
     }
 
+    function selectedMcpAdminRoute() {
+      const checked = mcpAdminRouteInputs.find((input) => input.checked);
+      return checked && checked.value === "direct" ? "direct" : "proxy";
+    }
+
+    function setSelectedMcpAdminRoute(value) {
+      const normalized = value === "direct" ? "direct" : "proxy";
+      for (const input of mcpAdminRouteInputs) {
+        input.checked = input.value === normalized;
+      }
+    }
+
+    function mcpServerAdminUrl(server, route) {
+      if (route === "direct") return server.admin_url || "";
+      return server.proxy_admin_url || server.admin_url || "";
+    }
+
+    function mcpServerRouteDetail(route) {
+      if (route === "direct") {
+        return "Direct mode loads the MCP server from this browser. Use it only when this device can reach that address.";
+      }
+      return "HTTP proxy mode loads the MCP admin page through LiveStageAssistant, so only the backend needs access.";
+    }
+
+    function renderMcpServers(servers) {
+      const items = Array.isArray(servers) ? servers : [];
+      lastMcpServers = items;
+      const route = selectedMcpAdminRoute();
+      const signature = JSON.stringify(items.map((item) => [
+        item.name || "",
+        item.type || "",
+        item.admin_url || "",
+        item.proxy_admin_url || "",
+        Boolean(item.embeddable),
+        Boolean(item.auth_required),
+        item.detail || ""
+      ])) + "|" + route;
+      if (signature === mcpServersSignature) return;
+      mcpServersSignature = signature;
+      mcpServerGrid.replaceChildren();
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "mcp-server-empty";
+        empty.textContent = "No MCP servers loaded from the active config.";
+        mcpServerGrid.append(empty);
+        return;
+      }
+
+      for (const server of items) {
+        const card = document.createElement("div");
+        card.className = "mcp-server-card";
+
+        const head = document.createElement("div");
+        head.className = "mcp-server-head";
+
+        const title = document.createElement("div");
+        title.className = "mcp-server-title";
+        const name = document.createElement("div");
+        name.className = "mcp-server-name";
+        name.textContent = server.name || "MCP server";
+        const url = document.createElement("div");
+        url.className = "mcp-server-url";
+        url.textContent = server.admin_url || server.detail || "No browser admin URL";
+        title.append(name, url);
+
+        const actions = document.createElement("div");
+        actions.className = "mcp-server-actions";
+        const badge = document.createElement("span");
+        badge.className = "inline-badge";
+        badge.textContent = server.auth_required ? "Auth" : (server.type || "MCP");
+        actions.append(badge);
+        const selectedUrl = mcpServerAdminUrl(server, route);
+        if (selectedUrl) {
+          const open = document.createElement("a");
+          open.className = "mcp-server-open";
+          open.href = selectedUrl;
+          open.target = "_blank";
+          open.rel = "noreferrer";
+          open.textContent = route === "direct" ? "Open direct" : "Open via proxy";
+          actions.append(open);
+        }
+        const alternateUrl = route === "direct" ? server.proxy_admin_url : server.admin_url;
+        if (alternateUrl && alternateUrl !== selectedUrl) {
+          const alternate = document.createElement("a");
+          alternate.className = "mcp-server-open";
+          alternate.href = alternateUrl;
+          alternate.target = "_blank";
+          alternate.rel = "noreferrer";
+          alternate.textContent = route === "direct" ? "Proxy" : "Direct";
+          actions.append(alternate);
+        }
+
+        head.append(title, actions);
+        card.append(head);
+
+        if (server.embeddable && selectedUrl) {
+          const placeholder = document.createElement("div");
+          placeholder.className = "mcp-server-placeholder";
+
+          const note = document.createElement("div");
+          note.className = "detail";
+          note.textContent = mcpServerRouteDetail(route);
+
+          const load = document.createElement("button");
+          load.className = "mcp-server-load";
+          load.type = "button";
+          load.textContent = "Load frame";
+          load.addEventListener("click", () => {
+            const frame = document.createElement("iframe");
+            frame.className = "mcp-server-frame";
+            frame.title = `${server.name || "MCP server"} admin`;
+            frame.referrerPolicy = "no-referrer";
+            frame.src = selectedUrl;
+            placeholder.replaceWith(frame);
+          });
+
+          placeholder.append(note, load);
+          card.append(placeholder);
+        } else {
+          const empty = document.createElement("div");
+          empty.className = "mcp-server-empty";
+          empty.textContent = server.detail || "This MCP server does not expose a browser page.";
+          card.append(empty);
+        }
+
+        mcpServerGrid.append(card);
+      }
+    }
+
     function isStopCommand(value) {
       const normalized = String(value || "")
         .toLowerCase()
@@ -2838,7 +3668,14 @@ INDEX_HTML = """<!doctype html>
       return response.json();
     }
 
-    async function connectVnc({ save = false } = {}) {
+    function disconnectVnc(status = "hors ligne") {
+      window.clearTimeout(vncConnectTimer);
+      currentVncFrameUrl = "";
+      vncFrame.src = "about:blank";
+      setVncStatus(status);
+    }
+
+    async function connectVnc({ save = false, force = false } = {}) {
       let frameUrl = "";
       try {
         if (save) await saveRemoteScreenUrl();
@@ -2850,6 +3687,9 @@ INDEX_HTML = """<!doctype html>
       }
       if (!frameUrl) {
         setVncStatus("hors ligne");
+        return;
+      }
+      if (!force && frameUrl === currentVncFrameUrl && vncFrame.src) {
         return;
       }
       setVncStatus("connexion...");
@@ -2872,13 +3712,18 @@ INDEX_HTML = """<!doctype html>
         metaEl.textContent = `noVNC indisponible: ${error}`;
         return;
       }
+      if (currentVncFrameUrl && (force || currentVncFrameUrl !== frameUrl)) {
+        vncFrame.src = "about:blank";
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+      currentVncFrameUrl = frameUrl;
       vncFrame.src = frameUrl;
     }
 
     function ledClass(status) {
       const value = String(status || "unknown").toLowerCase();
       if (["online", "initialized", "ready", "ok", "configured"].includes(value)) return "ok";
-      if (["initializing", "reload", "unknown"].includes(value)) return "warn";
+      if (["initializing", "reload", "unknown", "warning"].includes(value)) return "warn";
       if (["offline", "error", "failed"].includes(value)) return "bad";
       return "idle";
     }
@@ -3194,6 +4039,85 @@ INDEX_HTML = """<!doctype html>
       });
     }
 
+    function browserAudioConstraints() {
+      if (!selectedBrowserAudioInput) return { audio: true };
+      return { audio: { deviceId: { exact: selectedBrowserAudioInput } } };
+    }
+
+    function supportsBrowserAudioOutputSelection() {
+      return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+    }
+
+    async function applyBrowserAudioOutput(audio) {
+      if (!audio || !selectedBrowserAudioOutput || typeof audio.setSinkId !== "function") return;
+      await audio.setSinkId(selectedBrowserAudioOutput);
+    }
+
+    async function loadBrowserAudioDevices(requestPermission = false) {
+      browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
+      browserAudioOutput.replaceChildren(option("Default browser output", "", false, !selectedBrowserAudioOutput));
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        browserAudioInput.replaceChildren(option("Browser devices unavailable", "", true, true));
+        browserAudioOutput.replaceChildren(option("Browser devices unavailable", "", true, true));
+        browserAudioInput.disabled = true;
+        browserAudioOutput.disabled = true;
+        browserAudioRefresh.disabled = true;
+        return;
+      }
+
+      let permissionStream = null;
+      if (requestPermission && navigator.mediaDevices.getUserMedia) {
+        try {
+          permissionStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        } catch (error) {
+          metaEl.textContent = `browser audio devices unavailable: ${error}`;
+        } finally {
+          if (permissionStream) {
+            for (const track of permissionStream.getTracks()) track.stop();
+          }
+        }
+      }
+
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devices.filter((device) => device.kind === "audioinput");
+        const outputs = devices.filter((device) => device.kind === "audiooutput");
+
+        browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
+        inputs.forEach((device, index) => {
+          const label = device.label || `Microphone ${index + 1}`;
+          browserAudioInput.appendChild(option(label, device.deviceId, false, device.deviceId === selectedBrowserAudioInput));
+        });
+        if (selectedBrowserAudioInput && ![...browserAudioInput.options].some((item) => item.value === selectedBrowserAudioInput)) {
+          browserAudioInput.appendChild(option(`${selectedBrowserAudioInput} (current unavailable)`, selectedBrowserAudioInput, false, true));
+        }
+
+        const canSelectOutput = supportsBrowserAudioOutputSelection();
+        if (!canSelectOutput) {
+          browserAudioOutput.replaceChildren(option("Output selection unsupported", "", true, true));
+        } else {
+          browserAudioOutput.replaceChildren(option("Default browser output", "", false, !selectedBrowserAudioOutput));
+          outputs.forEach((device, index) => {
+            const label = device.label || `Speaker ${index + 1}`;
+            browserAudioOutput.appendChild(option(label, device.deviceId, false, device.deviceId === selectedBrowserAudioOutput));
+          });
+          if (selectedBrowserAudioOutput && ![...browserAudioOutput.options].some((item) => item.value === selectedBrowserAudioOutput)) {
+            browserAudioOutput.appendChild(option(`${selectedBrowserAudioOutput} (current unavailable)`, selectedBrowserAudioOutput, false, true));
+          }
+        }
+
+        browserAudioInput.disabled = inputs.length === 0;
+        browserAudioOutput.disabled = !canSelectOutput || browserAudioOutput.options.length === 0;
+        browserAudioRefresh.disabled = false;
+      } catch (error) {
+        browserAudioInput.replaceChildren(option("Could not list devices", "", true, true));
+        browserAudioOutput.replaceChildren(option("Could not list devices", "", true, true));
+        browserAudioInput.disabled = true;
+        browserAudioOutput.disabled = true;
+        metaEl.textContent = `browser audio devices unavailable: ${error}`;
+      }
+    }
+
     function base64ToArrayBuffer(base64) {
       const binary = window.atob(base64);
       const bytes = new Uint8Array(binary.length);
@@ -3256,6 +4180,7 @@ INDEX_HTML = """<!doctype html>
       audio.preservesPitch = true;
       audio.mozPreservesPitch = true;
       audio.webkitPreservesPitch = true;
+      await applyBrowserAudioOutput(audio);
       try {
         await new Promise((resolve, reject) => {
           audio.addEventListener("ended", resolve, { once: true });
@@ -3521,7 +4446,8 @@ INDEX_HTML = """<!doctype html>
         recordingStartedAt = Date.now();
         recordingSpeechCandidateStartedAt = null;
         recordingSpeechFrames = 0;
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        loadBrowserAudioDevices(false);
         if (AudioContextClass) {
           recordingAudioContext = new AudioContextClass();
           const source = recordingAudioContext.createMediaStreamSource(mediaStream);
@@ -3673,7 +4599,8 @@ INDEX_HTML = """<!doctype html>
       }
 
       stopConversationStream();
-      conversationStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      conversationStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+      loadBrowserAudioDevices(false);
       conversationAudioContext = new AudioContextClass();
       const source = conversationAudioContext.createMediaStreamSource(conversationStream);
       conversationAnalyser = conversationAudioContext.createAnalyser();
@@ -3795,14 +4722,20 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function playWebTts(text) {
-      if (!webAudio.tts_enabled || !text) return;
+    async function playWebTts(text, options = {}) {
+      const force = options.force === true;
+      if ((!force && !webAudio.tts_enabled) || !text) return;
       try {
         webTtsPlaying = true;
+        const payload = { text };
+        if (options.provider) payload.provider = options.provider;
+        if (options.model) payload.model = options.model;
+        if (options.voice) payload.voice = options.voice;
+        if (options.speed) payload.speed = options.speed;
         const response = await fetch("/api/web-tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text })
+          body: JSON.stringify(payload)
         });
         if (!response.ok) {
           const responseText = await response.text();
@@ -3818,6 +4751,7 @@ INDEX_HTML = """<!doctype html>
         }
       } catch (error) {
         setMeta(conciseClientTtsError(error), "error", 12000);
+        if (force) throw error;
       } finally {
         currentWebTtsSource = null;
         currentWebTtsAudio = null;
@@ -3851,6 +4785,7 @@ INDEX_HTML = """<!doctype html>
           thinkingAudio.loop = true;
           thinkingAudio.volume = 0.75;
         }
+        await applyBrowserAudioOutput(thinkingAudio);
         thinkingAudioPlaying = true;
         thinkingAudio.currentTime = 0;
         await thinkingAudio.play();
@@ -3940,7 +4875,16 @@ INDEX_HTML = """<!doctype html>
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
         openai_tts_voice: openaiTtsVoice.value || "",
-        openai_tts_speed: Number(openaiTtsSpeed.value || 1)
+        openai_tts_speed: Number(openaiTtsSpeed.value || 1),
+        web_conversation_threshold: Number(webConversationThreshold.value || 0.05),
+        web_conversation_min_speech_ms: Number(webConversationMinSpeechMs.value || 350),
+        web_conversation_min_speech_frames: Number(webConversationMinSpeechFrames.value || 8),
+        web_conversation_silence_ms: Number(webConversationSilenceMs.value || 1200),
+        web_conversation_idle_seconds: Number(webConversationIdleSeconds.value || 25),
+        voice_silence_threshold: Number(voiceSilenceThreshold.value || 500),
+        voice_min_speech_ms: Number(voiceMinSpeechMs.value || 350),
+        voice_min_speech_frames: Number(voiceMinSpeechFrames.value || 5),
+        voice_silence_duration: Number(voiceSilenceDuration.value || 1.5)
       });
     }
 
@@ -4009,6 +4953,7 @@ INDEX_HTML = """<!doctype html>
       envProfile.disabled = true;
       llmSave.disabled = true;
       setEnvironmentLoading(true, "rafraichissement de l'environnement");
+      disconnectVnc("reconnexion VNC...");
       llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
       try {
         const response = await fetch("/api/env-profile", {
@@ -4030,6 +4975,7 @@ INDEX_HTML = """<!doctype html>
         setEnvironmentLoading(false);
         envProfile.value = activeEnvProfile;
         llmMessage.textContent = `Env switch failed: ${error}`;
+        connectVnc({ force: true });
       } finally {
         envProfile.disabled = !envProfileSwitchingEnabled || envProfile.options.length <= 1;
         llmSave.disabled = !llmProvider.value;
@@ -4038,6 +4984,76 @@ INDEX_HTML = """<!doctype html>
 
     function syncOpenAiSpeedLabel() {
       openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
+    }
+
+    function syncVadLabels() {
+      webConversationThresholdLabel.textContent = Number(webConversationThreshold.value || 0.05).toFixed(3);
+      webConversationMinSpeechMsLabel.textContent = `${Number(webConversationMinSpeechMs.value || 350)} ms`;
+      webConversationMinSpeechFramesLabel.textContent = `${Number(webConversationMinSpeechFrames.value || 8)} frames`;
+      webConversationSilenceMsLabel.textContent = `${Number(webConversationSilenceMs.value || 1200)} ms`;
+      webConversationIdleSecondsLabel.textContent = `${Number(webConversationIdleSeconds.value || 25)} s`;
+      voiceSilenceThresholdLabel.textContent = `${Number(voiceSilenceThreshold.value || 500)}`;
+      voiceMinSpeechMsLabel.textContent = `${Number(voiceMinSpeechMs.value || 350)} ms`;
+      voiceMinSpeechFramesLabel.textContent = `${Number(voiceMinSpeechFrames.value || 5)} frames`;
+      voiceSilenceDurationLabel.textContent = `${Number(voiceSilenceDuration.value || 1.5).toFixed(1)} s`;
+    }
+
+    function setVadControls(data) {
+      webConversationThreshold.value = String(data.selected_web_conversation_threshold ?? 0.05);
+      webConversationMinSpeechMs.value = String(data.selected_web_conversation_min_speech_ms ?? 350);
+      webConversationMinSpeechFrames.value = String(data.selected_web_conversation_min_speech_frames ?? 8);
+      webConversationSilenceMs.value = String(data.selected_web_conversation_silence_ms ?? 1200);
+      webConversationIdleSeconds.value = String(data.selected_web_conversation_idle_seconds ?? 25);
+      voiceSilenceThreshold.value = String(data.selected_voice_silence_threshold ?? 500);
+      voiceMinSpeechMs.value = String(data.selected_voice_min_speech_ms ?? 350);
+      voiceMinSpeechFrames.value = String(data.selected_voice_min_speech_frames ?? 5);
+      voiceSilenceDuration.value = String(data.selected_voice_silence_duration ?? 1.5);
+      syncVadLabels();
+    }
+
+    function applyVadPreset(name) {
+      const preset = vadPresets[name];
+      if (!preset) return;
+      webConversationThreshold.value = String(preset.webConversationThreshold);
+      webConversationMinSpeechMs.value = String(preset.webConversationMinSpeechMs);
+      webConversationMinSpeechFrames.value = String(preset.webConversationMinSpeechFrames);
+      webConversationSilenceMs.value = String(preset.webConversationSilenceMs);
+      webConversationIdleSeconds.value = String(preset.webConversationIdleSeconds);
+      voiceSilenceThreshold.value = String(preset.voiceSilenceThreshold);
+      voiceMinSpeechMs.value = String(preset.voiceMinSpeechMs);
+      voiceMinSpeechFrames.value = String(preset.voiceMinSpeechFrames);
+      voiceSilenceDuration.value = String(preset.voiceSilenceDuration);
+      syncVadLabels();
+      llmMessage.textContent = "STT example applied. Save to persist.";
+    }
+
+    async function testSelectedTtsVoice() {
+      const provider = cloudTtsProvider.value || "none";
+      if (!["openai", "elevenlabs"].includes(provider)) return;
+      const voice = provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value;
+      const speed = Number(openaiTtsSpeed.value || 1);
+      ttsTest.disabled = true;
+      llmMessage.textContent = "Testing voice...";
+      try {
+        await playWebTts(ttsTestPhrase, {
+          force: true,
+          provider,
+          model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+          voice,
+          speed
+        });
+        llmMessage.textContent = "Voice test played.";
+      } catch (error) {
+        llmMessage.textContent = `Voice test failed: ${error}`;
+      } finally {
+        syncTtsProviderControls();
+      }
+    }
+
+    function syncAudioDeviceVisibility() {
+      const output = selectedTtsOutput();
+      browserAudioOutputField.classList.toggle("hidden", output !== "browser");
+      backendAudioOutputField.classList.toggle("hidden", output !== "backend");
     }
 
 	    function syncTtsProviderControls() {
@@ -4055,9 +5071,12 @@ INDEX_HTML = """<!doctype html>
 	      elevenlabsVoiceField.classList.toggle("hidden", offline || provider !== "elevenlabs");
 	      openaiTtsVoiceField.classList.toggle("hidden", offline || provider !== "openai");
 	      ttsSpeedField.classList.toggle("hidden", offline || provider === "none");
+	      ttsTestField.classList.toggle("hidden", offline || provider === "none");
 	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
 	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
 	      openaiTtsSpeed.disabled = offline || provider === "none";
+	      ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
+      syncAudioDeviceVisibility();
 	    }
 
     function selectedConnectivityMode() {
@@ -4272,6 +5291,9 @@ INDEX_HTML = """<!doctype html>
       elevenlabsVoice.disabled = true;
       openaiTtsVoice.disabled = true;
       openaiTtsSpeed.disabled = true;
+      ttsTest.disabled = true;
+      for (const control of vadControls) control.disabled = true;
+      for (const button of vadPresetButtons) button.disabled = true;
       backendAudioInput.disabled = true;
       backendAudioOutput.disabled = true;
       thinkingSound.disabled = true;
@@ -4356,6 +5378,7 @@ INDEX_HTML = """<!doctype html>
         }
 	        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
 	        syncOpenAiSpeedLabel();
+        setVadControls(data);
 	        syncConnectivityControls();
 
         backendAudioInput.replaceChildren();
@@ -4366,7 +5389,8 @@ INDEX_HTML = """<!doctype html>
           backendAudioInput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioInput));
         }
         if (selectedBackendAudioInput && ![...backendAudioInput.options].some((item) => item.value === selectedBackendAudioInput)) {
-          backendAudioInput.appendChild(option(`${selectedBackendAudioInput} (current unavailable)`, selectedBackendAudioInput, false, true));
+          backendAudioInput.options[0].textContent = `Default input (current unavailable: ${selectedBackendAudioInput})`;
+          backendAudioInput.value = "";
         }
 
         backendAudioOutput.replaceChildren();
@@ -4377,7 +5401,8 @@ INDEX_HTML = """<!doctype html>
           backendAudioOutput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioOutput));
         }
         if (selectedBackendAudioOutput && ![...backendAudioOutput.options].some((item) => item.value === selectedBackendAudioOutput)) {
-          backendAudioOutput.appendChild(option(`${selectedBackendAudioOutput} (current unavailable)`, selectedBackendAudioOutput, false, true));
+          backendAudioOutput.options[0].textContent = `Default output (current unavailable: ${selectedBackendAudioOutput})`;
+          backendAudioOutput.value = "";
         }
 
         thinkingSound.replaceChildren();
@@ -4412,6 +5437,8 @@ INDEX_HTML = """<!doctype html>
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
+        for (const control of vadControls) control.disabled = false;
+        for (const button of vadPresetButtons) button.disabled = false;
 	        syncConnectivityControls();
         backendAudioInput.disabled = backendAudioInput.options.length === 0;
         backendAudioOutput.disabled = backendAudioOutput.options.length === 0;
@@ -4438,6 +5465,11 @@ INDEX_HTML = """<!doctype html>
         const response = await fetch("/api/snapshot", { cache: "no-store" });
         const data = await response.json();
         const previousBusy = composerLocked;
+        const snapshotEnvFile = data.env_file || "";
+        const snapshotEnvChanged = Boolean(currentSnapshotEnvFile) && snapshotEnvFile && snapshotEnvFile !== currentSnapshotEnvFile;
+        if (snapshotEnvFile) {
+          currentSnapshotEnvFile = snapshotEnvFile;
+        }
         const services = data.services || {};
         const rows = [
           tile("Internet", data.internet, data.mode === "auto" ? "auto profile detection" : "fixed profile"),
@@ -4446,9 +5478,25 @@ INDEX_HTML = """<!doctype html>
         ];
         stateEl.innerHTML = rows.join("");
         configEl.value = data.config_text || "";
+        renderMcpServers(data.mcp_servers || []);
         const remoteScreen = data.remote_screen || {};
-        if (!vncUrlDirty && remoteScreen.vnc_url && vncUrl.value !== remoteScreen.vnc_url) {
-          vncUrl.value = remoteScreen.vnc_url;
+        if (!vncUrlDirty && snapshotEnvChanged && currentVncFrameUrl) {
+          disconnectVnc("reconnexion VNC...");
+        }
+        if (!vncUrlDirty && remoteScreen.vnc_url) {
+          const remoteScreenUrlChanged = vncUrl.value !== remoteScreen.vnc_url;
+          if (remoteScreenUrlChanged) {
+            vncUrl.value = remoteScreen.vnc_url;
+          }
+          let remoteScreenFrameUrl = "";
+          try {
+            remoteScreenFrameUrl = noVncUrlFromInput(remoteScreen.vnc_url);
+          } catch (error) {
+            remoteScreenFrameUrl = "";
+          }
+          if (remoteScreenFrameUrl && (remoteScreenUrlChanged || snapshotEnvChanged || !currentVncFrameUrl)) {
+            await connectVnc({ force: true });
+          }
         }
         const environmentLoading = data.environment_loading || {};
         setEnvironmentLoading(
@@ -4519,7 +5567,6 @@ INDEX_HTML = """<!doctype html>
 
     refresh();
     setInterval(refresh, 1500);
-    connectVnc();
 
     vncUrl.addEventListener("input", () => {
       vncUrlDirty = true;
@@ -4532,7 +5579,9 @@ INDEX_HTML = """<!doctype html>
       }
     });
     vncFrame.addEventListener("load", () => {
-      setVncStatus("connexion...");
+      if (currentVncFrameUrl) {
+        setVncStatus("connexion...");
+      }
     });
     vncFrame.addEventListener("error", () => {
       window.clearTimeout(vncConnectTimer);
@@ -4736,15 +5785,45 @@ INDEX_HTML = """<!doctype html>
     });
 
 	    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
+    elevenlabsVoice.addEventListener("change", syncTtsProviderControls);
+    openaiTtsVoice.addEventListener("change", syncTtsProviderControls);
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
     }
+    browserAudioInput.addEventListener("change", () => {
+      selectedBrowserAudioInput = browserAudioInput.value;
+      window.localStorage.setItem("browser-audio-input", selectedBrowserAudioInput);
+      if (conversationEnabled) {
+        stopConversationRecording(true, true);
+        scheduleConversationRestart(0);
+      }
+    });
+    browserAudioOutput.addEventListener("change", async () => {
+      selectedBrowserAudioOutput = browserAudioOutput.value;
+      window.localStorage.setItem("browser-audio-output", selectedBrowserAudioOutput);
+      try {
+        await applyBrowserAudioOutput(thinkingAudio);
+        await applyBrowserAudioOutput(currentWebTtsAudio);
+      } catch (error) {
+        metaEl.textContent = `browser audio output unavailable: ${error}`;
+      }
+    });
+    browserAudioRefresh.addEventListener("click", () => loadBrowserAudioDevices(true));
     sessionContextSize.addEventListener("input", () => {
       syncSessionContextSizeLabel();
       renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
     });
     for (const input of mcpToolRoutingInputs) {
       input.addEventListener("change", () => {});
+    }
+    setSelectedMcpAdminRoute(window.localStorage.getItem("mcp-admin-route") || "proxy");
+    for (const input of mcpAdminRouteInputs) {
+      input.addEventListener("change", () => {
+        const route = selectedMcpAdminRoute();
+        window.localStorage.setItem("mcp-admin-route", route);
+        mcpServersSignature = "";
+        renderMcpServers(lastMcpServers);
+      });
     }
     for (const input of interruptConversationInputs) {
       input.addEventListener("change", () => {
@@ -4774,6 +5853,15 @@ INDEX_HTML = """<!doctype html>
       const thinkingSoundFile = thinkingSound.value;
       const openAiTtsVoiceValue = openaiTtsVoice.value;
       const openAiTtsSpeedValue = Number(openaiTtsSpeed.value || 1);
+      const webConversationThresholdValue = Number(webConversationThreshold.value || 0.05);
+      const webConversationMinSpeechMsValue = Number(webConversationMinSpeechMs.value || 350);
+      const webConversationMinSpeechFramesValue = Number(webConversationMinSpeechFrames.value || 8);
+      const webConversationSilenceMsValue = Number(webConversationSilenceMs.value || 1200);
+      const webConversationIdleSecondsValue = Number(webConversationIdleSeconds.value || 25);
+      const voiceSilenceThresholdValue = Number(voiceSilenceThreshold.value || 500);
+      const voiceMinSpeechMsValue = Number(voiceMinSpeechMs.value || 350);
+      const voiceMinSpeechFramesValue = Number(voiceMinSpeechFrames.value || 5);
+      const voiceSilenceDurationValue = Number(voiceSilenceDuration.value || 1.5);
       if (!provider) return;
 
       llmSave.disabled = true;
@@ -4799,7 +5887,16 @@ INDEX_HTML = """<!doctype html>
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
             openai_tts_voice: openAiTtsVoiceValue,
-            openai_tts_speed: openAiTtsSpeedValue
+            openai_tts_speed: openAiTtsSpeedValue,
+            web_conversation_threshold: webConversationThresholdValue,
+            web_conversation_min_speech_ms: webConversationMinSpeechMsValue,
+            web_conversation_min_speech_frames: webConversationMinSpeechFramesValue,
+            web_conversation_silence_ms: webConversationSilenceMsValue,
+            web_conversation_idle_seconds: webConversationIdleSecondsValue,
+            voice_silence_threshold: voiceSilenceThresholdValue,
+            voice_min_speech_ms: voiceMinSpeechMsValue,
+            voice_min_speech_frames: voiceMinSpeechFramesValue,
+            voice_silence_duration: voiceSilenceDurationValue
           })
         });
         if (!response.ok) throw new Error(await response.text());
@@ -4818,6 +5915,14 @@ INDEX_HTML = """<!doctype html>
     });
 
     openaiTtsSpeed.addEventListener("input", syncOpenAiSpeedLabel);
+    for (const control of vadControls) {
+      control.addEventListener("input", syncVadLabels);
+    }
+    for (const button of vadPresetButtons) {
+      button.addEventListener("click", () => applyVadPreset(button.dataset.vadPreset || ""));
+    }
+    ttsTest.addEventListener("click", testSelectedTtsVoice);
+    loadBrowserAudioDevices(false);
   </script>
 </body>
 </html>

@@ -6,7 +6,8 @@ services:
     image: live-stage-assistant:local
     container_name: live-stage-assistant
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "${WEB_MONITOR_HOST_PORT:-8765}:8765/tcp"
     volumes:
       - ./container/config:/config
       - ./container/data:/data
@@ -19,7 +20,7 @@ services:
     # group_add:
     #   - audio
     environment:
-      ASSISTANT_ENV_FILE: /config/.env.infrafast
+      ASSISTANT_ENV_FILE: /config/.env.tailscale
       HF_HOME: /data/huggingface
       XDG_CACHE_HOME: /data/cache
       NPM_CONFIG_CACHE: /data/npm-cache

@@ -95,6 +95,16 @@ For developpers: https://deepwiki.com/infrafast/LiveStageAssistant
                                           └───────────────┘
 ```
 
+## Runtime Modes
+
+Live Stage Assistant now has three complementary operating paths:
+
+- **Backend embedded audio**: local microphone capture and backend TTS are driven by `STT_PROVIDER`, `TTS_PROVIDER`, `BACKEND_AUDIO_INPUT_DEVICE`, and `BACKEND_AUDIO_OUTPUT_DEVICE`.
+- **Web text/chat**: always available when the web monitor is enabled; the browser sends text commands, can cancel active work, and shows state, logs, sessions, config, and final prompt.
+- **Web audio**: optional with `WEB_AUDIO_ENABLED=true`; browser microphone and browser TTS are proxied through the backend so API keys stay server-side.
+
+The Python backend remains the MCP/LLM control plane in every mode. Browser controls queue commands and cancellation requests; the agent owns wake-word handling, MCP tool calls, runtime reloads, and final responses.
+
 ## Installation
 
 ### Prerequisites
@@ -163,7 +173,7 @@ host:      ./container/config/ELEVENLABS_API_KEY.txt
 container: /config/ELEVENLABS_API_KEY.txt
 ```
 
-The Docker image entrypoint uses `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and if that file is missing it auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Vendored noVNC files are copied into the image at build time; do not mount `./static` over `/app/static` unless the host folder contains the complete `static/novnc` tree, including `vendor/pako/lib`.
+The Docker image entrypoint uses `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and if that file is missing it auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. The bundled compose file uses bridge networking and publishes the web monitor as `${WEB_MONITOR_HOST_PORT:-8765}:8765/tcp`; keep that port mapping when you want to open the monitor from the NAS/LAN. Vendored noVNC files are copied into the image at build time; do not mount `./static` over `/app/static` unless the host folder contains the complete `static/novnc` tree, including `vendor/pako/lib`.
 
 The assistant can run without working audio devices: if microphone capture fails because no input device is available, it falls back to text commands from the web monitor or terminal; if speech playback is unavailable, responses are still printed in the console and monitor. For a first run on Synology or another headless Docker host, `TTS_PROVIDER=none` is only the quietest starting point while you validate the container, MCP, and web monitor. Microphone and speaker passthrough can be tested later.
 
@@ -206,7 +216,7 @@ The server script path itself belongs in `container/config/mcp_servers.synology.
 
 In stdio mode, mixer connection settings such as `OSC_HOST`, `OSC_PORT`, and `OSC_PROTOCOL` belong in the `env` block of `container/config/mcp_servers.synology.json`; that block is passed to the XMSeries-MCP process. If XMSeries-MCP runs as a separate HTTP service/container, put those OSC settings on the XMSeries-MCP service instead and configure Live Stage Assistant with only the MCP HTTP URL. QLCPlus-MCP can be configured the same way: either run it as a local stdio MCP server with its QLC+ host/OSC settings in that server's `env` block, or point the assistant at its streamable HTTP MCP endpoint.
 
-On DSM 7.0, the exact Docker UI depends on the Synology model and installed Docker package. If the Container Manager "Project" interface is not available, use SSH and the `docker compose` command above, or create an equivalent container manually with the same mounts, host network, and port `8765`.
+On DSM 7.0, the exact Docker UI depends on the Synology model and installed Docker package. If the Container Manager "Project" interface is not available, use SSH and the `docker compose` command above, or create an equivalent container manually with the same mounts and published port `8765`.
 
 ### Offline Preparation
 
@@ -360,13 +370,13 @@ The web monitor is intentionally split between a clean chat surface and a techni
 
 - The main page is a ChatGPT-like command window. User commands appear as right-aligned bubbles and assistant/TTS responses appear as left-aligned bubbles.
 - The command input stays pinned to the bottom of the page. Press Enter or the up-arrow button to send; Shift+Enter inserts a newline.
-- A **Remote screen** collapsible above the chat embeds the monitor's generated `/vnc.html` page in an iframe for visual monitoring. The URL is loaded from `REMOTE_SCREEN_VNC_URL` in the active env file and defaults to `vnc://192.168.0.160:5900?password=ronron`; clicking **Connecter** saves the edited URL back to the active env file. The browser-side helper converts `vnc://` values to `/vnc.html?host=...&port=...&password=...&autoconnect=1`. The monitor exposes `/api/vnc-check` to test TCP reachability from the server and `/api/vnc-proxy`, a small WebSocket-to-TCP bridge used by noVNC to reach the VNC target. This panel is independent of the assistant logic. The noVNC browser module is vendored under `static/novnc`, so the remote-screen panel can run on a local network without internet access.
+- A **Remote screen** collapsible above the chat embeds the monitor's generated `/vnc.html` page in an iframe for visual monitoring. The URL is loaded from `REMOTE_SCREEN_VNC_URL` in the active env file and defaults to `vnc://192.168.0.160:5900?password=ronron`; clicking **Connecter** saves the edited URL back to the active env file. When the active env profile changes, the web UI disconnects the current noVNC iframe and reconnects with the `REMOTE_SCREEN_VNC_URL` from the newly selected profile. The browser-side helper converts `vnc://` values to `/vnc.html?host=...&port=...&password=...&autoconnect=1`. The monitor exposes `/api/vnc-check` to test TCP reachability from the server and `/api/vnc-proxy`, a small WebSocket-to-TCP bridge used by noVNC to reach the VNC target. This panel is independent of the assistant logic. The noVNC browser module is vendored under `static/novnc`, so the remote-screen panel can run on a local network without internet access.
 - While the LLM/MCP agent is processing, the input is disabled and the response area shows a small thinking animation. The send arrow becomes a square stop button.
 - While the thinking animation is visible, the browser also loops the selected `THINKING_SOUND_FILE` from `assets/`, matching the backend thinking-sound behavior.
 - Pressing the stop button calls `/api/cancel-command`, cancels the active agent task, clears the busy state, and returns the assistant to listening.
 - If `WEB_AUDIO_ENABLED=true`, a browser microphone button appears in the composer. The browser records audio, sends it to the backend, the backend calls OpenAI STT, and the transcribed text is injected as a normal command.
 - The left sidebar lists persisted sessions. The `+` button creates a new session, and selecting a session restores its chat bubbles and clears the in-memory MCPAgent history for a clean switch.
-- The top-right settings button opens an overlay. The first tab contains **State** and **Console Log** collapsibles. The second tab contains **Config** with a top-level connectivity switch, then **STT/TTS**, **IA model**, **Other**, **Prompt**, and **Env file** collapsibles.
+- The top-right settings button opens an overlay. The first tab contains **State** and **Console Log** collapsibles. The second tab contains **Config** with a top-level connectivity switch, **MCP Servers** links and optional iframe loading for proxied HTTP MCP `/mcp` admin pages, then **STT/TTS**, **IA model**, **Other**, **Prompt**, and **Env file** collapsibles.
 
 The monitor exposes these HTTP endpoints:
 
@@ -374,7 +384,7 @@ The monitor exposes these HTTP endpoints:
 - `POST /api/inject-command`: queues a text command for the agent.
 - `POST /api/cancel-command`: requests cancellation of the currently processing command.
 - `POST /api/web-transcribe`: accepts browser-recorded base64 audio and returns transcribed command text when web audio is enabled.
-- `POST /api/web-tts`: returns browser-playable base64 MP3 speech when web audio TTS is enabled.
+- `POST /api/web-tts`: returns browser-playable base64 MP3 speech when web audio TTS is enabled. The config page's voice test button can also pass temporary `provider`, `voice`, `model`, and `speed` values to preview the selected cloud voice without saving the profile first.
 - `GET /api/llm-options` and `POST /api/llm-config`: back the provider/model/voice/thinking-sound controls in the config tab.
 - `GET /api/session-context`, `POST /api/session-context/new`, `POST /api/session-context/select`, `POST /api/session-context/rename`, `POST /api/session-context/clear`, `POST /api/session-context/save`, and `POST /api/session-context/delete`: list, create, switch, rename, clear visible conversation, force-save context summary, and delete persisted chat sessions.
 
@@ -411,17 +421,21 @@ WEB_TTS_SPEED=1.00
 
 The browser microphone path requires browser microphone permission and a browser that supports `MediaRecorder`. Depending on the browser, microphone access may require HTTPS when the monitor is opened from another machine over the LAN. Push-to-talk recording starts when the microphone button is pressed, stops when the square button is pressed again, stops automatically after end-of-speech silence, and still has `WEB_RECORDING_MAX_SECONDS` as a hard timeout to avoid accidental endless recordings.
 
+Browser audio input/output device choices are local to each browser and are saved in `localStorage`, not in the backend `.env` file. Settings -> Config -> Audio In/Out lists browser microphones with `navigator.mediaDevices.enumerateDevices()` and applies the selected input to push-to-talk and conversation mode with `getUserMedia({ deviceId })`. Output selectors follow **STT/TTS -> TTS Output**: `Silent` hides output selectors, `Browser` shows only browser output, and `Backend` shows only backend output. Device names may stay generic until the browser grants microphone permission. Browser output selection uses `HTMLMediaElement.setSinkId()` for web TTS and web thinking sound when the browser supports it; unsupported browsers show output selection as unavailable and use the system/browser default output. AudioContext fallback playback cannot force a selected sink, so the HTML audio path is preferred for web TTS.
+
 The conversation button next to the microphone enables continuous browser listening. In this mode the push-to-talk button is disabled, the browser detects speech/silence locally, sends each detected utterance to the backend, and then restarts listening after the assistant is done. If `WAKE_WORD` is configured, conversation-mode transcriptions must pass the same wake-word gate before being injected. Manual push-to-talk remains direct command input and does not require the wake word.
 
 Backend microphone STT and browser microphone STT have separate voice-activity gates. Backend microphone input uses `STT_PROVIDER`, `LOCAL_WHISPER_MODEL`, `STT_LANGUAGE`, and `STT_PROMPT` for transcription selection and Whisper biasing. Before backend STT runs, `VOICE_SILENCE_THRESHOLD` decides whether an audio frame is speech, `VOICE_MIN_SPEECH_MS` and `VOICE_MIN_SPEECH_FRAMES` require sustained non-silent input, and `VOICE_SILENCE_DURATION` decides when to stop after accepted speech. Browser microphone input uses `WEB_STT_PROVIDER` and `WEB_STT_MODEL`, with browser-side RMS detection controlled by `WEB_CONVERSATION_THRESHOLD`, `WEB_CONVERSATION_MIN_SPEECH_MS`, `WEB_CONVERSATION_MIN_SPEECH_FRAMES`, `WEB_CONVERSATION_SILENCE_MS`, `WEB_CONVERSATION_IDLE_SECONDS`, and `WEB_RECORDING_MAX_SECONDS`. Raise thresholds or minimum speech values to reject breaths/noise; lower them if short spoken commands are missed.
+
+The Settings -> Config -> STT/TTS section exposes the most useful voice-activity settings as friendly sliders grouped into Browser and Backend boxes. Browser controls tune microphone triggering, short-word acceptance, voice stability before sending, end-of-phrase silence, and idle listener restart. Backend controls tune the equivalent PyAudio gate: microphone triggering, short-word acceptance, voice stability, and end-of-phrase silence. Hover each slider label to see the exact `.env` variable it writes. A nested examples panel provides three starting points for quick isolated words, breath filtering, and slow soft speech; applying one fills the sliders and still requires Save to persist it.
 
 `INTERRUPT_CONVERSATION_ENABLED=false` keeps the conservative default: text, web STT, and backend STT do not start a new normal command while the assistant is processing. When set to `true`, a new text command or accepted STT command silently cancels current processing or TTS first, then runs the new command. Browser conversation mode also keeps listening during processing and web TTS.
 
 Backend interruption is implemented too: backend microphone input starts a parallel interrupt listener during command processing and backend TTS. If it hears a cancel phrase such as `stop` or `annule`, it only cancels; if it hears a full command that passes the wake-word gate, it cancels the current work and queues that command next. Remaining caveats are operational rather than TODOs in the code: backend barge-in depends on microphone availability and can be affected by the assistant's own speaker output leaking into the mic. For the cleanest backend interruption, use headphones, echo control, or browser TTS instead of open speakers.
 
-Backend audio devices can be selected from Settings -> Config -> Audio In/Out. The dropdown values are PyAudio device indexes saved as `BACKEND_AUDIO_INPUT_DEVICE` and `BACKEND_AUDIO_OUTPUT_DEVICE`; leave either value empty to use the system default. If a saved index is unavailable at startup, the backend falls back to the default device and reports the fallback in Settings -> Monitor -> State as `Backend audio`. The older separate `Audio input` state tile is replaced by this single backend audio tile. Backend microphone recording uses the selected input device. Backend cloud TTS and the thinking sound both play through the selected output device using the shared PyAudio playback path; MP3 cloud TTS is decoded with `ffmpeg` before playback. Local `pyttsx3` is first rendered to a file and played through the same output path when possible, with direct system TTS as the last fallback.
+Backend audio devices can be selected from Settings -> Config -> Audio In/Out. The dropdown values are PyAudio device indexes saved as `BACKEND_AUDIO_INPUT_DEVICE` and `BACKEND_AUDIO_OUTPUT_DEVICE`; leave either value empty to use the system default. If a saved index is unavailable at startup, the backend falls back to the default device and reports the fallback in Settings -> Monitor -> State as `Backend audio`. If the web config is saved while a previously selected backend device is unavailable, the stale selection is cleared to the default instead of blocking the save. The older separate `Audio input` state tile is replaced by this single backend audio tile. Backend microphone recording uses the selected input device. Backend cloud TTS and the thinking sound both play through the selected output device using the shared PyAudio playback path; MP3 cloud TTS is decoded with `ffmpeg` before playback. Local `pyttsx3` is first rendered to a file and played through the same output path when possible, with direct system TTS as the last fallback.
 
-`CLOUD_TTS_PROVIDER` is the TTS dropdown shown in the config page. Set it to `none`, `openai`, or `elevenlabs`. The separate `TTS Output` control chooses `Browser`, `Backend`, or `Silent`; it saves that choice by updating `TTS_PROVIDER`, `WEB_TTS_PROVIDER`, and the required web audio flags. Browser output saves `TTS_PROVIDER=none`, `WEB_AUDIO_ENABLED=true`, and `WEB_TTS_PROVIDER=<cloud provider>`. Backend output saves `TTS_PROVIDER=<cloud provider>` and `WEB_TTS_PROVIDER=none`. Silent output saves both as `none`. Selecting `TTS=none` forces silent output.
+`CLOUD_TTS_PROVIDER` is the TTS dropdown shown in the config page. Set it to `none`, `openai`, or `elevenlabs`. The separate `TTS Output` control chooses `Browser`, `Backend`, or `Silent`; it saves that choice by updating `TTS_PROVIDER`, `WEB_TTS_PROVIDER`, and the required web audio flags. Browser output saves `TTS_PROVIDER=none`, `WEB_AUDIO_ENABLED=true`, and `WEB_TTS_PROVIDER=<cloud provider>`. Backend output saves `TTS_PROVIDER=<cloud provider>` and `WEB_TTS_PROVIDER=none`. Silent output saves both as `none`. Selecting `TTS=none` forces silent output. The config voice Test button speaks a fixed browser-played sample using the currently selected cloud provider, voice, and speed, so changes can be previewed before saving.
 
 Backend TTS has priority over web TTS. If `TTS_PROVIDER` is `openai`, `elevenlabs`, or `pyttsx3`, the monitor still allows browser STT, but web TTS is disabled to avoid double audio. To let the browser play assistant responses, set `TTS_PROVIDER=none`, enable `WEB_AUDIO_ENABLED=true`, and set `WEB_TTS_PROVIDER` to the same cloud value as `CLOUD_TTS_PROVIDER`.
 
@@ -431,7 +445,7 @@ The config page shows only the voice selector for the selected TTS provider: Ope
 
 The **Cloud API** config collapsible queries provider status from the backend without exposing API keys to the browser. It shows each provider key masked with only the final characters visible, so you can confirm which secret is loaded. ElevenLabs uses `/v1/user/subscription` to show used, remaining, and limit characters for the current billing period. OpenAI's public API does not expose a simple remaining-credit balance; the panel says so and, when the active key is authorized for organization usage endpoints, shows the last 7 days of Costs API spend instead.
 
-The config tab also has a top-level connectivity area. The `.env` dropdown shows the active env profile and lists the available `.env*` files from the assistant working directory, including ignored local profiles that exist on disk. Selecting another env profile asks for confirmation when there are unsaved config changes, then requests a runtime reload with the selected env file. While an env reload is in progress, the web UI shows a loading overlay until the backend reports that the new environment is ready. In `--env-file auto` mode, manual env switching is disabled because connectivity detection owns the active `.env.online` / `.env.offline` choice; when auto switches profile, the config tab refreshes its fields from the newly loaded env file.
+The config tab also has a top-level connectivity area. The `.env` dropdown shows the active env profile and lists the available `.env*` files from the assistant working directory and from the active env file's directory, including ignored local profiles that exist on disk or in a mounted Docker `/config` folder. Selecting another env profile asks for confirmation when there are unsaved config changes, then requests a runtime reload with the selected env file. While an env reload is in progress, the web UI shows a loading overlay until the backend reports that the new environment is ready. In `--env-file auto` mode, manual env switching is disabled because connectivity detection owns the active `.env.online` / `.env.offline` choice; when auto switches profile, the config tab refreshes its fields from the newly loaded env file.
 
 The `CONNECTIVITY_MODE` switch below the env dropdown keeps the selected profile coherent. This switch is locked whenever the active profile file is named `.env.online` or `.env.offline`, so those canonical profiles cannot be mislabeled from the UI. `online` exposes the cloud LLM/STT/TTS controls and rejects saving an Ollama provider as an online profile. `offline` hides cloud STT/TTS choices, displays `TTS: local pyttsx3`, and saves a coherent local profile: `LLM_PROVIDER=ollama`, `STT_PROVIDER=local-whisper`, `CLOUD_TTS_PROVIDER=none`, `TTS_PROVIDER=pyttsx3`, `WEB_AUDIO_ENABLED=false`, and `WEB_TTS_PROVIDER=none`.
 
@@ -503,7 +517,9 @@ Set `MCP_CONFIG=mcp_servers.offline.json` in the selected env file.
 
 Compatible stage-control MCP servers include **XMSeries-MCP** for mixer control and **QLCPlus-MCP** for QLC+ lighting/DMX control. Add QLCPlus-MCP by adding a `qlcplus` server entry to the selected MCP JSON file, either as a local stdio command or as a streamable HTTP endpoint.
 
-Server-specific paths belong in the selected MCP JSON file. For a local mixer server, set the `mixer.args` entry directly to the full `XMSeries-MCP/dist/index.js` path for that machine. For a local QLC+ lighting server, set the `qlcplus.args` entry to the built `QLCPlus-MCP` entrypoint for that machine and put QLC+ connection settings in that server's `env` block. Environment placeholders can still appear inside JSON string values for secrets or shared settings. If a configured command or Node script cannot be found, the assistant prints that the MCP server instance could not be started and continues with the remaining available servers.
+Server-specific paths belong in the selected MCP JSON file. For a local mixer server, set the `mixer.args` entry directly to the full `XMSeries-MCP/dist/index.js` path for that machine. For a local QLC+ lighting server, set the `qlcplus.args` entry to the built `QLCPlus-MCP` entrypoint for that machine and put QLC+ connection settings in that server's `env` block. Environment placeholders can still appear inside JSON string values for secrets or shared settings. If a configured command or Node script cannot be found, the assistant prints that the MCP server instance could not be started and continues with the remaining available servers. When multiple MCP servers are configured, startup probes them individually; if one HTTP/stdio server is unreachable but another one works, the assistant starts with the available servers and reports the skipped server in the monitor state instead of disabling MCP entirely.
+
+For HTTP/Streamable MCP servers, the web monitor Config tab shows a **MCP Servers** collapsible with an **HTTP proxy / Direct** route switch. In proxy mode, **Open** and manual **Load frame** route through `/api/mcp-admin/<server>/...`, so compatible servers such as XMSeries-MCP or QLCPlus-MCP can expose their own runtime/admin UI even when only the LiveStageAssistant backend/NAS can reach the MCP server over Tailscale. In direct mode, the browser opens the MCP server URL itself. Local stdio servers are listed as non-embeddable because they do not have a browser endpoint. Bearer headers from the MCP config are applied by the backend proxy and are not exposed to the browser.
 
 To add more servers, edit `mcp_servers.json` or copy `mcp_servers.example.json` which includes additional servers like:
 - filesystem, github, gitlab, google-drive, postgres, sqlite, slack, memory, puppeteer, brave-search, fetch
@@ -765,6 +781,27 @@ Each entry uses `voice_id (Display name)`. The dropdown shows the display name a
 
 The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Output` control decides whether speech comes from the browser, from the backend speaker, or nowhere. When the browser is the active speech output (`TTS_PROVIDER=none` and `WEB_TTS_PROVIDER=openai|elevenlabs`), saving also keeps `WEB_AUDIO_ENABLED=true`; browser responses use that cloud provider with no pyttsx3 fallback. When backend speech is active (`TTS_PROVIDER=openai|elevenlabs`), backend speech uses that cloud provider and can fall back to pyttsx3. Selecting `none` sets cloud/browser TTS to silent and hides cloud voice controls. In `CONNECTIVITY_MODE=offline`, the web config hides cloud STT/TTS controls and forces local output with `TTS_PROVIDER=pyttsx3`.
 
+## Development And Maintenance Notes
+
+The recent web monitor work turned the monitor into the primary operator UI while keeping backend audio and terminal fallback intact. When continuing development, keep these boundaries in mind:
+
+- `voice_assistant/web_monitor.py` owns the browser UI, snapshot state, console-log mirroring, browser audio endpoints, noVNC bridge, MCP admin-page proxy, and settings overlay.
+- `voice_assistant/agent.py` owns runtime config loading, STT/TTS selection, wake-word handling, MCP initialization, prompt loading, tool routing, cancellation, and assistant reloads.
+- Runtime/config/audio/web/MCP/Docker behavior changes should update this README, relevant `docs/*.md`, `.env.example`, and active profile examples when meanings or defaults change.
+- Active local/container profiles such as `container/config/.env.infrafast` and `container/config/.env.tailscale` may contain deployment-specific values; inspect them before normalizing or overwriting.
+
+Useful lightweight checks after changes:
+
+```bash
+.venv/bin/python -m py_compile voice_assistant/web_monitor.py voice_assistant/agent.py
+git diff --check
+git status --short
+```
+
+For web monitor changes, verify the affected endpoint or UI path in a browser when possible. Important paths include `/api/snapshot`, `/api/cancel-command`, `/api/web-transcribe`, `/api/web-tts`, `/api/llm-config`, `/api/mcp-admin/<server>/...`, `/assets/<thinking-sound>`, and `/vnc.html`.
+
+Operational checks worth repeating on real hardware are browser push-to-talk silence stop, web conversation mode, wake-word gating, thinking sound playback, backend audio device selection, MCP startup with one server down, and MCP admin pages through both HTTP proxy and direct mode.
+
 ## Troubleshooting
 
 ### Common Issues
@@ -793,6 +830,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
    - For mixer control, set the `mixer` script path in the selected MCP JSON file to the real `XMSeries-MCP/dist/index.js` path
    - For QLC+ lighting control, set the `qlcplus` script path or HTTP endpoint in the selected MCP JSON file to your QLCPlus-MCP server
    - If a configured command or script path is missing, the assistant reports that this MCP server instance could not be started and keeps running with the remaining servers
+   - If MCP initialization still fails, the assistant keeps the web monitor running in degraded mode so you can open Config, fix the selected env/MCP profile, and save to reload
 
 4. **Thinking Sound Or Audio Output Unavailable**
    - If PyAudio cannot open the selected backend output device, clear `BACKEND_AUDIO_OUTPUT_DEVICE` to use the system default

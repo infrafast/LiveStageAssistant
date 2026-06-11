@@ -6,7 +6,7 @@ Required documentation check:
 
 - Review `README.md` for user-facing behavior, env examples, setup steps, and troubleshooting.
 - Review `docs/*.md` for deployment-specific instructions.
-- Review `ROADMAP.md` when the change affects recently tracked web monitor or audio behavior.
+- Review the README development/maintenance notes when the change affects recently tracked web monitor, audio, MCP, or Docker behavior.
 - Update `.env.example` and profile env files when adding, renaming, or changing the meaning of config keys.
 - Mention in the final response whether docs were updated or explicitly verified as still current.
 

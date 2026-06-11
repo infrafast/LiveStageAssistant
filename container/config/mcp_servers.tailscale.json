@@ -1,18 +1,16 @@
 {
   "mcpServers": {
-    "xmseries-http": {
+    "mixer": {
       "type": "streamable-http",
-      "url": "https://xmseriesmcp.infrafast.fr/mcp",
-      "headers": {
-        "Authorization": "Bearer change-me"
-      },
+      "url": "http://100.96.255.63:8787/mcp",
+      "headers": {},
       "assistantOptions": {
         "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"
       }
     },
     "qlcplus": {
       "type": "streamable-http",
-      "url": "https://qlcplusmcp.infrafast.fr/mcp",
+      "url": "http://100.96.255.63:8788/mcp",
       "headers": {},
       "assistantOptions": {
         "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
