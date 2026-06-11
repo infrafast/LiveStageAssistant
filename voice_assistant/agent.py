@@ -1174,6 +1174,7 @@ class VoiceAssistant:
         self.last_processed_command_key: str | None = None
         self.last_processed_command_at: float = 0.0
         self.pending_mcp_confirmation_route: dict[str, Any] | None = None
+        self.mcp_reconnect_after_response = False
         self.microphone_available = True
         self.microphone_warning_shown = False
         if self.audio_input_device_status == "unavailable":
@@ -2945,9 +2946,28 @@ class VoiceAssistant:
                     "Please switch to a larger-context model (for example gpt-4o-mini or gpt-4o), "
                     "or reduce enabled MCP servers/tools."
                 )
+            if self._is_mcp_connection_loss_error(error_text):
+                self.mcp_reconnect_after_response = True
+                return (
+                    "La connexion au serveur MCP a été perdue pendant l'appel outil. "
+                    "Je vais redémarrer la session MCP, puis tu pourras relancer la commande."
+                )
             return f"Sorry, I encountered an error: {error_text}"
         finally:
             self.stop_thinking_sound()
+
+    def _is_mcp_connection_loss_error(self, error_text: str) -> bool:
+        normalized = error_text.lower()
+        return any(
+            marker in normalized
+            for marker in (
+                "failed due to connection loss",
+                "connection closed",
+                "streamable http context cleanup",
+                "read stream closed",
+                "write stream closed",
+            )
+        )
 
     def _looks_like_current_external_state_query(self, text: str) -> bool:
         normalized = text.lower()
@@ -3205,6 +3225,11 @@ class VoiceAssistant:
                                 pass
                 else:
                     await self.text_to_speech(response)
+
+                if self.mcp_reconnect_after_response:
+                    self.mcp_reconnect_after_response = False
+                    print("MCP connection loss detected. Restarting assistant sessions.")
+                    return "reload"
 
         except KeyboardInterrupt:
             print("\n\nInterrupted by user.")
