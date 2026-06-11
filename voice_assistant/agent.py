@@ -63,6 +63,7 @@ DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "alloy"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
+DEFAULT_SILERO_VAD_MODEL = Path("static/vendor/silero-vad/silero_vad_v6.onnx")
 OPENAI_MAX_TOOLS_PER_REQUEST = 128
 DEFAULT_MCP_PROMPT_NAME = "agent_prompt"
 DEFAULT_MCP_PROMPT_RESOURCE_URI = "agent://prompt/system"
@@ -897,6 +898,82 @@ class AutoNetworkMonitor:
         return AUTO_ENV_ONLINE if self.current_online else AUTO_ENV_OFFLINE
 
 
+class SileroVadGate:
+    """Stateful Silero VAD runner for 16 kHz mono PCM chunks."""
+
+    def __init__(
+        self,
+        model_path: str | Path = DEFAULT_SILERO_VAD_MODEL,
+        *,
+        threshold: float = 0.5,
+        neg_threshold: float | None = None,
+        min_speech_ms: int = 120,
+        min_silence_ms: int = 650,
+        speech_pad_ms: int = 100,
+        max_speech_seconds: float = 8.0,
+    ) -> None:
+        self.model_path = Path(model_path)
+        self.threshold = max(0.05, min(0.95, float(threshold or 0.5)))
+        self.neg_threshold = (
+            max(0.01, min(0.95, float(neg_threshold)))
+            if neg_threshold is not None
+            else max(self.threshold - 0.15, 0.01)
+        )
+        self.min_speech_ms = max(0, int(min_speech_ms or 0))
+        self.min_silence_ms = max(0, int(min_silence_ms or 0))
+        self.speech_pad_ms = max(0, int(speech_pad_ms or 0))
+        self.max_speech_seconds = max(1.0, float(max_speech_seconds or 8.0))
+        self.window_samples = 512
+        self.context_samples = 64
+        self.sample_rate = 16000
+        if not self.model_path.is_file():
+            raise RuntimeError(f"Silero VAD model not found: {self.model_path}")
+        try:
+            import onnxruntime
+        except ImportError as e:
+            raise RuntimeError("Silero VAD requires the onnxruntime package") from e
+
+        options = onnxruntime.SessionOptions()
+        options.inter_op_num_threads = 1
+        options.intra_op_num_threads = 1
+        options.enable_cpu_mem_arena = False
+        options.log_severity_level = 4
+        self.session = onnxruntime.InferenceSession(
+            str(self.model_path),
+            providers=["CPUExecutionProvider"],
+            sess_options=options,
+        )
+        self.reset()
+
+    @property
+    def chunk_ms(self) -> float:
+        return self.window_samples / self.sample_rate * 1000.0
+
+    def reset(self) -> None:
+        self.h = np.zeros((1, 1, 128), dtype=np.float32)
+        self.c = np.zeros((1, 1, 128), dtype=np.float32)
+        self.context = np.zeros((1, self.context_samples), dtype=np.float32)
+        self.pending = np.array([], dtype=np.float32)
+
+    def process_pcm(self, audio_data: bytes) -> list[float]:
+        samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
+        if samples.size == 0:
+            return []
+        self.pending = np.concatenate((self.pending, samples))
+        probabilities: list[float] = []
+        while self.pending.size >= self.window_samples:
+            window = self.pending[: self.window_samples]
+            self.pending = self.pending[self.window_samples :]
+            model_input = np.concatenate((self.context.reshape(-1), window), axis=0).reshape(1, -1)
+            output, self.h, self.c = self.session.run(
+                None,
+                {"input": model_input.astype(np.float32), "h": self.h, "c": self.c},
+            )
+            self.context = window[-self.context_samples :].reshape(1, -1)
+            probabilities.append(float(np.ravel(output)[-1]))
+        return probabilities
+
+
 class VoiceAssistant:
     """Improved voice-enabled AI assistant with better error handling."""
 
@@ -916,10 +993,13 @@ class VoiceAssistant:
         thinking_sound_file: str = "thinking.wav",
         backend_audio_input_device: str | None = None,
         backend_audio_output_device: str | None = None,
-        silence_threshold: int = 500,
-        silence_duration: float = 1.5,
-        min_speech_ms: int = 350,
-        min_speech_frames: int = 5,
+        vad_model_path: str | Path = DEFAULT_SILERO_VAD_MODEL,
+        vad_speech_threshold: float = 0.5,
+        vad_negative_threshold: float | None = None,
+        vad_min_speech_ms: int = 120,
+        vad_min_silence_ms: int = 650,
+        vad_speech_pad_ms: int = 100,
+        vad_max_speech_seconds: float = 8.0,
         tts_speed: float = 1.0,
         wake_words: list[str] | None = None,
         mcp_config: dict | None = None,
@@ -959,10 +1039,13 @@ class VoiceAssistant:
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
             backend_audio_input_device: Optional PyAudio input device index from BACKEND_AUDIO_INPUT_DEVICE
             backend_audio_output_device: Optional PyAudio output device index from BACKEND_AUDIO_OUTPUT_DEVICE
-            silence_threshold: Audio silence detection threshold
-            silence_duration: How long to wait after speech stops
-            min_speech_ms: Minimum non-silent speech duration before backend STT is accepted
-            min_speech_frames: Minimum non-silent audio frames before backend STT is accepted
+            vad_model_path: Local Silero VAD ONNX model path
+            vad_speech_threshold: Silero probability threshold that starts speech
+            vad_negative_threshold: Silero probability threshold that ends speech
+            vad_min_speech_ms: Minimum speech duration before backend STT is accepted
+            vad_min_silence_ms: Silence duration that ends an accepted phrase
+            vad_speech_pad_ms: Audio retained before detected speech
+            vad_max_speech_seconds: Hard cap for one accepted utterance
             tts_speed: Cloud TTS speed for backend/non-web speech
             wake_words: Optional global wake word variants used to gate command processing
             mcp_config: Optional MCP server configuration dict
@@ -990,10 +1073,15 @@ class VoiceAssistant:
         self.channels = 1
         self.rate = 16000
         self.chunk = 1024
-        self.silence_threshold = silence_threshold
-        self.silence_duration = silence_duration
-        self.min_speech_ms = max(0, int(min_speech_ms or 0))
-        self.min_speech_frames = max(0, int(min_speech_frames or 0))
+        self.vad = SileroVadGate(
+            vad_model_path,
+            threshold=vad_speech_threshold,
+            neg_threshold=vad_negative_threshold,
+            min_speech_ms=vad_min_speech_ms,
+            min_silence_ms=vad_min_silence_ms,
+            speech_pad_ms=vad_speech_pad_ms,
+            max_speech_seconds=vad_max_speech_seconds,
+        )
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
@@ -1930,11 +2018,6 @@ class VoiceAssistant:
                 self.web_monitor.update(services={"MCP": {"status": "error", "detail": str(e)}})
             return False
 
-    def detect_silence(self, audio_data: bytes) -> bool:
-        """Detect if audio contains silence."""
-        audio_array = np.frombuffer(audio_data, dtype=np.int16)
-        return np.max(np.abs(audio_array)) < self.silence_threshold
-
     def record_audio(self) -> bytes | None:
         """Record audio from microphone."""
         if not self.microphone_available:
@@ -1954,17 +2037,15 @@ class VoiceAssistant:
                     frames_per_buffer=self.chunk,
                 )
 
-            frames = []
-            silence_frames = 0
-            silence_frame_threshold = int(self.rate / self.chunk * self.silence_duration)
-            min_speech_duration_frames = int(
-                (self.rate / self.chunk * (self.min_speech_ms / 1000.0)) + 0.999
-            )
-            min_speech_frames = max(
-                self.min_speech_frames,
-                min_speech_duration_frames,
-            )
-            speech_candidate_frames = 0
+            self.vad.reset()
+            frames: list[bytes] = []
+            pre_roll: list[bytes] = []
+            speech_candidate: list[bytes] = []
+            speech_candidate_ms = 0.0
+            silence_ms = 0.0
+            recorded_speech_ms = 0.0
+            audio_chunk_ms = self.chunk / self.rate * 1000.0
+            pad_frames = max(1, int((self.vad.speech_pad_ms / audio_chunk_ms) + 0.999))
             has_speech = False
 
             while True:
@@ -1980,19 +2061,36 @@ class VoiceAssistant:
                     break
 
                 data = stream.read(self.chunk, exception_on_overflow=False)
-                frames.append(data)
+                probabilities = self.vad.process_pcm(data)
+                speech_probability = max(probabilities) if probabilities else 0.0
+                chunk_ms = self.vad.chunk_ms * max(1, len(probabilities))
 
-                if self.detect_silence(data):
-                    speech_candidate_frames = 0
-                    if has_speech:
-                        silence_frames += 1
-                        if silence_frames > silence_frame_threshold:
+                if has_speech:
+                    frames.append(data)
+                    recorded_speech_ms += chunk_ms
+                    if speech_probability < self.vad.neg_threshold:
+                        silence_ms += chunk_ms
+                        if silence_ms >= self.vad.min_silence_ms:
                             break
-                else:
-                    silence_frames = 0
-                    speech_candidate_frames += 1
-                    if not has_speech and speech_candidate_frames >= min_speech_frames:
+                    else:
+                        silence_ms = 0.0
+                    if recorded_speech_ms >= self.vad.max_speech_seconds * 1000:
+                        break
+                elif speech_probability >= self.vad.threshold:
+                    speech_candidate.append(data)
+                    speech_candidate_ms += chunk_ms
+                    if speech_candidate_ms >= self.vad.min_speech_ms:
                         has_speech = True
+                        frames = pre_roll + speech_candidate
+                        recorded_speech_ms = speech_candidate_ms
+                        pre_roll = []
+                        speech_candidate = []
+                else:
+                    speech_candidate = []
+                    speech_candidate_ms = 0.0
+                    pre_roll.append(data)
+                    if len(pre_roll) > pad_frames:
+                        pre_roll = pre_roll[-pad_frames:]
 
                 if len(frames) > self.rate / self.chunk * 30:
                     break
@@ -2100,23 +2198,25 @@ class VoiceAssistant:
                     frames_per_buffer=self.chunk,
                 )
 
+            self.vad.reset()
             frames = []
-            silence_frames = 0
-            silence_frame_threshold = max(1, int(self.rate / self.chunk * 0.45))
+            silence_ms = 0.0
             max_frames = max(1, int(self.rate / self.chunk * 1.4))
             has_speech = False
 
             while len(frames) < max_frames and not stop_event.is_set():
                 data = stream.read(self.chunk, exception_on_overflow=False)
                 frames.append(data)
+                probabilities = self.vad.process_pcm(data)
+                speech_probability = max(probabilities) if probabilities else 0.0
 
-                if self.detect_silence(data):
-                    silence_frames += 1
-                    if has_speech and silence_frames > silence_frame_threshold:
-                        break
-                else:
-                    silence_frames = 0
+                if speech_probability >= self.vad.threshold:
+                    silence_ms = 0.0
                     has_speech = True
+                elif has_speech:
+                    silence_ms += self.vad.chunk_ms * max(1, len(probabilities))
+                    if silence_ms > 450:
+                        break
 
             if stop_event.is_set() or not has_speech:
                 return None
@@ -3513,15 +3613,12 @@ async def main():
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
         current_openai_tts_speed = env_float_from_values(values, "WEB_TTS_SPEED", 1.0)
-        current_web_conversation_threshold = env_float_from_values(values, "WEB_CONVERSATION_THRESHOLD", 0.05)
-        current_web_conversation_min_speech_ms = env_int_from_values(values, "WEB_CONVERSATION_MIN_SPEECH_MS", 350)
-        current_web_conversation_min_speech_frames = env_int_from_values(values, "WEB_CONVERSATION_MIN_SPEECH_FRAMES", 8)
-        current_web_conversation_silence_ms = env_int_from_values(values, "WEB_CONVERSATION_SILENCE_MS", 1200)
-        current_web_conversation_idle_seconds = env_float_from_values(values, "WEB_CONVERSATION_IDLE_SECONDS", 25.0)
-        current_voice_silence_threshold = env_int_from_values(values, "VOICE_SILENCE_THRESHOLD", 500)
-        current_voice_min_speech_ms = env_int_from_values(values, "VOICE_MIN_SPEECH_MS", 350)
-        current_voice_min_speech_frames = env_int_from_values(values, "VOICE_MIN_SPEECH_FRAMES", 5)
-        current_voice_silence_duration = env_float_from_values(values, "VOICE_SILENCE_DURATION", 1.5)
+        current_vad_speech_threshold = env_float_from_values(values, "VAD_SPEECH_THRESHOLD", 0.5)
+        current_vad_negative_threshold = env_float_from_values(values, "VAD_NEGATIVE_THRESHOLD", 0.35)
+        current_vad_min_speech_ms = env_int_from_values(values, "VAD_MIN_SPEECH_MS", 120)
+        current_vad_min_silence_ms = env_int_from_values(values, "VAD_MIN_SILENCE_MS", 650)
+        current_vad_speech_pad_ms = env_int_from_values(values, "VAD_SPEECH_PAD_MS", 100)
+        current_vad_max_speech_seconds = env_float_from_values(values, "VAD_MAX_SPEECH_SECONDS", 8.0)
         current_backend_audio_input_device = (values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
         current_backend_audio_output_device = (values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
         internet_online = check_internet_connection()
@@ -3575,15 +3672,12 @@ async def main():
             "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
             "selected_openai_tts_voice": current_openai_tts_voice,
             "selected_openai_tts_speed": current_openai_tts_speed,
-            "selected_web_conversation_threshold": current_web_conversation_threshold,
-            "selected_web_conversation_min_speech_ms": current_web_conversation_min_speech_ms,
-            "selected_web_conversation_min_speech_frames": current_web_conversation_min_speech_frames,
-            "selected_web_conversation_silence_ms": current_web_conversation_silence_ms,
-            "selected_web_conversation_idle_seconds": current_web_conversation_idle_seconds,
-            "selected_voice_silence_threshold": current_voice_silence_threshold,
-            "selected_voice_min_speech_ms": current_voice_min_speech_ms,
-            "selected_voice_min_speech_frames": current_voice_min_speech_frames,
-            "selected_voice_silence_duration": current_voice_silence_duration,
+            "selected_vad_speech_threshold": current_vad_speech_threshold,
+            "selected_vad_negative_threshold": current_vad_negative_threshold,
+            "selected_vad_min_speech_ms": current_vad_min_speech_ms,
+            "selected_vad_min_silence_ms": current_vad_min_silence_ms,
+            "selected_vad_speech_pad_ms": current_vad_speech_pad_ms,
+            "selected_vad_max_speech_seconds": current_vad_max_speech_seconds,
             "backend_audio_inputs": backend_audio_devices["inputs"],
             "backend_audio_outputs": backend_audio_devices["outputs"],
             "selected_backend_audio_input_device": current_backend_audio_input_device,
@@ -3612,15 +3706,12 @@ async def main():
         thinking_sound_file: str,
         openai_tts_voice: str,
         openai_tts_speed: float,
-        web_conversation_threshold: float,
-        web_conversation_min_speech_ms: int,
-        web_conversation_min_speech_frames: int,
-        web_conversation_silence_ms: int,
-        web_conversation_idle_seconds: float,
-        voice_silence_threshold: int,
-        voice_min_speech_ms: int,
-        voice_min_speech_frames: int,
-        voice_silence_duration: float,
+        vad_speech_threshold: float,
+        vad_negative_threshold: float,
+        vad_min_speech_ms: int,
+        vad_min_silence_ms: int,
+        vad_speech_pad_ms: int,
+        vad_max_speech_seconds: float,
         web_monitor: WebMonitor | None,
         reload_event: threading.Event | None,
         auto_env_mode: bool = False,
@@ -3642,15 +3733,14 @@ async def main():
         thinking_sound_file = thinking_sound_file.strip()
         openai_tts_voice = (openai_tts_voice or "").strip()
         openai_tts_speed = max(0.6, min(1.8, float(openai_tts_speed or 1.0)))
-        web_conversation_threshold = max(0.01, min(0.2, float(web_conversation_threshold or 0.05)))
-        web_conversation_min_speech_ms = max(50, min(2000, int(web_conversation_min_speech_ms or 350)))
-        web_conversation_min_speech_frames = max(1, min(40, int(web_conversation_min_speech_frames or 8)))
-        web_conversation_silence_ms = max(250, min(5000, int(web_conversation_silence_ms or 1200)))
-        web_conversation_idle_seconds = max(3.0, min(120.0, float(web_conversation_idle_seconds or 25.0)))
-        voice_silence_threshold = max(50, min(5000, int(voice_silence_threshold or 500)))
-        voice_min_speech_ms = max(50, min(2000, int(voice_min_speech_ms or 350)))
-        voice_min_speech_frames = max(1, min(40, int(voice_min_speech_frames or 5)))
-        voice_silence_duration = max(0.2, min(5.0, float(voice_silence_duration or 1.5)))
+        vad_speech_threshold = max(0.05, min(0.95, float(vad_speech_threshold or 0.5)))
+        vad_negative_threshold = max(0.01, min(0.95, float(vad_negative_threshold or 0.35)))
+        if vad_negative_threshold >= vad_speech_threshold:
+            vad_negative_threshold = max(0.01, vad_speech_threshold - 0.15)
+        vad_min_speech_ms = max(0, min(2000, int(vad_min_speech_ms or 120)))
+        vad_min_silence_ms = max(100, min(5000, int(vad_min_silence_ms or 650)))
+        vad_speech_pad_ms = max(0, min(1000, int(vad_speech_pad_ms or 100)))
+        vad_max_speech_seconds = max(1.0, min(30.0, float(vad_max_speech_seconds or 8.0)))
         if provider not in {"openai", "ollama"}:
             raise ValueError(f"unsupported LLM provider: {provider}")
         values = dict(dotenv_values(env_file))
@@ -3787,15 +3877,12 @@ async def main():
                 "WEB_STT_MODEL": (values.get("WEB_STT_MODEL") or "whisper-1").strip() or "whisper-1",
                 "WEB_TTS_PROVIDER": updated_web_tts_provider,
                 "WEB_TTS_MODEL": (values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip() or DEFAULT_OPENAI_TTS_MODEL,
-                "WEB_CONVERSATION_THRESHOLD": f"{web_conversation_threshold:.3f}".rstrip("0").rstrip("."),
-                "WEB_CONVERSATION_MIN_SPEECH_MS": str(web_conversation_min_speech_ms),
-                "WEB_CONVERSATION_MIN_SPEECH_FRAMES": str(web_conversation_min_speech_frames),
-                "WEB_CONVERSATION_SILENCE_MS": str(web_conversation_silence_ms),
-                "WEB_CONVERSATION_IDLE_SECONDS": f"{web_conversation_idle_seconds:.1f}".rstrip("0").rstrip("."),
-                "VOICE_SILENCE_THRESHOLD": str(voice_silence_threshold),
-                "VOICE_MIN_SPEECH_MS": str(voice_min_speech_ms),
-                "VOICE_MIN_SPEECH_FRAMES": str(voice_min_speech_frames),
-                "VOICE_SILENCE_DURATION": f"{voice_silence_duration:.2f}".rstrip("0").rstrip("."),
+                "VAD_SPEECH_THRESHOLD": f"{vad_speech_threshold:.2f}".rstrip("0").rstrip("."),
+                "VAD_NEGATIVE_THRESHOLD": f"{vad_negative_threshold:.2f}".rstrip("0").rstrip("."),
+                "VAD_MIN_SPEECH_MS": str(vad_min_speech_ms),
+                "VAD_MIN_SILENCE_MS": str(vad_min_silence_ms),
+                "VAD_SPEECH_PAD_MS": str(vad_speech_pad_ms),
+                "VAD_MAX_SPEECH_SECONDS": f"{vad_max_speech_seconds:.1f}".rstrip("0").rstrip("."),
                 "WAKE_WORD": wake_word,
                 "STT_PROMPT": stt_prompt,
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
@@ -3852,15 +3939,12 @@ async def main():
             "thinking_sound_file": thinking_sound_file,
             "openai_tts_voice": openai_tts_voice,
             "openai_tts_speed": openai_tts_speed,
-            "web_conversation_threshold": web_conversation_threshold,
-            "web_conversation_min_speech_ms": web_conversation_min_speech_ms,
-            "web_conversation_min_speech_frames": web_conversation_min_speech_frames,
-            "web_conversation_silence_ms": web_conversation_silence_ms,
-            "web_conversation_idle_seconds": web_conversation_idle_seconds,
-            "voice_silence_threshold": voice_silence_threshold,
-            "voice_min_speech_ms": voice_min_speech_ms,
-            "voice_min_speech_frames": voice_min_speech_frames,
-            "voice_silence_duration": voice_silence_duration,
+            "vad_speech_threshold": vad_speech_threshold,
+            "vad_negative_threshold": vad_negative_threshold,
+            "vad_min_speech_ms": vad_min_speech_ms,
+            "vad_min_silence_ms": vad_min_silence_ms,
+            "vad_speech_pad_ms": vad_speech_pad_ms,
+            "vad_max_speech_seconds": vad_max_speech_seconds,
             "message": "Configuration saved. Restarting assistant with the new settings.",
         }
 
@@ -3901,10 +3985,13 @@ async def main():
         thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
         backend_audio_input_device = os.getenv("BACKEND_AUDIO_INPUT_DEVICE", "").strip()
         backend_audio_output_device = os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE", "").strip()
-        silence_threshold = env_int("VOICE_SILENCE_THRESHOLD", 500)
-        silence_duration = env_float("VOICE_SILENCE_DURATION", 1.5)
-        min_speech_ms = env_int("VOICE_MIN_SPEECH_MS", 350)
-        min_speech_frames = env_int("VOICE_MIN_SPEECH_FRAMES", 5)
+        vad_model_path = os.getenv("VAD_MODEL_PATH", str(DEFAULT_SILERO_VAD_MODEL)).strip() or str(DEFAULT_SILERO_VAD_MODEL)
+        vad_speech_threshold = env_float("VAD_SPEECH_THRESHOLD", 0.5)
+        vad_negative_threshold = env_float("VAD_NEGATIVE_THRESHOLD", 0.35)
+        vad_min_speech_ms = env_int("VAD_MIN_SPEECH_MS", 120)
+        vad_min_silence_ms = env_int("VAD_MIN_SILENCE_MS", 650)
+        vad_speech_pad_ms = env_int("VAD_SPEECH_PAD_MS", 100)
+        vad_max_speech_seconds = env_float("VAD_MAX_SPEECH_SECONDS", 8.0)
         voice_cancel_during_thinking = env_bool("VOICE_CANCEL_DURING_THINKING", False)
         interrupt_conversation_enabled = env_bool("INTERRUPT_CONVERSATION_ENABLED", False)
         web_audio_enabled = env_bool("WEB_AUDIO_ENABLED", False)
@@ -3929,12 +4016,6 @@ async def main():
         web_tts_model = os.getenv("WEB_TTS_MODEL", DEFAULT_OPENAI_TTS_MODEL).strip()
         web_tts_speed = max(0.6, min(1.8, env_float("WEB_TTS_SPEED", 1.0)))
         web_stt_model = os.getenv("WEB_STT_MODEL", "whisper-1").strip()
-        web_recording_max_seconds = env_float("WEB_RECORDING_MAX_SECONDS", 8.0)
-        web_conversation_silence_ms = env_int("WEB_CONVERSATION_SILENCE_MS", 1200)
-        web_conversation_idle_seconds = env_float("WEB_CONVERSATION_IDLE_SECONDS", 25.0)
-        web_conversation_threshold = env_float("WEB_CONVERSATION_THRESHOLD", 0.05)
-        web_conversation_min_speech_ms = env_int("WEB_CONVERSATION_MIN_SPEECH_MS", 350)
-        web_conversation_min_speech_frames = env_int("WEB_CONVERSATION_MIN_SPEECH_FRAMES", 8)
         wake_words = parse_wake_words(env_optional("WAKE_WORD"))
         system_prompt = env_optional("ASSISTANT_SYSTEM_PROMPT")
         mcp_config_path = env_optional("MCP_CONFIG")
@@ -4026,12 +4107,15 @@ async def main():
             "tts_provider": web_tts_provider if web_audio_enabled and not backend_tts_active else "none",
             "cloud_tts_provider": cloud_tts_provider,
             "tts_speed": web_tts_speed,
-            "max_record_seconds": web_recording_max_seconds,
-            "conversation_silence_ms": web_conversation_silence_ms,
-            "conversation_idle_seconds": web_conversation_idle_seconds,
-            "conversation_threshold": web_conversation_threshold,
-            "conversation_min_speech_ms": web_conversation_min_speech_ms,
-            "conversation_min_speech_frames": web_conversation_min_speech_frames,
+            "vad_model_url": "/static/vendor/silero-vad/silero_vad_v6.onnx",
+            "vad_ort_url": "/static/vendor/onnxruntime-web/ort.wasm.min.mjs",
+            "vad_ort_wasm_path": "/static/vendor/onnxruntime-web/",
+            "vad_speech_threshold": vad_speech_threshold,
+            "vad_negative_threshold": vad_negative_threshold,
+            "vad_min_speech_ms": vad_min_speech_ms,
+            "vad_min_silence_ms": vad_min_silence_ms,
+            "vad_speech_pad_ms": vad_speech_pad_ms,
+            "vad_max_speech_seconds": vad_max_speech_seconds,
             "interrupt_conversation_enabled": interrupt_conversation_enabled,
         }
 
@@ -4093,10 +4177,13 @@ async def main():
             thinking_sound_file=thinking_sound_file,
             backend_audio_input_device=backend_audio_input_device,
             backend_audio_output_device=backend_audio_output_device,
-            silence_threshold=silence_threshold,
-            silence_duration=silence_duration,
-            min_speech_ms=min_speech_ms,
-            min_speech_frames=min_speech_frames,
+            vad_model_path=vad_model_path,
+            vad_speech_threshold=vad_speech_threshold,
+            vad_negative_threshold=vad_negative_threshold,
+            vad_min_speech_ms=vad_min_speech_ms,
+            vad_min_silence_ms=vad_min_silence_ms,
+            vad_speech_pad_ms=vad_speech_pad_ms,
+            vad_max_speech_seconds=vad_max_speech_seconds,
             tts_speed=web_tts_speed,
             wake_words=wake_words,
             mcp_config=mcp_config,
@@ -4342,7 +4429,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, web_conversation_threshold, web_conversation_min_speech_ms, web_conversation_min_speech_frames, web_conversation_silence_ms, web_conversation_idle_seconds, voice_silence_threshold, voice_min_speech_ms, voice_min_speech_frames, voice_silence_duration: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -4361,15 +4448,12 @@ async def main():
                 thinking_sound_file,
                 openai_tts_voice,
                 openai_tts_speed,
-                web_conversation_threshold,
-                web_conversation_min_speech_ms,
-                web_conversation_min_speech_frames,
-                web_conversation_silence_ms,
-                web_conversation_idle_seconds,
-                voice_silence_threshold,
-                voice_min_speech_ms,
-                voice_min_speech_frames,
-                voice_silence_duration,
+                vad_speech_threshold,
+                vad_negative_threshold,
+                vad_min_speech_ms,
+                vad_min_silence_ms,
+                vad_speech_pad_ms,
+                vad_max_speech_seconds,
                 web_monitor,
                 reload_event,
                 auto_env_mode,

@@ -256,9 +256,6 @@ class WebMonitor:
                 str,
                 float,
                 float,
-                int,
-                int,
-                int,
                 float,
                 int,
                 int,
@@ -325,9 +322,6 @@ class WebMonitor:
                 str,
                 float,
                 float,
-                int,
-                int,
-                int,
                 float,
                 int,
                 int,
@@ -563,10 +557,16 @@ class WebMonitor:
                 def log_message(self, format: str, *args: Any) -> None:
                     return
 
+                def _send_isolation_headers(self) -> None:
+                    self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+                    self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+                    self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+
                 def _send_text(self, value: str, content_type: str, *, send_body: bool = True) -> None:
                     encoded = value.encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
+                    self._send_isolation_headers()
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
                     if send_body:
@@ -577,6 +577,7 @@ class WebMonitor:
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Cache-Control", "no-store")
+                    self._send_isolation_headers()
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
                     self.wfile.write(encoded)
@@ -586,6 +587,7 @@ class WebMonitor:
                     self.send_response(status)
                     self.send_header("Content-Type", "application/json; charset=utf-8")
                     self.send_header("Cache-Control", "no-store")
+                    self._send_isolation_headers()
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()
                     self.wfile.write(encoded)
@@ -612,6 +614,7 @@ class WebMonitor:
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Cache-Control", "public, max-age=3600")
+                    self._send_isolation_headers()
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     if send_body:
@@ -653,7 +656,7 @@ class WebMonitor:
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Cache-Control", "public, max-age=3600")
-                    self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+                    self._send_isolation_headers()
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     if send_body:
@@ -958,19 +961,12 @@ class WebMonitor:
                         self.send_error(400, "OpenAI TTS speed must be a number")
                         return
                     try:
-                        web_conversation_threshold = float(payload.get("web_conversation_threshold") or 0.05)
-                        web_conversation_min_speech_ms = int(payload.get("web_conversation_min_speech_ms") or 350)
-                        web_conversation_min_speech_frames = int(
-                            payload.get("web_conversation_min_speech_frames") or 8
-                        )
-                        web_conversation_silence_ms = int(payload.get("web_conversation_silence_ms") or 1200)
-                        web_conversation_idle_seconds = float(
-                            payload.get("web_conversation_idle_seconds") or 25.0
-                        )
-                        voice_silence_threshold = int(payload.get("voice_silence_threshold") or 500)
-                        voice_min_speech_ms = int(payload.get("voice_min_speech_ms") or 350)
-                        voice_min_speech_frames = int(payload.get("voice_min_speech_frames") or 5)
-                        voice_silence_duration = float(payload.get("voice_silence_duration") or 1.5)
+                        vad_speech_threshold = float(payload.get("vad_speech_threshold") or 0.5)
+                        vad_negative_threshold = float(payload.get("vad_negative_threshold") or 0.35)
+                        vad_min_speech_ms = int(payload.get("vad_min_speech_ms") or 120)
+                        vad_min_silence_ms = int(payload.get("vad_min_silence_ms") or 650)
+                        vad_speech_pad_ms = int(payload.get("vad_speech_pad_ms") or 100)
+                        vad_max_speech_seconds = float(payload.get("vad_max_speech_seconds") or 8.0)
                     except (TypeError, ValueError):
                         self.send_error(400, "Voice detection settings must be numeric")
                         return
@@ -994,15 +990,12 @@ class WebMonitor:
                             thinking_sound_file,
                             openai_tts_voice,
                             openai_tts_speed,
-                            web_conversation_threshold,
-                            web_conversation_min_speech_ms,
-                            web_conversation_min_speech_frames,
-                            web_conversation_silence_ms,
-                            web_conversation_idle_seconds,
-                            voice_silence_threshold,
-                            voice_min_speech_ms,
-                            voice_min_speech_frames,
-                            voice_silence_duration,
+                            vad_speech_threshold,
+                            vad_negative_threshold,
+                            vad_min_speech_ms,
+                            vad_min_silence_ms,
+                            vad_speech_pad_ms,
+                            vad_max_speech_seconds,
                         )
                     except ValueError as e:
                         self.send_error(400, str(e))
@@ -2920,86 +2913,56 @@ INDEX_HTML = """<!doctype html>
                 <div class="vad-groups">
                   <div class="vad-group">
                     <div class="vad-group-title">
-                      <span>Browser</span>
-                      <span class="detail">Réglages du micro utilisé par le navigateur.</span>
+                      <span>Silero</span>
+                      <span class="detail">Réglages communs au micro navigateur et au micro backend.</span>
                     </div>
                     <div class="field vad-field">
-                      <label class="vad-label" for="web-conversation-threshold" title="WEB_CONVERSATION_THRESHOLD">
-                        <span>Déclenchement de la voix</span>
-                        <span class="vad-value" id="web-conversation-threshold-label">0.05</span>
+                      <label class="vad-label" for="vad-speech-threshold" title="VAD_SPEECH_THRESHOLD">
+                        <span>Seuil d'entrée voix</span>
+                        <span class="vad-value" id="vad-speech-threshold-label">0.5</span>
                       </label>
-                      <div class="field-hint">Plus bas capte une voix faible; plus haut ignore mieux le souffle et les bruits.</div>
-                      <input class="vad-control" id="web-conversation-threshold" type="range" min="0.01" max="0.2" step="0.005" value="0.05">
+                      <div class="field-hint">Plus bas capte une voix faible; plus haut ignore mieux bruit, musique et souffle.</div>
+                      <input class="vad-control" id="vad-speech-threshold" type="range" min="0.05" max="0.95" step="0.01" value="0.5">
                     </div>
                     <div class="field vad-field">
-                      <label class="vad-label" for="web-conversation-min-speech-ms" title="WEB_CONVERSATION_MIN_SPEECH_MS">
-                        <span>Durée minimale d'un mot</span>
-                        <span class="vad-value" id="web-conversation-min-speech-ms-label">350 ms</span>
+                      <label class="vad-label" for="vad-negative-threshold" title="VAD_NEGATIVE_THRESHOLD">
+                        <span>Seuil de sortie silence</span>
+                        <span class="vad-value" id="vad-negative-threshold-label">0.35</span>
                       </label>
-                      <div class="field-hint">Plus court accepte des mots très rapides; plus long évite les petits bruits isolés.</div>
-                      <input class="vad-control" id="web-conversation-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
+                      <div class="field-hint">Doit rester sous le seuil d'entrée; plus bas évite les coupures sur syllabes faibles.</div>
+                      <input class="vad-control" id="vad-negative-threshold" type="range" min="0.01" max="0.9" step="0.01" value="0.35">
                     </div>
                     <div class="field vad-field">
-                      <label class="vad-label" for="web-conversation-min-speech-frames" title="WEB_CONVERSATION_MIN_SPEECH_FRAMES">
-                        <span>Stabilité avant validation</span>
-                        <span class="vad-value" id="web-conversation-min-speech-frames-label">8 frames</span>
+                      <label class="vad-label" for="vad-min-speech-ms" title="VAD_MIN_SPEECH_MS">
+                        <span>Durée minimale de voix</span>
+                        <span class="vad-value" id="vad-min-speech-ms-label">120 ms</span>
                       </label>
-                      <div class="field-hint">Plus bas réagit vite; plus haut demande plusieurs instants de voix avant d'envoyer.</div>
-                      <input class="vad-control" id="web-conversation-min-speech-frames" type="range" min="1" max="30" step="1" value="8">
+                      <div class="field-hint">Plus court accepte des commandes très brèves; plus long filtre mieux les faux départs.</div>
+                      <input class="vad-control" id="vad-min-speech-ms" type="range" min="0" max="1500" step="20" value="120">
                     </div>
                     <div class="field vad-field">
-                      <label class="vad-label" for="web-conversation-silence-ms" title="WEB_CONVERSATION_SILENCE_MS">
-                        <span>Pause qui termine la phrase</span>
-                        <span class="vad-value" id="web-conversation-silence-ms-label">1200 ms</span>
+                      <label class="vad-label" for="vad-min-silence-ms" title="VAD_MIN_SILENCE_MS">
+                        <span>Silence qui termine la phrase</span>
+                        <span class="vad-value" id="vad-min-silence-ms-label">650 ms</span>
                       </label>
                       <div class="field-hint">Plus court envoie vite; plus long laisse le temps de parler lentement sans couper.</div>
-                      <input class="vad-control" id="web-conversation-silence-ms" type="range" min="300" max="4000" step="50" value="1200">
+                      <input class="vad-control" id="vad-min-silence-ms" type="range" min="100" max="5000" step="50" value="650">
                     </div>
                     <div class="field vad-field">
-                      <label class="vad-label" for="web-conversation-idle-seconds" title="WEB_CONVERSATION_IDLE_SECONDS">
-                        <span>Relance si personne ne parle</span>
-                        <span class="vad-value" id="web-conversation-idle-seconds-label">25 s</span>
+                      <label class="vad-label" for="vad-speech-pad-ms" title="VAD_SPEECH_PAD_MS">
+                        <span>Marge avant la voix</span>
+                        <span class="vad-value" id="vad-speech-pad-ms-label">100 ms</span>
                       </label>
-                      <div class="field-hint">Redémarre l'écoute après une période calme pour éviter un micro bloqué.</div>
-                      <input class="vad-control" id="web-conversation-idle-seconds" type="range" min="3" max="90" step="1" value="25">
-                    </div>
-                  </div>
-                  <div class="vad-group">
-                    <div class="vad-group-title">
-                      <span>Backend</span>
-                      <span class="detail">Réglages du micro PyAudio côté assistant.</span>
+                      <div class="field-hint">Conserve un peu d'audio avant le déclenchement pour ne pas manger l'attaque du mot.</div>
+                      <input class="vad-control" id="vad-speech-pad-ms" type="range" min="0" max="1000" step="20" value="100">
                     </div>
                     <div class="field vad-field">
-                      <label class="vad-label" for="voice-silence-threshold" title="VOICE_SILENCE_THRESHOLD">
-                        <span>Déclenchement de la voix</span>
-                        <span class="vad-value" id="voice-silence-threshold-label">500</span>
+                      <label class="vad-label" for="vad-max-speech-seconds" title="VAD_MAX_SPEECH_SECONDS">
+                        <span>Durée maximale d'une phrase</span>
+                        <span class="vad-value" id="vad-max-speech-seconds-label">8 s</span>
                       </label>
-                      <div class="field-hint">Plus bas capte plus facilement; plus haut filtre mieux souffle, salle et retours.</div>
-                      <input class="vad-control" id="voice-silence-threshold" type="range" min="50" max="3000" step="25" value="500">
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="voice-min-speech-ms" title="VOICE_MIN_SPEECH_MS">
-                        <span>Durée minimale d'un mot</span>
-                        <span class="vad-value" id="voice-min-speech-ms-label">350 ms</span>
-                      </label>
-                      <div class="field-hint">Plus court accepte une commande brève; plus long évite les clics et respirations.</div>
-                      <input class="vad-control" id="voice-min-speech-ms" type="range" min="50" max="1500" step="25" value="350">
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="voice-min-speech-frames" title="VOICE_MIN_SPEECH_FRAMES">
-                        <span>Stabilité avant validation</span>
-                        <span class="vad-value" id="voice-min-speech-frames-label">5 frames</span>
-                      </label>
-                      <div class="field-hint">Plus bas démarre vite; plus haut attend que la voix soit vraiment présente.</div>
-                      <input class="vad-control" id="voice-min-speech-frames" type="range" min="1" max="30" step="1" value="5">
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="voice-silence-duration" title="VOICE_SILENCE_DURATION">
-                        <span>Pause qui termine la phrase</span>
-                        <span class="vad-value" id="voice-silence-duration-label">1.5 s</span>
-                      </label>
-                      <div class="field-hint">Plus court répond vite; plus long protège les phrases lentes ou hésitantes.</div>
-                      <input class="vad-control" id="voice-silence-duration" type="range" min="0.2" max="5" step="0.1" value="1.5">
+                      <div class="field-hint">Coupe un enregistrement trop long même si Silero pense entendre encore de la voix.</div>
+                      <input class="vad-control" id="vad-max-speech-seconds" type="range" min="1" max="30" step="0.5" value="8">
                     </div>
                   </div>
                 </div>
@@ -3010,8 +2973,7 @@ INDEX_HTML = """<!doctype html>
                       <button class="small-button vad-preset" type="button" data-vad-preset="quick-word">Apply</button>
                     </div>
                     <div class="vad-example-values">
-                      <div>Browser: sensibilité 0.035, mot court 120 ms, confirmation 3 frames, fin 650 ms, relance 18 s</div>
-                      <div>Backend: sensibilité 300, mot court 120 ms, confirmation 2 frames, fin 0.7 s</div>
+                      <div>Entrée 0.42, sortie 0.25, voix minimale 80 ms, silence 450 ms, marge 120 ms, maximum 6 s</div>
                     </div>
                   </div>
                   <div class="vad-example">
@@ -3020,8 +2982,7 @@ INDEX_HTML = """<!doctype html>
                       <button class="small-button vad-preset" type="button" data-vad-preset="noise-filter">Apply</button>
                     </div>
                     <div class="vad-example-values">
-                      <div>Browser: sensibilité 0.075, mot court 300 ms, confirmation 8 frames, fin 1000 ms, relance 25 s</div>
-                      <div>Backend: sensibilité 700, mot court 300 ms, confirmation 6 frames, fin 1.2 s</div>
+                      <div>Entrée 0.62, sortie 0.42, voix minimale 180 ms, silence 700 ms, marge 100 ms, maximum 8 s</div>
                     </div>
                   </div>
                   <div class="vad-example">
@@ -3030,8 +2991,7 @@ INDEX_HTML = """<!doctype html>
                       <button class="small-button vad-preset" type="button" data-vad-preset="slow-soft">Apply</button>
                     </div>
                     <div class="vad-example-values">
-                      <div>Browser: sensibilité 0.03, mot court 220 ms, confirmation 5 frames, fin 2200 ms, relance 45 s</div>
-                      <div>Backend: sensibilité 250, mot court 220 ms, confirmation 4 frames, fin 2.4 s</div>
+                      <div>Entrée 0.38, sortie 0.22, voix minimale 120 ms, silence 1600 ms, marge 180 ms, maximum 12 s</div>
                     </div>
                   </div>
                 </div>
@@ -3210,35 +3170,26 @@ INDEX_HTML = """<!doctype html>
     const openaiTtsSpeedLabel = document.querySelector("#openai-tts-speed-label");
     const ttsTestField = document.querySelector("#tts-test-field");
     const ttsTest = document.querySelector("#tts-test");
-    const webConversationThreshold = document.querySelector("#web-conversation-threshold");
-    const webConversationThresholdLabel = document.querySelector("#web-conversation-threshold-label");
-    const webConversationMinSpeechMs = document.querySelector("#web-conversation-min-speech-ms");
-    const webConversationMinSpeechMsLabel = document.querySelector("#web-conversation-min-speech-ms-label");
-    const webConversationMinSpeechFrames = document.querySelector("#web-conversation-min-speech-frames");
-    const webConversationMinSpeechFramesLabel = document.querySelector("#web-conversation-min-speech-frames-label");
-    const webConversationSilenceMs = document.querySelector("#web-conversation-silence-ms");
-    const webConversationSilenceMsLabel = document.querySelector("#web-conversation-silence-ms-label");
-    const webConversationIdleSeconds = document.querySelector("#web-conversation-idle-seconds");
-    const webConversationIdleSecondsLabel = document.querySelector("#web-conversation-idle-seconds-label");
-    const voiceSilenceThreshold = document.querySelector("#voice-silence-threshold");
-    const voiceSilenceThresholdLabel = document.querySelector("#voice-silence-threshold-label");
-    const voiceMinSpeechMs = document.querySelector("#voice-min-speech-ms");
-    const voiceMinSpeechMsLabel = document.querySelector("#voice-min-speech-ms-label");
-    const voiceMinSpeechFrames = document.querySelector("#voice-min-speech-frames");
-    const voiceMinSpeechFramesLabel = document.querySelector("#voice-min-speech-frames-label");
-    const voiceSilenceDuration = document.querySelector("#voice-silence-duration");
-    const voiceSilenceDurationLabel = document.querySelector("#voice-silence-duration-label");
+    const vadSpeechThreshold = document.querySelector("#vad-speech-threshold");
+    const vadSpeechThresholdLabel = document.querySelector("#vad-speech-threshold-label");
+    const vadNegativeThreshold = document.querySelector("#vad-negative-threshold");
+    const vadNegativeThresholdLabel = document.querySelector("#vad-negative-threshold-label");
+    const vadMinSpeechMs = document.querySelector("#vad-min-speech-ms");
+    const vadMinSpeechMsLabel = document.querySelector("#vad-min-speech-ms-label");
+    const vadMinSilenceMs = document.querySelector("#vad-min-silence-ms");
+    const vadMinSilenceMsLabel = document.querySelector("#vad-min-silence-ms-label");
+    const vadSpeechPadMs = document.querySelector("#vad-speech-pad-ms");
+    const vadSpeechPadMsLabel = document.querySelector("#vad-speech-pad-ms-label");
+    const vadMaxSpeechSeconds = document.querySelector("#vad-max-speech-seconds");
+    const vadMaxSpeechSecondsLabel = document.querySelector("#vad-max-speech-seconds-label");
     const vadPresetButtons = Array.from(document.querySelectorAll(".vad-preset"));
     const vadControls = [
-      webConversationThreshold,
-      webConversationMinSpeechMs,
-      webConversationMinSpeechFrames,
-      webConversationSilenceMs,
-      webConversationIdleSeconds,
-      voiceSilenceThreshold,
-      voiceMinSpeechMs,
-      voiceMinSpeechFrames,
-      voiceSilenceDuration
+      vadSpeechThreshold,
+      vadNegativeThreshold,
+      vadMinSpeechMs,
+      vadMinSilenceMs,
+      vadSpeechPadMs,
+      vadMaxSpeechSeconds
     ];
     const cloudApiDetails = document.querySelector("#cloud-api-details");
     const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
@@ -3258,37 +3209,28 @@ INDEX_HTML = """<!doctype html>
     const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
     const vadPresets = {
       "quick-word": {
-        webConversationThreshold: 0.035,
-        webConversationMinSpeechMs: 120,
-        webConversationMinSpeechFrames: 3,
-        webConversationSilenceMs: 650,
-        webConversationIdleSeconds: 18,
-        voiceSilenceThreshold: 300,
-        voiceMinSpeechMs: 120,
-        voiceMinSpeechFrames: 2,
-        voiceSilenceDuration: 0.7
+        vadSpeechThreshold: 0.42,
+        vadNegativeThreshold: 0.25,
+        vadMinSpeechMs: 80,
+        vadMinSilenceMs: 450,
+        vadSpeechPadMs: 120,
+        vadMaxSpeechSeconds: 6
       },
       "noise-filter": {
-        webConversationThreshold: 0.075,
-        webConversationMinSpeechMs: 300,
-        webConversationMinSpeechFrames: 8,
-        webConversationSilenceMs: 1000,
-        webConversationIdleSeconds: 25,
-        voiceSilenceThreshold: 700,
-        voiceMinSpeechMs: 300,
-        voiceMinSpeechFrames: 6,
-        voiceSilenceDuration: 1.2
+        vadSpeechThreshold: 0.62,
+        vadNegativeThreshold: 0.42,
+        vadMinSpeechMs: 180,
+        vadMinSilenceMs: 700,
+        vadSpeechPadMs: 100,
+        vadMaxSpeechSeconds: 8
       },
       "slow-soft": {
-        webConversationThreshold: 0.03,
-        webConversationMinSpeechMs: 220,
-        webConversationMinSpeechFrames: 5,
-        webConversationSilenceMs: 2200,
-        webConversationIdleSeconds: 45,
-        voiceSilenceThreshold: 250,
-        voiceMinSpeechMs: 220,
-        voiceMinSpeechFrames: 4,
-        voiceSilenceDuration: 2.4
+        vadSpeechThreshold: 0.38,
+        vadNegativeThreshold: 0.22,
+        vadMinSpeechMs: 120,
+        vadMinSilenceMs: 1600,
+        vadSpeechPadMs: 180,
+        vadMaxSpeechSeconds: 12
       }
     };
     let llmControlsInitialized = false;
@@ -3325,12 +3267,10 @@ INDEX_HTML = """<!doctype html>
     let recordingTimer = null;
     let recordingAudioContext = null;
     let recordingAnalyser = null;
+    let recordingVad = null;
     let recordingMonitorId = null;
     let recordingSpeechDetected = false;
-    let recordingSilenceStartedAt = null;
     let recordingStartedAt = 0;
-    let recordingSpeechCandidateStartedAt = null;
-    let recordingSpeechFrames = 0;
     let soundwaveAnimationId = null;
     let soundwaveStartedAt = 0;
     let conversationEnabled = false;
@@ -3338,13 +3278,10 @@ INDEX_HTML = """<!doctype html>
     let conversationStream = null;
     let conversationAudioContext = null;
     let conversationAnalyser = null;
+    let conversationVad = null;
     let conversationChunks = [];
     let conversationMonitorId = null;
     let conversationSpeechDetected = false;
-    let conversationSilenceStartedAt = null;
-    let conversationStartedAt = 0;
-    let conversationSpeechCandidateStartedAt = null;
-    let conversationSpeechFrames = 0;
     let conversationRestartTimer = null;
     let conversationDiscard = false;
     let conversationStopStreamAfterSegment = false;
@@ -3363,6 +3300,8 @@ INDEX_HTML = """<!doctype html>
     let thinkingAudio = null;
     let thinkingAudioUrl = "";
     let thinkingAudioPlaying = false;
+    let ortModulePromise = null;
+    let sileroSessionPromise = null;
 
     function setMeta(text, mode = "normal", holdMs = 0) {
       metaEl.textContent = text;
@@ -4030,6 +3969,160 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function vadSettings() {
+      const speechThreshold = Number(webAudio.vad_speech_threshold || 0.5);
+      const negativeThreshold = Number(webAudio.vad_negative_threshold || Math.max(0.01, speechThreshold - 0.15));
+      return {
+        speechThreshold,
+        negativeThreshold,
+        minSpeechMs: Math.max(0, Number(webAudio.vad_min_speech_ms || 120)),
+        minSilenceMs: Math.max(100, Number(webAudio.vad_min_silence_ms || 650)),
+        maxSpeechMs: Math.max(1000, Number(webAudio.vad_max_speech_seconds || 8) * 1000)
+      };
+    }
+
+    async function loadOrtModule() {
+      if (!ortModulePromise) {
+        ortModulePromise = import(webAudio.vad_ort_url || "/static/vendor/onnxruntime-web/ort.wasm.min.mjs").then((module) => {
+          const ort = module.default || module;
+          ort.env.wasm.wasmPaths = webAudio.vad_ort_wasm_path || "/static/vendor/onnxruntime-web/";
+          ort.env.wasm.numThreads = 2;
+          return ort;
+        });
+      }
+      return ortModulePromise;
+    }
+
+    async function loadSileroSession() {
+      if (!sileroSessionPromise) {
+        sileroSessionPromise = loadOrtModule().then((ort) =>
+          ort.InferenceSession.create(webAudio.vad_model_url || "/static/vendor/silero-vad/silero_vad_v6.onnx", {
+            executionProviders: ["wasm"]
+          })
+        );
+      }
+      return sileroSessionPromise;
+    }
+
+    function resampleTo16k(input, sourceRate) {
+      if (!sourceRate || Math.abs(sourceRate - 16000) < 1) return Array.from(input);
+      const ratio = sourceRate / 16000;
+      const length = Math.max(1, Math.floor(input.length / ratio));
+      const output = new Float32Array(length);
+      for (let i = 0; i < length; i += 1) {
+        const position = i * ratio;
+        const left = Math.floor(position);
+        const right = Math.min(input.length - 1, left + 1);
+        const weight = position - left;
+        output[i] = input[left] * (1 - weight) + input[right] * weight;
+      }
+      return output;
+    }
+
+    class BrowserSileroVad {
+      constructor({ onStart, onEnd, onIdle }) {
+        this.onStart = onStart;
+        this.onEnd = onEnd;
+        this.onIdle = onIdle;
+        this.settings = vadSettings();
+        this.windowSamples = 512;
+        this.contextSamples = 64;
+        this.pending = [];
+        this.context = new Float32Array(this.contextSamples);
+        this.h = new Float32Array(128);
+        this.c = new Float32Array(128);
+        this.processing = false;
+        this.active = true;
+        this.speechDetected = false;
+        this.candidateMs = 0;
+        this.silenceMs = 0;
+        this.startedAt = Date.now();
+        this.processor = null;
+        this.source = null;
+      }
+
+      async attach(audioContext, source) {
+        this.ort = await loadOrtModule();
+        this.session = await loadSileroSession();
+        this.processor = audioContext.createScriptProcessor(2048, 1, 1);
+        this.processor.onaudioprocess = (event) => {
+          event.outputBuffer.getChannelData(0).fill(0);
+          this.push(event.inputBuffer.getChannelData(0), audioContext.sampleRate);
+        };
+        this.source = source;
+        source.connect(this.processor);
+        this.processor.connect(audioContext.destination);
+      }
+
+      close() {
+        this.active = false;
+        if (this.source && this.processor) {
+          try {
+            this.source.disconnect(this.processor);
+          } catch (error) {}
+        }
+        if (this.processor) {
+          this.processor.disconnect();
+          this.processor.onaudioprocess = null;
+        }
+        this.processor = null;
+        this.source = null;
+      }
+
+      push(input, sourceRate) {
+        if (!this.active) return;
+        for (const sample of resampleTo16k(input, sourceRate)) this.pending.push(sample);
+        this.processQueue();
+      }
+
+      async processQueue() {
+        if (this.processing || !this.session || !this.ort) return;
+        this.processing = true;
+        try {
+          while (this.active && this.pending.length >= this.windowSamples) {
+            const windowSamples = this.pending.splice(0, this.windowSamples);
+            const modelInput = new Float32Array(this.windowSamples + this.contextSamples);
+            modelInput.set(this.context, 0);
+            modelInput.set(windowSamples, this.contextSamples);
+            const results = await this.session.run({
+              input: new this.ort.Tensor("float32", modelInput, [1, this.windowSamples + this.contextSamples]),
+              h: new this.ort.Tensor("float32", this.h, [1, 1, 128]),
+              c: new this.ort.Tensor("float32", this.c, [1, 1, 128])
+            });
+            const probability = Number(results.speech_probs.data[0] || 0);
+            this.h = new Float32Array(results.hn.data);
+            this.c = new Float32Array(results.cn.data);
+            this.context = Float32Array.from(windowSamples.slice(-this.contextSamples));
+            this.update(probability);
+          }
+        } finally {
+          this.processing = false;
+        }
+      }
+
+      update(probability) {
+        const chunkMs = this.windowSamples / 16000 * 1000;
+        if (probability >= this.settings.speechThreshold) {
+          this.candidateMs += chunkMs;
+          this.silenceMs = 0;
+          if (!this.speechDetected && this.candidateMs >= this.settings.minSpeechMs) {
+            this.speechDetected = true;
+            if (this.onStart) this.onStart();
+          }
+        } else if (this.speechDetected && probability < this.settings.negativeThreshold) {
+          this.silenceMs += chunkMs;
+          if (this.silenceMs >= this.settings.minSilenceMs && this.onEnd) this.onEnd();
+        } else if (!this.speechDetected) {
+          this.candidateMs = 0;
+        }
+        if (this.speechDetected && Date.now() - this.startedAt >= this.settings.maxSpeechMs && this.onEnd) {
+          this.onEnd();
+        } else if (!this.speechDetected && Date.now() - this.startedAt >= 25000 && this.onIdle) {
+          this.onIdle();
+        }
+      }
+    }
+
     function blobToBase64(blob) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -4202,6 +4295,10 @@ INDEX_HTML = """<!doctype html>
         window.cancelAnimationFrame(recordingMonitorId);
         recordingMonitorId = null;
       }
+      if (recordingVad) {
+        recordingVad.close();
+        recordingVad = null;
+      }
       if (recordingAudioContext) {
         recordingAudioContext.close().catch(() => {});
         recordingAudioContext = null;
@@ -4225,10 +4322,6 @@ INDEX_HTML = """<!doctype html>
         sum += centered * centered;
       }
       return Math.sqrt(sum / data.length);
-    }
-
-    function recordingRms() {
-      return analyserRms(recordingAnalyser);
     }
 
     function activeSoundwaveAnalyser() {
@@ -4445,10 +4538,7 @@ INDEX_HTML = """<!doctype html>
       try {
         recordedChunks = [];
         recordingSpeechDetected = false;
-        recordingSilenceStartedAt = null;
         recordingStartedAt = Date.now();
-        recordingSpeechCandidateStartedAt = null;
-        recordingSpeechFrames = 0;
         mediaStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
         loadBrowserAudioDevices(false);
         if (AudioContextClass) {
@@ -4457,6 +4547,14 @@ INDEX_HTML = """<!doctype html>
           recordingAnalyser = recordingAudioContext.createAnalyser();
           recordingAnalyser.fftSize = 2048;
           source.connect(recordingAnalyser);
+          recordingVad = new BrowserSileroVad({
+            onStart: () => {
+              recordingSpeechDetected = true;
+            },
+            onEnd: () => stopWebRecording(),
+            onIdle: () => stopWebRecording()
+          });
+          await recordingVad.attach(recordingAudioContext, source);
         }
         mediaRecorder = new MediaRecorder(mediaStream);
         mediaRecorder.addEventListener("dataavailable", (event) => {
@@ -4478,9 +4576,8 @@ INDEX_HTML = """<!doctype html>
         mediaRecorder.start();
         setRecording(true);
         startSoundwave();
-        const maxRecordingMs = Math.max(1000, Number(webAudio.max_record_seconds || 8) * 1000);
+        const maxRecordingMs = Math.max(1000, Number(webAudio.vad_max_speech_seconds || 8) * 1000 + 1000);
         recordingTimer = window.setTimeout(() => stopWebRecording(), maxRecordingMs);
-        monitorPushToTalkAudio();
       } catch (error) {
         stopMediaStream();
         setRecording(false);
@@ -4489,6 +4586,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     function stopWebRecording() {
+      if (recordingVad) {
+        recordingVad.close();
+        recordingVad = null;
+      }
       if (mediaRecorder && mediaRecorder.state !== "inactive") {
         clearRecordingTimer();
         webMic.disabled = true;
@@ -4496,52 +4597,11 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function monitorPushToTalkAudio() {
-      if (!mediaRecorder || mediaRecorder.state === "inactive" || !recordingAnalyser) return;
-      const now = Date.now();
-      const rms = recordingRms();
-      const threshold = Number(webAudio.conversation_threshold || 0.05);
-      const silenceMs = Math.max(250, Number(webAudio.conversation_silence_ms || 1200));
-      const minSpeechMs = Math.max(0, Number(webAudio.conversation_min_speech_ms || 350));
-      const minSpeechFrames = Math.max(0, Number(webAudio.conversation_min_speech_frames || 8));
-
-      if (rms > threshold) {
-        if (!recordingSpeechCandidateStartedAt) {
-          recordingSpeechCandidateStartedAt = now;
-          recordingSpeechFrames = 0;
-        }
-        recordingSpeechFrames += 1;
-        if (
-          !recordingSpeechDetected &&
-          now - recordingSpeechCandidateStartedAt >= minSpeechMs &&
-          recordingSpeechFrames >= minSpeechFrames
-        ) {
-          recordingSpeechDetected = true;
-        }
-        recordingSilenceStartedAt = null;
-      } else if (recordingSpeechDetected) {
-        if (!recordingSilenceStartedAt) recordingSilenceStartedAt = now;
-        if (now - recordingSilenceStartedAt >= silenceMs) {
-          stopWebRecording();
-          return;
-        }
-      } else {
-        recordingSpeechCandidateStartedAt = null;
-        recordingSpeechFrames = 0;
-      }
-
-      recordingMonitorId = window.requestAnimationFrame(monitorPushToTalkAudio);
-    }
-
     function clearConversationRestartTimer() {
       if (conversationRestartTimer) {
         window.clearTimeout(conversationRestartTimer);
         conversationRestartTimer = null;
       }
-    }
-
-    function conversationRms() {
-      return analyserRms(conversationAnalyser);
     }
 
     function stopConversationMonitor() {
@@ -4554,6 +4614,10 @@ INDEX_HTML = """<!doctype html>
     function stopConversationStream() {
       stopConversationMonitor();
       stopSoundwave();
+      if (conversationVad) {
+        conversationVad.close();
+        conversationVad = null;
+      }
       if (conversationAudioContext) {
         conversationAudioContext.close().catch(() => {});
         conversationAudioContext = null;
@@ -4571,12 +4635,20 @@ INDEX_HTML = """<!doctype html>
     function stopConversationSegment() {
       stopConversationMonitor();
       stopSoundwave();
+      if (conversationVad) {
+        conversationVad.close();
+        conversationVad = null;
+      }
       conversationRecorder = null;
     }
 
     function stopConversationRecording(discard = false, closeStream = false) {
       conversationDiscard = discard;
       conversationStopStreamAfterSegment = Boolean(closeStream);
+      if (conversationVad) {
+        conversationVad.close();
+        conversationVad = null;
+      }
       if (conversationRecorder && conversationRecorder.state !== "inactive") {
         conversationRecorder.stop();
       } else {
@@ -4584,6 +4656,19 @@ INDEX_HTML = """<!doctype html>
         else stopConversationSegment();
         conversationStopStreamAfterSegment = false;
       }
+    }
+
+    async function attachConversationVad() {
+      if (!conversationAudioContext || !conversationStream || conversationVad) return;
+      const source = conversationAudioContext.createMediaStreamSource(conversationStream);
+      conversationVad = new BrowserSileroVad({
+        onStart: () => {
+          conversationSpeechDetected = true;
+        },
+        onEnd: () => stopConversationRecording(false),
+        onIdle: () => stopConversationRecording(true)
+      });
+      await conversationVad.attach(conversationAudioContext, source);
     }
 
     async function ensureConversationMicrophone() {
@@ -4598,6 +4683,7 @@ INDEX_HTML = """<!doctype html>
         if (conversationAudioContext.state === "suspended") {
           await conversationAudioContext.resume();
         }
+        await attachConversationVad();
         return;
       }
 
@@ -4609,6 +4695,7 @@ INDEX_HTML = """<!doctype html>
       conversationAnalyser = conversationAudioContext.createAnalyser();
       conversationAnalyser.fftSize = 2048;
       source.connect(conversationAnalyser);
+      await attachConversationVad();
     }
 
     async function startConversationListening() {
@@ -4619,12 +4706,8 @@ INDEX_HTML = """<!doctype html>
         await ensureConversationMicrophone();
         conversationChunks = [];
         conversationSpeechDetected = false;
-        conversationSilenceStartedAt = null;
-        conversationSpeechCandidateStartedAt = null;
-        conversationSpeechFrames = 0;
         conversationDiscard = false;
         conversationStopStreamAfterSegment = false;
-        conversationStartedAt = Date.now();
         conversationRecorder = new MediaRecorder(conversationStream);
         conversationRecorder.addEventListener("dataavailable", (event) => {
           if (event.data && event.data.size > 0) conversationChunks.push(event.data);
@@ -4647,7 +4730,6 @@ INDEX_HTML = """<!doctype html>
         });
         conversationRecorder.start();
         startSoundwave();
-        monitorConversationAudio();
         metaEl.textContent = "conversation listening...";
       } catch (error) {
         stopConversationStream();
@@ -4655,54 +4737,6 @@ INDEX_HTML = """<!doctype html>
         conversationEnabled = false;
         updateConversationButton();
       }
-    }
-
-    function monitorConversationAudio() {
-      if (!conversationRecorder || conversationRecorder.state === "inactive") return;
-      const now = Date.now();
-      const rms = conversationRms();
-      const threshold = Number(webAudio.conversation_threshold || 0.05);
-      const silenceMs = Math.max(250, Number(webAudio.conversation_silence_ms || 1200));
-      const minSpeechMs = Math.max(0, Number(webAudio.conversation_min_speech_ms || 350));
-      const minSpeechFrames = Math.max(0, Number(webAudio.conversation_min_speech_frames || 8));
-      const maxRecordMs = Math.max(1000, Number(webAudio.max_record_seconds || 8) * 1000);
-      const maxIdleMs = Math.max(3000, Number(webAudio.conversation_idle_seconds || 25) * 1000);
-
-      if (rms > threshold) {
-        if (!conversationSpeechCandidateStartedAt) {
-          conversationSpeechCandidateStartedAt = now;
-          conversationSpeechFrames = 0;
-        }
-        conversationSpeechFrames += 1;
-        if (
-          !conversationSpeechDetected &&
-          now - conversationSpeechCandidateStartedAt >= minSpeechMs &&
-          conversationSpeechFrames >= minSpeechFrames
-        ) {
-          conversationSpeechDetected = true;
-        }
-        conversationSilenceStartedAt = null;
-      } else if (conversationSpeechDetected) {
-        if (!conversationSilenceStartedAt) conversationSilenceStartedAt = now;
-        if (now - conversationSilenceStartedAt >= silenceMs) {
-          stopConversationRecording(false);
-          return;
-        }
-      } else {
-        conversationSpeechCandidateStartedAt = null;
-        conversationSpeechFrames = 0;
-      }
-
-      if (conversationSpeechDetected && now - conversationStartedAt >= maxRecordMs) {
-        stopConversationRecording(false);
-        return;
-      }
-      if (!conversationSpeechDetected && now - conversationStartedAt >= maxIdleMs) {
-        stopConversationRecording(true);
-        return;
-      }
-
-      conversationMonitorId = window.requestAnimationFrame(monitorConversationAudio);
     }
 
     function scheduleConversationRestart(delayMs = 250) {
@@ -4879,15 +4913,12 @@ INDEX_HTML = """<!doctype html>
         thinking_sound_file: thinkingSound.value || "",
         openai_tts_voice: openaiTtsVoice.value || "",
         openai_tts_speed: Number(openaiTtsSpeed.value || 1),
-        web_conversation_threshold: Number(webConversationThreshold.value || 0.05),
-        web_conversation_min_speech_ms: Number(webConversationMinSpeechMs.value || 350),
-        web_conversation_min_speech_frames: Number(webConversationMinSpeechFrames.value || 8),
-        web_conversation_silence_ms: Number(webConversationSilenceMs.value || 1200),
-        web_conversation_idle_seconds: Number(webConversationIdleSeconds.value || 25),
-        voice_silence_threshold: Number(voiceSilenceThreshold.value || 500),
-        voice_min_speech_ms: Number(voiceMinSpeechMs.value || 350),
-        voice_min_speech_frames: Number(voiceMinSpeechFrames.value || 5),
-        voice_silence_duration: Number(voiceSilenceDuration.value || 1.5)
+        vad_speech_threshold: Number(vadSpeechThreshold.value || 0.5),
+        vad_negative_threshold: Number(vadNegativeThreshold.value || 0.35),
+        vad_min_speech_ms: Number(vadMinSpeechMs.value || 120),
+        vad_min_silence_ms: Number(vadMinSilenceMs.value || 650),
+        vad_speech_pad_ms: Number(vadSpeechPadMs.value || 100),
+        vad_max_speech_seconds: Number(vadMaxSpeechSeconds.value || 8)
       });
     }
 
@@ -4990,42 +5021,33 @@ INDEX_HTML = """<!doctype html>
     }
 
     function syncVadLabels() {
-      webConversationThresholdLabel.textContent = Number(webConversationThreshold.value || 0.05).toFixed(3);
-      webConversationMinSpeechMsLabel.textContent = `${Number(webConversationMinSpeechMs.value || 350)} ms`;
-      webConversationMinSpeechFramesLabel.textContent = `${Number(webConversationMinSpeechFrames.value || 8)} frames`;
-      webConversationSilenceMsLabel.textContent = `${Number(webConversationSilenceMs.value || 1200)} ms`;
-      webConversationIdleSecondsLabel.textContent = `${Number(webConversationIdleSeconds.value || 25)} s`;
-      voiceSilenceThresholdLabel.textContent = `${Number(voiceSilenceThreshold.value || 500)}`;
-      voiceMinSpeechMsLabel.textContent = `${Number(voiceMinSpeechMs.value || 350)} ms`;
-      voiceMinSpeechFramesLabel.textContent = `${Number(voiceMinSpeechFrames.value || 5)} frames`;
-      voiceSilenceDurationLabel.textContent = `${Number(voiceSilenceDuration.value || 1.5).toFixed(1)} s`;
+      vadSpeechThresholdLabel.textContent = Number(vadSpeechThreshold.value || 0.5).toFixed(2);
+      vadNegativeThresholdLabel.textContent = Number(vadNegativeThreshold.value || 0.35).toFixed(2);
+      vadMinSpeechMsLabel.textContent = `${Number(vadMinSpeechMs.value || 120)} ms`;
+      vadMinSilenceMsLabel.textContent = `${Number(vadMinSilenceMs.value || 650)} ms`;
+      vadSpeechPadMsLabel.textContent = `${Number(vadSpeechPadMs.value || 100)} ms`;
+      vadMaxSpeechSecondsLabel.textContent = `${Number(vadMaxSpeechSeconds.value || 8).toFixed(1)} s`;
     }
 
     function setVadControls(data) {
-      webConversationThreshold.value = String(data.selected_web_conversation_threshold ?? 0.05);
-      webConversationMinSpeechMs.value = String(data.selected_web_conversation_min_speech_ms ?? 350);
-      webConversationMinSpeechFrames.value = String(data.selected_web_conversation_min_speech_frames ?? 8);
-      webConversationSilenceMs.value = String(data.selected_web_conversation_silence_ms ?? 1200);
-      webConversationIdleSeconds.value = String(data.selected_web_conversation_idle_seconds ?? 25);
-      voiceSilenceThreshold.value = String(data.selected_voice_silence_threshold ?? 500);
-      voiceMinSpeechMs.value = String(data.selected_voice_min_speech_ms ?? 350);
-      voiceMinSpeechFrames.value = String(data.selected_voice_min_speech_frames ?? 5);
-      voiceSilenceDuration.value = String(data.selected_voice_silence_duration ?? 1.5);
+      vadSpeechThreshold.value = String(data.selected_vad_speech_threshold ?? 0.5);
+      vadNegativeThreshold.value = String(data.selected_vad_negative_threshold ?? 0.35);
+      vadMinSpeechMs.value = String(data.selected_vad_min_speech_ms ?? 120);
+      vadMinSilenceMs.value = String(data.selected_vad_min_silence_ms ?? 650);
+      vadSpeechPadMs.value = String(data.selected_vad_speech_pad_ms ?? 100);
+      vadMaxSpeechSeconds.value = String(data.selected_vad_max_speech_seconds ?? 8);
       syncVadLabels();
     }
 
     function applyVadPreset(name) {
       const preset = vadPresets[name];
       if (!preset) return;
-      webConversationThreshold.value = String(preset.webConversationThreshold);
-      webConversationMinSpeechMs.value = String(preset.webConversationMinSpeechMs);
-      webConversationMinSpeechFrames.value = String(preset.webConversationMinSpeechFrames);
-      webConversationSilenceMs.value = String(preset.webConversationSilenceMs);
-      webConversationIdleSeconds.value = String(preset.webConversationIdleSeconds);
-      voiceSilenceThreshold.value = String(preset.voiceSilenceThreshold);
-      voiceMinSpeechMs.value = String(preset.voiceMinSpeechMs);
-      voiceMinSpeechFrames.value = String(preset.voiceMinSpeechFrames);
-      voiceSilenceDuration.value = String(preset.voiceSilenceDuration);
+      vadSpeechThreshold.value = String(preset.vadSpeechThreshold);
+      vadNegativeThreshold.value = String(preset.vadNegativeThreshold);
+      vadMinSpeechMs.value = String(preset.vadMinSpeechMs);
+      vadMinSilenceMs.value = String(preset.vadMinSilenceMs);
+      vadSpeechPadMs.value = String(preset.vadSpeechPadMs);
+      vadMaxSpeechSeconds.value = String(preset.vadMaxSpeechSeconds);
       syncVadLabels();
       llmMessage.textContent = "STT example applied. Save to persist.";
     }
@@ -5856,15 +5878,12 @@ INDEX_HTML = """<!doctype html>
       const thinkingSoundFile = thinkingSound.value;
       const openAiTtsVoiceValue = openaiTtsVoice.value;
       const openAiTtsSpeedValue = Number(openaiTtsSpeed.value || 1);
-      const webConversationThresholdValue = Number(webConversationThreshold.value || 0.05);
-      const webConversationMinSpeechMsValue = Number(webConversationMinSpeechMs.value || 350);
-      const webConversationMinSpeechFramesValue = Number(webConversationMinSpeechFrames.value || 8);
-      const webConversationSilenceMsValue = Number(webConversationSilenceMs.value || 1200);
-      const webConversationIdleSecondsValue = Number(webConversationIdleSeconds.value || 25);
-      const voiceSilenceThresholdValue = Number(voiceSilenceThreshold.value || 500);
-      const voiceMinSpeechMsValue = Number(voiceMinSpeechMs.value || 350);
-      const voiceMinSpeechFramesValue = Number(voiceMinSpeechFrames.value || 5);
-      const voiceSilenceDurationValue = Number(voiceSilenceDuration.value || 1.5);
+      const vadSpeechThresholdValue = Number(vadSpeechThreshold.value || 0.5);
+      const vadNegativeThresholdValue = Number(vadNegativeThreshold.value || 0.35);
+      const vadMinSpeechMsValue = Number(vadMinSpeechMs.value || 120);
+      const vadMinSilenceMsValue = Number(vadMinSilenceMs.value || 650);
+      const vadSpeechPadMsValue = Number(vadSpeechPadMs.value || 100);
+      const vadMaxSpeechSecondsValue = Number(vadMaxSpeechSeconds.value || 8);
       if (!provider) return;
 
       llmSave.disabled = true;
@@ -5891,15 +5910,12 @@ INDEX_HTML = """<!doctype html>
             thinking_sound_file: thinkingSoundFile,
             openai_tts_voice: openAiTtsVoiceValue,
             openai_tts_speed: openAiTtsSpeedValue,
-            web_conversation_threshold: webConversationThresholdValue,
-            web_conversation_min_speech_ms: webConversationMinSpeechMsValue,
-            web_conversation_min_speech_frames: webConversationMinSpeechFramesValue,
-            web_conversation_silence_ms: webConversationSilenceMsValue,
-            web_conversation_idle_seconds: webConversationIdleSecondsValue,
-            voice_silence_threshold: voiceSilenceThresholdValue,
-            voice_min_speech_ms: voiceMinSpeechMsValue,
-            voice_min_speech_frames: voiceMinSpeechFramesValue,
-            voice_silence_duration: voiceSilenceDurationValue
+            vad_speech_threshold: vadSpeechThresholdValue,
+            vad_negative_threshold: vadNegativeThresholdValue,
+            vad_min_speech_ms: vadMinSpeechMsValue,
+            vad_min_silence_ms: vadMinSilenceMsValue,
+            vad_speech_pad_ms: vadSpeechPadMsValue,
+            vad_max_speech_seconds: vadMaxSpeechSecondsValue
           })
         });
         if (!response.ok) throw new Error(await response.text());

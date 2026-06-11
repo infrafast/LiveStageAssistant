@@ -1,37 +1,4 @@
 <h1 align="center"> MCP Live Stage Assistant </h1>
-<div align="center" style="margin: 0 auto; max-width: 20%;">
-<h2 align="center">built with</h2>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="static/logo_white.svg">
-    <source media="(prefers-color-scheme: light)" srcset="static/logo_black.svg">
-    <img alt="mcp use logo" src="./static/logo-white.svg" width="80%" style="margin: 20px auto;">
-  </picture>
-</div>
-
-<p align="center">
-    <a href="https://pypi.org/project/mcp_use/" alt="PyPI Version">
-        <img src="https://img.shields.io/pypi/v/mcp_use.svg"/></a>
-    <a href="https://pypi.org/project/mcp_use/" alt="Python Versions">
-        <img src="https://img.shields.io/pypi/pyversions/mcp_use.svg" /></a>
-    <a href="https://docs.mcp-use.com" alt="Documentation">
-        <img src="https://img.shields.io/badge/docs-mcp--use.com-blue" /></a>
-    <a href="https://mcp-use.com" alt="Website">
-        <img src="https://img.shields.io/badge/website-mcp--use.io-blue" /></a>
-    <a href="https://github.com/pietrozullo/mcp-use/blob/main/LICENSE" alt="License">
-        <img src="https://img.shields.io/github/license/pietrozullo/mcp-use" /></a>
-    <a href="https://github.com/astral-sh/ruff" alt="Code style: Ruff">
-        <img src="https://img.shields.io/badge/code%20style-ruff-000000.svg" /></a>
-    <a href="https://github.com/pietrozullo/mcp-use/stargazers" alt="GitHub stars">
-        <img src="https://img.shields.io/github/stars/pietrozullo/mcp-use?style=social" /></a>
-    </p>
-    <p align="center">
-    <a href="https://x.com/pietrozullo" alt="Twitter Follow - Pietro">
-        <img src="https://img.shields.io/twitter/follow/Pietro?style=social" /></a>
-    <a href="https://x.com/pederzh" alt="Twitter Follow - Luigi">
-        <img src="https://img.shields.io/twitter/follow/Luigi?style=social" /></a>
-    <a href="https://discord.gg/XkNkSkMz3V" alt="Discord">
-        <img src="https://dcbadge.limes.pink/api/server/XkNkSkMz3V?style=flat" /></a>
-</p>
 
 This is a voice-enabled AI personal assistant that leverages the Model Context Protocol (MCP) to integrate multiple tools and services through natural voice interactions.
 It is more specifically design for assisting live musician that gives commands to drive a digital mixer, a DMX console or other on stage equipment.
@@ -76,14 +43,14 @@ For developpers: https://deepwiki.com/infrafast/LiveStageAssistant
        └──────────────────────────────┬──────────────────────────────┘
                                       │
                                       ▼
-┌──────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
-│ Command text │ --> │ Speech-to-   │ --> │  LLM with   │ --> │ Text-to-     │
-│ or audio     │     │ Text (STT)   │     │  MCPAgent   │     │ Speech (TTS) │
-└──────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
-                       Whisper            OpenAI  │              Browser,
-                       API or local     or local  │              OpenAI,
-                                        (Ollama)  │              ElevenLabs,
-                                                  │              or pyttsx3
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
+│ Audio input  │ --> │ Silero VAD   │ --> │ Speech-to-   │ --> │  LLM with   │ --> │ Text-to-     │
+│ backend/web  │     │ local ONNX   │     │ Text (STT)   │     │  MCPAgent   │     │ Speech (TTS) │
+└──────────────┘     └──────────────┘     └──────────────┘     └──────┬──────┘     └──────────────┘
+┌──────────────┐                                                      │               Browser,
+│ Text command │ -----------------------------------------------------┘               OpenAI,
+└──────────────┘                         Whisper API or local     OpenAI or local     ElevenLabs,
+                                                                    (Ollama)          or pyttsx3
                                           ┌───────▼───────┐
                                           │ MCP Servers   │
                                           ├───────────────┤
@@ -284,10 +251,12 @@ ELEVENLABS_VOICE_OPTIONS=kENkNtk0xyzG09WW40xE (Marcel), 1EmYoP3UnnnwhlJKovEy (An
 ELEVENLABS_VOICE_ID=1EmYoP3UnnnwhlJKovEy      # Selected ElevenLabs voice ID
 
 # Optional - Audio Configuration
-VOICE_SILENCE_THRESHOLD=500                     # Lower = more sensitive
-VOICE_SILENCE_DURATION=1.5                      # Seconds to wait after speech
-VOICE_MIN_SPEECH_MS=350                         # Minimum backend mic speech duration before STT
-VOICE_MIN_SPEECH_FRAMES=5                       # Minimum backend mic non-silent frames before STT
+VAD_SPEECH_THRESHOLD=0.5                         # Silero speech probability required to start speech
+VAD_NEGATIVE_THRESHOLD=0.35                      # Silero probability below which accepted speech can end
+VAD_MIN_SPEECH_MS=120                            # Minimum speech duration before STT is accepted
+VAD_MIN_SILENCE_MS=650                           # Silence duration before ending an accepted utterance
+VAD_SPEECH_PAD_MS=100                            # Backend pre-roll kept before detected speech
+VAD_MAX_SPEECH_SECONDS=8                         # Hard cap for one detected utterance
 INTERRUPT_CONVERSATION_ENABLED=false            # Let new text/STT commands cancel current processing/TTS first
 VOICE_CANCEL_DURING_THINKING=false             # Optional spoken stop/annule cancel listener while processing
 THINKING_SOUND_FILE=thinking.wav                # WAV loop while the LLM/MCP agent processes the command
@@ -301,12 +270,6 @@ WEB_MONITOR_PORT=8765
 WEB_AUDIO_ENABLED=false                        # Optional browser mic/speaker mode proxied through the backend
 WEB_STT_PROVIDER=openai
 WEB_STT_MODEL=whisper-1
-WEB_RECORDING_MAX_SECONDS=8                    # Browser mic auto-stop duration
-WEB_CONVERSATION_SILENCE_MS=1200               # Browser conversation mode end-of-utterance silence
-WEB_CONVERSATION_IDLE_SECONDS=25               # Restart the listener if no speech is detected
-WEB_CONVERSATION_THRESHOLD=0.05                # Browser-side RMS speech threshold
-WEB_CONVERSATION_MIN_SPEECH_MS=350             # Minimum above-threshold speech duration before STT
-WEB_CONVERSATION_MIN_SPEECH_FRAMES=8           # Minimum above-threshold analyser frames before STT
 WEB_TTS_PROVIDER=openai                         # Browser output: openai | elevenlabs | none
 WEB_TTS_MODEL=gpt-4o-mini-tts
 WEB_TTS_VOICE=alloy
@@ -406,12 +369,12 @@ When `WEB_AUDIO_ENABLED=true`, browser audio is proxied through the backend so A
 WEB_AUDIO_ENABLED=true
 WEB_STT_PROVIDER=openai
 WEB_STT_MODEL=whisper-1
-WEB_RECORDING_MAX_SECONDS=8
-WEB_CONVERSATION_SILENCE_MS=1200
-WEB_CONVERSATION_IDLE_SECONDS=25
-WEB_CONVERSATION_THRESHOLD=0.05
-WEB_CONVERSATION_MIN_SPEECH_MS=350
-WEB_CONVERSATION_MIN_SPEECH_FRAMES=8
+VAD_SPEECH_THRESHOLD=0.5
+VAD_NEGATIVE_THRESHOLD=0.35
+VAD_MIN_SPEECH_MS=120
+VAD_MIN_SILENCE_MS=650
+VAD_SPEECH_PAD_MS=100
+VAD_MAX_SPEECH_SECONDS=8
 CLOUD_TTS_PROVIDER=openai
 WEB_TTS_PROVIDER=openai
 WEB_TTS_MODEL=gpt-4o-mini-tts
@@ -419,15 +382,15 @@ WEB_TTS_VOICE=alloy
 WEB_TTS_SPEED=1.00
 ```
 
-The browser microphone path requires browser microphone permission and a browser that supports `MediaRecorder`. Depending on the browser, microphone access may require HTTPS when the monitor is opened from another machine over the LAN. Push-to-talk recording starts when the microphone button is pressed, stops when the square button is pressed again, stops automatically after end-of-speech silence, and still has `WEB_RECORDING_MAX_SECONDS` as a hard timeout to avoid accidental endless recordings.
+The browser microphone path requires browser microphone permission, a browser that supports `MediaRecorder`, and cross-origin isolation for the bundled ONNX Runtime Web worker/wasm. The monitor serves the required COOP/COEP headers for its own pages and static assets. Depending on the browser, microphone access may require HTTPS when the monitor is opened from another machine over the LAN. Push-to-talk recording starts when the microphone button is pressed, stops when the square button is pressed again, and stops automatically after Silero VAD detects end-of-speech or reaches `VAD_MAX_SPEECH_SECONDS`.
 
 Browser audio input/output device choices are local to each browser and are saved in `localStorage`, not in the backend `.env` file. Settings -> Config -> Audio In/Out lists browser microphones with `navigator.mediaDevices.enumerateDevices()` and applies the selected input to push-to-talk and conversation mode with `getUserMedia({ deviceId })`. Output selectors follow **STT/TTS -> TTS Output**: `Silent` hides output selectors, `Browser` shows only browser output, and `Backend` shows only backend output. Device names may stay generic until the browser grants microphone permission. Browser output selection uses `HTMLMediaElement.setSinkId()` for web TTS and web thinking sound when the browser supports it; unsupported browsers show output selection as unavailable and use the system/browser default output. AudioContext fallback playback cannot force a selected sink, so the HTML audio path is preferred for web TTS.
 
 The conversation button next to the microphone enables continuous browser listening. In this mode the push-to-talk button is disabled, the browser detects speech/silence locally, sends each detected utterance to the backend, and then restarts listening after the assistant is done. If `WAKE_WORD` is configured, conversation-mode transcriptions must pass the same wake-word gate before being injected. Manual push-to-talk remains direct command input and does not require the wake word.
 
-Backend microphone STT and browser microphone STT have separate voice-activity gates. Backend microphone input uses `STT_PROVIDER`, `LOCAL_WHISPER_MODEL`, `STT_LANGUAGE`, and `STT_PROMPT` for transcription selection and Whisper biasing. Before backend STT runs, `VOICE_SILENCE_THRESHOLD` decides whether an audio frame is speech, `VOICE_MIN_SPEECH_MS` and `VOICE_MIN_SPEECH_FRAMES` require sustained non-silent input, and `VOICE_SILENCE_DURATION` decides when to stop after accepted speech. Browser microphone input uses `WEB_STT_PROVIDER` and `WEB_STT_MODEL`, with browser-side RMS detection controlled by `WEB_CONVERSATION_THRESHOLD`, `WEB_CONVERSATION_MIN_SPEECH_MS`, `WEB_CONVERSATION_MIN_SPEECH_FRAMES`, `WEB_CONVERSATION_SILENCE_MS`, `WEB_CONVERSATION_IDLE_SECONDS`, and `WEB_RECORDING_MAX_SECONDS`. Raise thresholds or minimum speech values to reject breaths/noise; lower them if short spoken commands are missed.
+Backend microphone STT and browser microphone STT now use the same bundled Silero VAD ONNX model offline. Backend microphone input uses `STT_PROVIDER`, `LOCAL_WHISPER_MODEL`, `STT_LANGUAGE`, and `STT_PROMPT` for transcription selection and Whisper biasing; browser microphone input uses `WEB_STT_PROVIDER` and `WEB_STT_MODEL`. Before either path sends audio to STT, Silero estimates speech probability. `VAD_SPEECH_THRESHOLD` starts speech, `VAD_NEGATIVE_THRESHOLD` allows accepted speech to end, `VAD_MIN_SPEECH_MS` rejects tiny noises, `VAD_MIN_SILENCE_MS` controls end-of-phrase timing, `VAD_SPEECH_PAD_MS` keeps backend pre-roll before detected speech, and `VAD_MAX_SPEECH_SECONDS` caps one utterance. Raise thresholds or minimum speech values to reject breaths/noise; lower them if short spoken commands are missed.
 
-The Settings -> Config -> STT/TTS section exposes the most useful voice-activity settings in a nested **Voice Activity Detection (VAD)** collapsible, with friendly sliders grouped into Browser and Backend boxes. Browser controls tune microphone triggering, short-word acceptance, voice stability before sending, end-of-phrase silence, and idle listener restart. Backend controls tune the equivalent PyAudio gate: microphone triggering, short-word acceptance, voice stability, and end-of-phrase silence. Hover each slider label to see the exact `.env` variable it writes. The same VAD collapsible includes three example starting points for quick isolated words, breath filtering, and slow soft speech; applying one fills the sliders and still requires Save to persist it.
+The Settings -> Config -> STT/TTS section exposes these controls in a nested **Voice Activity Detection (VAD)** collapsible. Hover each slider label to see the exact `.env` variable it writes. The same VAD collapsible includes three Silero presets for quick isolated words, breath filtering, and slow soft speech; applying one fills the sliders and still requires Save to persist it.
 
 `INTERRUPT_CONVERSATION_ENABLED=false` keeps the conservative default: text, web STT, and backend STT do not start a new normal command while the assistant is processing. When set to `true`, a new text command or accepted STT command silently cancels current processing or TTS first, then runs the new command. Browser conversation mode also keeps listening during processing and web TTS.
 
@@ -762,8 +725,8 @@ assistant = VoiceAssistant(
     elevenlabs_api_key="your-key",
     tts_provider="elevenlabs",
     elevenlabs_voice_id="different-voice-id",  # Change voice
-    silence_threshold=300,  # More sensitive
-    silence_duration=2.0,   # Wait longer
+    vad_speech_threshold=0.45,  # More sensitive
+    vad_min_silence_ms=900,     # Wait longer before ending a phrase
     model="gpt-3.5-turbo"  # Faster model
 )
 ```
@@ -808,7 +771,7 @@ Operational checks worth repeating on real hardware are browser push-to-talk sil
 
 1. **No Audio Input Detected**
    - Check microphone permissions
-   - Lower the `silence_threshold` value
+   - Lower `VAD_SPEECH_THRESHOLD` or `VAD_MIN_SPEECH_MS` if short speech is missed
    - Verify PyAudio: `python -c "import pyaudio; pyaudio.PyAudio()"`
    - If no default input device is available, the assistant falls back to text commands instead of retrying microphone capture in a tight loop
    - With the web monitor enabled, use the bottom chat input; without it, type commands in the terminal prompt
