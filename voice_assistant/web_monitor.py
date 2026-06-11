@@ -33,6 +33,7 @@ SECRET_KEY_MARKERS = (
     "CONNECTION_STRING",
 )
 LOGGER = logging.getLogger(__name__)
+TOOL_RESULT_MARKER = "Tool result:"
 
 
 def redact_config_value(key: str, value: Any) -> Any:
@@ -100,6 +101,59 @@ def concise_web_tts_error(error: Exception | str) -> dict[str, str]:
 
 def redact_mapping(values: dict[str, Any]) -> dict[str, Any]:
     return {key: redact_config_value(key, value) for key, value in values.items()}
+
+
+def compact_jsonish_spacing(value: str) -> str:
+    """Remove JSON formatting whitespace without touching quoted string content."""
+    compacted: list[str] = []
+    in_string = False
+    escape = False
+
+    for char in value:
+        if in_string:
+            compacted.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            compacted.append(char)
+            continue
+        if char.isspace():
+            continue
+        compacted.append(char)
+
+    return "".join(compacted)
+
+
+def compact_tool_result_log_value(value: str) -> str:
+    """Compact flattened JSON payloads in mcp-use tool result log lines."""
+    if TOOL_RESULT_MARKER not in value:
+        return value
+
+    output_lines: list[str] = []
+    for line in value.splitlines(keepends=True):
+        line_body = line.rstrip("\r\n")
+        line_ending = line[len(line_body) :]
+        marker_index = line_body.find(TOOL_RESULT_MARKER)
+        if marker_index == -1:
+            output_lines.append(line)
+            continue
+
+        payload_start = marker_index + len(TOOL_RESULT_MARKER)
+        prefix = line_body[:payload_start].rstrip()
+        payload = line_body[payload_start:].strip()
+        if payload.startswith(("{", "[")):
+            output_lines.append(f"{prefix} {compact_jsonish_spacing(payload)}{line_ending}")
+        else:
+            output_lines.append(line)
+
+    return "".join(output_lines)
 
 
 def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1479,7 +1533,7 @@ class WebMonitor:
             self._snapshot["updated_at"] = time.time()
 
     def _filter_log_value(self, value: str) -> str:
-        return value
+        return compact_tool_result_log_value(value)
 
     def update(
         self,

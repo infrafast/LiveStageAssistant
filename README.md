@@ -610,7 +610,7 @@ Instructions loaded from MCP server "lights":
 ...
 ```
 
-This mode preserves the local voice constraints, including concise TTS-friendly replies, same-language answers, plain text only, and no emojis, markdown, bullets, or decorative characters.
+This mode preserves the local voice constraints, including concise TTS-friendly replies, French-by-default answers unless the user clearly speaks English, plain text only, and no emojis, markdown, bullets, or decorative characters.
 
 Even with several MCP prompt sources, `MCP_PROMPT_MERGE_MODE` still has a role: the loaded MCP prompts are always combined together in the configured order, and this setting decides whether that combined block is appended to the local assistant prompt or replaces it.
 
