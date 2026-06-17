@@ -178,15 +178,19 @@ def suppress_native_stderr():
         pass
 
     saved_stderr_fd = None
+    redirected = False
     try:
         saved_stderr_fd = os.dup(stderr_fd)
-        with open(os.devnull, "w", encoding="utf-8") as devnull:
+        with open(os.devnull, "w") as devnull:
             os.dup2(devnull.fileno(), stderr_fd)
-            yield
+            redirected = True
     except OSError:
+        saved_stderr_fd = None
+
+    try:
         yield
     finally:
-        if saved_stderr_fd is not None:
+        if redirected and saved_stderr_fd is not None:
             try:
                 os.dup2(saved_stderr_fd, stderr_fd)
             finally:
