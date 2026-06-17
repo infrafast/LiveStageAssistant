@@ -171,19 +171,20 @@ DEFAULT_BACKEND_MP3_CHANNELS = 1
 @contextmanager
 def suppress_native_stderr():
     """Temporarily silence native libraries that write directly to stderr."""
+    stderr_fd = 2
     try:
         sys.stderr.flush()
-        stderr_fd = sys.stderr.fileno()
-    except (AttributeError, OSError, ValueError):
-        yield
-        return
+    except Exception:
+        pass
 
     saved_stderr_fd = None
     try:
         saved_stderr_fd = os.dup(stderr_fd)
-        with open(os.devnull, "w") as devnull:
+        with open(os.devnull, "w", encoding="utf-8") as devnull:
             os.dup2(devnull.fileno(), stderr_fd)
             yield
+    except OSError:
+        yield
     finally:
         if saved_stderr_fd is not None:
             try:
