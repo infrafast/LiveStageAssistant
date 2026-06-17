@@ -3014,14 +3014,9 @@ INDEX_HTML = """<!doctype html>
 	                  <label><input type="radio" name="tts-output" value="silent">Silent</label>
 	                </div>
 	              </div>
-	              <div class="field">
-	                <label>STT Input</label>
-	                <div class="segmented" id="stt-input" role="radiogroup" aria-label="STT Input">
-	                  <label><input type="radio" name="stt-input" value="both">Both</label>
-	                  <label><input type="radio" name="stt-input" value="browser">Browser</label>
-	                  <label><input type="radio" name="stt-input" value="backend">Backend</label>
-	                  <label><input type="radio" name="stt-input" value="silent">Silent</label>
-	                </div>
+	              <div class="field" id="tts-speed-field">
+	                <label for="openai-tts-speed">TTS Speed <span id="openai-tts-speed-label">1.0x</span></label>
+	                <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
 	              </div>
 	              <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local pyttsx3</div>
               <div class="field" id="elevenlabs-voice-field">
@@ -3032,9 +3027,14 @@ INDEX_HTML = """<!doctype html>
                 <label for="openai-tts-voice">OpenAI Voice</label>
                 <select id="openai-tts-voice"></select>
               </div>
-              <div class="field" id="tts-speed-field">
-                <label for="openai-tts-speed">TTS Speed <span id="openai-tts-speed-label">1.0x</span></label>
-                <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
+              <div class="field">
+                <label>STT Input</label>
+                <div class="segmented" id="stt-input" role="radiogroup" aria-label="STT Input">
+                  <label><input type="radio" name="stt-input" value="both">Both</label>
+                  <label><input type="radio" name="stt-input" value="browser">Browser</label>
+                  <label><input type="radio" name="stt-input" value="backend">Backend</label>
+                  <label><input type="radio" name="stt-input" value="silent">Silent</label>
+                </div>
               </div>
               <div class="field" id="tts-test-field">
                 <label>Voice Test</label>
