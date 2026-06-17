@@ -420,10 +420,11 @@ When set to `true`, the assistant starts a short-lived parallel listener only du
 
 ### Online and Offline Profiles
 
-The repository includes two ready-to-use environment profiles:
+The repository includes ready-to-use environment profiles:
 
 - `.env.online`: `CONNECTIVITY_MODE=online`, cloud mode with OpenAI for LLM/STT, TTS dropdown set to ElevenLabs, and `mcp_servers.json`
 - `.env.offline`: `CONNECTIVITY_MODE=offline`, local mode with Ollama for LLM, local Whisper for STT, pyttsx3 for TTS, and `mcp_servers.offline.json`
+- `.env.raspi`: `CONNECTIVITY_MODE=online`, cloud LLM/STT/TTS with local stdio `XMSeries-MCP` and `QLCPlus-MCP` sibling folders through `mcp_servers_raspi.json`
 - `auto`: switch to/from online to offline setting depending according to internet connectivity
 
 Start the assistant by passing the profile you want:
@@ -434,6 +435,9 @@ python voice_assistant/agent.py --env-file .env.online
 
 # Offline/local profile
 python voice_assistant/agent.py --env-file .env.offline
+
+# Raspberry Pi local stdio MCP profile
+python voice_assistant/agent.py --env-file .env.raspi
 
 # auto
 python voice_assistant/agent.py --env-file auto
@@ -630,6 +634,9 @@ python voice_assistant/agent.py --env-file .env.online
 
 # Explicit offline profile
 python voice_assistant/agent.py --env-file .env.offline
+
+# Explicit Raspberry Pi local stdio MCP profile
+python voice_assistant/agent.py --env-file .env.raspi
 
 # Auto profile selection
 python voice_assistant/agent.py --env-file auto
