@@ -324,6 +324,7 @@ class WebMonitor:
         self._env_profile_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
         self._remote_screen_save_handler: Callable[[str], dict[str, Any]] | None = None
+        self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
@@ -413,6 +414,11 @@ class WebMonitor:
         """Register callback used by the web UI to save remote-screen settings."""
         with self._lock:
             self._remote_screen_save_handler = save_handler
+
+    def set_backend_audio_level_handler(self, handler: Callable[[str], dict[str, Any]]) -> None:
+        """Register callback used by the web UI to test backend microphone level."""
+        with self._lock:
+            self._backend_audio_level_handler = handler
 
     def set_session_context_handlers(
         self,
@@ -581,6 +587,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/web-tts":
                         self._handle_web_tts()
+                        return
+                    if self.path == "/api/backend-audio-level":
+                        self._handle_backend_audio_level()
                         return
                     if self.path == "/api/llm-config":
                         self._handle_llm_config_save()
@@ -1377,6 +1386,26 @@ class WebMonitor:
                         else:
                             status = 500
                         self._send_json_error(status, {"ok": False, "error": error})
+                        return
+                    self._send_json(result)
+
+                def _handle_backend_audio_level(self) -> None:
+                    handler = monitor._backend_audio_level_handler
+                    if handler is None:
+                        self.send_error(503, "Backend audio level test is not available")
+                        return
+
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    device = str(payload.get("device") or "").strip()
+                    try:
+                        result = handler(device)
+                    except ValueError as e:
+                        self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        return
+                    except Exception as e:
+                        self._send_json_error(500, {"ok": False, "error": {"message": f"Could not test backend audio input: {e}"}})
                         return
                     self._send_json(result)
 
@@ -2506,6 +2535,30 @@ INDEX_HTML = """<!doctype html>
 	    .field.hidden {
 	      display: none;
 	    }
+    .audio-test-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 6px;
+      align-items: stretch;
+    }
+    .vu-meter {
+      width: 12px;
+      height: 38px;
+      align-self: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface-soft);
+      overflow: hidden;
+      display: flex;
+      align-items: end;
+    }
+    .vu-fill {
+      width: 100%;
+      height: 0%;
+      border-radius: inherit;
+      background: linear-gradient(to top, var(--ok), var(--warn) 68%, var(--bad));
+      transition: height 90ms linear;
+    }
     .hidden {
       display: none !important;
     }
@@ -3096,7 +3149,11 @@ INDEX_HTML = """<!doctype html>
             <div class="config-controls">
               <div class="field" id="browser-audio-input-field">
                 <label for="browser-audio-input">Browser Audio Input</label>
-                <select id="browser-audio-input"></select>
+                <div class="audio-test-row">
+                  <select id="browser-audio-input"></select>
+                  <button class="small-button" id="browser-audio-test" type="button">Test</button>
+                  <div class="vu-meter" id="browser-audio-meter" aria-hidden="true"><div class="vu-fill"></div></div>
+                </div>
               </div>
               <div class="field" id="browser-audio-output-field">
                 <label for="browser-audio-output">Browser Audio Output</label>
@@ -3108,7 +3165,11 @@ INDEX_HTML = """<!doctype html>
               </div>
               <div class="field" id="backend-audio-input-field">
                 <label for="backend-audio-input">Backend Audio Input</label>
-                <select id="backend-audio-input"></select>
+                <div class="audio-test-row">
+                  <select id="backend-audio-input"></select>
+                  <button class="small-button" id="backend-audio-test" type="button">Test</button>
+                  <div class="vu-meter" id="backend-audio-meter" aria-hidden="true"><div class="vu-fill"></div></div>
+                </div>
               </div>
               <div class="field" id="backend-audio-output-field">
                 <label for="backend-audio-output">Backend Audio Output</label>
@@ -3278,11 +3339,15 @@ INDEX_HTML = """<!doctype html>
     const mcpAdminRouteInputs = Array.from(document.querySelectorAll('input[name="mcp-admin-route"]'));
     const browserAudioInputField = document.querySelector("#browser-audio-input-field");
     const browserAudioInput = document.querySelector("#browser-audio-input");
+    const browserAudioTest = document.querySelector("#browser-audio-test");
+    const browserAudioMeter = document.querySelector("#browser-audio-meter .vu-fill");
     const browserAudioOutputField = document.querySelector("#browser-audio-output-field");
     const browserAudioOutput = document.querySelector("#browser-audio-output");
     const browserAudioRefresh = document.querySelector("#browser-audio-refresh");
     const backendAudioInputField = document.querySelector("#backend-audio-input-field");
     const backendAudioInput = document.querySelector("#backend-audio-input");
+    const backendAudioTest = document.querySelector("#backend-audio-test");
+    const backendAudioMeter = document.querySelector("#backend-audio-meter .vu-fill");
     const backendAudioOutputField = document.querySelector("#backend-audio-output-field");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
     const thinkingSound = document.querySelector("#thinking-sound");
@@ -3375,6 +3440,11 @@ INDEX_HTML = """<!doctype html>
     let selectedBrowserAudioOutput = window.localStorage.getItem("browser-audio-output") || "";
     let backendAudioCapabilities = { input: false, output: false };
     let browserAudioCapabilities = { input: false, output: typeof Audio !== "undefined", outputSelection: false };
+    let browserAudioTestStream = null;
+    let browserAudioTestContext = null;
+    let browserAudioTestAnalyser = null;
+    let browserAudioTestAnimationId = null;
+    let backendAudioTestTimer = null;
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
     let mcpServersSignature = "";
@@ -4233,6 +4303,105 @@ INDEX_HTML = """<!doctype html>
       await audio.setSinkId(selectedBrowserAudioOutput);
     }
 
+    function setVuMeter(fill, level) {
+      if (!fill) return;
+      const normalized = Math.max(0, Math.min(1, Number(level || 0)));
+      fill.style.height = `${Math.round(normalized * 100)}%`;
+    }
+
+    function stopBrowserAudioTest() {
+      window.cancelAnimationFrame(browserAudioTestAnimationId);
+      browserAudioTestAnimationId = null;
+      if (browserAudioTestStream) {
+        for (const track of browserAudioTestStream.getTracks()) track.stop();
+      }
+      browserAudioTestStream = null;
+      if (browserAudioTestContext) {
+        browserAudioTestContext.close().catch(() => {});
+      }
+      browserAudioTestContext = null;
+      browserAudioTestAnalyser = null;
+      browserAudioTest.textContent = "Test";
+      setVuMeter(browserAudioMeter, 0);
+    }
+
+    async function startBrowserAudioTest() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+      stopBackendAudioTest();
+      try {
+        browserAudioTestStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        browserAudioTestContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = browserAudioTestContext.createMediaStreamSource(browserAudioTestStream);
+        browserAudioTestAnalyser = browserAudioTestContext.createAnalyser();
+        browserAudioTestAnalyser.fftSize = 1024;
+        source.connect(browserAudioTestAnalyser);
+        const data = new Uint8Array(browserAudioTestAnalyser.fftSize);
+        browserAudioTest.textContent = "Stop";
+        const tick = () => {
+          if (!browserAudioTestAnalyser) return;
+          browserAudioTestAnalyser.getByteTimeDomainData(data);
+          let sum = 0;
+          let peak = 0;
+          for (const value of data) {
+            const centered = (value - 128) / 128;
+            sum += centered * centered;
+            peak = Math.max(peak, Math.abs(centered));
+          }
+          const rms = Math.sqrt(sum / data.length);
+          setVuMeter(browserAudioMeter, Math.max(rms * 4, peak * 0.75));
+          browserAudioTestAnimationId = window.requestAnimationFrame(tick);
+        };
+        tick();
+      } catch (error) {
+        stopBrowserAudioTest();
+        metaEl.textContent = `browser audio test unavailable: ${error}`;
+      }
+    }
+
+    function toggleBrowserAudioTest() {
+      if (browserAudioTestStream) stopBrowserAudioTest();
+      else startBrowserAudioTest();
+    }
+
+    function stopBackendAudioTest() {
+      window.clearInterval(backendAudioTestTimer);
+      backendAudioTestTimer = null;
+      backendAudioTest.textContent = "Test";
+      setVuMeter(backendAudioMeter, 0);
+    }
+
+    async function pollBackendAudioLevel() {
+      try {
+        const response = await fetch("/api/backend-audio-level", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ device: backendAudioInput.value || "" })
+        });
+        const text = await response.text();
+        const data = text ? JSON.parse(text) : {};
+        if (!response.ok || data.ok === false) {
+          const message = data.error && data.error.message ? data.error.message : data.detail || text;
+          throw new Error(message || "backend audio level unavailable");
+        }
+        setVuMeter(backendAudioMeter, Math.max(Number(data.level || 0), Number(data.peak || 0) * 0.7));
+      } catch (error) {
+        stopBackendAudioTest();
+        metaEl.textContent = `backend audio test unavailable: ${error}`;
+      }
+    }
+
+    function startBackendAudioTest() {
+      stopBrowserAudioTest();
+      backendAudioTest.textContent = "Stop";
+      pollBackendAudioLevel();
+      backendAudioTestTimer = window.setInterval(pollBackendAudioLevel, 220);
+    }
+
+    function toggleBackendAudioTest() {
+      if (backendAudioTestTimer) stopBackendAudioTest();
+      else startBackendAudioTest();
+    }
+
     async function loadBrowserAudioDevices(requestPermission = false) {
       browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
       browserAudioOutput.replaceChildren(option("Default browser output", "", false, !selectedBrowserAudioOutput));
@@ -5081,6 +5250,8 @@ INDEX_HTML = """<!doctype html>
 
       envProfile.disabled = true;
       llmSave.disabled = true;
+      stopBrowserAudioTest();
+      stopBackendAudioTest();
       setEnvironmentLoading(true, "rafraichissement de l'environnement");
       disconnectVnc("reconnexion VNC...");
       llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
@@ -5177,6 +5348,10 @@ INDEX_HTML = """<!doctype html>
       backendAudioInputField.classList.toggle("hidden", !["both", "backend"].includes(sttInput));
       browserAudioOutputField.classList.toggle("hidden", output !== "browser");
       backendAudioOutputField.classList.toggle("hidden", output !== "backend");
+      if (browserAudioInputField.classList.contains("hidden") && browserAudioTestStream) stopBrowserAudioTest();
+      if (backendAudioInputField.classList.contains("hidden") && backendAudioTestTimer) stopBackendAudioTest();
+      browserAudioTest.disabled = browserAudioInputField.classList.contains("hidden") || !browserAudioCapabilities.input;
+      backendAudioTest.disabled = backendAudioInputField.classList.contains("hidden") || !backendAudioCapabilities.input;
     }
 
     function setSegmentOptionVisible(input, visible) {
@@ -5515,6 +5690,8 @@ INDEX_HTML = """<!doctype html>
       for (const control of vadControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
       backendAudioInput.disabled = true;
+      browserAudioTest.disabled = true;
+      backendAudioTest.disabled = true;
       backendAudioOutput.disabled = true;
       thinkingSound.disabled = true;
       llmSave.disabled = true;
@@ -5666,6 +5843,8 @@ INDEX_HTML = """<!doctype html>
 	        syncConnectivityControls();
         backendAudioInput.disabled = !backendAudioCapabilities.input || backendAudioInput.options.length === 0;
         backendAudioOutput.disabled = !backendAudioCapabilities.output || backendAudioOutput.options.length === 0;
+        browserAudioTest.disabled = !browserAudioCapabilities.input || browserAudioInputField.classList.contains("hidden");
+        backendAudioTest.disabled = !backendAudioCapabilities.input || backendAudioInputField.classList.contains("hidden");
         thinkingSound.disabled = thinkingSound.options.length === 0 || !thinkingSound.value;
         llmSave.disabled = !llmProvider.value;
         llmOptionsLoading = false;
@@ -6018,6 +6197,7 @@ INDEX_HTML = """<!doctype html>
       input.addEventListener("change", syncSttInputControls);
     }
     browserAudioInput.addEventListener("change", () => {
+      stopBrowserAudioTest();
       selectedBrowserAudioInput = browserAudioInput.value;
       window.localStorage.setItem("browser-audio-input", selectedBrowserAudioInput);
       if (conversationEnabled) {
@@ -6025,6 +6205,9 @@ INDEX_HTML = """<!doctype html>
         scheduleConversationRestart(0);
       }
     });
+    browserAudioTest.addEventListener("click", toggleBrowserAudioTest);
+    backendAudioInput.addEventListener("change", stopBackendAudioTest);
+    backendAudioTest.addEventListener("click", toggleBackendAudioTest);
     browserAudioOutput.addEventListener("change", async () => {
       selectedBrowserAudioOutput = browserAudioOutput.value;
       window.localStorage.setItem("browser-audio-output", selectedBrowserAudioOutput);

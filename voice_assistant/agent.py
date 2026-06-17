@@ -15,6 +15,7 @@ from contextlib import contextmanager
 import io
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -509,6 +510,75 @@ def resolve_pyaudio_device_index(
         return None, "default", f"default {direction}: {info.get('index')}: {info.get('name')}"
     except Exception as e:
         return None, "unavailable", f"default {direction} unavailable: {e}"
+
+
+def backend_audio_input_level(selected_device: str | None = None) -> dict[str, Any]:
+    """Return a short RMS/peak level sample for a backend PyAudio input device."""
+    audio = None
+    stream = None
+    try:
+        with suppress_native_stderr():
+            audio = pyaudio.PyAudio()
+        input_device_index, status, detail = resolve_pyaudio_device_index(
+            audio,
+            selected_device,
+            input_device=True,
+        )
+        if status in {"invalid", "unavailable"}:
+            return {"ok": False, "level": 0.0, "peak": 0.0, "status": status, "detail": detail}
+
+        try:
+            device_info = (
+                audio.get_device_info_by_index(input_device_index)
+                if input_device_index is not None
+                else audio.get_default_input_device_info()
+            )
+            sample_rate = int(float(device_info.get("defaultSampleRate") or 16000))
+        except Exception:
+            sample_rate = 16000
+
+        frames_per_buffer = 512
+        chunks = []
+        with suppress_native_stderr():
+            stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=sample_rate,
+                input=True,
+                input_device_index=input_device_index,
+                frames_per_buffer=frames_per_buffer,
+            )
+        for _ in range(4):
+            chunks.append(stream.read(frames_per_buffer, exception_on_overflow=False))
+
+        pcm = b"".join(chunks)
+        sample_count = len(pcm) // 2
+        if sample_count <= 0:
+            return {"ok": True, "level": 0.0, "peak": 0.0, "status": status, "detail": detail}
+        samples = struct.unpack(f"<{sample_count}h", pcm[: sample_count * 2])
+        peak = max(abs(sample) for sample in samples) / 32768.0
+        rms = math.sqrt(sum(sample * sample for sample in samples) / sample_count) / 32768.0
+        return {
+            "ok": True,
+            "level": max(0.0, min(1.0, rms * 3.0)),
+            "peak": max(0.0, min(1.0, peak)),
+            "status": status,
+            "detail": detail,
+        }
+    except Exception as e:
+        return {"ok": False, "level": 0.0, "peak": 0.0, "status": "error", "detail": str(e)}
+    finally:
+        if stream is not None:
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
+        if audio is not None:
+            try:
+                audio.terminate()
+            except Exception:
+                pass
 
 
 def backend_audio_service_state(
@@ -4358,6 +4428,7 @@ async def main():
                 ),
                 tts_handler=web_tts_handler,
             )
+            web_monitor.set_backend_audio_level_handler(backend_audio_input_level)
             web_monitor.set_cancel_handler(assistant.stop_tts)
 
         return assistant
