@@ -13,7 +13,7 @@ The harder parts are runtime integrations:
 - Offline mode needs Ollama and local Whisper model caches available to the container.
 - Local stdio MCP servers such as XMSeries-MCP or QLCPlus-MCP must be mounted after they have been installed and built.
 
-For a first Synology deployment, use the web monitor and text command injection with `TTS_PROVIDER=none`. This leaves backend speaker output disabled and allows browser/web TTS to speak when `WEB_AUDIO_ENABLED=true`.
+For a first Synology deployment, use the web monitor and text command injection with `TTS_PROVIDER=none`. This leaves backend speaker output disabled and allows browser/web TTS to speak when `WEB_TTS_PROVIDER=openai|elevenlabs`.
 
 ## Files
 
@@ -143,17 +143,17 @@ WEB_MONITOR_PORT=8765
 CONNECTIVITY_MODE=online
 CLOUD_TTS_PROVIDER=openai
 TTS_PROVIDER=none
-WEB_AUDIO_ENABLED=true
 WEB_TTS_PROVIDER=openai
 STT_PROVIDER=openai-whisper
+STT_INPUT=both
 LLM_PROVIDER=openai
 SESSION_CONTEXT_SIZE=6000
 SESSION_CONTEXT_DIR=/data/contexts
 ```
 
-In the web config, keep the connectivity switch on `Online` and use `TTS Output = Browser` for this first-run shape. Saving browser output keeps `WEB_AUDIO_ENABLED=true` and stores the chosen cloud provider in `WEB_TTS_PROVIDER`. `Backend` is useful only when the container has usable speaker/audio passthrough; `Silent` sets both backend and browser TTS to `none`.
+In the web config, keep the connectivity switch on `Online` and use `TTS Output = Browser` for this first-run shape. Saving browser output stores the chosen cloud provider in `WEB_TTS_PROVIDER`. `Backend` is useful only when the container has usable speaker/audio passthrough; `Silent` sets both backend and browser TTS to `none`. `STT Input = Both` keeps browser microphone and backend microphone available when both devices exist.
 
-Browser audio device selection is per browser and saved in browser `localStorage`. The monitor can select a browser microphone for web STT and, when the browser supports `setSinkId()`, a browser output device for web TTS/thinking sound. Output selectors follow the selected `TTS Output`: silent hides outputs, browser shows browser output, and backend shows backend output. Device labels may remain generic until microphone permission is granted. On LAN/NAS access, browser microphone permission may require HTTPS through a reverse proxy.
+Browser audio device selection is per browser and saved in browser `localStorage`. The monitor can select a browser microphone for web STT and, when the browser supports `setSinkId()`, a browser output device for web TTS/thinking sound. Input selectors follow the selected `STT Input`; output selectors follow the selected `TTS Output`. The STT/TTS choices hide unavailable browser/backend input/output options after capability detection. Device labels may remain generic until microphone permission is granted. On LAN/NAS access, browser microphone permission may require HTTPS through a reverse proxy.
 
 The web Config -> STT/TTS section also exposes a nested **Voice Activity Detection (VAD)** collapsible for the bundled offline Silero VAD used by both browser and backend microphone STT. It writes the active profile's `VAD_*` speech threshold, end threshold, minimum speech, silence, padding, and maximum utterance settings; hover a slider label to see the exact `.env` key.
 

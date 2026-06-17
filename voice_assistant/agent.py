@@ -741,15 +741,8 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
     values = dotenv_values_func(env_file)
     tts_provider = (values.get("TTS_PROVIDER") or "elevenlabs").strip().lower()
     web_tts_provider = (values.get("WEB_TTS_PROVIDER") or "none").strip().lower()
-    web_audio_enabled = str(values.get("WEB_AUDIO_ENABLED") or "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "y",
-        "on",
-    }
     cloud_provider = tts_provider
-    if cloud_provider == "none" and web_audio_enabled and web_tts_provider in {"openai", "elevenlabs"}:
+    if cloud_provider == "none" and web_tts_provider in {"openai", "elevenlabs"}:
         cloud_provider = web_tts_provider
     voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
 
@@ -1000,6 +993,7 @@ class VoiceAssistant:
         vad_min_silence_ms: int = 650,
         vad_speech_pad_ms: int = 100,
         vad_max_speech_seconds: float = 8.0,
+        backend_stt_enabled: bool = True,
         tts_speed: float = 1.0,
         wake_words: list[str] | None = None,
         mcp_config: dict | None = None,
@@ -1046,6 +1040,7 @@ class VoiceAssistant:
             vad_min_silence_ms: Silence duration that ends an accepted phrase
             vad_speech_pad_ms: Audio retained before detected speech
             vad_max_speech_seconds: Hard cap for one accepted utterance
+            backend_stt_enabled: Whether the backend microphone should listen for normal commands
             tts_speed: Cloud TTS speed for backend/non-web speech
             wake_words: Optional global wake word variants used to gate command processing
             mcp_config: Optional MCP server configuration dict
@@ -1086,6 +1081,7 @@ class VoiceAssistant:
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
+        self.backend_stt_enabled = bool(backend_stt_enabled)
         self.voice_cancel_words = DEFAULT_VOICE_CANCEL_WORDS
 
         # Initialize audio components
@@ -1177,7 +1173,9 @@ class VoiceAssistant:
         self.mcp_reconnect_after_response = False
         self.microphone_available = True
         self.microphone_warning_shown = False
-        if self.audio_input_device_status == "unavailable":
+        if not self.backend_stt_enabled:
+            self.microphone_available = False
+        elif self.audio_input_device_status == "unavailable":
             self.microphone_available = False
         if self.web_monitor:
             self.web_monitor.update(
@@ -3356,8 +3354,9 @@ async def main():
         )
         return f'"{escaped}"'
 
-    def update_env_file_values(env_file: Path, updates: dict[str, str]) -> None:
+    def update_env_file_values(env_file: Path, updates: dict[str, str], remove_keys: set[str] | None = None) -> None:
         """Update or append KEY=value pairs in an env file while preserving other lines."""
+        remove_keys = remove_keys or set()
         try:
             lines = env_file.read_text().splitlines(keepends=True)
         except OSError as e:
@@ -3372,6 +3371,8 @@ async def main():
                 continue
 
             key = line.split("=", 1)[0].strip()
+            if key in remove_keys:
+                continue
             if key in remaining:
                 newline = "\n" if line.endswith("\n") else ""
                 updated_lines.append(f"{key}={format_env_value(remaining.pop(key))}{newline}")
@@ -3626,6 +3627,9 @@ async def main():
         current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
         provider = (requested_provider or current_provider or "openai").strip().lower()
         current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        current_stt_input = (values.get("STT_INPUT") or "both").strip().lower()
+        if current_stt_input not in {"both", "backend", "browser", "silent"}:
+            current_stt_input = "both"
         current_cloud_tts_provider = cloud_tts_provider_from_values(values)
         current_tts_output = tts_output_from_values(values)
         current_wake_word = (values.get("WAKE_WORD") or "").strip()
@@ -3684,6 +3688,7 @@ async def main():
             "selected_model": current_model if provider == current_provider else "",
             "cloud_tts_providers": CLOUD_TTS_PROVIDER_OPTIONS,
             "selected_cloud_tts_provider": current_cloud_tts_provider,
+            "selected_stt_input": current_stt_input,
             "tts_outputs": TTS_OUTPUT_OPTIONS,
             "selected_tts_output": current_tts_output,
             "selected_wake_word": current_wake_word,
@@ -3718,6 +3723,7 @@ async def main():
         model: str,
         cloud_tts_provider: str,
         tts_output: str,
+        stt_input: str,
         connectivity_mode: str,
         wake_word: str,
         stt_prompt: str,
@@ -3745,6 +3751,7 @@ async def main():
         model = model.strip()
         cloud_tts_provider = (cloud_tts_provider or "").strip().lower()
         tts_output = (tts_output or "").strip().lower()
+        stt_input = (stt_input or "both").strip().lower()
         connectivity_mode = (connectivity_mode or "").strip().lower()
         wake_word = (wake_word or "").strip()
         stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
@@ -3766,6 +3773,8 @@ async def main():
         vad_min_silence_ms = max(100, min(5000, int(vad_min_silence_ms or 650)))
         vad_speech_pad_ms = max(0, min(1000, int(vad_speech_pad_ms or 100)))
         vad_max_speech_seconds = max(1.0, min(30.0, float(vad_max_speech_seconds or 8.0)))
+        if stt_input not in {"both", "backend", "browser", "silent"}:
+            raise ValueError(f"unsupported STT input: {stt_input}")
         if provider not in {"openai", "ollama"}:
             raise ValueError(f"unsupported LLM provider: {provider}")
         values = dict(dotenv_values(env_file))
@@ -3787,9 +3796,9 @@ async def main():
             provider = "ollama"
             cloud_tts_provider = "none"
             tts_output = "backend"
+            stt_input = "backend"
             updated_tts_provider = "pyttsx3"
             updated_web_tts_provider = "none"
-            updated_web_audio_enabled = "false"
         else:
             if provider == "ollama":
                 raise ValueError("online mode cannot use Ollama; switch to offline mode for local LLM")
@@ -3801,6 +3810,7 @@ async def main():
             tts_output = tts_output_from_values(dict(dotenv_values(env_file)))
         if tts_output not in {"browser", "backend", "silent"}:
             raise ValueError(f"unsupported TTS output: {tts_output}")
+        browser_stt_selected = stt_input in {"both", "browser"}
         if connectivity_mode != "offline" and cloud_tts_provider == "none":
             tts_output = "silent"
         if connectivity_mode == "offline":
@@ -3808,9 +3818,8 @@ async def main():
         elif cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "browser":
             updated_tts_provider = "none"
             updated_web_tts_provider = cloud_tts_provider
-            updated_web_audio_enabled = "true"
-            if not env_secret_available("OPENAI_API_KEY"):
-                raise ValueError("browser audio requires OPENAI_API_KEY_FILE for web speech-to-text")
+            if (browser_stt_selected or cloud_tts_provider == "openai") and not env_secret_available("OPENAI_API_KEY"):
+                raise ValueError("browser STT or OpenAI browser TTS requires OPENAI_API_KEY_FILE")
             if cloud_tts_provider == "elevenlabs" and not env_secret_available("ELEVENLABS_API_KEY"):
                 raise ValueError("ElevenLabs browser TTS requires ELEVENLABS_API_KEY_FILE")
         elif cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "backend":
@@ -3821,7 +3830,6 @@ async def main():
                 )
             updated_tts_provider = cloud_tts_provider
             updated_web_tts_provider = "none"
-            updated_web_audio_enabled = (values.get("WEB_AUDIO_ENABLED") or "false").strip().lower() or "false"
             if cloud_tts_provider == "openai" and not env_secret_available("OPENAI_API_KEY"):
                 raise ValueError("OpenAI backend TTS requires OPENAI_API_KEY_FILE")
             if cloud_tts_provider == "elevenlabs" and not env_secret_available("ELEVENLABS_API_KEY"):
@@ -3829,7 +3837,8 @@ async def main():
         else:
             updated_tts_provider = "none"
             updated_web_tts_provider = "none"
-            updated_web_audio_enabled = (values.get("WEB_AUDIO_ENABLED") or "false").strip().lower() or "false"
+        if connectivity_mode != "offline" and browser_stt_selected and not env_secret_available("OPENAI_API_KEY"):
+            raise ValueError("browser STT requires OPENAI_API_KEY_FILE")
         current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
         current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
         if connectivity_mode == "offline" and (
@@ -3895,9 +3904,9 @@ async def main():
                 "OPENAI_MODEL": model,
                 "CONNECTIVITY_MODE": connectivity_mode,
                 "STT_PROVIDER": "local-whisper" if connectivity_mode == "offline" else (values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
+                "STT_INPUT": stt_input,
                 "CLOUD_TTS_PROVIDER": cloud_tts_provider,
                 "TTS_PROVIDER": updated_tts_provider,
-                "WEB_AUDIO_ENABLED": updated_web_audio_enabled,
                 "WEB_STT_PROVIDER": "openai",
                 "WEB_STT_MODEL": (values.get("WEB_STT_MODEL") or "whisper-1").strip() or "whisper-1",
                 "WEB_TTS_PROVIDER": updated_web_tts_provider,
@@ -3921,6 +3930,7 @@ async def main():
                 "WEB_TTS_VOICE": openai_tts_voice,
                 "WEB_TTS_SPEED": f"{openai_tts_speed:.2f}",
             },
+            remove_keys={"WEB_AUDIO_ENABLED"},
         )
         values = dict(dotenv_values(env_file))
         mcp_config = load_mcp_config_from_values(values)
@@ -3944,7 +3954,7 @@ async def main():
         return {
             "saved": True,
             "message": (
-                "Saved. Browser TTS enabled WEB_AUDIO_ENABLED=true."
+                "Saved. Browser TTS enabled."
                 if tts_output == "browser"
                 else f"Saved. Backend TTS uses {cloud_tts_provider} in {env_file}."
                 if tts_output == "backend" and cloud_tts_provider in {"openai", "elevenlabs"}
@@ -3955,6 +3965,7 @@ async def main():
             "connectivity_mode": connectivity_mode,
             "cloud_tts_provider": cloud_tts_provider,
             "tts_output": tts_output,
+            "stt_input": stt_input,
             "wake_word": wake_word,
             "system_prompt": system_prompt,
             "session_context_size": session_context_size,
@@ -4001,6 +4012,7 @@ async def main():
         llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         stt_provider = os.getenv("STT_PROVIDER", "openai-whisper").lower()
+        stt_input = os.getenv("STT_INPUT", "both").strip().lower()
         local_whisper_model = os.getenv("LOCAL_WHISPER_MODEL", "base")
         stt_language_value = os.getenv("STT_LANGUAGE", "auto")
         stt_language = None if stt_language_value.lower() == "auto" else stt_language_value
@@ -4019,7 +4031,6 @@ async def main():
         vad_max_speech_seconds = env_float("VAD_MAX_SPEECH_SECONDS", 8.0)
         voice_cancel_during_thinking = env_bool("VOICE_CANCEL_DURING_THINKING", False)
         interrupt_conversation_enabled = env_bool("INTERRUPT_CONVERSATION_ENABLED", False)
-        web_audio_enabled = env_bool("WEB_AUDIO_ENABLED", False)
         web_stt_provider = os.getenv("WEB_STT_PROVIDER", "openai").strip().lower()
         raw_web_tts_provider = os.getenv("WEB_TTS_PROVIDER")
         web_tts_provider = (raw_web_tts_provider or "openai").strip().lower()
@@ -4060,6 +4071,9 @@ async def main():
         if stt_provider not in {"openai-whisper", "local-whisper"}:
             print(f"Error: STT_PROVIDER must be 'openai-whisper' or 'local-whisper', got: {stt_provider}")
             sys.exit(1)
+        if stt_input not in {"both", "backend", "browser", "silent"}:
+            print(f"Error: STT_INPUT must be 'both', 'backend', 'browser', or 'silent', got: {stt_input}")
+            sys.exit(1)
         if cloud_tts_provider not in {"none", "openai", "elevenlabs"}:
             print(f"Error: CLOUD_TTS_PROVIDER must be 'none', 'openai', or 'elevenlabs', got: {cloud_tts_provider}")
             sys.exit(1)
@@ -4076,10 +4090,17 @@ async def main():
             print(f"Error: MCP_PROMPT_MERGE_MODE must be 'append' or 'replace', got: {mcp_prompt_merge_mode}")
             sys.exit(1)
 
+        backend_stt_enabled = stt_input in {"both", "backend"}
+        browser_stt_enabled = stt_input in {"both", "browser"}
+        backend_tts_active = tts_provider != "none"
+        web_tts_requested = web_tts_provider in {"openai", "elevenlabs"}
+        web_audio_enabled = browser_stt_enabled or web_tts_requested
+
         print(f"Using env file: {env_file}")
         print(f"Using ElevenLabs voice ID: {voice_id}")
         print(f"Using LLM provider: {llm_provider}")
         print(f"Using STT provider: {stt_provider}")
+        print(f"Using STT input: {stt_input}")
         print(f"Using cloud TTS provider: {cloud_tts_provider}")
         print(f"Using TTS provider: {tts_provider}")
         print(f"Using thinking sound file: {thinking_sound_file}")
@@ -4096,14 +4117,10 @@ async def main():
         print(f"Using MCP tool routing: {'enabled' if mcp_tool_routing_enabled else 'disabled'}")
         print(f"Using session context size: {session_context_size} ({session_context_dir})")
 
-        web_audio_needs_openai = web_audio_enabled and (
-            web_stt_provider == "openai" or web_tts_provider == "openai"
-        )
         backend_tts_needs_openai = tts_provider == "openai"
         if (
             llm_provider == "openai"
-            or stt_provider == "openai-whisper"
-            or web_audio_needs_openai
+            or (backend_stt_enabled and stt_provider == "openai-whisper")
             or backend_tts_needs_openai
         ) and not openai_api_key:
             print("Error: OpenAI API key is required")
@@ -4113,14 +4130,15 @@ async def main():
             )
             sys.exit(1)
 
-        backend_tts_active = tts_provider != "none"
         web_tts_has_key = (
             (web_tts_provider == "openai" and bool(openai_api_key))
             or (web_tts_provider == "elevenlabs" and bool(elevenlabs_api_key))
         )
         web_audio_state = {
             "enabled": web_audio_enabled,
-            "stt_enabled": web_audio_enabled and web_stt_provider == "openai" and bool(openai_api_key),
+            "stt_input": stt_input,
+            "backend_stt_enabled": backend_stt_enabled,
+            "stt_enabled": web_audio_enabled and browser_stt_enabled and web_stt_provider == "openai" and bool(openai_api_key),
             "tts_enabled": (
                 web_audio_enabled
                 and web_tts_provider in {"openai", "elevenlabs"}
@@ -4209,6 +4227,7 @@ async def main():
             vad_min_silence_ms=vad_min_silence_ms,
             vad_speech_pad_ms=vad_speech_pad_ms,
             vad_max_speech_seconds=vad_max_speech_seconds,
+            backend_stt_enabled=backend_stt_enabled,
             tts_speed=web_tts_speed,
             wake_words=wake_words,
             mcp_config=mcp_config,
@@ -4454,12 +4473,13 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
                 cloud_tts_provider,
                 tts_output,
+                stt_input,
                 connectivity_mode,
                 wake_word,
                 stt_prompt,

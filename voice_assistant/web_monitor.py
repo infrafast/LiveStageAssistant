@@ -301,6 +301,7 @@ class WebMonitor:
                 str,
                 str,
                 str,
+                str,
                 int,
                 bool,
                 bool,
@@ -359,6 +360,7 @@ class WebMonitor:
         options_handler: Callable[[str | None], dict[str, Any]],
         save_handler: Callable[
             [
+                str,
                 str,
                 str,
                 str,
@@ -1005,6 +1007,7 @@ class WebMonitor:
                         return
                     cloud_tts_provider = str(payload.get("cloud_tts_provider") or "").strip().lower()
                     tts_output = str(payload.get("tts_output") or "").strip().lower()
+                    stt_input = str(payload.get("stt_input") or "both").strip().lower()
                     connectivity_mode = str(payload.get("connectivity_mode") or "").strip().lower()
                     wake_word = str(payload.get("wake_word") or "").strip()
                     stt_prompt = str(payload.get("stt_prompt") or "").strip()
@@ -1043,6 +1046,7 @@ class WebMonitor:
                             model,
                             cloud_tts_provider,
                             tts_output,
+                            stt_input,
                             connectivity_mode,
                             wake_word,
                             stt_prompt,
@@ -2957,6 +2961,15 @@ INDEX_HTML = """<!doctype html>
 	                  <label><input type="radio" name="tts-output" value="silent">Silent</label>
 	                </div>
 	              </div>
+	              <div class="field">
+	                <label>STT Input</label>
+	                <div class="segmented" id="stt-input" role="radiogroup" aria-label="STT Input">
+	                  <label><input type="radio" name="stt-input" value="both">Both</label>
+	                  <label><input type="radio" name="stt-input" value="browser">Browser</label>
+	                  <label><input type="radio" name="stt-input" value="backend">Backend</label>
+	                  <label><input type="radio" name="stt-input" value="silent">Silent</label>
+	                </div>
+	              </div>
 	              <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local pyttsx3</div>
               <div class="field" id="elevenlabs-voice-field">
                 <label for="elevenlabs-voice">ElevenLabs Voice</label>
@@ -3081,7 +3094,7 @@ INDEX_HTML = """<!doctype html>
           <details>
             <summary>Audio In/Out</summary>
             <div class="config-controls">
-              <div class="field">
+              <div class="field" id="browser-audio-input-field">
                 <label for="browser-audio-input">Browser Audio Input</label>
                 <select id="browser-audio-input"></select>
               </div>
@@ -3093,7 +3106,7 @@ INDEX_HTML = """<!doctype html>
                 <label>&nbsp;</label>
                 <button class="small-button" id="browser-audio-refresh" type="button">Refresh</button>
               </div>
-              <div class="field">
+              <div class="field" id="backend-audio-input-field">
                 <label for="backend-audio-input">Backend Audio Input</label>
                 <select id="backend-audio-input"></select>
               </div>
@@ -3227,6 +3240,7 @@ INDEX_HTML = """<!doctype html>
 	    const wakeWord = document.querySelector("#wake-word");
     const cloudTtsProvider = document.querySelector("#cloud-tts-provider");
     const ttsOutputInputs = Array.from(document.querySelectorAll('input[name="tts-output"]'));
+    const sttInputInputs = Array.from(document.querySelectorAll('input[name="stt-input"]'));
     const elevenlabsVoiceField = document.querySelector("#elevenlabs-voice-field");
     const elevenlabsVoice = document.querySelector("#elevenlabs-voice");
     const openaiTtsVoiceField = document.querySelector("#openai-tts-voice-field");
@@ -3262,10 +3276,12 @@ INDEX_HTML = """<!doctype html>
     const cloudApiGrid = document.querySelector("#cloud-api-grid");
     const mcpServerGrid = document.querySelector("#mcp-server-grid");
     const mcpAdminRouteInputs = Array.from(document.querySelectorAll('input[name="mcp-admin-route"]'));
+    const browserAudioInputField = document.querySelector("#browser-audio-input-field");
     const browserAudioInput = document.querySelector("#browser-audio-input");
     const browserAudioOutputField = document.querySelector("#browser-audio-output-field");
     const browserAudioOutput = document.querySelector("#browser-audio-output");
     const browserAudioRefresh = document.querySelector("#browser-audio-refresh");
+    const backendAudioInputField = document.querySelector("#backend-audio-input-field");
     const backendAudioInput = document.querySelector("#backend-audio-input");
     const backendAudioOutputField = document.querySelector("#backend-audio-output-field");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
@@ -3357,6 +3373,8 @@ INDEX_HTML = """<!doctype html>
     let webTtsUnlocked = false;
     let selectedBrowserAudioInput = window.localStorage.getItem("browser-audio-input") || "";
     let selectedBrowserAudioOutput = window.localStorage.getItem("browser-audio-output") || "";
+    let backendAudioCapabilities = { input: false, output: false };
+    let browserAudioCapabilities = { input: false, output: typeof Audio !== "undefined", outputSelection: false };
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
     let mcpServersSignature = "";
@@ -4219,11 +4237,13 @@ INDEX_HTML = """<!doctype html>
       browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
       browserAudioOutput.replaceChildren(option("Default browser output", "", false, !selectedBrowserAudioOutput));
       if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        browserAudioCapabilities = { input: false, output: typeof Audio !== "undefined", outputSelection: false };
         browserAudioInput.replaceChildren(option("Browser devices unavailable", "", true, true));
         browserAudioOutput.replaceChildren(option("Browser devices unavailable", "", true, true));
         browserAudioInput.disabled = true;
         browserAudioOutput.disabled = true;
         browserAudioRefresh.disabled = true;
+        syncAudioCapabilityControls();
         return;
       }
 
@@ -4244,6 +4264,12 @@ INDEX_HTML = """<!doctype html>
         const devices = await navigator.mediaDevices.enumerateDevices();
         const inputs = devices.filter((device) => device.kind === "audioinput");
         const outputs = devices.filter((device) => device.kind === "audiooutput");
+        const canSelectOutput = supportsBrowserAudioOutputSelection();
+        browserAudioCapabilities = {
+          input: inputs.length > 0,
+          output: typeof Audio !== "undefined",
+          outputSelection: canSelectOutput && outputs.length > 0
+        };
 
         browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
         inputs.forEach((device, index) => {
@@ -4254,7 +4280,6 @@ INDEX_HTML = """<!doctype html>
           browserAudioInput.appendChild(option(`${selectedBrowserAudioInput} (current unavailable)`, selectedBrowserAudioInput, false, true));
         }
 
-        const canSelectOutput = supportsBrowserAudioOutputSelection();
         if (!canSelectOutput) {
           browserAudioOutput.replaceChildren(option("Output selection unsupported", "", true, true));
         } else {
@@ -4271,11 +4296,14 @@ INDEX_HTML = """<!doctype html>
         browserAudioInput.disabled = inputs.length === 0;
         browserAudioOutput.disabled = !canSelectOutput || browserAudioOutput.options.length === 0;
         browserAudioRefresh.disabled = false;
+        syncAudioCapabilityControls();
       } catch (error) {
+        browserAudioCapabilities = { input: false, output: typeof Audio !== "undefined", outputSelection: false };
         browserAudioInput.replaceChildren(option("Could not list devices", "", true, true));
         browserAudioOutput.replaceChildren(option("Could not list devices", "", true, true));
         browserAudioInput.disabled = true;
         browserAudioOutput.disabled = true;
+        syncAudioCapabilityControls();
         metaEl.textContent = `browser audio devices unavailable: ${error}`;
       }
     }
@@ -4973,6 +5001,7 @@ INDEX_HTML = """<!doctype html>
         system_prompt: assistantSystemPromptEl.value.trim(),
         cloud_tts_provider: cloudTtsProvider.value || "",
         tts_output: selectedTtsOutput(),
+        stt_input: selectedSttInput(),
         backend_audio_input_device: backendAudioInput.value || "",
         backend_audio_output_device: backendAudioOutput.value || "",
         voice_id: elevenlabsVoice.value || "",
@@ -5143,8 +5172,98 @@ INDEX_HTML = """<!doctype html>
 
     function syncAudioDeviceVisibility() {
       const output = selectedTtsOutput();
+      const sttInput = selectedSttInput();
+      browserAudioInputField.classList.toggle("hidden", !["both", "browser"].includes(sttInput));
+      backendAudioInputField.classList.toggle("hidden", !["both", "backend"].includes(sttInput));
       browserAudioOutputField.classList.toggle("hidden", output !== "browser");
       backendAudioOutputField.classList.toggle("hidden", output !== "backend");
+    }
+
+    function setSegmentOptionVisible(input, visible) {
+      const label = input.closest("label");
+      if (label) label.classList.toggle("hidden", !visible);
+      input.disabled = !visible;
+    }
+
+    function sttInputAvailable(value) {
+      if (value === "silent") return true;
+      if (value === "browser") return browserAudioCapabilities.input;
+      if (value === "backend") return backendAudioCapabilities.input;
+      if (value === "both") return browserAudioCapabilities.input && backendAudioCapabilities.input;
+      return false;
+    }
+
+    function firstAvailableSttInput(preferred) {
+      if (sttInputAvailable(preferred)) return preferred;
+      const fallbacks = preferred === "both"
+        ? ["browser", "backend", "silent"]
+        : ["both", "browser", "backend", "silent"];
+      return fallbacks.find(sttInputAvailable) || "silent";
+    }
+
+    function ttsOutputAvailable(value) {
+      if (value === "silent") return true;
+      if (value === "browser") return browserAudioCapabilities.output;
+      if (value === "backend") return backendAudioCapabilities.output;
+      return false;
+    }
+
+    function firstAvailableTtsOutput(preferred) {
+      if (ttsOutputAvailable(preferred)) return preferred;
+      const fallbacks = preferred === "browser"
+        ? ["backend", "silent"]
+        : ["browser", "silent"];
+      return fallbacks.find(ttsOutputAvailable) || "silent";
+    }
+
+    function syncAudioCapabilityControls() {
+      const offline = selectedConnectivityMode() === "offline";
+      const provider = cloudTtsProvider.value || "none";
+      const forceSilentTts = !offline && provider === "none";
+      for (const input of sttInputInputs) {
+        const visible = sttInputAvailable(input.value) && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionVisible(input, visible);
+      }
+      setSelectedSttInput(offline ? firstAvailableSttInput("backend") : firstAvailableSttInput(selectedSttInput()));
+
+      for (const input of ttsOutputInputs) {
+        const visible = ttsOutputAvailable(input.value)
+          && (!forceSilentTts || input.value === "silent")
+          && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionVisible(input, visible);
+      }
+      setSelectedTtsOutput(
+        offline ? (ttsOutputAvailable("backend") ? "backend" : "silent")
+          : (forceSilentTts ? "silent" : firstAvailableTtsOutput(selectedTtsOutput()))
+      );
+      syncAudioDeviceVisibility();
+    }
+
+    function selectedSttInput() {
+      const checked = sttInputInputs.find((input) => input.checked);
+      return checked ? checked.value : "both";
+    }
+
+    function setSelectedSttInput(value) {
+      const nextValue = ["both", "browser", "backend", "silent"].includes(value) ? value : "both";
+      for (const input of sttInputInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function syncSttInputControls() {
+      const offline = selectedConnectivityMode() === "offline";
+      if (offline) {
+        setSelectedSttInput(firstAvailableSttInput("backend"));
+      }
+      for (const input of sttInputInputs) {
+        const visible = sttInputAvailable(input.value) && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionVisible(input, visible);
+      }
+      if (!sttInputAvailable(selectedSttInput())) {
+        setSelectedSttInput(firstAvailableSttInput(selectedSttInput()));
+      }
+      syncAudioDeviceVisibility();
     }
 
 	    function syncTtsProviderControls() {
@@ -5152,12 +5271,18 @@ INDEX_HTML = """<!doctype html>
       const offline = connectivityMode === "offline";
 	      const provider = cloudTtsProvider.value || "none";
 	      const output = selectedTtsOutput();
-	      const forceSilent = provider === "none";
+	      const forceSilent = !offline && provider === "none";
       for (const element of cloudAudioControls) element.classList.toggle("hidden", offline);
       offlineAudioSummary.classList.toggle("hidden", !offline);
 	      for (const input of ttsOutputInputs) {
-	        input.disabled = offline || (forceSilent && input.value !== "silent");
-	        input.checked = offline ? input.value === "backend" : (forceSilent ? input.value === "silent" : input.value === output);
+        const visible = ttsOutputAvailable(input.value)
+          && (!forceSilent || input.value === "silent")
+          && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionVisible(input, visible);
+        input.disabled = input.disabled || offline || (forceSilent && input.value !== "silent");
+	        input.checked = offline
+          ? input.value === (ttsOutputAvailable("backend") ? "backend" : "silent")
+          : (forceSilent ? input.value === "silent" : input.value === firstAvailableTtsOutput(output));
 	      }
 	      elevenlabsVoiceField.classList.toggle("hidden", offline || provider !== "elevenlabs");
 	      openaiTtsVoiceField.classList.toggle("hidden", offline || provider !== "openai");
@@ -5166,7 +5291,7 @@ INDEX_HTML = """<!doctype html>
 	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
 	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
 	      openaiTtsSpeed.disabled = offline || provider === "none";
-	      ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
+      ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
       syncAudioDeviceVisibility();
 	    }
 
@@ -5215,9 +5340,11 @@ INDEX_HTML = """<!doctype html>
         if ([...cloudTtsProvider.options].some((option) => option.value === "none")) {
           cloudTtsProvider.value = "none";
         }
-        setSelectedTtsOutput("backend");
+        setSelectedTtsOutput(ttsOutputAvailable("backend") ? "backend" : "silent");
+        setSelectedSttInput(firstAvailableSttInput("backend"));
       }
       syncConnectivityLock();
+      syncSttInputControls();
       syncTtsProviderControls();
     }
 
@@ -5231,6 +5358,7 @@ INDEX_HTML = """<!doctype html>
       for (const input of ttsOutputInputs) {
         input.checked = input.value === nextValue;
       }
+      syncAudioDeviceVisibility();
     }
 
     function autoSizeComposer() {
@@ -5379,6 +5507,7 @@ INDEX_HTML = """<!doctype html>
       assistantSystemPromptEl.disabled = true;
       cloudTtsProvider.disabled = true;
       for (const input of ttsOutputInputs) input.disabled = true;
+      for (const input of sttInputInputs) input.disabled = true;
       elevenlabsVoice.disabled = true;
       openaiTtsVoice.disabled = true;
       openaiTtsSpeed.disabled = true;
@@ -5425,6 +5554,7 @@ INDEX_HTML = """<!doctype html>
           cloudTtsProvider.value = selectedCloudTtsProvider;
         }
         setSelectedTtsOutput(data.selected_tts_output || "silent");
+        setSelectedSttInput(data.selected_stt_input || "both");
 
         llmModel.replaceChildren();
         const selectedModel = preferredModel || data.selected_model || "";
@@ -5470,11 +5600,11 @@ INDEX_HTML = """<!doctype html>
 	        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
 	        syncOpenAiSpeedLabel();
         setVadControls(data);
-	        syncConnectivityControls();
 
         backendAudioInput.replaceChildren();
+        backendAudioCapabilities.input = Array.isArray(data.backend_audio_inputs) && data.backend_audio_inputs.length > 0;
         const selectedBackendAudioInput = data.selected_backend_audio_input_device || "";
-        backendAudioInput.appendChild(option("Default input", "", false, !selectedBackendAudioInput));
+        backendAudioInput.appendChild(option(backendAudioCapabilities.input ? "Default input" : "No backend input", "", !backendAudioCapabilities.input, !selectedBackendAudioInput));
         for (const device of data.backend_audio_inputs || []) {
           const label = device.default ? `${device.label || device.id} (default)` : (device.label || device.id);
           backendAudioInput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioInput));
@@ -5485,8 +5615,9 @@ INDEX_HTML = """<!doctype html>
         }
 
         backendAudioOutput.replaceChildren();
+        backendAudioCapabilities.output = Array.isArray(data.backend_audio_outputs) && data.backend_audio_outputs.length > 0;
         const selectedBackendAudioOutput = data.selected_backend_audio_output_device || "";
-        backendAudioOutput.appendChild(option("Default output", "", false, !selectedBackendAudioOutput));
+        backendAudioOutput.appendChild(option(backendAudioCapabilities.output ? "Default output" : "No backend output", "", !backendAudioCapabilities.output, !selectedBackendAudioOutput));
         for (const device of data.backend_audio_outputs || []) {
           const label = device.default ? `${device.label || device.id} (default)` : (device.label || device.id);
           backendAudioOutput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioOutput));
@@ -5495,6 +5626,7 @@ INDEX_HTML = """<!doctype html>
           backendAudioOutput.options[0].textContent = `Default output (current unavailable: ${selectedBackendAudioOutput})`;
           backendAudioOutput.value = "";
         }
+        syncConnectivityControls();
 
         thinkingSound.replaceChildren();
         const selectedThinkingSound = data.selected_thinking_sound_file || "";
@@ -5528,11 +5660,12 @@ INDEX_HTML = """<!doctype html>
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
+        for (const input of sttInputInputs) input.disabled = false;
         for (const control of vadControls) control.disabled = false;
         for (const button of vadPresetButtons) button.disabled = false;
 	        syncConnectivityControls();
-        backendAudioInput.disabled = backendAudioInput.options.length === 0;
-        backendAudioOutput.disabled = backendAudioOutput.options.length === 0;
+        backendAudioInput.disabled = !backendAudioCapabilities.input || backendAudioInput.options.length === 0;
+        backendAudioOutput.disabled = !backendAudioCapabilities.output || backendAudioOutput.options.length === 0;
         thinkingSound.disabled = thinkingSound.options.length === 0 || !thinkingSound.value;
         llmSave.disabled = !llmProvider.value;
         llmOptionsLoading = false;
@@ -5881,6 +6014,9 @@ INDEX_HTML = """<!doctype html>
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
     }
+    for (const input of sttInputInputs) {
+      input.addEventListener("change", syncSttInputControls);
+    }
     browserAudioInput.addEventListener("change", () => {
       selectedBrowserAudioInput = browserAudioInput.value;
       window.localStorage.setItem("browser-audio-input", selectedBrowserAudioInput);
@@ -5936,8 +6072,9 @@ INDEX_HTML = """<!doctype html>
 	      const sttPromptValue = sttPromptEl.value.trim();
 	      const systemPromptValue = assistantSystemPromptEl.value.trim();
       const connectivityModeValue = selectedConnectivityMode();
-	      const cloudTtsProviderValue = cloudTtsProvider.value;
+      const cloudTtsProviderValue = cloudTtsProvider.value;
       const ttsOutputValue = selectedTtsOutput();
+      const sttInputValue = selectedSttInput();
       const backendAudioInputDevice = backendAudioInput.value;
       const backendAudioOutputDevice = backendAudioOutput.value;
       const voiceId = elevenlabsVoice.value;
@@ -5967,6 +6104,7 @@ INDEX_HTML = """<!doctype html>
             connectivity_mode: connectivityModeValue,
             cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,
+            stt_input: sttInputValue,
             backend_audio_input_device: backendAudioInputDevice,
             backend_audio_output_device: backendAudioOutputDevice,
             wake_word: wakeWordValue,
