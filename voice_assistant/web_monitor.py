@@ -3445,6 +3445,7 @@ INDEX_HTML = """<!doctype html>
     let browserAudioTestAnalyser = null;
     let browserAudioTestAnimationId = null;
     let backendAudioTestTimer = null;
+    let backendAudioTestRequestActive = false;
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
     let mcpServersSignature = "";
@@ -4366,11 +4367,14 @@ INDEX_HTML = """<!doctype html>
     function stopBackendAudioTest() {
       window.clearInterval(backendAudioTestTimer);
       backendAudioTestTimer = null;
+      backendAudioTestRequestActive = false;
       backendAudioTest.textContent = "Test";
       setVuMeter(backendAudioMeter, 0);
     }
 
     async function pollBackendAudioLevel() {
+      if (backendAudioTestRequestActive) return;
+      backendAudioTestRequestActive = true;
       try {
         const response = await fetch("/api/backend-audio-level", {
           method: "POST",
@@ -4387,6 +4391,8 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         stopBackendAudioTest();
         metaEl.textContent = `backend audio test unavailable: ${error}`;
+      } finally {
+        backendAudioTestRequestActive = false;
       }
     }
 
@@ -4394,7 +4400,7 @@ INDEX_HTML = """<!doctype html>
       stopBrowserAudioTest();
       backendAudioTest.textContent = "Stop";
       pollBackendAudioLevel();
-      backendAudioTestTimer = window.setInterval(pollBackendAudioLevel, 220);
+      backendAudioTestTimer = window.setInterval(pollBackendAudioLevel, 450);
     }
 
     function toggleBackendAudioTest() {

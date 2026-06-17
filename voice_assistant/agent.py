@@ -512,6 +512,32 @@ def resolve_pyaudio_device_index(
         return None, "unavailable", f"default {direction} unavailable: {e}"
 
 
+def concise_pyaudio_error(error: Exception) -> str:
+    """Return a user-facing PyAudio/ALSA error without noisy native trace text."""
+    code = getattr(error, "errno", None)
+    if code is None and getattr(error, "args", None):
+        first_arg = error.args[0]
+        if isinstance(first_arg, int):
+            code = first_arg
+    raw = str(error).replace("\n", " ").strip()
+    known = {
+        -9985: "device unavailable or busy",
+        -9996: "invalid input device",
+        -9997: "invalid sample rate",
+        -9998: "invalid channel count",
+        -9988: "stream closed",
+    }
+    if code in known:
+        return f"{known[code]} ({code})"
+    return raw or error.__class__.__name__
+
+
+def pyaudio_candidate_rates(default_rate: int) -> list[int]:
+    rates = [default_rate, 48000, 44100, 32000, 24000, 16000, 8000]
+    seen = set()
+    return [rate for rate in rates if rate > 0 and not (rate in seen or seen.add(rate))]
+
+
 def backend_audio_input_level(selected_device: str | None = None) -> dict[str, Any]:
     """Return a short RMS/peak level sample for a backend PyAudio input device."""
     audio = None
@@ -527,27 +553,54 @@ def backend_audio_input_level(selected_device: str | None = None) -> dict[str, A
         if status in {"invalid", "unavailable"}:
             return {"ok": False, "level": 0.0, "peak": 0.0, "status": status, "detail": detail}
 
+        frames_per_buffer = 512
         try:
             device_info = (
                 audio.get_device_info_by_index(input_device_index)
                 if input_device_index is not None
                 else audio.get_default_input_device_info()
             )
-            sample_rate = int(float(device_info.get("defaultSampleRate") or 16000))
+            default_rate = int(float(device_info.get("defaultSampleRate") or 16000))
+            max_channels = max(1, int(device_info.get("maxInputChannels", 1) or 1))
         except Exception:
-            sample_rate = 16000
+            default_rate = 16000
+            max_channels = 1
 
-        frames_per_buffer = 512
+        channel_candidates = [1]
+        if max_channels >= 2:
+            channel_candidates.append(2)
+        last_error: Exception | None = None
+        opened_channels = 1
+        opened_rate = default_rate
+        for channels in channel_candidates:
+            for sample_rate in pyaudio_candidate_rates(default_rate):
+                try:
+                    with suppress_native_stderr():
+                        stream = audio.open(
+                            format=pyaudio.paInt16,
+                            channels=channels,
+                            rate=sample_rate,
+                            input=True,
+                            input_device_index=input_device_index,
+                            frames_per_buffer=frames_per_buffer,
+                        )
+                    opened_channels = channels
+                    opened_rate = sample_rate
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    stream = None
+            if stream is not None:
+                break
+
+        if stream is None:
+            detail_suffix = f"{detail}; tried rates {', '.join(str(rate) for rate in pyaudio_candidate_rates(default_rate))}"
+            if last_error is not None:
+                detail_suffix = f"{detail_suffix}; {concise_pyaudio_error(last_error)}"
+            return {"ok": False, "level": 0.0, "peak": 0.0, "status": "unavailable", "detail": detail_suffix}
+
         chunks = []
-        with suppress_native_stderr():
-            stream = audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=sample_rate,
-                input=True,
-                input_device_index=input_device_index,
-                frames_per_buffer=frames_per_buffer,
-            )
         for _ in range(4):
             chunks.append(stream.read(frames_per_buffer, exception_on_overflow=False))
 
@@ -563,10 +616,10 @@ def backend_audio_input_level(selected_device: str | None = None) -> dict[str, A
             "level": max(0.0, min(1.0, rms * 3.0)),
             "peak": max(0.0, min(1.0, peak)),
             "status": status,
-            "detail": detail,
+            "detail": f"{detail}; opened {opened_channels}ch/{opened_rate}Hz",
         }
     except Exception as e:
-        return {"ok": False, "level": 0.0, "peak": 0.0, "status": "error", "detail": str(e)}
+        return {"ok": False, "level": 0.0, "peak": 0.0, "status": "error", "detail": concise_pyaudio_error(e)}
     finally:
         if stream is not None:
             try:
