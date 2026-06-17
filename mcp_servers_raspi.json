@@ -23,6 +23,7 @@
       ],
       "env": {
         "MCP_TRANSPORT": "stdio",
+        "DOTENV_CONFIG_QUIET": "true",
         "QLC_HOST": "127.0.0.1",
         "QLC_OSC_INPUT_PORT": "7700",
         "QLC_OSC_OUTPUT_PORT": "9000",
