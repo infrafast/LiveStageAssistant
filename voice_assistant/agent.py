@@ -543,6 +543,88 @@ def pyaudio_candidate_rates(default_rate: int) -> list[int]:
     return [rate for rate in rates if rate > 0 and not (rate in seen or seen.add(rate))]
 
 
+def resolve_backend_input_format(
+    audio: pyaudio.PyAudio,
+    input_device_index: int | None,
+    audio_format: int,
+) -> dict[str, Any]:
+    """Find an input channel/rate combination that PyAudio can actually open."""
+    try:
+        device_info = (
+            audio.get_device_info_by_index(input_device_index)
+            if input_device_index is not None
+            else audio.get_default_input_device_info()
+        )
+        default_rate = int(float(device_info.get("defaultSampleRate") or 16000))
+        max_channels = max(1, int(device_info.get("maxInputChannels", 1) or 1))
+    except Exception:
+        default_rate = 16000
+        max_channels = 1
+
+    channel_candidates = [1]
+    if max_channels >= 2:
+        channel_candidates.append(2)
+
+    last_error: Exception | None = None
+    for channels in channel_candidates:
+        for sample_rate in pyaudio_candidate_rates(default_rate):
+            stream = None
+            try:
+                with suppress_native_stderr():
+                    stream = audio.open(
+                        format=audio_format,
+                        channels=channels,
+                        rate=sample_rate,
+                        input=True,
+                        input_device_index=input_device_index,
+                        frames_per_buffer=max(512, int(sample_rate * 0.064)),
+                    )
+                return {
+                    "ok": True,
+                    "channels": channels,
+                    "rate": sample_rate,
+                    "chunk": max(512, int(sample_rate * 0.064)),
+                    "detail": f"{channels}ch/{sample_rate}Hz",
+                }
+            except Exception as e:
+                last_error = e
+            finally:
+                if stream is not None:
+                    try:
+                        stream.stop_stream()
+                        stream.close()
+                    except Exception:
+                        pass
+
+    detail = f"tried rates {', '.join(str(rate) for rate in pyaudio_candidate_rates(default_rate))}"
+    if last_error is not None:
+        detail = f"{detail}; {concise_pyaudio_error(last_error)}"
+    return {"ok": False, "channels": 1, "rate": 16000, "chunk": 1024, "detail": detail}
+
+
+def pcm_to_vad_16k_mono(audio_data: bytes, *, source_rate: int, channels: int) -> bytes:
+    """Convert int16 PCM to mono 16 kHz bytes for Silero VAD."""
+    if source_rate == 16000 and channels == 1:
+        return audio_data
+    samples = np.frombuffer(audio_data, dtype=np.int16)
+    if samples.size == 0:
+        return b""
+    if channels > 1:
+        usable = samples[: samples.size - (samples.size % channels)]
+        if usable.size == 0:
+            return b""
+        samples_float = usable.reshape(-1, channels).mean(axis=1).astype(np.float32)
+    else:
+        samples_float = samples.astype(np.float32)
+    if source_rate != 16000 and samples_float.size > 1:
+        target_size = max(1, int(round(samples_float.size * 16000 / source_rate)))
+        source_positions = np.linspace(0, samples_float.size - 1, num=samples_float.size)
+        target_positions = np.linspace(0, samples_float.size - 1, num=target_size)
+        samples_float = np.interp(target_positions, source_positions, samples_float).astype(np.float32)
+    clipped = np.clip(samples_float, -32768, 32767).astype(np.int16)
+    return clipped.tobytes()
+
+
 def backend_audio_input_level(selected_device: str | None = None) -> dict[str, Any]:
     """Return a short RMS/peak level sample for a backend PyAudio input device."""
     audio = None
@@ -1233,6 +1315,20 @@ class VoiceAssistant:
             backend_audio_output_device,
             input_device=False,
         )
+        if self.audio_input_device_status not in {"invalid", "unavailable"}:
+            input_format = resolve_backend_input_format(
+                self.audio,
+                self.audio_input_device_index,
+                self.audio_format,
+            )
+            if input_format["ok"]:
+                self.channels = int(input_format["channels"])
+                self.rate = int(input_format["rate"])
+                self.chunk = int(input_format["chunk"])
+                self.audio_input_device_detail = f"{self.audio_input_device_detail}; {input_format['detail']}"
+            else:
+                self.audio_input_device_status = "unavailable"
+                self.audio_input_device_detail = f"{self.audio_input_device_detail}; {input_format['detail']}"
         if self.audio_input_device_status == "invalid":
             print(f"Backend audio input fallback: {self.audio_input_device_detail}")
         if self.audio_output_device_status == "invalid":
@@ -2188,7 +2284,8 @@ class VoiceAssistant:
                     break
 
                 data = stream.read(self.chunk, exception_on_overflow=False)
-                probabilities = self.vad.process_pcm(data)
+                vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
+                probabilities = self.vad.process_pcm(vad_data)
                 speech_probability = max(probabilities) if probabilities else 0.0
                 chunk_ms = self.vad.chunk_ms * max(1, len(probabilities))
 
@@ -2334,7 +2431,8 @@ class VoiceAssistant:
             while len(frames) < max_frames and not stop_event.is_set():
                 data = stream.read(self.chunk, exception_on_overflow=False)
                 frames.append(data)
-                probabilities = self.vad.process_pcm(data)
+                vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
+                probabilities = self.vad.process_pcm(vad_data)
                 speech_probability = max(probabilities) if probabilities else 0.0
 
                 if speech_probability >= self.vad.threshold:

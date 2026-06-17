@@ -157,6 +157,8 @@ Browser audio device selection is per browser and saved in browser `localStorage
 
 The web Config -> STT/TTS section also exposes a nested **Voice Activity Detection (VAD)** collapsible for the bundled offline Silero VAD used by both browser and backend microphone STT. It writes the active profile's `VAD_*` speech threshold, end threshold, minimum speech, silence, padding, and maximum utterance settings; hover a slider label to see the exact `.env` key.
 
+Backend microphone capture auto-selects a channel/rate combination that PyAudio can open, then resamples internally to 16 kHz for Silero VAD. This avoids Raspberry Pi or NAS ALSA devices that list as inputs but reject a fixed 16 kHz stream.
+
 `SESSION_CONTEXT_SIZE` controls how much of the active `.context.json` session summary is reinjected for continuity. The assistant stores both a deterministic `summary` transcript and, when an LLM is available at startup or session switch, a compact `llm_summary` generated from it. In the web chat, restored bubbles highlighted in green are the messages that fit in the current context window; moving the **Session Context** range updates that preview immediately. In the session sidebar, hover a session on desktop to preview its `llm_summary`, or tap the small `i` button on touch/mobile when a summary exists. Use `0` to disable context injection.
 
 Once the monitor path is stable, try microphone/speaker passthrough if needed.
