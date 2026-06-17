@@ -5354,10 +5354,14 @@ INDEX_HTML = """<!doctype html>
       backendAudioTest.disabled = backendAudioInputField.classList.contains("hidden") || !backendAudioCapabilities.input;
     }
 
-    function setSegmentOptionVisible(input, visible) {
+    function setSegmentOptionEnabled(input, enabled, reason = "") {
       const label = input.closest("label");
-      if (label) label.classList.toggle("hidden", !visible);
-      input.disabled = !visible;
+      if (label) {
+        label.classList.remove("hidden");
+        label.title = enabled ? "" : reason;
+      }
+      input.disabled = !enabled;
+      input.title = enabled ? "" : reason;
     }
 
     function sttInputAvailable(value) {
@@ -5366,6 +5370,16 @@ INDEX_HTML = """<!doctype html>
       if (value === "backend") return backendAudioCapabilities.input;
       if (value === "both") return browserAudioCapabilities.input && backendAudioCapabilities.input;
       return false;
+    }
+
+    function sttInputUnavailableReason(value) {
+      const offline = selectedConnectivityMode() === "offline";
+      if (offline && value === "browser") return "Le mode offline utilise uniquement l'entrée micro backend.";
+      if (offline && value === "both") return "Le mode offline ne combine pas micro navigateur et micro backend.";
+      if (value === "browser") return "Aucun micro navigateur n'est disponible. Autorise le micro puis clique Refresh, ou ouvre l'app en HTTPS/localhost.";
+      if (value === "backend") return "Aucune entrée audio backend n'est détectée par PyAudio.";
+      if (value === "both") return "Both nécessite à la fois un micro navigateur et une entrée audio backend.";
+      return "";
     }
 
     function firstAvailableSttInput(preferred) {
@@ -5383,6 +5397,16 @@ INDEX_HTML = """<!doctype html>
       return false;
     }
 
+    function ttsOutputUnavailableReason(value) {
+      const offline = selectedConnectivityMode() === "offline";
+      const provider = cloudTtsProvider.value || "none";
+      if (offline && value === "browser") return "Le mode offline force la sortie locale backend ou Silent.";
+      if (!offline && provider === "none" && value !== "silent") return "Sélectionne un fournisseur TTS cloud pour activer cette sortie.";
+      if (value === "backend") return "Aucune sortie audio backend n'est détectée par PyAudio.";
+      if (value === "browser") return "Le navigateur ne permet pas la lecture audio.";
+      return "";
+    }
+
     function firstAvailableTtsOutput(preferred) {
       if (ttsOutputAvailable(preferred)) return preferred;
       const fallbacks = preferred === "browser"
@@ -5396,16 +5420,16 @@ INDEX_HTML = """<!doctype html>
       const provider = cloudTtsProvider.value || "none";
       const forceSilentTts = !offline && provider === "none";
       for (const input of sttInputInputs) {
-        const visible = sttInputAvailable(input.value) && (!offline || input.value === "backend" || input.value === "silent");
-        setSegmentOptionVisible(input, visible);
+        const enabled = sttInputAvailable(input.value) && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionEnabled(input, enabled, sttInputUnavailableReason(input.value));
       }
       setSelectedSttInput(offline ? firstAvailableSttInput("backend") : firstAvailableSttInput(selectedSttInput()));
 
       for (const input of ttsOutputInputs) {
-        const visible = ttsOutputAvailable(input.value)
+        const enabled = ttsOutputAvailable(input.value)
           && (!forceSilentTts || input.value === "silent")
           && (!offline || input.value === "backend" || input.value === "silent");
-        setSegmentOptionVisible(input, visible);
+        setSegmentOptionEnabled(input, enabled, ttsOutputUnavailableReason(input.value));
       }
       setSelectedTtsOutput(
         offline ? (ttsOutputAvailable("backend") ? "backend" : "silent")
@@ -5432,8 +5456,8 @@ INDEX_HTML = """<!doctype html>
         setSelectedSttInput(firstAvailableSttInput("backend"));
       }
       for (const input of sttInputInputs) {
-        const visible = sttInputAvailable(input.value) && (!offline || input.value === "backend" || input.value === "silent");
-        setSegmentOptionVisible(input, visible);
+        const enabled = sttInputAvailable(input.value) && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionEnabled(input, enabled, sttInputUnavailableReason(input.value));
       }
       if (!sttInputAvailable(selectedSttInput())) {
         setSelectedSttInput(firstAvailableSttInput(selectedSttInput()));
@@ -5450,11 +5474,10 @@ INDEX_HTML = """<!doctype html>
       for (const element of cloudAudioControls) element.classList.toggle("hidden", offline);
       offlineAudioSummary.classList.toggle("hidden", !offline);
 	      for (const input of ttsOutputInputs) {
-        const visible = ttsOutputAvailable(input.value)
+        const enabled = ttsOutputAvailable(input.value)
           && (!forceSilent || input.value === "silent")
           && (!offline || input.value === "backend" || input.value === "silent");
-        setSegmentOptionVisible(input, visible);
-        input.disabled = input.disabled || offline || (forceSilent && input.value !== "silent");
+        setSegmentOptionEnabled(input, enabled, ttsOutputUnavailableReason(input.value));
 	        input.checked = offline
           ? input.value === (ttsOutputAvailable("backend") ? "backend" : "silent")
           : (forceSilent ? input.value === "silent" : input.value === firstAvailableTtsOutput(output));
