@@ -1,7 +1,9 @@
 # Live Stage Assistant Raspberry Pi stdio service
 
 run locally to test:
+```bash
 ASSISTANT_AUTO_ENV_DIR=./raspi_service_pack_stdio .venv/bin/python voice_assistant/agent.py --env-file auto
+```
 
 This pack installs Live Stage Assistant as a Raspberry Pi `systemd` service using the local stdio MCP profile.
 
