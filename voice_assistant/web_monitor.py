@@ -1039,6 +1039,12 @@ class WebMonitor:
                         self.send_error(400, "OpenAI TTS speed must be a number")
                         return
                     try:
+                        web_tts_volume = float(payload.get("web_tts_volume") if payload.get("web_tts_volume") is not None else 1.0)
+                        backend_tts_volume = float(payload.get("backend_tts_volume") if payload.get("backend_tts_volume") is not None else 1.0)
+                    except (TypeError, ValueError):
+                        self.send_error(400, "TTS volume must be a number")
+                        return
+                    try:
                         vad_speech_threshold = float(payload.get("vad_speech_threshold") or 0.5)
                         vad_negative_threshold = float(payload.get("vad_negative_threshold") or 0.35)
                         vad_min_speech_ms = int(payload.get("vad_min_speech_ms") or 120)
@@ -1069,6 +1075,8 @@ class WebMonitor:
                             thinking_sound_file,
                             openai_tts_voice,
                             openai_tts_speed,
+                            web_tts_volume,
+                            backend_tts_volume,
                             vad_speech_threshold,
                             vad_negative_threshold,
                             vad_min_speech_ms,
@@ -3018,6 +3026,14 @@ INDEX_HTML = """<!doctype html>
 	                <label for="openai-tts-speed">TTS Speed <span id="openai-tts-speed-label">1.0x</span></label>
 	                <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
 	              </div>
+	              <div class="field" id="web-tts-volume-field">
+	                <label for="web-tts-volume" title="WEB_TTS_VOLUME">Volume TTS navigateur <span id="web-tts-volume-label">100%</span></label>
+	                <input id="web-tts-volume" type="range" min="0" max="1" step="0.05" value="1">
+	              </div>
+	              <div class="field" id="backend-tts-volume-field">
+	                <label for="backend-tts-volume" title="BACKEND_TTS_VOLUME">Volume TTS backend <span id="backend-tts-volume-label">100%</span></label>
+	                <input id="backend-tts-volume" type="range" min="0" max="2" step="0.05" value="1">
+	              </div>
 	              <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local pyttsx3</div>
               <div class="field" id="elevenlabs-voice-field">
                 <label for="elevenlabs-voice">ElevenLabs Voice</label>
@@ -3309,6 +3325,12 @@ INDEX_HTML = """<!doctype html>
     const ttsSpeedField = document.querySelector("#tts-speed-field");
     const openaiTtsSpeed = document.querySelector("#openai-tts-speed");
     const openaiTtsSpeedLabel = document.querySelector("#openai-tts-speed-label");
+    const webTtsVolumeField = document.querySelector("#web-tts-volume-field");
+    const webTtsVolume = document.querySelector("#web-tts-volume");
+    const webTtsVolumeLabel = document.querySelector("#web-tts-volume-label");
+    const backendTtsVolumeField = document.querySelector("#backend-tts-volume-field");
+    const backendTtsVolume = document.querySelector("#backend-tts-volume");
+    const backendTtsVolumeLabel = document.querySelector("#backend-tts-volume-label");
     const ttsTestField = document.querySelector("#tts-test-field");
     const ttsTest = document.querySelector("#tts-test");
     const vadSpeechThreshold = document.querySelector("#vad-speech-threshold");
@@ -4510,15 +4532,18 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function playWebTtsBuffer(audioBase64) {
+    async function playWebTtsBuffer(audioBase64, volume = null) {
       if (!webTtsAudioContext || webTtsAudioContext.state !== "running") return false;
       try {
         const arrayBuffer = base64ToArrayBuffer(audioBase64);
         const audioBuffer = await webTtsAudioContext.decodeAudioData(arrayBuffer.slice(0));
         const source = webTtsAudioContext.createBufferSource();
+        const gain = webTtsAudioContext.createGain();
         source.buffer = audioBuffer;
         source.playbackRate.value = 1;
-        source.connect(webTtsAudioContext.destination);
+        gain.gain.value = Math.max(0, Math.min(1, Number(volume ?? webAudio.tts_volume ?? 1)));
+        source.connect(gain);
+        gain.connect(webTtsAudioContext.destination);
         currentWebTtsSource = source;
         await new Promise((resolve, reject) => {
           source.addEventListener("ended", resolve, { once: true });
@@ -4535,13 +4560,14 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    async function playWebTtsElement(audioBase64, mimeType) {
+    async function playWebTtsElement(audioBase64, mimeType, volume = null) {
       const arrayBuffer = base64ToArrayBuffer(audioBase64);
       const blob = new Blob([arrayBuffer], { type: mimeType || "audio/mpeg" });
       const objectUrl = URL.createObjectURL(blob);
       const audio = new Audio(objectUrl);
       currentWebTtsAudio = audio;
       audio.playbackRate = Math.max(0.6, Math.min(1.8, Number(webAudio.tts_speed || 1)));
+      audio.volume = Math.max(0, Math.min(1, Number(volume ?? webAudio.tts_volume ?? 1)));
       audio.preservesPitch = true;
       audio.mozPreservesPitch = true;
       audio.webkitPreservesPitch = true;
@@ -5050,9 +5076,9 @@ INDEX_HTML = """<!doctype html>
         const data = await response.json();
         if (!data.audio_base64 || !data.mime_type) return;
         try {
-          await playWebTtsElement(data.audio_base64, data.mime_type);
+          await playWebTtsElement(data.audio_base64, data.mime_type, options.volume);
         } catch (audioElementError) {
-          const playedWithContext = await playWebTtsBuffer(data.audio_base64);
+          const playedWithContext = await playWebTtsBuffer(data.audio_base64, options.volume);
           if (!playedWithContext) throw audioElementError;
         }
       } catch (error) {
@@ -5183,6 +5209,8 @@ INDEX_HTML = """<!doctype html>
         thinking_sound_file: thinkingSound.value || "",
         openai_tts_voice: openaiTtsVoice.value || "",
         openai_tts_speed: Number(openaiTtsSpeed.value || 1),
+        web_tts_volume: Number(webTtsVolume.value || 1),
+        backend_tts_volume: Number(backendTtsVolume.value || 1),
         vad_speech_threshold: Number(vadSpeechThreshold.value || 0.5),
         vad_negative_threshold: Number(vadNegativeThreshold.value || 0.35),
         vad_min_speech_ms: Number(vadMinSpeechMs.value || 120),
@@ -5292,6 +5320,11 @@ INDEX_HTML = """<!doctype html>
       openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
     }
 
+    function syncTtsVolumeLabels() {
+      webTtsVolumeLabel.textContent = `${Math.round(Number(webTtsVolume.value || 1) * 100)}%`;
+      backendTtsVolumeLabel.textContent = `${Math.round(Number(backendTtsVolume.value || 1) * 100)}%`;
+    }
+
     function syncVadLabels() {
       vadSpeechThresholdLabel.textContent = Number(vadSpeechThreshold.value || 0.5).toFixed(2);
       vadNegativeThresholdLabel.textContent = Number(vadNegativeThreshold.value || 0.35).toFixed(2);
@@ -5329,6 +5362,7 @@ INDEX_HTML = """<!doctype html>
       if (!["openai", "elevenlabs"].includes(provider)) return;
       const voice = provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value;
       const speed = Number(openaiTtsSpeed.value || 1);
+      const volume = Number(webTtsVolume.value || 1);
       ttsTest.disabled = true;
       llmMessage.textContent = "Testing voice...";
       try {
@@ -5337,7 +5371,8 @@ INDEX_HTML = """<!doctype html>
           provider,
           model: provider === "openai" ? "gpt-4o-mini-tts" : "",
           voice,
-          speed
+          speed,
+          volume
         });
         llmMessage.textContent = "Voice test played.";
       } catch (error) {
@@ -5495,6 +5530,10 @@ INDEX_HTML = """<!doctype html>
 	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
 	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
 	      openaiTtsSpeed.disabled = offline || provider === "none";
+      webTtsVolume.disabled = offline || provider === "none" || selectedTtsOutput() !== "browser";
+      backendTtsVolume.disabled = selectedTtsOutput() !== "backend";
+      webTtsVolumeField.title = webTtsVolume.disabled ? "WEB_TTS_VOLUME - actif seulement avec TTS Output Browser" : "WEB_TTS_VOLUME";
+      backendTtsVolumeField.title = backendTtsVolume.disabled ? "BACKEND_TTS_VOLUME - actif seulement avec TTS Output Backend" : "BACKEND_TTS_VOLUME";
       ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
       syncAudioDeviceVisibility();
 	    }
@@ -5715,6 +5754,8 @@ INDEX_HTML = """<!doctype html>
       elevenlabsVoice.disabled = true;
       openaiTtsVoice.disabled = true;
       openaiTtsSpeed.disabled = true;
+      webTtsVolume.disabled = true;
+      backendTtsVolume.disabled = true;
       ttsTest.disabled = true;
       for (const control of vadControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
@@ -5804,7 +5845,10 @@ INDEX_HTML = """<!doctype html>
           }
         }
 	        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
+	        webTtsVolume.value = String(data.selected_web_tts_volume ?? 1.0);
+	        backendTtsVolume.value = String(data.selected_backend_tts_volume ?? 1.0);
 	        syncOpenAiSpeedLabel();
+        syncTtsVolumeLabels();
         setVadControls(data);
 
         backendAudioInput.replaceChildren();
@@ -6293,6 +6337,8 @@ INDEX_HTML = """<!doctype html>
       const thinkingSoundFile = thinkingSound.value;
       const openAiTtsVoiceValue = openaiTtsVoice.value;
       const openAiTtsSpeedValue = Number(openaiTtsSpeed.value || 1);
+      const webTtsVolumeValue = Number(webTtsVolume.value || 1);
+      const backendTtsVolumeValue = Number(backendTtsVolume.value || 1);
       const vadSpeechThresholdValue = Number(vadSpeechThreshold.value || 0.5);
       const vadNegativeThresholdValue = Number(vadNegativeThreshold.value || 0.35);
       const vadMinSpeechMsValue = Number(vadMinSpeechMs.value || 120);
@@ -6326,6 +6372,8 @@ INDEX_HTML = """<!doctype html>
             thinking_sound_file: thinkingSoundFile,
             openai_tts_voice: openAiTtsVoiceValue,
             openai_tts_speed: openAiTtsSpeedValue,
+            web_tts_volume: webTtsVolumeValue,
+            backend_tts_volume: backendTtsVolumeValue,
             vad_speech_threshold: vadSpeechThresholdValue,
             vad_negative_threshold: vadNegativeThresholdValue,
             vad_min_speech_ms: vadMinSpeechMsValue,
@@ -6350,6 +6398,8 @@ INDEX_HTML = """<!doctype html>
     });
 
     openaiTtsSpeed.addEventListener("input", syncOpenAiSpeedLabel);
+    webTtsVolume.addEventListener("input", syncTtsVolumeLabels);
+    backendTtsVolume.addEventListener("input", syncTtsVolumeLabels);
     for (const control of vadControls) {
       control.addEventListener("input", syncVadLabels);
     }

@@ -859,6 +859,16 @@ def decode_audio_file_to_pcm_bytes(
     return process.stdout
 
 
+def apply_pcm_volume(pcm_bytes: bytes, volume: float) -> bytes:
+    """Apply software gain to signed 16-bit PCM bytes."""
+    volume = max(0.0, min(2.0, float(volume if volume is not None else 1.0)))
+    if volume == 1.0 or not pcm_bytes:
+        return pcm_bytes
+    samples = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+    samples *= volume
+    return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+
+
 def play_pcm_bytes(
     audio: pyaudio.PyAudio,
     pcm_bytes: bytes,
@@ -867,8 +877,10 @@ def play_pcm_bytes(
     channels: int,
     output_device_index: int | None = None,
     stop_event: threading.Event | None = None,
+    volume: float = 1.0,
 ) -> None:
     """Play signed 16-bit PCM through PyAudio, optionally using a configured output device."""
+    pcm_bytes = apply_pcm_volume(pcm_bytes, volume)
     stream = None
     try:
         with suppress_native_stderr():
@@ -899,6 +911,7 @@ def play_mp3_bytes(
     *,
     audio: pyaudio.PyAudio | None = None,
     output_device_index: int | None = None,
+    volume: float = 1.0,
 ) -> None:
     """Play MP3 bytes locally, preferring backend-controlled PyAudio playback."""
     if audio is not None:
@@ -912,6 +925,7 @@ def play_mp3_bytes(
             channels=DEFAULT_BACKEND_MP3_CHANNELS,
             output_device_index=output_device_index,
             stop_event=TTS_STOP_EVENT,
+            volume=volume,
         )
         return
 
@@ -925,7 +939,16 @@ def play_mp3_bytes(
             temp_file.write(audio_bytes)
             temp_path = temp_file.name
         TTS_PLAYBACK_PROCESS = subprocess.Popen(
-            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", temp_path],
+            [
+                "ffplay",
+                "-nodisp",
+                "-autoexit",
+                "-loglevel",
+                "quiet",
+                "-volume",
+                str(int(max(0.0, min(2.0, float(volume or 1.0))) * 100)),
+                temp_path,
+            ],
         )
         while TTS_PLAYBACK_PROCESS.poll() is None:
             if TTS_STOP_EVENT.is_set():
@@ -1206,6 +1229,7 @@ class VoiceAssistant:
         vad_max_speech_seconds: float = 8.0,
         backend_stt_enabled: bool = True,
         tts_speed: float = 1.0,
+        backend_tts_volume: float = 1.0,
         wake_words: list[str] | None = None,
         mcp_config: dict | None = None,
         mcp_load_server_prompt: bool = False,
@@ -1253,6 +1277,7 @@ class VoiceAssistant:
             vad_max_speech_seconds: Hard cap for one accepted utterance
             backend_stt_enabled: Whether the backend microphone should listen for normal commands
             tts_speed: Cloud TTS speed for backend/non-web speech
+            backend_tts_volume: Software gain for backend TTS playback, 0.0 to 2.0
             wake_words: Optional global wake word variants used to gate command processing
             mcp_config: Optional MCP server configuration dict
             mcp_load_server_prompt: Whether to load extra system instructions from an MCP server
@@ -1289,6 +1314,7 @@ class VoiceAssistant:
             max_speech_seconds=vad_max_speech_seconds,
         )
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
+        self.backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
@@ -2721,6 +2747,7 @@ class VoiceAssistant:
                             audio,
                             audio=self.audio,
                             output_device_index=self.audio_output_device_index,
+                            volume=self.backend_tts_volume,
                         )
                     return True
                 except Exception as e:
@@ -2745,6 +2772,7 @@ class VoiceAssistant:
                             audio_bytes,
                             audio=self.audio,
                             output_device_index=self.audio_output_device_index,
+                            volume=self.backend_tts_volume,
                         )
                     return True
                 except Exception as e:
@@ -2827,6 +2855,7 @@ class VoiceAssistant:
             channels=DEFAULT_BACKEND_MP3_CHANNELS,
             output_device_index=self.audio_output_device_index,
             stop_event=stop_event,
+            volume=self.backend_tts_volume,
         )
 
     def play_wav_file(self, wav_path: str | Path, *, stop_event: threading.Event | None = None) -> None:
@@ -2852,6 +2881,7 @@ class VoiceAssistant:
                     data = wav_file.readframes(1024)
                     if not data:
                         break
+                    data = apply_pcm_volume(data, self.backend_tts_volume)
                     stream.write(data)
             finally:
                 if stream:
@@ -3869,6 +3899,8 @@ async def main():
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
         current_openai_tts_speed = env_float_from_values(values, "WEB_TTS_SPEED", 1.0)
+        current_web_tts_volume = min(1.0, env_float_from_values(values, "WEB_TTS_VOLUME", 1.0))
+        current_backend_tts_volume = env_float_from_values(values, "BACKEND_TTS_VOLUME", 1.0)
         current_vad_speech_threshold = env_float_from_values(values, "VAD_SPEECH_THRESHOLD", 0.5)
         current_vad_negative_threshold = env_float_from_values(values, "VAD_NEGATIVE_THRESHOLD", 0.35)
         current_vad_min_speech_ms = env_int_from_values(values, "VAD_MIN_SPEECH_MS", 120)
@@ -3929,6 +3961,8 @@ async def main():
             "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
             "selected_openai_tts_voice": current_openai_tts_voice,
             "selected_openai_tts_speed": current_openai_tts_speed,
+            "selected_web_tts_volume": current_web_tts_volume,
+            "selected_backend_tts_volume": current_backend_tts_volume,
             "selected_vad_speech_threshold": current_vad_speech_threshold,
             "selected_vad_negative_threshold": current_vad_negative_threshold,
             "selected_vad_min_speech_ms": current_vad_min_speech_ms,
@@ -3964,6 +3998,8 @@ async def main():
         thinking_sound_file: str,
         openai_tts_voice: str,
         openai_tts_speed: float,
+        web_tts_volume: float,
+        backend_tts_volume: float,
         vad_speech_threshold: float,
         vad_negative_threshold: float,
         vad_min_speech_ms: int,
@@ -3992,6 +4028,8 @@ async def main():
         thinking_sound_file = thinking_sound_file.strip()
         openai_tts_voice = (openai_tts_voice or "").strip()
         openai_tts_speed = max(0.6, min(1.8, float(openai_tts_speed or 1.0)))
+        web_tts_volume = max(0.0, min(1.0, float(web_tts_volume if web_tts_volume is not None else 1.0)))
+        backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
         vad_speech_threshold = max(0.05, min(0.95, float(vad_speech_threshold or 0.5)))
         vad_negative_threshold = max(0.01, min(0.95, float(vad_negative_threshold or 0.35)))
         if vad_negative_threshold >= vad_speech_threshold:
@@ -4156,6 +4194,8 @@ async def main():
                 "THINKING_SOUND_FILE": thinking_sound_file,
                 "WEB_TTS_VOICE": openai_tts_voice,
                 "WEB_TTS_SPEED": f"{openai_tts_speed:.2f}",
+                "WEB_TTS_VOLUME": f"{web_tts_volume:.2f}",
+                "BACKEND_TTS_VOLUME": f"{backend_tts_volume:.2f}",
             },
             remove_keys={"WEB_AUDIO_ENABLED"},
         )
@@ -4202,6 +4242,8 @@ async def main():
             "thinking_sound_file": thinking_sound_file,
             "openai_tts_voice": openai_tts_voice,
             "openai_tts_speed": openai_tts_speed,
+            "web_tts_volume": web_tts_volume,
+            "backend_tts_volume": backend_tts_volume,
             "vad_speech_threshold": vad_speech_threshold,
             "vad_negative_threshold": vad_negative_threshold,
             "vad_min_speech_ms": vad_min_speech_ms,
@@ -4278,6 +4320,8 @@ async def main():
         web_tts_voice = os.getenv("WEB_TTS_VOICE", DEFAULT_OPENAI_TTS_VOICE).strip()
         web_tts_model = os.getenv("WEB_TTS_MODEL", DEFAULT_OPENAI_TTS_MODEL).strip()
         web_tts_speed = max(0.6, min(1.8, env_float("WEB_TTS_SPEED", 1.0)))
+        web_tts_volume = max(0.0, min(1.0, env_float("WEB_TTS_VOLUME", 1.0)))
+        backend_tts_volume = max(0.0, min(2.0, env_float("BACKEND_TTS_VOLUME", 1.0)))
         web_stt_model = os.getenv("WEB_STT_MODEL", "whisper-1").strip()
         wake_words = parse_wake_words(env_optional("WAKE_WORD"))
         system_prompt = env_optional("ASSISTANT_SYSTEM_PROMPT")
@@ -4377,6 +4421,7 @@ async def main():
             "tts_provider": web_tts_provider if web_audio_enabled and not backend_tts_active else "none",
             "cloud_tts_provider": cloud_tts_provider,
             "tts_speed": web_tts_speed,
+            "tts_volume": web_tts_volume,
             "vad_model_url": "/static/vendor/silero-vad/silero_vad_v6.onnx",
             "vad_ort_url": "/static/vendor/onnxruntime-web/ort.wasm.min.mjs",
             "vad_ort_wasm_path": "/static/vendor/onnxruntime-web/",
@@ -4456,6 +4501,7 @@ async def main():
             vad_max_speech_seconds=vad_max_speech_seconds,
             backend_stt_enabled=backend_stt_enabled,
             tts_speed=web_tts_speed,
+            backend_tts_volume=backend_tts_volume,
             wake_words=wake_words,
             mcp_config=mcp_config,
             mcp_load_server_prompt=env_bool("MCP_LOAD_SERVER_PROMPT", False),
@@ -4701,7 +4747,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -4721,6 +4767,8 @@ async def main():
                 thinking_sound_file,
                 openai_tts_voice,
                 openai_tts_speed,
+                web_tts_volume,
+                backend_tts_volume,
                 vad_speech_threshold,
                 vad_negative_threshold,
                 vad_min_speech_ms,
