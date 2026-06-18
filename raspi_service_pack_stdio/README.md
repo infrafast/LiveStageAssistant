@@ -155,7 +155,7 @@ sudo systemctl reload caddy
 Open the monitor with:
 
 ```text
-https://liveassistant.example.com
+https://<localip>:8765
 ```
 
 Caddy can automatically issue and renew certificates when the hostname resolves to the Raspberry Pi and the HTTP/HTTPS validation ports are reachable. After HTTPS is working, the browser microphone selector and browser STT controls should become usable after you grant microphone permission.
