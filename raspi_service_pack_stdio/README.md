@@ -25,6 +25,15 @@ The installer copies `.env.online` and `.env.offline` to `/etc/livestageassistan
 
 ## Prerequisites
 
+Install system packages used by backend audio capture/playback and cloud TTS MP3 playback:
+
+```bash
+sudo apt update
+sudo apt install portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
+```
+
+`alsa-utils` provides tools such as `aplay` for ALSA device checks, and `ffmpeg` is required for backend OpenAI/ElevenLabs MP3 TTS playback. Without `ffmpeg`, backend cloud TTS can fall back to `pyttsx3`.
+
 On the Raspberry Pi, install the assistant dependencies first:
 
 ```bash
