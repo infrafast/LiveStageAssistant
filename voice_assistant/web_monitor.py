@@ -3030,19 +3030,6 @@ INDEX_HTML = """<!doctype html>
 	                <label for="web-tts-volume" title="WEB_TTS_VOLUME">Volume TTS navigateur <span id="web-tts-volume-label">100%</span></label>
 	                <input id="web-tts-volume" type="range" min="0" max="1" step="0.05" value="1">
 	              </div>
-	              <div class="field" id="backend-tts-volume-field">
-	                <label for="backend-tts-volume" title="BACKEND_TTS_VOLUME">Volume TTS backend <span id="backend-tts-volume-label">100%</span></label>
-	                <input id="backend-tts-volume" type="range" min="0" max="2" step="0.05" value="1">
-	              </div>
-	              <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local pyttsx3</div>
-              <div class="field" id="elevenlabs-voice-field">
-                <label for="elevenlabs-voice">ElevenLabs Voice</label>
-                <select id="elevenlabs-voice"></select>
-              </div>
-              <div class="field" id="openai-tts-voice-field">
-                <label for="openai-tts-voice">OpenAI Voice</label>
-                <select id="openai-tts-voice"></select>
-              </div>
               <div class="field">
                 <label>STT Input</label>
                 <div class="segmented" id="stt-input" role="radiogroup" aria-label="STT Input">
@@ -3052,6 +3039,19 @@ INDEX_HTML = """<!doctype html>
                   <label><input type="radio" name="stt-input" value="silent">Silent</label>
                 </div>
               </div>
+	              <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local pyttsx3</div>
+              <div class="field" id="elevenlabs-voice-field">
+                <label for="elevenlabs-voice">ElevenLabs Voice</label>
+                <select id="elevenlabs-voice"></select>
+              </div>
+              <div class="field" id="openai-tts-voice-field">
+                <label for="openai-tts-voice">OpenAI Voice</label>
+                <select id="openai-tts-voice"></select>
+              </div>
+	              <div class="field" id="backend-tts-volume-field">
+	                <label for="backend-tts-volume" title="BACKEND_TTS_VOLUME">Volume TTS backend <span id="backend-tts-volume-label">100%</span></label>
+	                <input id="backend-tts-volume" type="range" min="0" max="2" step="0.05" value="1">
+	              </div>
               <div class="field" id="tts-test-field">
                 <label>Voice Test</label>
                 <button class="small-button" id="tts-test" type="button">Test</button>
