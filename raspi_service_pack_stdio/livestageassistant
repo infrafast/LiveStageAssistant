@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SERVICE="livestageassistant.service"
+ENV_FILE="/etc/livestageassistant.env"
+
+read_env_value() {
+  local key="$1"
+  if [ -f "$ENV_FILE" ]; then
+    sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1 | tr -d '"'
+  fi
+}
+
+WEB_PORT="$(read_env_value WEB_MONITOR_PORT)"
+WEB_PORT="${WEB_PORT:-8765}"
+WEB_URL="http://127.0.0.1:$WEB_PORT"
+SNAPSHOT_URL="$WEB_URL/api/snapshot"
+
+cmd="${1:-}"
+
+case "$cmd" in
+  start)
+    sudo systemctl start "$SERVICE"
+    ;;
+
+  stop)
+    sudo systemctl stop "$SERVICE"
+    ;;
+
+  restart)
+    sudo systemctl restart "$SERVICE"
+    ;;
+
+  status)
+    systemctl status "$SERVICE" --no-pager
+    ;;
+
+  logs)
+    journalctl -u "$SERVICE" -f
+    ;;
+
+  auto)
+    sudo systemctl enable "$SERVICE"
+    sudo systemctl start "$SERVICE"
+    echo "Live Stage Assistant auto-start enabled and service started."
+    ;;
+
+  noauto)
+    sudo systemctl disable "$SERVICE"
+    echo "Live Stage Assistant auto-start disabled."
+    ;;
+
+  last-state)
+    echo "Enabled: $(systemctl is-enabled "$SERVICE" 2>/dev/null || true)"
+    echo "Active : $(systemctl is-active "$SERVICE" 2>/dev/null || true)"
+    ;;
+
+  health)
+    if curl -fsS "$SNAPSHOT_URL" >/dev/null; then
+      echo "Live Stage Assistant web monitor is responding at $WEB_URL"
+    else
+      echo "Web monitor did not respond at $SNAPSHOT_URL"
+      exit 1
+    fi
+    ;;
+
+  test-remote)
+    IP="$(tailscale ip -4 2>/dev/null | head -n 1)"
+    if [ -z "$IP" ]; then
+      echo "No Tailscale IPv4 found."
+      exit 1
+    fi
+    echo "Local web monitor:  $WEB_URL"
+    echo "Remote web monitor: http://$IP:$WEB_PORT"
+    curl -I "http://$IP:$WEB_PORT" || true
+    ;;
+
+  config)
+    sudo nano "$ENV_FILE"
+    ;;
+
+  *)
+    echo "Usage: livestageassistant {start|stop|restart|status|logs|auto|noauto|last-state|health|test-remote|config}"
+    exit 1
+    ;;
+esac

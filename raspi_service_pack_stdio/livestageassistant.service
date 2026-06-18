@@ -1,0 +1,18 @@
+[Unit]
+Description=Live Stage Assistant stdio MCP Agent
+Documentation=https://github.com/infrafast/LiveStageAssistant
+After=network-online.target tailscaled.service sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/LiveStageAssistant
+ExecStart=/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file /etc/livestageassistant.env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

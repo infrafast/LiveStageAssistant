@@ -1,0 +1,96 @@
+# Live Stage Assistant Raspberry Pi stdio service
+
+This pack installs Live Stage Assistant as a Raspberry Pi `systemd` service using the local stdio MCP profile.
+
+It assumes these folders are siblings under `/home/pi`:
+
+```text
+/home/pi/LiveStageAssistant
+/home/pi/XMSeries-MCP
+/home/pi/QLCPlus-MCP
+```
+
+The service starts the Python agent with:
+
+```bash
+/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file /etc/livestageassistant.env
+```
+
+The bundled `.env.raspi` is copied to `/etc/livestageassistant.env`. It points `MCP_CONFIG` to `raspi_service_pack_stdio/mcp_servers_raspi.json`, so the stdio MCP servers keep using repo-relative paths to the sibling MCP folders.
+
+## Prerequisites
+
+On the Raspberry Pi, install the assistant dependencies first:
+
+```bash
+cd /home/pi/LiveStageAssistant
+uv venv
+uv pip install -e .
+```
+
+Build the MCP servers before starting the assistant:
+
+```bash
+cd /home/pi/XMSeries-MCP
+npm ci
+npm run build
+
+cd /home/pi/QLCPlus-MCP
+npm ci
+npm run build
+```
+
+Node.js must be `20.20.0` or newer. Node 22 LTS is recommended.
+
+## Install
+
+```bash
+cd /home/pi/LiveStageAssistant/raspi_service_pack_stdio
+chmod +x install_livestageassistant_service.sh livestageassistant
+./install_livestageassistant_service.sh
+```
+
+Review the copied runtime config:
+
+```bash
+sudo nano /etc/livestageassistant.env
+```
+
+## Commands
+
+Start automatically at boot:
+
+```bash
+livestageassistant auto
+```
+
+Start, stop, restart, and inspect:
+
+```bash
+livestageassistant start
+livestageassistant stop
+livestageassistant restart
+livestageassistant status
+livestageassistant logs
+```
+
+Disable boot auto-start:
+
+```bash
+livestageassistant noauto
+```
+
+Check state:
+
+```bash
+livestageassistant last-state
+livestageassistant health
+livestageassistant test-remote
+```
+
+Edit the active service environment:
+
+```bash
+livestageassistant config
+livestageassistant restart
+```

@@ -423,7 +423,7 @@ The repository includes ready-to-use environment profiles:
 
 - `.env.online`: `CONNECTIVITY_MODE=online`, cloud mode with OpenAI for LLM/STT, TTS dropdown set to ElevenLabs, and `mcp_servers.json`
 - `.env.offline`: `CONNECTIVITY_MODE=offline`, local mode with Ollama for LLM, local Whisper for STT, pyttsx3 for TTS, and `mcp_servers.offline.json`
-- `.env.raspi`: `CONNECTIVITY_MODE=online`, cloud LLM/STT/TTS with local stdio `XMSeries-MCP` and `QLCPlus-MCP` sibling folders through `mcp_servers_raspi.json`
+- `raspi_service_pack_stdio/.env.raspi`: `CONNECTIVITY_MODE=online`, cloud LLM/STT/TTS with local stdio `XMSeries-MCP` and `QLCPlus-MCP` sibling folders through `raspi_service_pack_stdio/mcp_servers_raspi.json`
 - `auto`: switch to/from online to offline setting depending according to internet connectivity
 
 Start the assistant by passing the profile you want:
@@ -436,11 +436,22 @@ python voice_assistant/agent.py --env-file .env.online
 python voice_assistant/agent.py --env-file .env.offline
 
 # Raspberry Pi local stdio MCP profile
-python voice_assistant/agent.py --env-file .env.raspi
+python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.raspi
 
 # auto
 python voice_assistant/agent.py --env-file auto
 ```
+
+For a Raspberry Pi service install, use the bundled stdio service pack:
+
+```bash
+cd /home/pi/LiveStageAssistant/raspi_service_pack_stdio
+chmod +x install_livestageassistant_service.sh livestageassistant
+./install_livestageassistant_service.sh
+livestageassistant auto
+```
+
+The installer copies `raspi_service_pack_stdio/.env.raspi` to `/etc/livestageassistant.env`, installs `livestageassistant.service`, and adds the `livestageassistant` helper command with `auto`, `noauto`, `start`, `stop`, `restart`, `status`, `logs`, `health`, `test-remote`, and `config`.
 
 Before using the online profile, create local secret files at the repository root. They are ignored by Git:
 
@@ -635,7 +646,7 @@ python voice_assistant/agent.py --env-file .env.online
 python voice_assistant/agent.py --env-file .env.offline
 
 # Explicit Raspberry Pi local stdio MCP profile
-python voice_assistant/agent.py --env-file .env.raspi
+python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.raspi
 
 # Auto profile selection
 python voice_assistant/agent.py --env-file auto
