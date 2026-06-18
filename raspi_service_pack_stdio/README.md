@@ -1,8 +1,5 @@
 # Live Stage Assistant Raspberry Pi stdio service
 
-run locally to test:
-ASSISTANT_AUTO_ENV_DIR=./raspi_service_pack_stdio .venv/bin/python voice_assistant/agent.py --env-file auto
-
 This pack installs Live Stage Assistant as a Raspberry Pi `systemd` service using the local stdio MCP profile.
 
 It assumes these folders are siblings under `/home/pi`:
@@ -91,6 +88,13 @@ cd /home/pi/LiveStageAssistant
 ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant .venv/bin/python voice_assistant/agent.py --env-file auto
 ```
 
+For a local repository test before installing the service, use the pack directory directly:
+
+```bash
+cd /home/pi/LiveStageAssistant
+ASSISTANT_AUTO_ENV_DIR=./raspi_service_pack_stdio .venv/bin/python voice_assistant/agent.py --env-file auto
+```
+
 Disable boot auto-start:
 
 ```bash
@@ -111,3 +115,43 @@ Edit the active service environment:
 livestageassistant config
 livestageassistant restart
 ```
+
+## HTTPS for browser microphone STT
+
+Browser microphone access is blocked by modern browsers when the web monitor is opened from another machine over plain `http://`. This means browser STT can fail even when backend STT works. Serve the monitor through HTTPS so the browser treats the page as a secure context and allows microphone permission.
+
+Keep Live Stage Assistant listening locally on the Raspberry Pi:
+
+```env
+WEB_MONITOR_HOST=127.0.0.1
+WEB_MONITOR_PORT=8765
+```
+
+Install Caddy:
+
+```bash
+sudo apt update
+sudo apt install caddy
+```
+
+Create or edit `/etc/caddy/Caddyfile` with your HTTPS hostname:
+
+```caddyfile
+liveassistant.example.com {
+    reverse_proxy 127.0.0.1:8765
+}
+```
+
+Reload Caddy:
+
+```bash
+sudo systemctl reload caddy
+```
+
+Open the monitor with:
+
+```text
+https://liveassistant.example.com
+```
+
+Caddy can automatically issue and renew certificates when the hostname resolves to the Raspberry Pi and the HTTP/HTTPS validation ports are reachable. After HTTPS is working, the browser microphone selector and browser STT controls should become usable after you grant microphone permission.
