@@ -64,6 +64,7 @@ DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "alloy"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
+DEFAULT_MCP_AGENT_MAX_STEPS = 20
 DEFAULT_SILERO_VAD_MODEL = Path("static/vendor/silero-vad/silero_vad_v6.onnx")
 OPENAI_MAX_TOOLS_PER_REQUEST = 128
 DEFAULT_MCP_PROMPT_NAME = "agent_prompt"
@@ -1241,6 +1242,7 @@ class VoiceAssistant:
         mcp_prompt_merge_mode: str = "append",
         mcp_agent_memory_enabled: bool = True,
         mcp_agent_timeout_seconds: float = DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
+        mcp_agent_max_steps: int = DEFAULT_MCP_AGENT_MAX_STEPS,
         mcp_tool_routing_enabled: bool = False,
         session_context_store: SessionContextStore | None = None,
         session_context_size: int = 6000,
@@ -1289,6 +1291,7 @@ class VoiceAssistant:
             mcp_prompt_merge_mode: How to merge remote instructions: append or replace
             mcp_agent_memory_enabled: Whether MCPAgent should keep conversation memory
             mcp_agent_timeout_seconds: Maximum seconds to wait for one LLM/MCP agent response
+            mcp_agent_max_steps: Maximum MCPAgent steps for one LLM/MCP turn
             mcp_tool_routing_enabled: Whether assistantOptions.routing keywords restrict a turn to one MCP server
             session_context_store: Persistent chat session store
             session_context_size: Maximum active session summary characters injected into each LLM/MCP turn; 0 disables injection
@@ -1405,6 +1408,7 @@ class VoiceAssistant:
         self.mcp_prompt_merge_mode = (mcp_prompt_merge_mode or "append").lower()
         self.mcp_agent_memory_enabled = mcp_agent_memory_enabled
         self.mcp_agent_timeout_seconds = max(1.0, float(mcp_agent_timeout_seconds or DEFAULT_MCP_AGENT_TIMEOUT_SECONDS))
+        self.mcp_agent_max_steps = max(5, int(mcp_agent_max_steps or DEFAULT_MCP_AGENT_MAX_STEPS))
         self.mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
         self.mcp_tool_routes: list[dict[str, Any]] = []
         self.mcp_all_tools: list[Any] = []
@@ -2247,7 +2251,7 @@ class VoiceAssistant:
             self.agent = MCPAgent(
                 llm=llm,
                 client=self.mcp_client,
-                max_steps=10,
+                max_steps=self.mcp_agent_max_steps,
                 memory_enabled=self.mcp_agent_memory_enabled,
                 system_prompt=self.system_prompt,
             )
@@ -3040,7 +3044,7 @@ class VoiceAssistant:
         try:
             await self._set_agent_tool_subset(tools)
             response = await asyncio.wait_for(
-                self.agent.run(agent_input),
+                self.agent.run(agent_input, max_steps=self.mcp_agent_max_steps),
                 timeout=self.mcp_agent_timeout_seconds,
             )
             response_text = response if isinstance(response, str) else str(response)
@@ -3083,7 +3087,7 @@ class VoiceAssistant:
                 print("[MCP CALL: no route, no tools]")
                 return await self._run_agent_with_tools(agent_input, [])
             response = await asyncio.wait_for(
-                self.agent.run(agent_input),
+                self.agent.run(agent_input, max_steps=self.mcp_agent_max_steps),
                 timeout=self.mcp_agent_timeout_seconds,
             )
             return response if isinstance(response, str) else str(response)
@@ -3095,7 +3099,7 @@ class VoiceAssistant:
                 print("[MCP CALL: route has no tools, no tools]")
                 return await self._run_agent_with_tools(agent_input, [])
             response = await asyncio.wait_for(
-                self.agent.run(agent_input),
+                self.agent.run(agent_input, max_steps=self.mcp_agent_max_steps),
                 timeout=self.mcp_agent_timeout_seconds,
             )
             return response if isinstance(response, str) else str(response)
@@ -3107,7 +3111,7 @@ class VoiceAssistant:
         try:
             await self._set_agent_tool_subset(routed_tools)
             response = await asyncio.wait_for(
-                self.agent.run(agent_input),
+                self.agent.run(agent_input, max_steps=self.mcp_agent_max_steps),
                 timeout=self.mcp_agent_timeout_seconds,
             )
             if isinstance(response, str) and response.strip():
@@ -3139,7 +3143,7 @@ class VoiceAssistant:
             return "Je n'ai pas pu exécuter cette demande avec le serveur MCP routé. Merci de reformuler en précisant le domaine, par exemple lumière, QLC, mixeur, volume ou bus."
 
         response = await asyncio.wait_for(
-            self.agent.run(agent_input),
+            self.agent.run(agent_input, max_steps=self.mcp_agent_max_steps),
             timeout=self.mcp_agent_timeout_seconds,
         )
         return response if isinstance(response, str) else str(response)
@@ -4336,6 +4340,7 @@ async def main():
             "MCP_AGENT_TIMEOUT_SECONDS",
             DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
         )
+        mcp_agent_max_steps = env_int("MCP_AGENT_MAX_STEPS", DEFAULT_MCP_AGENT_MAX_STEPS)
         mcp_tool_routing_enabled = env_bool("MCP_TOOL_ROUTING_ENABLED", False)
         session_context_dir = os.getenv("SESSION_CONTEXT_DIR", str(DEFAULT_CONTEXT_DIR)).strip() or str(DEFAULT_CONTEXT_DIR)
         session_context_size = max(0, min(12000, env_int("SESSION_CONTEXT_SIZE", 6000)))
@@ -4389,6 +4394,7 @@ async def main():
             print(f"Using web audio: STT={web_stt_provider}, TTS={web_tts_provider}")
         print(f"Using wake word: {', '.join(wake_words) if wake_words else 'disabled'}")
         print(f"Using MCP agent memory: {mcp_agent_memory_enabled}")
+        print(f"Using MCP agent max steps: {max(5, mcp_agent_max_steps)}")
         print(f"Using MCP tool routing: {'enabled' if mcp_tool_routing_enabled else 'disabled'}")
         print(f"Using session context size: {session_context_size} ({session_context_dir})")
 
@@ -4512,6 +4518,7 @@ async def main():
             mcp_prompt_merge_mode=mcp_prompt_merge_mode,
             mcp_agent_memory_enabled=mcp_agent_memory_enabled,
             mcp_agent_timeout_seconds=mcp_agent_timeout_seconds,
+            mcp_agent_max_steps=mcp_agent_max_steps,
             mcp_tool_routing_enabled=mcp_tool_routing_enabled,
             session_context_store=session_context_store,
             session_context_size=session_context_size,

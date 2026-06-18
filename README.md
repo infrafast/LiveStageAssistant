@@ -282,6 +282,7 @@ WAKE_WORD="régie,console"
 ASSISTANT_SYSTEM_PROMPT="You are a helpful voice assistant..."  # Customize personality
 MCP_AGENT_MEMORY_ENABLED=true                  # Keep conversational memory; live external state still requires MCP reads
 MCP_AGENT_TIMEOUT_SECONDS=45                   # Max seconds for one LLM/MCP response before timeout
+MCP_AGENT_MAX_STEPS=20                         # Max MCPAgent steps for one response; each tool call consumes several steps
 MCP_TOOL_ROUTING_ENABLED=false                 # Use assistantOptions.routing keywords to expose only one MCP server's tools
 SESSION_CONTEXT_SIZE=6000                      # Inject up to this many session-summary chars; 0 disables injection
 SESSION_CONTEXT_DIR=.contexts                  # Local directory for .context JSON session files
@@ -299,7 +300,7 @@ The assistant is configured from an environment file. The CLI intentionally acce
 
 API secrets are read through `OPENAI_API_KEY_FILE` and `ELEVENLABS_API_KEY_FILE`. These variables must contain paths to text files that contain the secret, not the secret value itself. In Docker/Synology deployments, place those files in the mounted config folder on the host, for example `./container/config/OPENAI_API_KEY.txt`, and point the container env file to `/config/OPENAI_API_KEY.txt`.
 
-The assistant treats current external state as time-sensitive. Conversation memory can preserve context and follow-up references, but when the user asks for the current state of anything outside the conversation, the agent is instructed to call the relevant MCP read tool before answering. Set `MCP_AGENT_MEMORY_ENABLED=false` only if you want to disable MCPAgent conversation memory entirely. `MCP_AGENT_TIMEOUT_SECONDS` limits one LLM/MCP turn; if the agent has not produced a response before that delay, the request is cancelled and the assistant says that the request is taking too long.
+The assistant treats current external state as time-sensitive. Conversation memory can preserve context and follow-up references, but when the user asks for the current state of anything outside the conversation, the agent is instructed to call the relevant MCP read tool before answering. Set `MCP_AGENT_MEMORY_ENABLED=false` only if you want to disable MCPAgent conversation memory entirely. `MCP_AGENT_TIMEOUT_SECONDS` limits one LLM/MCP turn by wall-clock time; if the agent has not produced a response before that delay, the request is cancelled and the assistant says that the request is taking too long. `MCP_AGENT_MAX_STEPS` controls the MCPAgent/LangGraph step budget for one turn. Mixer and lighting commands that resolve a named target, read the current value, convert units, write the new value, verify it, then answer can consume several internal steps, so raise it if a successful tool action ends with a recursion-limit error.
 
 Web chat sessions are persisted as `.context.json` files under `SESSION_CONTEXT_DIR`. The web monitor shows the sessions in the left sidebar, restores the selected session's message bubbles, and loads the most recently active session on startup. The active session keeps the full message list for UI restore, a bounded `summary` transcript, and an optional `llm_summary` generated from that transcript when the assistant starts or when the web UI switches sessions. The LLM summary is durable memory: it keeps preferences, future instructions, corrections, conventions, unresolved tasks, and project decisions, while ignoring transient one-off requests, momentary state checks, executed commands, temporary values, live external state, connected device identity, and routine tool results unless the user explicitly turns them into a durable note. In the web sidebar, hover a session on desktop to preview its `llm_summary`; on touch/mobile, tap the small `i` button when a session has a summary. The session actions menu can rename, delete, clear the visible conversation, or save context; save context forces a fresh `llm_summary` generation for that session. Clearing removes the stored message bubbles and transcript summary but preserves `llm_summary`, so learned continuity can still be injected internally without reappearing as a visible chat bubble. `SESSION_CONTEXT_SIZE` controls how many characters from the injectable summary are added to each LLM/MCP turn, but the injected context is not added to the Final Prompt shown in the Config tab. The web range accepts `0` to `12000`; set it to `0`, or use **Config -> IA model -> Session Context**, if a prior session is steering the assistant too strongly. Restored chat bubbles that fit inside the selected context window are highlighted in green, and the preview updates immediately when the range changes. If `llm_summary` cannot be generated, the assistant falls back to the deterministic `summary` transcript. Even when session context is enabled, live external state still must be read again through MCP tools.
 
@@ -838,10 +839,14 @@ Operational checks worth repeating on real hardware are browser push-to-talk sil
 
 7. **High Latency**
    - Use faster LLM model (e.g., `gpt-3.5-turbo`)
-   - Reduce `max_steps` in MCPAgent
+   - Reduce `MCP_AGENT_MAX_STEPS` only if the model spends too many turns planning tool calls
    - Consider using local models
 
-8. **Offline Mode Still Tries to Connect**
+8. **Tool Action Succeeds Then Ends With a Recursion-Limit Error**
+   - Increase `MCP_AGENT_MAX_STEPS` in the active env file, for example `MCP_AGENT_MAX_STEPS=30`
+   - This usually means the MCP tool sequence completed, but the agent ran out of internal steps before producing the final spoken answer
+
+9. **Offline Mode Still Tries to Connect**
    - Confirm you started with `python voice_assistant/agent.py --env-file .env.offline`
    - Confirm the selected env file includes `CONNECTIVITY_MODE=offline`
    - Confirm the selected env file includes `LLM_PROVIDER=ollama`

@@ -147,6 +147,7 @@ WEB_TTS_PROVIDER=openai
 STT_PROVIDER=openai-whisper
 STT_INPUT=both
 LLM_PROVIDER=openai
+MCP_AGENT_MAX_STEPS=20
 SESSION_CONTEXT_SIZE=6000
 SESSION_CONTEXT_DIR=/data/contexts
 ```
@@ -160,5 +161,7 @@ The web Config -> STT/TTS section also exposes a nested **Voice Activity Detecti
 Backend microphone capture auto-selects a channel/rate combination that PyAudio can open, then resamples internally to 16 kHz for Silero VAD. This avoids Raspberry Pi or NAS ALSA devices that list as inputs but reject a fixed 16 kHz stream.
 
 `SESSION_CONTEXT_SIZE` controls how much of the active `.context.json` session summary is reinjected for continuity. The assistant stores both a deterministic `summary` transcript and, when an LLM is available at startup or session switch, a compact `llm_summary` generated from it. In the web chat, restored bubbles highlighted in green are the messages that fit in the current context window; moving the **Session Context** range updates that preview immediately. In the session sidebar, hover a session on desktop to preview its `llm_summary`, or tap the small `i` button on touch/mobile when a summary exists. Use `0` to disable context injection.
+
+`MCP_AGENT_MAX_STEPS` controls the internal MCPAgent/LangGraph step budget for one user turn. Keep the default unless a command successfully calls MCP tools and then fails with a recursion-limit error before the final answer; in that case, raise it to `30`.
 
 Once the monitor path is stable, try microphone/speaker passthrough if needed.
