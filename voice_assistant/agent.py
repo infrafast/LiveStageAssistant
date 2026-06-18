@@ -3491,6 +3491,8 @@ class VoiceAssistant:
             return "exit"
         finally:
             # Cleanup
+            if self.reload_event and self.reload_event.is_set():
+                print("Reload cleanup started.")
             try:
                 self.stop_thinking_sound()
             except Exception:
@@ -3508,6 +3510,8 @@ class VoiceAssistant:
                     await asyncio.wait_for(self.mcp_client.close_all_sessions(), timeout=3.0)
                 except Exception as e:
                     print(f"MCP cleanup timed out or failed: {e}")
+            if self.reload_event and self.reload_event.is_set():
+                print("Reload cleanup finished.")
 
         return "exit"
 
@@ -4791,11 +4795,16 @@ async def main():
                 reload_event.clear()
                 active_env_file = get_active_env_file()
                 assistant = build_assistant_from_env(active_env_file, reload_event=reload_event, web_monitor=web_monitor)
+                reload_complete_message = None
                 if announce_reload_complete:
-                    await assistant.text_to_speech("Configuration mise à jour. L'assistant redémarre avec le nouveau modèle.")
+                    print("Configuration reload complete.")
+                    reload_complete_message = "Configuration mise à jour."
                     announce_reload_complete = False
                 if web_monitor:
                     web_monitor.set_environment_loading(False)
+                    if reload_complete_message:
+                        # Browser TTS can announce this after reload; backend TTS stays out of the reload path.
+                        web_monitor.append_dialogue("assistant", reload_complete_message, speak=True)
 
                 run_result = await assistant.run()
                 if run_result != "reload":
@@ -4831,11 +4840,16 @@ async def main():
 
             reload_event.clear()
             assistant = build_assistant_from_env(detected_env_file, reload_event=reload_event, web_monitor=web_monitor)
+            reload_complete_message = None
             if announce_reload_complete:
-                await assistant.text_to_speech("Environnement mis à jour. La demande en cours a été annulée.")
+                print("Auto environment reload complete.")
+                reload_complete_message = "Environnement mis à jour."
                 announce_reload_complete = False
             if web_monitor:
                 web_monitor.set_environment_loading(False)
+                if reload_complete_message:
+                    # Browser TTS can announce this after reload; backend TTS stays out of the reload path.
+                    web_monitor.append_dialogue("assistant", reload_complete_message, speak=True)
 
             run_result = await assistant.run()
             if run_result != "reload":
