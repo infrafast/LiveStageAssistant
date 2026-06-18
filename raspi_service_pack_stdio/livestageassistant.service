@@ -8,7 +8,8 @@ Wants=network-online.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/LiveStageAssistant
-ExecStart=/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file /etc/livestageassistant.env
+Environment=ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant
+ExecStart=/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file auto
 Restart=always
 RestartSec=5
 StandardOutput=journal

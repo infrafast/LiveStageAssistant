@@ -52,12 +52,14 @@ require_node_stack
 
 echo "Installing Live Stage Assistant service files..."
 
-sudo cp "$SCRIPT_DIR/.env.raspi" /etc/livestageassistant.env
+sudo install -d -o "$SERVICE_USER" -g "$SERVICE_USER" /etc/livestageassistant
+sudo cp "$SCRIPT_DIR/.env.online" /etc/livestageassistant/.env.online
+sudo cp "$SCRIPT_DIR/.env.offline" /etc/livestageassistant/.env.offline
 sudo cp "$SCRIPT_DIR/livestageassistant.service" /etc/systemd/system/livestageassistant.service
 sudo cp "$SCRIPT_DIR/livestageassistant" /usr/local/bin/livestageassistant
 
-sudo chown "$SERVICE_USER:$SERVICE_USER" /etc/livestageassistant.env
-sudo chmod 644 /etc/livestageassistant.env
+sudo chown "$SERVICE_USER:$SERVICE_USER" /etc/livestageassistant/.env.online /etc/livestageassistant/.env.offline
+sudo chmod 644 /etc/livestageassistant/.env.online /etc/livestageassistant/.env.offline
 sudo chmod 644 /etc/systemd/system/livestageassistant.service
 sudo chmod +x /usr/local/bin/livestageassistant
 
@@ -66,7 +68,7 @@ sudo systemctl daemon-reload
 echo
 echo "Installation complete."
 echo "Next steps:"
-echo "  1) Check /etc/livestageassistant.env"
+echo "  1) Check /etc/livestageassistant/.env.online and /etc/livestageassistant/.env.offline"
 echo "  2) Make sure /home/pi/XMSeries-MCP and /home/pi/QLCPlus-MCP exist and are built"
 echo "  3) Run: livestageassistant auto"
 echo "  4) Test locally: livestageassistant health"

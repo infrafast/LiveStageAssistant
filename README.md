@@ -423,7 +423,8 @@ The repository includes ready-to-use environment profiles:
 
 - `.env.online`: `CONNECTIVITY_MODE=online`, cloud mode with OpenAI for LLM/STT, TTS dropdown set to ElevenLabs, and `mcp_servers.json`
 - `.env.offline`: `CONNECTIVITY_MODE=offline`, local mode with Ollama for LLM, local Whisper for STT, pyttsx3 for TTS, and `mcp_servers.offline.json`
-- `raspi_service_pack_stdio/.env.raspi`: `CONNECTIVITY_MODE=online`, cloud LLM/STT/TTS with local stdio `XMSeries-MCP` and `QLCPlus-MCP` sibling folders through `raspi_service_pack_stdio/mcp_servers_raspi.json`
+- `raspi_service_pack_stdio/.env.online`: `CONNECTIVITY_MODE=online`, cloud LLM/STT/TTS with local stdio `XMSeries-MCP` and `QLCPlus-MCP` sibling folders through `raspi_service_pack_stdio/mcp_servers_raspi.json`
+- `raspi_service_pack_stdio/.env.offline`: `CONNECTIVITY_MODE=offline`, local Ollama/STT/TTS with the same Raspberry Pi stdio MCP config
 - `auto`: switch to/from online to offline setting depending according to internet connectivity
 
 Start the assistant by passing the profile you want:
@@ -436,7 +437,7 @@ python voice_assistant/agent.py --env-file .env.online
 python voice_assistant/agent.py --env-file .env.offline
 
 # Raspberry Pi local stdio MCP profile
-python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.raspi
+python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
 
 # auto
 python voice_assistant/agent.py --env-file auto
@@ -451,7 +452,7 @@ chmod +x install_livestageassistant_service.sh livestageassistant
 livestageassistant auto
 ```
 
-The installer copies `raspi_service_pack_stdio/.env.raspi` to `/etc/livestageassistant.env`, installs `livestageassistant.service`, and adds the `livestageassistant` helper command with `auto`, `noauto`, `start`, `stop`, `restart`, `status`, `logs`, `health`, `test-remote`, and `config`.
+The installer installs `livestageassistant.service`, adds the `livestageassistant` helper command, and runs the agent with `--env-file auto` using the pack's `.env.online` and `.env.offline` profiles.
 
 Before using the online profile, create local secret files at the repository root. They are ignored by Git:
 
@@ -646,7 +647,7 @@ python voice_assistant/agent.py --env-file .env.online
 python voice_assistant/agent.py --env-file .env.offline
 
 # Explicit Raspberry Pi local stdio MCP profile
-python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.raspi
+python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
 
 # Auto profile selection
 python voice_assistant/agent.py --env-file auto
@@ -657,7 +658,7 @@ python voice_assistant/agent.py --help
 
 `OPENAI_API_KEY` is not required when the selected env file uses `LLM_PROVIDER=ollama` and `STT_PROVIDER=local-whisper`.
 
-With `--env-file auto`, the assistant checks internet connectivity at startup. It loads `.env.online` when internet is reachable, otherwise `.env.offline`. It then monitors connectivity every 10 seconds and switches the running assistant profile when the connection state changes:
+With `--env-file auto`, the assistant checks internet connectivity at startup. It loads `.env.online` when internet is reachable, otherwise `.env.offline`. By default these files are read from the current working directory; set `ASSISTANT_AUTO_ENV_DIR` to point auto mode at another profile directory, as the Raspberry Pi service pack does with `/etc/livestageassistant`. It then monitors connectivity every 10 seconds and switches the running assistant profile when the connection state changes:
 
 - `Internet est en ligne` is announced when the online profile is selected
 - `Connexion internet coupée` is announced when the offline profile is selected

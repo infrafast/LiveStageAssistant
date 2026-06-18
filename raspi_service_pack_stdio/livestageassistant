@@ -2,13 +2,22 @@
 set -euo pipefail
 
 SERVICE="livestageassistant.service"
-ENV_FILE="/etc/livestageassistant.env"
+ENV_DIR="/etc/livestageassistant"
+ONLINE_ENV_FILE="$ENV_DIR/.env.online"
+OFFLINE_ENV_FILE="$ENV_DIR/.env.offline"
 
 read_env_value() {
   local key="$1"
-  if [ -f "$ENV_FILE" ]; then
-    sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1 | tr -d '"'
-  fi
+  local value=""
+  for env_file in "$ONLINE_ENV_FILE" "$OFFLINE_ENV_FILE"; do
+    if [ -f "$env_file" ]; then
+      value="$(sed -n "s/^${key}=//p" "$env_file" | tail -n 1 | tr -d '"')"
+      if [ -n "$value" ]; then
+        echo "$value"
+        return
+      fi
+    fi
+  done
 }
 
 WEB_PORT="$(read_env_value WEB_MONITOR_PORT)"
@@ -76,7 +85,9 @@ case "$cmd" in
     ;;
 
   config)
-    sudo nano "$ENV_FILE"
+    echo "Online profile : $ONLINE_ENV_FILE"
+    echo "Offline profile: $OFFLINE_ENV_FILE"
+    sudo nano "$ONLINE_ENV_FILE" "$OFFLINE_ENV_FILE"
     ;;
 
   *)

@@ -10,13 +10,13 @@ It assumes these folders are siblings under `/home/pi`:
 /home/pi/QLCPlus-MCP
 ```
 
-The service starts the Python agent with:
+The service starts the Python agent in automatic online/offline profile mode:
 
 ```bash
-/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file /etc/livestageassistant.env
+/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file auto
 ```
 
-The bundled `.env.raspi` is copied to `/etc/livestageassistant.env`. It points `MCP_CONFIG` to `raspi_service_pack_stdio/mcp_servers_raspi.json`, so the stdio MCP servers keep using repo-relative paths to the sibling MCP folders.
+The installer copies `.env.online` and `.env.offline` to `/etc/livestageassistant/`. The service sets `ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant`, so `auto` loads `.env.online` when internet is reachable and `.env.offline` when it is not. Both profiles point `MCP_CONFIG` to `raspi_service_pack_stdio/mcp_servers_raspi.json`, so the stdio MCP servers keep using repo-relative paths to the sibling MCP folders.
 
 ## Prerequisites
 
@@ -50,10 +50,11 @@ chmod +x install_livestageassistant_service.sh livestageassistant
 ./install_livestageassistant_service.sh
 ```
 
-Review the copied runtime config:
+Review the copied runtime configs:
 
 ```bash
-sudo nano /etc/livestageassistant.env
+sudo nano /etc/livestageassistant/.env.online
+sudo nano /etc/livestageassistant/.env.offline
 ```
 
 ## Commands
