@@ -140,7 +140,8 @@ sudo apt install caddy
 Create or edit `/etc/caddy/Caddyfile` with your HTTPS hostname:
 
 ```caddyfile
-liveassistant.example.com {
+:8443 {
+    tls internal
     reverse_proxy 127.0.0.1:8765
 }
 ```
