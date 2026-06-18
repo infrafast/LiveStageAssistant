@@ -11,7 +11,7 @@
     "qlcplus": {
       "command": "node",
       "args": [
-        "/Users/ts/Documents/PlatformIO/Projects/QLCPlus-MCP/dist/src/index.js"
+        "../QLCPlus-MCP/dist/src/index.js"
       ],
       "env": {
         "MCP_TRANSPORT": "stdio",
@@ -19,10 +19,10 @@
         "QLC_OSC_INPUT_PORT": "7700",
         "QLC_OSC_OUTPUT_PORT": "9000",
         "QLC_UNIVERSE": "1",
-        "QLC_WIDGETS_FILE": "/Users/ts/Documents/PlatformIO/Projects/QLCPlus-MCP/config/widgets.json",
+        "QLC_WIDGETS_FILE": "../QLCPlus-MCP/config/widgets.json",
         "QLC_ALLOW_RAW_OSC": "false",
         "QLC_DRY_RUN": "false",
-        "MCP_PROMPT_FILE": "/Users/ts/Documents/PlatformIO/Projects/QLCPlus-MCP/PROMPT.md",
+        "MCP_PROMPT_FILE": "../QLCPlus-MCP/PROMPT.md",
         "LOG_LEVEL": "debug",
         "NODE_ENV": "development"
       },

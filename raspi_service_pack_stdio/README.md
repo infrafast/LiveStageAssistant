@@ -75,6 +75,19 @@ livestageassistant status
 livestageassistant logs
 ```
 
+Test the same auto profile mode from a foreground terminal:
+
+```bash
+livestageassistant run-auto
+```
+
+If you invoke the agent directly, pass the same auto profile directory used by systemd:
+
+```bash
+cd /home/pi/LiveStageAssistant
+ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant .venv/bin/python voice_assistant/agent.py --env-file auto
+```
+
 Disable boot auto-start:
 
 ```bash

@@ -5,6 +5,8 @@ SERVICE="livestageassistant.service"
 ENV_DIR="/etc/livestageassistant"
 ONLINE_ENV_FILE="$ENV_DIR/.env.online"
 OFFLINE_ENV_FILE="$ENV_DIR/.env.offline"
+APP_DIR="/home/pi/LiveStageAssistant"
+PYTHON_BIN="$APP_DIR/.venv/bin/python"
 
 read_env_value() {
   local key="$1"
@@ -46,6 +48,11 @@ case "$cmd" in
 
   logs)
     journalctl -u "$SERVICE" -f
+    ;;
+
+  run-auto)
+    cd "$APP_DIR"
+    ASSISTANT_AUTO_ENV_DIR="$ENV_DIR" "$PYTHON_BIN" voice_assistant/agent.py --env-file auto
     ;;
 
   auto)
@@ -91,7 +98,7 @@ case "$cmd" in
     ;;
 
   *)
-    echo "Usage: livestageassistant {start|stop|restart|status|logs|auto|noauto|last-state|health|test-remote|config}"
+    echo "Usage: livestageassistant {start|stop|restart|status|logs|run-auto|auto|noauto|last-state|health|test-remote|config}"
     exit 1
     ;;
 esac

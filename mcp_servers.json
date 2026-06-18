@@ -3,12 +3,13 @@
     "mixer": {
       "command": "node",
       "args": [
-        "/Users/ts/Documents/PlatformIO/Projects/XMSeries-MCP/dist/index.js"
+        "../XMSeries-MCP/dist/index.js"
       ],
       "env": {
         "OSC_HOST": "192.168.0.1",
         "OSC_PORT": "10023",
         "OSC_PROTOCOL": "OSCX32M32",
+        "MCP_PROMPT_FILE": "../XMSeries-MCP/PROMPT.md",
         "DEBUG": "${DEBUG}"
       },
       "assistantOptions": {
