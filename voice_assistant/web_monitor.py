@@ -322,6 +322,7 @@ class WebMonitor:
                 str,
                 str,
                 str,
+                bool,
                 str,
                 float,
                 float,
@@ -1070,6 +1071,7 @@ class WebMonitor:
                     backend_audio_monitor_mode = str(payload.get("backend_audio_monitor_mode") or "off").strip().lower()
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
+                    command_ack_sound_enabled = bool(payload.get("command_ack_sound_enabled"))
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
                     try:
                         openai_tts_speed = float(payload.get("openai_tts_speed") or 1.0)
@@ -1113,6 +1115,7 @@ class WebMonitor:
                             backend_audio_output_device,
                             voice_id,
                             thinking_sound_file,
+                            command_ack_sound_enabled,
                             openai_tts_voice,
                             openai_tts_speed,
                             web_tts_volume,
@@ -2111,6 +2114,11 @@ INDEX_HTML = """<!doctype html>
       background: var(--surface);
       color: var(--text);
       font-weight: 650;
+    }
+    .small-button.enabled {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
     }
     .chat-scroll {
       padding: 22px 16px 16px;
@@ -3381,6 +3389,10 @@ INDEX_HTML = """<!doctype html>
                 <label for="thinking-sound">Thinking Sound</label>
                 <select id="thinking-sound"></select>
               </div>
+              <div class="field" id="command-ack-sound-field" title="COMMAND_ACK_SOUND_ENABLED">
+                <label for="command-ack-sound">Ding!</label>
+                <button class="small-button" id="command-ack-sound" type="button" role="switch" aria-checked="false">Off</button>
+              </div>
             </div>
           </details>
         </section>
@@ -3534,6 +3546,8 @@ INDEX_HTML = """<!doctype html>
     const backendAudioOutputPan = document.querySelector("#backend-audio-output-pan");
     const backendAudioOutputPanLabel = document.querySelector("#backend-audio-output-pan-label");
     const thinkingSound = document.querySelector("#thinking-sound");
+    const commandAckSoundField = document.querySelector("#command-ack-sound-field");
+    const commandAckSound = document.querySelector("#command-ack-sound");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
     const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
@@ -3638,6 +3652,7 @@ INDEX_HTML = """<!doctype html>
     let thinkingAudio = null;
     let thinkingAudioUrl = "";
     let thinkingAudioPlaying = false;
+    let lastBrowserCommandAckAt = 0;
     let ortModulePromise = null;
     let sileroSessionPromise = null;
 
@@ -4779,6 +4794,48 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    async function ensureWebAudioContext() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return null;
+      if (!webTtsAudioContext) webTtsAudioContext = new AudioContextClass();
+      if (webTtsAudioContext.state === "suspended") {
+        try {
+          await webTtsAudioContext.resume();
+        } catch (error) {
+          return null;
+        }
+      }
+      return webTtsAudioContext.state === "running" ? webTtsAudioContext : null;
+    }
+
+    async function playBrowserCommandAckSound() {
+      if (!commandAckSoundEnabled() || !webAudio.tts_enabled) return;
+      const nowMs = Date.now();
+      if (nowMs - lastBrowserCommandAckAt < 900) return;
+      lastBrowserCommandAckAt = nowMs;
+      const context = await ensureWebAudioContext();
+      if (!context) return;
+      try {
+        const now = context.currentTime;
+        const gain = context.createGain();
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(Math.max(0.02, Math.min(0.22, Number(webAudio.tts_volume ?? 1) * 0.22)), now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+        gain.connect(context.destination);
+        for (const [frequency, level] of [[1568, 1], [2352, 0.45], [3136, 0.22]]) {
+          const oscillator = context.createOscillator();
+          const toneGain = context.createGain();
+          oscillator.type = "sine";
+          oscillator.frequency.setValueAtTime(frequency, now);
+          toneGain.gain.setValueAtTime(level, now);
+          oscillator.connect(toneGain);
+          toneGain.connect(gain);
+          oscillator.start(now);
+          oscillator.stop(now + 0.26);
+        }
+      } catch (error) {}
+    }
+
     async function playWebTtsBuffer(audioBase64, volume = null) {
       if (!webTtsAudioContext || webTtsAudioContext.state !== "running") return false;
       try {
@@ -4792,6 +4849,7 @@ INDEX_HTML = """<!doctype html>
         source.connect(gain);
         gain.connect(webTtsAudioContext.destination);
         currentWebTtsSource = source;
+        stopThinkingAudio();
         await new Promise((resolve, reject) => {
           source.addEventListener("ended", resolve, { once: true });
           try {
@@ -4823,7 +4881,9 @@ INDEX_HTML = """<!doctype html>
         await new Promise((resolve, reject) => {
           audio.addEventListener("ended", resolve, { once: true });
           audio.addEventListener("error", reject, { once: true });
-          audio.play().catch(reject);
+          audio.play()
+            .then(() => stopThinkingAudio())
+            .catch(reject);
         });
       } finally {
         URL.revokeObjectURL(objectUrl);
@@ -4976,6 +5036,7 @@ INDEX_HTML = """<!doctype html>
       if (!cleanedCommand) return;
       const shouldInterrupt = Boolean(options.interrupt) && interruptConversationEnabled && (composerLocked || webTtsPlaying);
       if (composerLocked && !shouldInterrupt) return;
+      playBrowserCommandAckSound();
       if (shouldInterrupt) {
         await requestSilentCancel();
       }
@@ -5457,6 +5518,7 @@ INDEX_HTML = """<!doctype html>
         backend_audio_monitor_volume: Number(backendAudioMonitorVolume.value || 1),
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
+        command_ack_sound_enabled: commandAckSound.getAttribute("aria-checked") === "true",
         openai_tts_voice: openaiTtsVoice.value || "",
         openai_tts_speed: Number(openaiTtsSpeed.value || 1),
         web_tts_volume: Number(webTtsVolume.value || 1),
@@ -5602,6 +5664,16 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function setCommandAckSoundEnabled(enabled) {
+      commandAckSound.setAttribute("aria-checked", enabled ? "true" : "false");
+      commandAckSound.textContent = enabled ? "On" : "Off";
+      commandAckSound.classList.toggle("enabled", enabled);
+    }
+
+    function commandAckSoundEnabled() {
+      return commandAckSound.getAttribute("aria-checked") === "true";
+    }
+
     function syncVadLabels() {
       vadSpeechThresholdLabel.textContent = Number(vadSpeechThreshold.value || 0.5).toFixed(2);
       vadNegativeThresholdLabel.textContent = Number(vadNegativeThreshold.value || 0.35).toFixed(2);
@@ -5735,6 +5807,13 @@ INDEX_HTML = """<!doctype html>
       backendAudioMonitorVolumeField.title = enabled
         ? "BACKEND_AUDIO_MONITOR_VOLUME"
         : "BACKEND_AUDIO_MONITOR_VOLUME - actif seulement avec Rejected ou Pass through";
+    }
+
+    function syncCommandAckSoundControls() {
+      commandAckSound.disabled = !backendAudioCapabilities.output && !webAudio.tts_enabled;
+      commandAckSoundField.title = commandAckSound.disabled
+        ? "COMMAND_ACK_SOUND_ENABLED - nécessite une sortie audio backend ou TTS navigateur disponible"
+        : "COMMAND_ACK_SOUND_ENABLED";
     }
 
     function setSegmentOptionEnabled(input, enabled, reason = "") {
@@ -6103,6 +6182,7 @@ INDEX_HTML = """<!doctype html>
       backendAudioMonitorVolume.disabled = true;
       for (const input of backendAudioMonitorModeInputs) input.disabled = true;
       backendAudioOutputPan.disabled = true;
+      commandAckSound.disabled = true;
       ttsTest.disabled = true;
       for (const control of vadControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
@@ -6197,6 +6277,7 @@ INDEX_HTML = """<!doctype html>
 	        setSelectedBackendAudioMonitorMode(data.selected_backend_audio_monitor_mode || "off");
 	        backendAudioMonitorVolume.value = String(data.selected_backend_audio_monitor_volume ?? 1.0);
 	        backendAudioOutputPan.value = String(data.selected_backend_audio_output_pan ?? 0.0);
+	        setCommandAckSoundEnabled(Boolean(data.selected_command_ack_sound_enabled));
 	        syncOpenAiSpeedLabel();
         syncTtsVolumeLabels();
         syncBackendAudioMonitorVolumeLabel();
@@ -6269,6 +6350,7 @@ INDEX_HTML = """<!doctype html>
         backendAudioInput.disabled = !backendAudioCapabilities.input || backendAudioInput.options.length === 0;
         backendAudioOutput.disabled = !backendAudioCapabilities.output || backendAudioOutput.options.length === 0;
         syncBackendAudioMonitorControls();
+        syncCommandAckSoundControls();
         backendAudioOutputPan.disabled = !backendAudioCapabilities.output || backendAudioOutputPanField.classList.contains("hidden");
         browserAudioTest.disabled = !browserAudioCapabilities.input || browserAudioInputField.classList.contains("hidden");
         backendAudioTest.disabled = !backendAudioCapabilities.input || backendAudioInputField.classList.contains("hidden");
@@ -6359,10 +6441,7 @@ INDEX_HTML = """<!doctype html>
         lastServerMessages = data.messages || [];
         const serverBusy = Boolean(data.assistant_busy);
         const showThinking = serverBusy || pendingMessages.length > 0;
-        if (showThinking) startThinkingAudio();
-        else stopThinkingAudio();
-        setComposerLocked(showThinking);
-        renderMessages(lastServerMessages, showThinking);
+        if (!previousBusy && serverBusy) playBrowserCommandAckSound();
         const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
         const latestAssistantMessageAgeMs = latestAssistantMessage && latestAssistantMessage.created_at
           ? Date.now() - Number(latestAssistantMessage.created_at) * 1000
@@ -6370,12 +6449,19 @@ INDEX_HTML = """<!doctype html>
         const shouldSpeakLatestAssistant = latestAssistantMessage && (
           previousBusy || (latestAssistantMessage.speak === true && latestAssistantMessageAgeMs < 30000)
         );
-        if (
+        const willSpeakLatestAssistant = Boolean(
           shouldSpeakLatestAssistant &&
           !showThinking &&
           webAudio.tts_enabled &&
           latestAssistantMessage &&
           latestAssistantMessage.id !== lastSpokenAssistantMessageId
+        );
+        if (showThinking || willSpeakLatestAssistant) startThinkingAudio();
+        else stopThinkingAudio();
+        setComposerLocked(showThinking);
+        renderMessages(lastServerMessages, showThinking);
+        if (
+          willSpeakLatestAssistant
         ) {
           lastSpokenAssistantMessageId = latestAssistantMessage.id;
           playWebTts(latestAssistantMessage.text || "");
@@ -6693,6 +6779,7 @@ INDEX_HTML = """<!doctype html>
       const backendAudioMonitorVolumeValue = Number(backendAudioMonitorVolume.value || 1);
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
+      const commandAckSoundEnabledValue = commandAckSoundEnabled();
       const openAiTtsVoiceValue = openaiTtsVoice.value;
       const openAiTtsSpeedValue = Number(openaiTtsSpeed.value || 1);
       const webTtsVolumeValue = Number(webTtsVolume.value || 1);
@@ -6731,6 +6818,7 @@ INDEX_HTML = """<!doctype html>
             system_prompt: systemPromptValue,
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
+            command_ack_sound_enabled: commandAckSoundEnabledValue,
             openai_tts_voice: openAiTtsVoiceValue,
             openai_tts_speed: openAiTtsSpeedValue,
             web_tts_volume: webTtsVolumeValue,
@@ -6769,6 +6857,7 @@ INDEX_HTML = """<!doctype html>
       });
     }
     backendAudioOutputPan.addEventListener("input", syncBackendAudioOutputPanLabel);
+    commandAckSound.addEventListener("click", () => setCommandAckSoundEnabled(!commandAckSoundEnabled()));
     wakeWord.addEventListener("input", () => {
       syncBackendAudioMonitorControls();
       syncAudioDeviceVisibility();

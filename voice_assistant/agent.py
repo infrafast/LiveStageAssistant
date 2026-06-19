@@ -170,6 +170,7 @@ TTS_OUTPUT_OPTIONS = [
 ]
 DEFAULT_BACKEND_MP3_SAMPLE_RATE = 24000
 DEFAULT_BACKEND_MP3_CHANNELS = 1
+DEFAULT_COMMAND_ACK_SAMPLE_RATE = 24000
 
 
 @contextmanager
@@ -925,6 +926,21 @@ def apply_pcm_volume(pcm_bytes: bytes, volume: float) -> bytes:
     return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
 
 
+def generate_command_ack_pcm(sample_rate: int = DEFAULT_COMMAND_ACK_SAMPLE_RATE) -> bytes:
+    """Generate a short bell-like command acknowledgement chime."""
+    duration = 0.24
+    samples_count = max(1, int(sample_rate * duration))
+    t = np.linspace(0.0, duration, samples_count, endpoint=False, dtype=np.float32)
+    envelope = np.exp(-9.0 * t)
+    tone = (
+        np.sin(2.0 * np.pi * 1568.0 * t)
+        + 0.45 * np.sin(2.0 * np.pi * 2352.0 * t)
+        + 0.22 * np.sin(2.0 * np.pi * 3136.0 * t)
+    )
+    audio = tone * envelope * 0.32
+    return np.clip(audio * 32767.0, -32768, 32767).astype(np.int16).tobytes()
+
+
 def play_pcm_bytes(
     audio: pyaudio.PyAudio,
     pcm_bytes: bytes,
@@ -1290,6 +1306,7 @@ class VoiceAssistant:
         tts_provider: str = "elevenlabs",
         elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
         thinking_sound_file: str = "thinking.wav",
+        command_ack_sound_enabled: bool = False,
         backend_audio_input_device: str | None = None,
         backend_audio_output_device: str | None = None,
         vad_model_path: str | Path = DEFAULT_SILERO_VAD_MODEL,
@@ -1342,6 +1359,7 @@ class VoiceAssistant:
             tts_provider: Text-to-speech provider (elevenlabs, pyttsx3, or none)
             elevenlabs_voice_id: ElevenLabs voice ID (default: Rachel)
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
+            command_ack_sound_enabled: Play a short backend chime when a command is accepted
             backend_audio_input_device: Optional PyAudio input device index from BACKEND_AUDIO_INPUT_DEVICE
             backend_audio_output_device: Optional PyAudio output device index from BACKEND_AUDIO_OUTPUT_DEVICE
             vad_model_path: Local Silero VAD ONNX model path
@@ -1480,6 +1498,8 @@ class VoiceAssistant:
         self.thinking_sound_lock = threading.Lock()
         self.thinking_sound_stop_event = threading.Event()
         self.thinking_sound_thread: threading.Thread | None = None
+        self.command_ack_sound_enabled = bool(command_ack_sound_enabled)
+        self.command_ack_sound_warning_shown = False
 
         # MCP configuration
         self.mcp_config = mcp_config
@@ -1593,6 +1613,33 @@ class VoiceAssistant:
             self.thinking_sound_thread = None
         if thread and thread.is_alive():
             thread.join(timeout=0.5)
+
+    def play_command_ack_sound(self) -> None:
+        """Play a short non-blocking chime when a command is accepted."""
+        if (
+            not self.command_ack_sound_enabled
+            or self.tts_provider == "none"
+            or self.audio_output_device_status == "unavailable"
+        ):
+            return
+
+        def _play() -> None:
+            try:
+                play_pcm_bytes(
+                    self.audio,
+                    generate_command_ack_pcm(),
+                    sample_rate=DEFAULT_COMMAND_ACK_SAMPLE_RATE,
+                    channels=1,
+                    output_device_index=self.audio_output_device_index,
+                    volume=min(1.0, max(0.0, self.backend_tts_volume)),
+                    pan=self.backend_audio_output_pan,
+                )
+            except Exception as e:
+                if not self.command_ack_sound_warning_shown:
+                    print(f"Could not play command ack sound: {e}")
+                    self.command_ack_sound_warning_shown = True
+
+        threading.Thread(target=_play, name="backend-command-ack-sound", daemon=True).start()
 
     def _play_thinking_sound_loop(self) -> None:
         """Loop the configured WAV through the same PyAudio output path as backend TTS."""
@@ -2890,6 +2937,7 @@ class VoiceAssistant:
     async def text_to_speech(self, text: str) -> bool:
         """Convert text to speech using the configured provider."""
         if self.tts_provider == "none":
+            self.stop_thinking_sound()
             return False
 
         TTS_STOP_EVENT.clear()
@@ -2901,12 +2949,14 @@ class VoiceAssistant:
                 if local_tts_playback_available():
                     print("OpenAI TTS selected but OPENAI_API_KEY is missing. Falling back to pyttsx3...")
                 else:
+                    self.stop_thinking_sound()
                     return False
             else:
                 try:
                     with TTS_LOCK:
                         TTS_STOP_EVENT.clear()
                         audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
+                        self.stop_thinking_sound()
                         play_mp3_bytes(
                             audio,
                             audio=self.audio,
@@ -2920,6 +2970,7 @@ class VoiceAssistant:
                         print(f"OpenAI TTS failed: {e}")
                         print("Falling back to local pyttsx3 TTS...")
                     else:
+                        self.stop_thinking_sound()
                         return False
 
         elif self.tts_provider == "elevenlabs":
@@ -2933,6 +2984,7 @@ class VoiceAssistant:
                         TTS_STOP_EVENT.clear()
                         audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
                         audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
+                        self.stop_thinking_sound()
                         play_mp3_bytes(
                             audio_bytes,
                             audio=self.audio,
@@ -2946,15 +2998,18 @@ class VoiceAssistant:
                         print(f"ElevenLabs TTS failed: {e}")
                         print("Falling back to local pyttsx3 TTS...")
                     else:
+                        self.stop_thinking_sound()
                         return False
             elif local_tts_playback_available():
                 print("ElevenLabs TTS selected but ELEVENLABS_API_KEY is missing. Falling back to pyttsx3...")
             else:
+                self.stop_thinking_sound()
                 return False
         else:
             if local_tts_playback_available():
                 print(f"Unknown TTS provider '{self.tts_provider}'. Falling back to pyttsx3...")
             else:
+                self.stop_thinking_sound()
                 return False
 
         return self.text_to_speech_pyttsx3(text)
@@ -2975,6 +3030,7 @@ class VoiceAssistant:
                 file_rendered = temp_path and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
                 if file_rendered:
                     try:
+                        self.stop_thinking_sound()
                         self.play_local_tts_file(temp_path, stop_event=TTS_STOP_EVENT)
                         return True
                     except Exception as e:
@@ -2984,13 +3040,16 @@ class VoiceAssistant:
                         print(f"Local pyttsx3 backend playback failed: {e}. Falling back to direct system TTS...")
                 if self.audio_output_device_index is not None:
                     print("Local pyttsx3 file rendering failed; direct system TTS skipped because a backend output device is selected.")
+                    self.stop_thinking_sound()
                     return False
                 if not file_rendered:
                     print("Local pyttsx3 file rendering failed. Falling back to direct system TTS...")
+                self.stop_thinking_sound()
                 TTS_ENGINE.say(text)
                 TTS_ENGINE.runAndWait()
             return True
         except Exception as e:
+            self.stop_thinking_sound()
             print(f"Local pyttsx3 TTS failed: {e}")
             return False
         finally:
@@ -3443,9 +3502,13 @@ class VoiceAssistant:
                 f"Détail: {detail}"
             )
 
+        self.play_command_ack_sound()
         self.start_thinking_sound()
         try:
             return await self._run_agent_with_optional_tool_routing(text)
+        except asyncio.CancelledError:
+            self.stop_thinking_sound()
+            raise
         except asyncio.TimeoutError:
             return "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple."
         except Exception as e:
@@ -3463,8 +3526,6 @@ class VoiceAssistant:
                     "Je vais redémarrer la session MCP, puis tu pourras relancer la commande."
                 )
             return f"Sorry, I encountered an error: {error_text}"
-        finally:
-            self.stop_thinking_sound()
 
     def _is_mcp_connection_loss_error(self, error_text: str) -> bool:
         normalized = error_text.lower()
@@ -4226,6 +4287,7 @@ async def main():
         current_interrupt_conversation_enabled = env_bool_from_values(values, "INTERRUPT_CONVERSATION_ENABLED", False)
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
         current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
+        current_command_ack_sound_enabled = env_bool_from_values(values, "COMMAND_ACK_SOUND_ENABLED", False)
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
         current_openai_tts_speed = env_float_from_values(values, "WEB_TTS_SPEED", 1.0)
         current_web_tts_volume = min(1.0, env_float_from_values(values, "WEB_TTS_VOLUME", 1.0))
@@ -4310,6 +4372,7 @@ async def main():
             "selected_backend_audio_output_device": current_backend_audio_output_device,
             "thinking_sounds": list_thinking_sound_options(),
             "selected_thinking_sound_file": current_thinking_sound_file,
+            "selected_command_ack_sound_enabled": current_command_ack_sound_enabled,
             "message": message,
         }
 
@@ -4331,6 +4394,7 @@ async def main():
         backend_audio_output_device: str,
         voice_id: str,
         thinking_sound_file: str,
+        command_ack_sound_enabled: bool,
         openai_tts_voice: str,
         openai_tts_speed: float,
         web_tts_volume: float,
@@ -4364,6 +4428,7 @@ async def main():
         backend_audio_output_device = str(backend_audio_output_device or "").strip()
         voice_id = voice_id.strip()
         thinking_sound_file = thinking_sound_file.strip()
+        command_ack_sound_enabled = bool(command_ack_sound_enabled)
         openai_tts_voice = (openai_tts_voice or "").strip()
         openai_tts_speed = max(0.6, min(1.8, float(openai_tts_speed or 1.0)))
         web_tts_volume = max(0.0, min(1.0, float(web_tts_volume if web_tts_volume is not None else 1.0)))
@@ -4538,6 +4603,7 @@ async def main():
                 "BACKEND_AUDIO_OUTPUT_DEVICE": backend_audio_output_device,
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
+                "COMMAND_ACK_SOUND_ENABLED": "true" if command_ack_sound_enabled else "false",
                 "WEB_TTS_VOICE": openai_tts_voice,
                 "WEB_TTS_SPEED": f"{openai_tts_speed:.2f}",
                 "WEB_TTS_VOLUME": f"{web_tts_volume:.2f}",
@@ -4589,6 +4655,7 @@ async def main():
             "backend_audio_output_device": backend_audio_output_device,
             "voice_id": voice_id,
             "thinking_sound_file": thinking_sound_file,
+            "command_ack_sound_enabled": command_ack_sound_enabled,
             "openai_tts_voice": openai_tts_voice,
             "openai_tts_speed": openai_tts_speed,
             "web_tts_volume": web_tts_volume,
@@ -4641,6 +4708,7 @@ async def main():
         tts_provider = os.getenv("TTS_PROVIDER", "elevenlabs").lower()
         voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
         thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
+        command_ack_sound_enabled = env_bool("COMMAND_ACK_SOUND_ENABLED", False)
         backend_audio_input_device = os.getenv("BACKEND_AUDIO_INPUT_DEVICE", "").strip()
         backend_audio_output_device = os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE", "").strip()
         vad_model_path = os.getenv("VAD_MODEL_PATH", str(DEFAULT_SILERO_VAD_MODEL)).strip() or str(DEFAULT_SILERO_VAD_MODEL)
@@ -4734,6 +4802,7 @@ async def main():
         print(f"Using cloud TTS provider: {cloud_tts_provider}")
         print(f"Using TTS provider: {tts_provider}")
         print(f"Using thinking sound file: {thinking_sound_file}")
+        print(f"Using command ack sound: {'enabled' if command_ack_sound_enabled else 'disabled'}")
         print(f"Using backend audio input: {backend_audio_input_device or 'default'}")
         print(f"Using backend audio output: {backend_audio_output_device or 'default'}")
         print(f"Using backend audio output pan: {backend_audio_output_pan:+.2f}")
@@ -4852,6 +4921,7 @@ async def main():
             tts_provider=tts_provider,
             elevenlabs_voice_id=voice_id,
             thinking_sound_file=thinking_sound_file,
+            command_ack_sound_enabled=command_ack_sound_enabled,
             backend_audio_input_device=backend_audio_input_device,
             backend_audio_output_device=backend_audio_output_device,
             vad_model_path=vad_model_path,
@@ -5184,7 +5254,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -5202,6 +5272,7 @@ async def main():
                 backend_audio_output_device,
                 voice_id,
                 thinking_sound_file,
+                command_ack_sound_enabled,
                 openai_tts_voice,
                 openai_tts_speed,
                 web_tts_volume,
