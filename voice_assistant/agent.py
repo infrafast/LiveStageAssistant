@@ -867,6 +867,16 @@ def normalize_audio_pan(pan: float | None) -> float:
     return max(-1.0, min(1.0, float(pan if pan is not None else 0.0)))
 
 
+def normalize_backend_audio_monitor_mode(mode: str | None) -> str:
+    """Normalize backend audio monitor mode."""
+    normalized = (mode or "off").strip().lower().replace("-", "_")
+    if normalized in {"pass_through", "passthrough"}:
+        return "passthrough"
+    if normalized == "rejected":
+        return "rejected"
+    return "off"
+
+
 def pcm_with_volume_and_pan(
     pcm_bytes: bytes,
     volume: float,
@@ -1293,6 +1303,8 @@ class VoiceAssistant:
         tts_speed: float = 1.0,
         backend_tts_volume: float = 1.0,
         backend_audio_output_pan: float = 0.0,
+        backend_audio_monitor_mode: str = "off",
+        backend_audio_monitor_volume: float = 1.0,
         wake_words: list[str] | None = None,
         mcp_config: dict | None = None,
         mcp_load_server_prompt: bool = False,
@@ -1343,6 +1355,8 @@ class VoiceAssistant:
             tts_speed: Cloud TTS speed for backend/non-web speech
             backend_tts_volume: Software gain for backend TTS playback, 0.0 to 2.0
             backend_audio_output_pan: Backend output pan, -1.0 left to 1.0 right
+            backend_audio_monitor_mode: Backend microphone monitor mode: off, rejected, or passthrough
+            backend_audio_monitor_volume: Software gain for backend microphone monitoring, 0.0 to 2.0
             wake_words: Optional global wake word variants used to gate command processing
             mcp_config: Optional MCP server configuration dict
             mcp_load_server_prompt: Whether to load extra system instructions from an MCP server
@@ -1382,6 +1396,12 @@ class VoiceAssistant:
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
         self.backend_audio_output_pan = normalize_audio_pan(backend_audio_output_pan)
+        self.backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(backend_audio_monitor_mode)
+        self.backend_audio_monitor_volume = max(
+            0.0,
+            min(2.0, float(backend_audio_monitor_volume if backend_audio_monitor_volume is not None else 1.0)),
+        )
+        self.backend_audio_monitor_warning_shown = False
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
@@ -2352,6 +2372,7 @@ class VoiceAssistant:
         print("\nListening... (speak now)")
 
         stream = None
+        monitor_stream = None
         try:
             with suppress_native_stderr():
                 stream = self.audio.open(
@@ -2362,6 +2383,13 @@ class VoiceAssistant:
                     input_device_index=self.audio_input_device_index,
                     frames_per_buffer=self.chunk,
                 )
+            if self.backend_audio_monitor_mode == "passthrough":
+                try:
+                    monitor_stream = self._open_backend_audio_monitor_stream()
+                except Exception as e:
+                    if not self.backend_audio_monitor_warning_shown:
+                        print(f"Backend audio pass-through monitor unavailable: {e}")
+                        self.backend_audio_monitor_warning_shown = True
 
             self.vad.reset()
             frames: list[bytes] = []
@@ -2387,6 +2415,15 @@ class VoiceAssistant:
                     break
 
                 data = stream.read(self.chunk, exception_on_overflow=False)
+                if monitor_stream:
+                    try:
+                        monitor_stream.write(self._prepare_backend_monitor_chunk(data))
+                    except Exception as e:
+                        self._close_audio_stream(monitor_stream)
+                        monitor_stream = None
+                        if not self.backend_audio_monitor_warning_shown:
+                            print(f"Backend audio pass-through monitor stopped: {e}")
+                            self.backend_audio_monitor_warning_shown = True
                 vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
                 probabilities = self.vad.process_pcm(vad_data)
                 speech_probability = max(probabilities) if probabilities else 0.0
@@ -2440,13 +2477,67 @@ class VoiceAssistant:
             self._mark_microphone_unavailable(e)
             return None
         finally:
-            if stream:
-                try:
-                    if stream.is_active():
-                        stream.stop_stream()
-                    stream.close()
-                except Exception:
-                    pass
+            self._close_audio_stream(monitor_stream)
+            self._close_audio_stream(stream)
+
+    def _open_backend_audio_monitor_stream(self):
+        """Open a backend output stream for microphone monitoring."""
+        if self.audio_output_device_status == "unavailable":
+            raise RuntimeError("backend audio output is unavailable")
+        output_channels = 2 if self.channels == 1 and abs(self.backend_audio_output_pan) > 1e-6 else self.channels
+        with suppress_native_stderr():
+            return self.audio.open(
+                format=self.audio_format,
+                channels=output_channels,
+                rate=self.rate,
+                output=True,
+                output_device_index=self.audio_output_device_index,
+                frames_per_buffer=self.chunk,
+            )
+
+    def _prepare_backend_monitor_chunk(self, data: bytes) -> bytes:
+        """Apply monitor volume and pan to a backend microphone chunk."""
+        output, _channels = pcm_with_volume_and_pan(
+            data,
+            self.backend_audio_monitor_volume,
+            channels=self.channels,
+            pan=self.backend_audio_output_pan,
+        )
+        return output
+
+    def _close_audio_stream(self, stream) -> None:
+        """Close a PyAudio stream without surfacing teardown errors."""
+        if not stream:
+            return
+        try:
+            if stream.is_active():
+                stream.stop_stream()
+            stream.close()
+        except Exception:
+            pass
+
+    def play_rejected_backend_audio(self, audio_data: bytes) -> None:
+        """Replay a wake-word-rejected backend utterance through the selected output."""
+        if (
+            self.backend_audio_monitor_mode != "rejected"
+            or not audio_data
+            or self.audio_output_device_status == "unavailable"
+        ):
+            return
+        try:
+            play_pcm_bytes(
+                self.audio,
+                audio_data,
+                sample_rate=self.rate,
+                channels=self.channels,
+                output_device_index=self.audio_output_device_index,
+                volume=self.backend_audio_monitor_volume,
+                pan=self.backend_audio_output_pan,
+            )
+        except Exception as e:
+            if not self.backend_audio_monitor_warning_shown:
+                print(f"Backend audio rejected monitor unavailable: {e}")
+                self.backend_audio_monitor_warning_shown = True
 
     def _mark_microphone_unavailable(self, error: Exception) -> None:
         """Switch to text fallback when the microphone cannot be opened."""
@@ -3474,6 +3565,7 @@ class VoiceAssistant:
                         should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
                         if not should_process:
                             print("Wake word not detected. Ignoring transcription.")
+                            self.play_rejected_backend_audio(audio_data)
                             continue
                         if matched_wake_word:
                             print(f"Wake word detected: {matched_wake_word}")
@@ -4127,6 +4219,8 @@ async def main():
         current_web_tts_volume = min(1.0, env_float_from_values(values, "WEB_TTS_VOLUME", 1.0))
         current_backend_tts_volume = env_float_from_values(values, "BACKEND_TTS_VOLUME", 1.0)
         current_backend_audio_output_pan = normalize_audio_pan(env_float_from_values(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
+        current_backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(values.get("BACKEND_AUDIO_MONITOR_MODE"))
+        current_backend_audio_monitor_volume = env_float_from_values(values, "BACKEND_AUDIO_MONITOR_VOLUME", 1.0)
         current_vad_speech_threshold = env_float_from_values(values, "VAD_SPEECH_THRESHOLD", 0.5)
         current_vad_negative_threshold = env_float_from_values(values, "VAD_NEGATIVE_THRESHOLD", 0.35)
         current_vad_min_speech_ms = env_int_from_values(values, "VAD_MIN_SPEECH_MS", 120)
@@ -4190,6 +4284,8 @@ async def main():
             "selected_web_tts_volume": current_web_tts_volume,
             "selected_backend_tts_volume": current_backend_tts_volume,
             "selected_backend_audio_output_pan": current_backend_audio_output_pan,
+            "selected_backend_audio_monitor_mode": current_backend_audio_monitor_mode,
+            "selected_backend_audio_monitor_volume": current_backend_audio_monitor_volume,
             "selected_vad_speech_threshold": current_vad_speech_threshold,
             "selected_vad_negative_threshold": current_vad_negative_threshold,
             "selected_vad_min_speech_ms": current_vad_min_speech_ms,
@@ -4228,6 +4324,8 @@ async def main():
         web_tts_volume: float,
         backend_tts_volume: float,
         backend_audio_output_pan: float,
+        backend_audio_monitor_mode: str,
+        backend_audio_monitor_volume: float,
         vad_speech_threshold: float,
         vad_negative_threshold: float,
         vad_min_speech_ms: int,
@@ -4259,6 +4357,13 @@ async def main():
         web_tts_volume = max(0.0, min(1.0, float(web_tts_volume if web_tts_volume is not None else 1.0)))
         backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
         backend_audio_output_pan = normalize_audio_pan(backend_audio_output_pan)
+        backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(backend_audio_monitor_mode)
+        backend_audio_monitor_volume = max(
+            0.0,
+            min(2.0, float(backend_audio_monitor_volume if backend_audio_monitor_volume is not None else 1.0)),
+        )
+        if backend_audio_monitor_mode == "rejected" and not wake_word:
+            backend_audio_monitor_mode = "off"
         vad_speech_threshold = max(0.05, min(0.95, float(vad_speech_threshold or 0.5)))
         vad_negative_threshold = max(0.01, min(0.95, float(vad_negative_threshold or 0.35)))
         if vad_negative_threshold >= vad_speech_threshold:
@@ -4426,6 +4531,8 @@ async def main():
                 "WEB_TTS_VOLUME": f"{web_tts_volume:.2f}",
                 "BACKEND_TTS_VOLUME": f"{backend_tts_volume:.2f}",
                 "BACKEND_AUDIO_OUTPUT_PAN": f"{backend_audio_output_pan:.2f}",
+                "BACKEND_AUDIO_MONITOR_MODE": backend_audio_monitor_mode,
+                "BACKEND_AUDIO_MONITOR_VOLUME": f"{backend_audio_monitor_volume:.2f}",
             },
             remove_keys={"WEB_AUDIO_ENABLED"},
         )
@@ -4475,6 +4582,8 @@ async def main():
             "web_tts_volume": web_tts_volume,
             "backend_tts_volume": backend_tts_volume,
             "backend_audio_output_pan": backend_audio_output_pan,
+            "backend_audio_monitor_mode": backend_audio_monitor_mode,
+            "backend_audio_monitor_volume": backend_audio_monitor_volume,
             "vad_speech_threshold": vad_speech_threshold,
             "vad_negative_threshold": vad_negative_threshold,
             "vad_min_speech_ms": vad_min_speech_ms,
@@ -4554,8 +4663,13 @@ async def main():
         web_tts_volume = max(0.0, min(1.0, env_float("WEB_TTS_VOLUME", 1.0)))
         backend_tts_volume = max(0.0, min(2.0, env_float("BACKEND_TTS_VOLUME", 1.0)))
         backend_audio_output_pan = normalize_audio_pan(env_float("BACKEND_AUDIO_OUTPUT_PAN", 0.0))
+        backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(os.getenv("BACKEND_AUDIO_MONITOR_MODE", "off"))
+        backend_audio_monitor_volume = max(0.0, min(2.0, env_float("BACKEND_AUDIO_MONITOR_VOLUME", 1.0)))
         web_stt_model = os.getenv("WEB_STT_MODEL", "whisper-1").strip()
         wake_words = parse_wake_words(env_optional("WAKE_WORD"))
+        if backend_audio_monitor_mode == "rejected" and not wake_words:
+            print("Backend audio monitor rejected mode requires WAKE_WORD; falling back to off.")
+            backend_audio_monitor_mode = "off"
         system_prompt = env_optional("ASSISTANT_SYSTEM_PROMPT")
         mcp_config_path = env_optional("MCP_CONFIG")
         mcp_prompt_merge_mode = os.getenv("MCP_PROMPT_MERGE_MODE", "append").lower()
@@ -4611,6 +4725,7 @@ async def main():
         print(f"Using backend audio input: {backend_audio_input_device or 'default'}")
         print(f"Using backend audio output: {backend_audio_output_device or 'default'}")
         print(f"Using backend audio output pan: {backend_audio_output_pan:+.2f}")
+        print(f"Using backend audio monitor: {backend_audio_monitor_mode}, volume {backend_audio_monitor_volume:.2f}")
         if voice_cancel_during_thinking:
             print("Using voice cancel during thinking: enabled")
         if interrupt_conversation_enabled:
@@ -4738,6 +4853,8 @@ async def main():
             tts_speed=web_tts_speed,
             backend_tts_volume=backend_tts_volume,
             backend_audio_output_pan=backend_audio_output_pan,
+            backend_audio_monitor_mode=backend_audio_monitor_mode,
+            backend_audio_monitor_volume=backend_audio_monitor_volume,
             wake_words=wake_words,
             mcp_config=mcp_config,
             mcp_load_server_prompt=env_bool("MCP_LOAD_SERVER_PROMPT", False),
@@ -5055,7 +5172,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -5078,6 +5195,8 @@ async def main():
                 web_tts_volume,
                 backend_tts_volume,
                 backend_audio_output_pan,
+                backend_audio_monitor_mode,
+                backend_audio_monitor_volume,
                 vad_speech_threshold,
                 vad_negative_threshold,
                 vad_min_speech_ms,
