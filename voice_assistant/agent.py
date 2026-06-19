@@ -3502,7 +3502,6 @@ class VoiceAssistant:
                 f"Détail: {detail}"
             )
 
-        self.play_command_ack_sound()
         self.start_thinking_sound()
         try:
             return await self._run_agent_with_optional_tool_routing(text)
@@ -3738,6 +3737,7 @@ class VoiceAssistant:
                         self.web_monitor.set_assistant_busy(False)
                     return "reload"
 
+                self.play_command_ack_sound()
                 print(f"\nAssistant: {response}")
                 if self.session_context_store:
                     self.session_context_store.append_message("assistant", response)

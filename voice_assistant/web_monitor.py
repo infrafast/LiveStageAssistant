@@ -5036,7 +5036,6 @@ INDEX_HTML = """<!doctype html>
       if (!cleanedCommand) return;
       const shouldInterrupt = Boolean(options.interrupt) && interruptConversationEnabled && (composerLocked || webTtsPlaying);
       if (composerLocked && !shouldInterrupt) return;
-      playBrowserCommandAckSound();
       if (shouldInterrupt) {
         await requestSilentCancel();
       }
@@ -6441,7 +6440,6 @@ INDEX_HTML = """<!doctype html>
         lastServerMessages = data.messages || [];
         const serverBusy = Boolean(data.assistant_busy);
         const showThinking = serverBusy || pendingMessages.length > 0;
-        if (!previousBusy && serverBusy) playBrowserCommandAckSound();
         const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
         const latestAssistantMessageAgeMs = latestAssistantMessage && latestAssistantMessage.created_at
           ? Date.now() - Number(latestAssistantMessage.created_at) * 1000
@@ -6464,6 +6462,7 @@ INDEX_HTML = """<!doctype html>
           willSpeakLatestAssistant
         ) {
           lastSpokenAssistantMessageId = latestAssistantMessage.id;
+          playBrowserCommandAckSound();
           playWebTts(latestAssistantMessage.text || "");
         } else if (previousBusy && !showThinking && conversationEnabled) {
           const delay = interruptConversationEnabled
