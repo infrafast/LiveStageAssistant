@@ -1033,8 +1033,8 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
     if cloud_provider == "none" and web_tts_provider in {"openai", "elevenlabs"}:
         cloud_provider = web_tts_provider
     voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
-    backend_tts_volume = max(0.0, min(2.0, env_float_from_values(values, "BACKEND_TTS_VOLUME", 1.0)))
-    backend_audio_output_pan = normalize_audio_pan(env_float_from_values(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
+    backend_tts_volume = max(0.0, min(2.0, env_float_from_mapping(values, "BACKEND_TTS_VOLUME", 1.0)))
+    backend_audio_output_pan = normalize_audio_pan(env_float_from_mapping(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
 
     def play_auto_mp3(audio_bytes: bytes) -> None:
         temp_audio = None
