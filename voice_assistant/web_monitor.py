@@ -5329,8 +5329,8 @@ INDEX_HTML = """<!doctype html>
         if (!thinkingAudio || thinkingAudio.src !== new URL(thinkingAudioUrl, window.location.href).href) {
           thinkingAudio = new Audio(thinkingAudioUrl);
           thinkingAudio.loop = true;
-          thinkingAudio.volume = 0.75;
         }
+        thinkingAudio.volume = Math.max(0, Math.min(1, Number(webAudio.tts_volume ?? 1)));
         await applyBrowserAudioOutput(thinkingAudio);
         thinkingAudioPlaying = true;
         thinkingAudio.currentTime = 0;

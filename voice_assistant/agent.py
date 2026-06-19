@@ -93,6 +93,7 @@ TOOL_ACTION_FRESHNESS_RULE = (
     "state through tools, call the relevant tool again. Do not refuse a new action solely because a previous turn's "
     "tool call failed, timed out, or reported a disconnected service. Do not mention this internal rule."
 )
+RELOAD_AUDIO_GUARD: list[Any] = []
 SESSION_LLM_SUMMARY_PROMPT = (
     "Create durable memory for this persisted assistant session.\n"
     "Keep only what should remain useful later: user preferences, future instructions, aliases, mappings, conventions, "
@@ -1540,6 +1541,7 @@ class VoiceAssistant:
                             data = wav_file.readframes(1024)
                             if not data:
                                 break
+                            data = apply_pcm_volume(data, self.backend_tts_volume)
                             stream.write(data)
                     finally:
                         if stream:
@@ -2349,9 +2351,6 @@ class VoiceAssistant:
 
                 if len(frames) > self.rate / self.chunk * 30:
                     break
-
-            stream.stop_stream()
-            stream.close()
 
             if self.pending_injected_command:
                 return None
@@ -3566,16 +3565,21 @@ class VoiceAssistant:
             return "exit"
         finally:
             # Cleanup
-            if self.reload_event and self.reload_event.is_set():
+            reload_requested = bool(self.reload_event and self.reload_event.is_set())
+            if reload_requested:
                 print("Reload cleanup started.")
             try:
                 self.stop_thinking_sound()
             except Exception:
                 pass
-            try:
-                self.audio.terminate()
-            except Exception:
-                pass
+            if reload_requested:
+                RELOAD_AUDIO_GUARD.append(self.audio)
+                print("Backend audio termination deferred for reload.")
+            else:
+                try:
+                    self.audio.terminate()
+                except Exception:
+                    pass
             try:
                 TTS_ENGINE.stop()
             except Exception:
@@ -3585,7 +3589,7 @@ class VoiceAssistant:
                     await asyncio.wait_for(self.mcp_client.close_all_sessions(), timeout=3.0)
                 except Exception as e:
                     print(f"MCP cleanup timed out or failed: {e}")
-            if self.reload_event and self.reload_event.is_set():
+            if reload_requested:
                 print("Reload cleanup finished.")
 
         return "exit"
