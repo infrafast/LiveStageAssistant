@@ -2903,15 +2903,22 @@ class VoiceAssistant:
         model: str | None = None,
         voice: str | None = None,
         speed: float | None = None,
+        volume: float | None = None,
     ) -> bool:
         """Play a TTS test phrase through the selected backend PyAudio output."""
         selected_provider = (provider or self.tts_provider or "").strip().lower()
         if selected_provider in {"", "none"}:
             raise ValueError("backend TTS output is disabled")
+        test_volume = max(0.0, min(2.0, float(volume if volume is not None else self.backend_tts_volume)))
 
         TTS_STOP_EVENT.clear()
         if selected_provider == "pyttsx3":
-            return self.text_to_speech_pyttsx3(text)
+            previous_volume = self.backend_tts_volume
+            self.backend_tts_volume = test_volume
+            try:
+                return self.text_to_speech_pyttsx3(text)
+            finally:
+                self.backend_tts_volume = previous_volume
 
         if selected_provider == "openai":
             with TTS_LOCK:
@@ -2926,7 +2933,7 @@ class VoiceAssistant:
                     audio,
                     audio=self.audio,
                     output_device_index=self.audio_output_device_index,
-                    volume=self.backend_tts_volume,
+                    volume=test_volume,
                 )
             return True
 
@@ -2934,7 +2941,12 @@ class VoiceAssistant:
             if not elevenlabs_playback_available():
                 if local_tts_playback_available():
                     print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
-                    return self.text_to_speech_pyttsx3(text)
+                    previous_volume = self.backend_tts_volume
+                    self.backend_tts_volume = test_volume
+                    try:
+                        return self.text_to_speech_pyttsx3(text)
+                    finally:
+                        self.backend_tts_volume = previous_volume
                 return False
             with TTS_LOCK:
                 TTS_STOP_EVENT.clear()
@@ -2948,7 +2960,7 @@ class VoiceAssistant:
                     audio_bytes,
                     audio=self.audio,
                     output_device_index=self.audio_output_device_index,
-                    volume=self.backend_tts_volume,
+                    volume=test_volume,
                 )
             return True
 
@@ -4700,6 +4712,7 @@ async def main():
                     model=str(requested.get("model") or DEFAULT_OPENAI_TTS_MODEL),
                     voice=str(requested.get("voice") or ""),
                     speed=max(0.6, min(1.8, float(requested.get("speed") or web_tts_speed or 1.0))),
+                    volume=max(0.0, min(2.0, float(requested.get("volume") if requested.get("volume") is not None else active_assistant.backend_tts_volume))),
                 )
                 if not ok:
                     raise ValueError("Backend TTS playback failed")

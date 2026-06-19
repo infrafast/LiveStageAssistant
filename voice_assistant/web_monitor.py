@@ -1387,6 +1387,7 @@ class WebMonitor:
                         "model": str(payload.get("model") or "").strip(),
                         "voice": str(payload.get("voice") or "").strip(),
                         "speed": payload.get("speed"),
+                        "volume": payload.get("volume"),
                     }
 
                     try:
@@ -5404,6 +5405,7 @@ INDEX_HTML = """<!doctype html>
       const voice = provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value;
       const speed = Number(openaiTtsSpeed.value || 1);
       const volume = Number(webTtsVolume.value || 1);
+      const backendVolume = Number(backendTtsVolume.value || 1);
       const output = selectedTtsOutput();
       ttsTest.disabled = true;
       llmMessage.textContent = "Testing voice...";
@@ -5417,7 +5419,8 @@ INDEX_HTML = """<!doctype html>
               provider,
               model: provider === "openai" ? "gpt-4o-mini-tts" : "",
               voice,
-              speed
+              speed,
+              volume: backendVolume
             })
           });
           if (!response.ok) throw new Error(await response.text());
