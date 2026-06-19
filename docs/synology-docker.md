@@ -160,7 +160,7 @@ The web Config -> STT/TTS section also exposes a nested **Voice Activity Detecti
 
 Backend microphone capture auto-selects a channel/rate combination that PyAudio can open, then resamples internally to 16 kHz for Silero VAD. This avoids Raspberry Pi or NAS ALSA devices that list as inputs but reject a fixed 16 kHz stream.
 
-If the web config is saved while backend microphone capture is active, the assistant interrupts capture and reloads. During that reload, PortAudio termination is deferred to avoid native ALSA/PipeWire crashes during immediate PyAudio teardown.
+If the web config is saved while backend microphone capture is active, the assistant interrupts capture and reloads. During that reload, PortAudio termination is deferred and the local pyttsx3/espeak engine stop is skipped in favor of the shared TTS stop event to avoid native ALSA/PipeWire crashes or pyttsx3/espeak hangs during immediate audio teardown.
 
 `SESSION_CONTEXT_SIZE` controls how much of the active `.context.json` session summary is reinjected for continuity. The assistant stores both a deterministic `summary` transcript and, when an LLM is available at startup or session switch, a compact `llm_summary` generated from it. In the web chat, restored bubbles highlighted in green are the messages that fit in the current context window; moving the **Session Context** range updates that preview immediately. In the session sidebar, hover a session on desktop to preview its `llm_summary`, or tap the small `i` button on touch/mobile when a summary exists. Use `0` to disable context injection.
 

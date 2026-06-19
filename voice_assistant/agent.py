@@ -3762,10 +3762,20 @@ class VoiceAssistant:
                     self.audio.terminate()
                 except Exception:
                     pass
-            try:
-                TTS_ENGINE.stop()
-            except Exception:
-                pass
+            if reload_requested:
+                TTS_STOP_EVENT.set()
+                process = TTS_PLAYBACK_PROCESS
+                if process and process.poll() is None:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+                print("TTS engine stop deferred for reload.")
+            else:
+                try:
+                    TTS_ENGINE.stop()
+                except Exception:
+                    pass
             if self.mcp_client and self.mcp_client.sessions:
                 try:
                     await asyncio.wait_for(self.mcp_client.close_all_sessions(), timeout=3.0)
