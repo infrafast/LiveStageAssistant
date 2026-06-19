@@ -34,6 +34,15 @@ SECRET_KEY_MARKERS = (
 )
 LOGGER = logging.getLogger(__name__)
 TOOL_RESULT_MARKER = "Tool result:"
+COMMAND_ACK_SOUND_CANDIDATES = ("ring.wav", "bell.wav")
+
+
+def command_ack_sound_url() -> str:
+    """Return the available command acknowledgement asset URL."""
+    for filename in COMMAND_ACK_SOUND_CANDIDATES:
+        if (Path("assets") / filename).is_file():
+            return f"/assets/{filename}"
+    return "/assets/ring.wav"
 
 
 def redact_config_value(key: str, value: Any) -> Any:
@@ -371,6 +380,7 @@ class WebMonitor:
             "environment_loading": {"active": False, "title": ""},
             "remote_screen": {"vnc_url": "vnc://192.168.0.160:5900?password=ronron"},
             "web_audio": {"enabled": False, "stt_enabled": False, "tts_enabled": False},
+            "command_ack_sound_url": command_ack_sound_url(),
             "updated_at": time.time(),
         }
 
@@ -1726,6 +1736,7 @@ class WebMonitor:
                     self._snapshot["thinking_sound_url"] = f"/assets/{cleaned_file}"
                 else:
                     self._snapshot["thinking_sound_url"] = ""
+                self._snapshot["command_ack_sound_url"] = command_ack_sound_url()
             self._snapshot["updated_at"] = time.time()
 
     def snapshot(self) -> dict[str, Any]:
@@ -3651,6 +3662,7 @@ INDEX_HTML = """<!doctype html>
     let currentWebTtsAudio = null;
     let thinkingAudio = null;
     let thinkingAudioUrl = "";
+    let commandAckSoundUrl = "/assets/ring.wav";
     let thinkingAudioPlaying = false;
     let lastBrowserCommandAckAt = 0;
     let ortModulePromise = null;
@@ -4813,26 +4825,12 @@ INDEX_HTML = """<!doctype html>
       const nowMs = Date.now();
       if (nowMs - lastBrowserCommandAckAt < 900) return;
       lastBrowserCommandAckAt = nowMs;
-      const context = await ensureWebAudioContext();
-      if (!context) return;
       try {
-        const now = context.currentTime;
-        const gain = context.createGain();
-        gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.exponentialRampToValueAtTime(Math.max(0.02, Math.min(0.22, Number(webAudio.tts_volume ?? 1) * 0.22)), now + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
-        gain.connect(context.destination);
-        for (const [frequency, level] of [[1568, 1], [2352, 0.45], [3136, 0.22]]) {
-          const oscillator = context.createOscillator();
-          const toneGain = context.createGain();
-          oscillator.type = "sine";
-          oscillator.frequency.setValueAtTime(frequency, now);
-          toneGain.gain.setValueAtTime(level, now);
-          oscillator.connect(toneGain);
-          toneGain.connect(gain);
-          oscillator.start(now);
-          oscillator.stop(now + 0.26);
-        }
+        const audio = new Audio(commandAckSoundUrl);
+        audio.preload = "auto";
+        audio.volume = Math.max(0, Math.min(1, Number(webAudio.tts_volume ?? 1)));
+        await applyBrowserAudioOutput(audio);
+        await audio.play();
       } catch (error) {}
     }
 
@@ -6433,6 +6431,7 @@ INDEX_HTML = """<!doctype html>
         webAudio = data.web_audio || { enabled: false, stt_enabled: false, tts_enabled: false };
         interruptConversationEnabled = Boolean(webAudio.interrupt_conversation_enabled);
         thinkingAudioUrl = data.thinking_sound_url || "";
+        commandAckSoundUrl = data.command_ack_sound_url || "/assets/ring.wav";
         if (!webAudio.stt_enabled && conversationEnabled) {
           setConversationEnabled(false);
         }

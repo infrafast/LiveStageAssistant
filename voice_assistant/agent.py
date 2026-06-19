@@ -170,7 +170,7 @@ TTS_OUTPUT_OPTIONS = [
 ]
 DEFAULT_BACKEND_MP3_SAMPLE_RATE = 24000
 DEFAULT_BACKEND_MP3_CHANNELS = 1
-DEFAULT_COMMAND_ACK_SAMPLE_RATE = 24000
+COMMAND_ACK_SOUND_CANDIDATES = ("ring.wav", "bell.wav")
 
 
 @contextmanager
@@ -926,21 +926,6 @@ def apply_pcm_volume(pcm_bytes: bytes, volume: float) -> bytes:
     return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
 
 
-def generate_command_ack_pcm(sample_rate: int = DEFAULT_COMMAND_ACK_SAMPLE_RATE) -> bytes:
-    """Generate a short bell-like command acknowledgement chime."""
-    duration = 0.24
-    samples_count = max(1, int(sample_rate * duration))
-    t = np.linspace(0.0, duration, samples_count, endpoint=False, dtype=np.float32)
-    envelope = np.exp(-9.0 * t)
-    tone = (
-        np.sin(2.0 * np.pi * 1568.0 * t)
-        + 0.45 * np.sin(2.0 * np.pi * 2352.0 * t)
-        + 0.22 * np.sin(2.0 * np.pi * 3136.0 * t)
-    )
-    audio = tone * envelope * 0.32
-    return np.clip(audio * 32767.0, -32768, 32767).astype(np.int16).tobytes()
-
-
 def play_pcm_bytes(
     audio: pyaudio.PyAudio,
     pcm_bytes: bytes,
@@ -1499,6 +1484,7 @@ class VoiceAssistant:
         self.thinking_sound_stop_event = threading.Event()
         self.thinking_sound_thread: threading.Thread | None = None
         self.command_ack_sound_enabled = bool(command_ack_sound_enabled)
+        self.command_ack_sound_path = self._resolve_command_ack_sound_path()
         self.command_ack_sound_warning_shown = False
 
         # MCP configuration
@@ -1582,6 +1568,14 @@ class VoiceAssistant:
 
         return None
 
+    def _resolve_command_ack_sound_path(self) -> Path | None:
+        """Resolve the fixed command acknowledgement sound asset."""
+        for filename in COMMAND_ACK_SOUND_CANDIDATES:
+            asset_path = self._resolve_asset_path(filename)
+            if asset_path:
+                return asset_path
+        return None
+
     def start_thinking_sound(self) -> None:
         """Loop the configured thinking sound until stop_thinking_sound is called."""
         if not self.thinking_sound_path:
@@ -1615,7 +1609,7 @@ class VoiceAssistant:
             thread.join(timeout=0.5)
 
     def play_command_ack_sound(self) -> None:
-        """Play a short non-blocking chime when a command is accepted."""
+        """Play a short non-blocking asset when a command is accepted."""
         if (
             not self.command_ack_sound_enabled
             or self.tts_provider == "none"
@@ -1625,15 +1619,24 @@ class VoiceAssistant:
 
         def _play() -> None:
             try:
-                play_pcm_bytes(
-                    self.audio,
-                    generate_command_ack_pcm(),
-                    sample_rate=DEFAULT_COMMAND_ACK_SAMPLE_RATE,
-                    channels=1,
-                    output_device_index=self.audio_output_device_index,
-                    volume=min(1.0, max(0.0, self.backend_tts_volume)),
-                    pan=self.backend_audio_output_pan,
-                )
+                if not self.command_ack_sound_path:
+                    raise RuntimeError("ring.wav was not found in assets/")
+                volume = min(1.0, max(0.0, self.backend_tts_volume))
+                try:
+                    self.play_wav_file(self.command_ack_sound_path, volume=volume)
+                except Exception as wav_error:
+                    if not ffmpeg_decode_available():
+                        raise wav_error
+                    pcm_bytes = decode_audio_file_to_pcm_bytes(self.command_ack_sound_path)
+                    play_pcm_bytes(
+                        self.audio,
+                        pcm_bytes,
+                        sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+                        channels=DEFAULT_BACKEND_MP3_CHANNELS,
+                        output_device_index=self.audio_output_device_index,
+                        volume=volume,
+                        pan=self.backend_audio_output_pan,
+                    )
             except Exception as e:
                 if not self.command_ack_sound_warning_shown:
                     print(f"Could not play command ack sound: {e}")
@@ -3084,7 +3087,13 @@ class VoiceAssistant:
             pan=self.backend_audio_output_pan,
         )
 
-    def play_wav_file(self, wav_path: str | Path, *, stop_event: threading.Event | None = None) -> None:
+    def play_wav_file(
+        self,
+        wav_path: str | Path,
+        *,
+        stop_event: threading.Event | None = None,
+        volume: float | None = None,
+    ) -> None:
         """Play a WAV file through backend PyAudio output selection."""
         with wave.open(str(wav_path), "rb") as wav_file:
             sample_width = wav_file.getsampwidth()
@@ -3093,6 +3102,7 @@ class VoiceAssistant:
             stream = None
             source_channels = wav_file.getnchannels()
             output_channels = 2 if source_channels == 1 and abs(self.backend_audio_output_pan) > 1e-6 else source_channels
+            playback_volume = self.backend_tts_volume if volume is None else volume
             try:
                 with suppress_native_stderr():
                     stream = self.audio.open(
@@ -3111,7 +3121,7 @@ class VoiceAssistant:
                         break
                     data, _ = pcm_with_volume_and_pan(
                         data,
-                        self.backend_tts_volume,
+                        playback_volume,
                         channels=source_channels,
                         pan=self.backend_audio_output_pan,
                     )
