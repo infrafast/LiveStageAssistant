@@ -3614,7 +3614,7 @@ INDEX_HTML = """<!doctype html>
     let sessionSummaryHoverId = "";
     let sessionSummaryCache = new Map();
     let lastPointer = { x: -1, y: -1 };
-    let webAudio = { enabled: false, stt_enabled: false, tts_enabled: false };
+    let webAudio = { enabled: false, stt_enabled: false, tts_enabled: false, tts_output: "silent" };
     let mediaRecorder = null;
     let mediaStream = null;
     let recordedChunks = [];
@@ -4821,7 +4821,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function playBrowserCommandAckSound() {
-      if (!commandAckSoundEnabled() || !webAudio.tts_enabled) return;
+      if (!commandAckSoundEnabled() || !webAudio.tts_enabled || webAudio.tts_output !== "browser") return;
       const nowMs = Date.now();
       if (nowMs - lastBrowserCommandAckAt < 900) return;
       lastBrowserCommandAckAt = nowMs;
@@ -5415,7 +5415,7 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function startThinkingAudio() {
-      if (!thinkingAudioUrl || thinkingAudioPlaying) return;
+      if (!webAudio.tts_enabled || webAudio.tts_output !== "browser" || !thinkingAudioUrl || thinkingAudioPlaying) return;
       try {
         if (!thinkingAudio || thinkingAudio.src !== new URL(thinkingAudioUrl, window.location.href).href) {
           thinkingAudio = new Audio(thinkingAudioUrl);
@@ -6428,7 +6428,7 @@ INDEX_HTML = """<!doctype html>
         const shouldStick = logsEl.scrollTop + logsEl.clientHeight >= logsEl.scrollHeight - 8;
         logsEl.value = data.logs || "";
         if (shouldStick) logsEl.scrollTop = logsEl.scrollHeight;
-        webAudio = data.web_audio || { enabled: false, stt_enabled: false, tts_enabled: false };
+        webAudio = data.web_audio || { enabled: false, stt_enabled: false, tts_enabled: false, tts_output: "silent" };
         interruptConversationEnabled = Boolean(webAudio.interrupt_conversation_enabled);
         thinkingAudioUrl = data.thinking_sound_url || "";
         commandAckSoundUrl = data.command_ack_sound_url || "/assets/ring.wav";
@@ -6453,7 +6453,7 @@ INDEX_HTML = """<!doctype html>
           latestAssistantMessage &&
           latestAssistantMessage.id !== lastSpokenAssistantMessageId
         );
-        if (showThinking || willSpeakLatestAssistant) startThinkingAudio();
+        if (webAudio.tts_enabled && webAudio.tts_output === "browser" && (showThinking || willSpeakLatestAssistant)) startThinkingAudio();
         else stopThinkingAudio();
         setComposerLocked(showThinking);
         renderMessages(lastServerMessages, showThinking);

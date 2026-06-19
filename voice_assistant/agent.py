@@ -4802,6 +4802,7 @@ async def main():
         browser_stt_enabled = stt_input in {"both", "browser"}
         backend_tts_active = tts_provider != "none"
         web_tts_requested = web_tts_provider in {"openai", "elevenlabs"}
+        active_tts_output = "backend" if backend_tts_active else "browser" if web_tts_requested else "silent"
         web_audio_enabled = browser_stt_enabled or web_tts_requested
 
         print(f"Using env file: {env_file}")
@@ -4849,6 +4850,7 @@ async def main():
         web_audio_state = {
             "enabled": web_audio_enabled,
             "stt_input": stt_input,
+            "tts_output": active_tts_output,
             "backend_stt_enabled": backend_stt_enabled,
             "stt_enabled": web_audio_enabled and browser_stt_enabled and web_stt_provider == "openai" and bool(openai_api_key),
             "tts_enabled": (
