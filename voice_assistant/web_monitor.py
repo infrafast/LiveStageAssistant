@@ -171,12 +171,25 @@ def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dic
             "admin_url": "",
             "embeddable": False,
             "auth_required": False,
+            "routing": "",
             "detail": "",
         }
         if not isinstance(server_config, dict):
             entry["detail"] = "invalid MCP server config"
             frames.append(entry)
             continue
+
+        assistant_options = (
+            server_config.get("assistantOptions")
+            or server_config.get("assistantPrompt")
+            or server_config.get("agentPrompt")
+        )
+        if isinstance(assistant_options, dict):
+            routing = assistant_options.get("routing")
+            if isinstance(routing, list):
+                entry["routing"] = ", ".join(str(item).strip() for item in routing if str(item).strip())
+            elif routing is not None:
+                entry["routing"] = str(routing)
 
         server_type = str(server_config.get("type") or "stdio")
         entry["type"] = server_type
@@ -326,6 +339,7 @@ class WebMonitor:
         self._remote_screen_save_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
+        self._mcp_routing_save_handler: Callable[[dict[str, str]], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
@@ -428,6 +442,11 @@ class WebMonitor:
         """Register callback used by the web UI to test backend TTS output."""
         with self._lock:
             self._backend_tts_test_handler = handler
+
+    def set_mcp_routing_save_handler(self, handler: Callable[[dict[str, str]], dict[str, Any]]) -> None:
+        """Register callback used by the web UI to persist MCP routing words."""
+        with self._lock:
+            self._mcp_routing_save_handler = handler
 
     def set_session_context_handlers(
         self,
@@ -602,6 +621,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/backend-tts-test":
                         self._handle_backend_tts_test()
+                        return
+                    if self.path == "/api/mcp-routing":
+                        self._handle_mcp_routing_save()
                         return
                     if self.path == "/api/llm-config":
                         self._handle_llm_config_save()
@@ -1456,6 +1478,30 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self._send_json_error(500, {"ok": False, "error": {"message": f"Could not test backend TTS: {e}"}})
+                        return
+                    self._send_json(result)
+
+                def _handle_mcp_routing_save(self) -> None:
+                    handler = monitor._mcp_routing_save_handler
+                    if handler is None:
+                        self.send_error(503, "MCP routing save is not available")
+                        return
+
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    raw_routing = payload.get("routing")
+                    if not isinstance(raw_routing, dict):
+                        self.send_error(400, "routing must be an object")
+                        return
+                    routing = {str(name): str(value or "") for name, value in raw_routing.items()}
+                    try:
+                        result = handler(routing)
+                    except ValueError as e:
+                        self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        return
+                    except Exception as e:
+                        self._send_json_error(500, {"ok": False, "error": {"message": f"Could not save MCP routing: {e}"}})
                         return
                     self._send_json(result)
 
@@ -2720,6 +2766,35 @@ INDEX_HTML = """<!doctype html>
       font-weight: 700;
       cursor: pointer;
     }
+    .mcp-routing-box {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .mcp-routing-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+    .mcp-routing-save {
+      min-height: 38px;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 0 12px;
+      color: #fff;
+      background: var(--accent);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .mcp-routing-message {
+      min-height: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
     .mcp-server-frame {
       display: block;
       width: 100%;
@@ -2834,17 +2909,25 @@ INDEX_HTML = """<!doctype html>
       color: var(--muted);
       font-weight: 650;
     }
-    input, select {
+    input, select, textarea {
       width: 100%;
-      min-height: 38px;
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 0 10px;
       background: var(--surface-soft);
       color: var(--text);
       outline: none;
     }
-    input:focus, select:focus {
+    input, select {
+      min-height: 38px;
+      padding: 0 10px;
+    }
+    textarea {
+      min-height: 72px;
+      padding: 9px 10px;
+      resize: vertical;
+      font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    input:focus, select:focus, textarea:focus {
       border-color: var(--accent);
     }
     #llm-save {
@@ -3686,6 +3769,7 @@ INDEX_HTML = """<!doctype html>
         item.proxy_admin_url || "",
         Boolean(item.embeddable),
         Boolean(item.auth_required),
+        item.routing || "",
         item.detail || ""
       ])) + "|" + route;
       if (signature === mcpServersSignature) return;
@@ -3747,6 +3831,31 @@ INDEX_HTML = """<!doctype html>
         head.append(title, actions);
         card.append(head);
 
+        const routingBox = document.createElement("div");
+        routingBox.className = "mcp-routing-box";
+        const routingLabel = document.createElement("label");
+        routingLabel.textContent = "Routing words";
+        routingLabel.title = "assistantOptions.routing";
+        const routingRow = document.createElement("div");
+        routingRow.className = "mcp-routing-row";
+        const routingInput = document.createElement("textarea");
+        routingInput.className = "mcp-routing-input";
+        routingInput.dataset.serverName = server.name || "";
+        routingInput.value = server.routing || "";
+        routingInput.placeholder = "mixer,mix,volume,bus";
+        routingInput.spellcheck = false;
+        const routingSave = document.createElement("button");
+        routingSave.className = "mcp-routing-save";
+        routingSave.type = "button";
+        routingSave.textContent = "Save";
+        const routingMessage = document.createElement("div");
+        routingMessage.className = "mcp-routing-message";
+        routingMessage.textContent = "Comma-separated words; max 10 per server, no duplicates.";
+        routingSave.addEventListener("click", () => saveMcpRouting(routingMessage));
+        routingRow.append(routingInput, routingSave);
+        routingBox.append(routingLabel, routingRow, routingMessage);
+        card.append(routingBox);
+
         if (server.embeddable && selectedUrl) {
           const placeholder = document.createElement("div");
           placeholder.className = "mcp-server-placeholder";
@@ -3778,6 +3887,30 @@ INDEX_HTML = """<!doctype html>
         }
 
         mcpServerGrid.append(card);
+      }
+    }
+
+    async function saveMcpRouting(messageEl) {
+      const routing = {};
+      for (const input of mcpServerGrid.querySelectorAll(".mcp-routing-input")) {
+        const name = input.dataset.serverName || "";
+        if (name) routing[name] = input.value || "";
+      }
+      if (messageEl) messageEl.textContent = "Saving...";
+      try {
+        const response = await fetch("/api/mcp-routing", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ routing })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        if (messageEl) messageEl.textContent = data.message || "Routing saved.";
+        setEnvironmentLoading(true, "rafraichissement de l'environnement");
+        mcpServersSignature = "";
+        await refresh();
+      } catch (error) {
+        if (messageEl) messageEl.textContent = `Save failed: ${error}`;
       }
     }
 

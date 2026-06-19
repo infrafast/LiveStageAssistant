@@ -3677,6 +3677,58 @@ async def main():
         except (OSError, json.JSONDecodeError):
             return None
 
+    def mcp_config_path_from_values(values: dict) -> Path:
+        mcp_config_path = (values.get("MCP_CONFIG") or "").strip()
+        if not mcp_config_path:
+            raise ValueError("MCP_CONFIG is not set in the active env file")
+        path = Path(mcp_config_path)
+        return path if path.is_absolute() else Path.cwd() / path
+
+    def normalize_routing_words(value: Any) -> list[str]:
+        raw_values = re.split(r"[,;\n]+", str(value or ""))
+        words: list[str] = []
+        seen: set[str] = set()
+        for item in raw_values:
+            word = item.strip().lower()
+            if word and word not in seen:
+                words.append(word)
+                seen.add(word)
+        return words
+
+    def validate_mcp_routing_updates(config: dict[str, Any], routing_updates: dict[str, str]) -> dict[str, str]:
+        servers = config.get("mcpServers")
+        if not isinstance(servers, dict):
+            raise ValueError("active MCP config has no mcpServers object")
+
+        unknown = sorted(name for name in routing_updates if name not in servers)
+        if unknown:
+            raise ValueError(f"unknown MCP server(s): {', '.join(unknown)}")
+
+        normalized_updates: dict[str, str] = {}
+        keyword_owner: dict[str, str] = {}
+        for server_name, server_config in servers.items():
+            if not isinstance(server_config, dict):
+                continue
+            raw_routing = routing_updates.get(str(server_name))
+            if raw_routing is None:
+                assistant_options = (
+                    server_config.get("assistantOptions")
+                    or server_config.get("assistantPrompt")
+                    or server_config.get("agentPrompt")
+                    or {}
+                )
+                raw_routing = assistant_options.get("routing") if isinstance(assistant_options, dict) else ""
+
+            words = normalize_routing_words(raw_routing)
+            if len(words) > 10:
+                raise ValueError(f"routing words limit exceeded: {server_name} has {len(words)} words, max 10")
+            for word in words:
+                if word in keyword_owner and keyword_owner[word] != server_name:
+                    raise ValueError(f"routing word duplicate: {word}")
+                keyword_owner[word] = str(server_name)
+            normalized_updates[str(server_name)] = ",".join(words)
+        return normalized_updates
+
     def format_env_value(value: str) -> str:
         """Format an env value so python-dotenv can parse it back safely."""
         value = str(value)
@@ -4825,6 +4877,56 @@ async def main():
                 "message": f"Switching to {display_env_path(env_file)}.",
             }
 
+    def save_mcp_routing_config(routing_updates: dict[str, str]) -> dict[str, Any]:
+        with env_file_lock:
+            active_env_file = env_file
+            values = dict(dotenv_values(active_env_file))
+            mcp_config_path = mcp_config_path_from_values(values)
+
+            try:
+                with open(mcp_config_path) as config_file:
+                    config = json.load(config_file)
+            except OSError as e:
+                raise ValueError(f"could not read MCP_CONFIG '{mcp_config_path}': {e}") from e
+            except json.JSONDecodeError as e:
+                raise ValueError(f"invalid JSON in MCP_CONFIG '{mcp_config_path}': {e}") from e
+
+            if not isinstance(config, dict):
+                raise ValueError("active MCP config must be a JSON object")
+
+            normalized_updates = validate_mcp_routing_updates(config, routing_updates)
+            servers = config.get("mcpServers")
+            if not isinstance(servers, dict):
+                raise ValueError("active MCP config has no mcpServers object")
+
+            for server_name, routing in normalized_updates.items():
+                server_config = servers.get(server_name)
+                if not isinstance(server_config, dict):
+                    continue
+                assistant_options = server_config.get("assistantOptions")
+                if not isinstance(assistant_options, dict):
+                    assistant_options = {}
+                    server_config["assistantOptions"] = assistant_options
+                assistant_options["routing"] = routing
+
+            try:
+                with open(mcp_config_path, "w") as config_file:
+                    json.dump(config, config_file, ensure_ascii=False, indent=2)
+                    config_file.write("\n")
+            except OSError as e:
+                raise ValueError(f"could not write MCP_CONFIG '{mcp_config_path}': {e}") from e
+
+            if web_monitor:
+                web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
+                web_monitor.update(env_values=values, mcp_config=config)
+            reload_event.set()
+            return {
+                "ok": True,
+                "message": f"MCP routing saved to {display_env_path(mcp_config_path)}.",
+                "mcp_config": str(mcp_config_path),
+                "routing": normalized_updates,
+            }
+
     web_monitor = None
     if web_enabled:
         web_monitor = WebMonitor()
@@ -4845,6 +4947,7 @@ async def main():
         web_monitor.set_remote_screen_handler(
             lambda vnc_url: save_remote_screen_config(get_active_env_file(), vnc_url, web_monitor)
         )
+        web_monitor.set_mcp_routing_save_handler(save_mcp_routing_config)
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),

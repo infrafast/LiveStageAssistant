@@ -58,7 +58,8 @@ sudo cp "$SCRIPT_DIR/.env.offline" /etc/livestageassistant/.env.offline
 sudo cp "$SCRIPT_DIR/livestageassistant.service" /etc/systemd/system/livestageassistant.service
 sudo cp "$SCRIPT_DIR/livestageassistant" /usr/local/bin/livestageassistant
 
-sudo chown "$SERVICE_USER:$SERVICE_USER" /etc/livestageassistant/.env.online /etc/livestageassistant/.env.offline
+sudo chown -R "$SERVICE_USER:$SERVICE_USER" /etc/livestageassistant
+sudo chmod 755 /etc/livestageassistant
 sudo chmod 644 /etc/livestageassistant/.env.online /etc/livestageassistant/.env.offline
 sudo chmod 644 /etc/systemd/system/livestageassistant.service
 sudo chmod +x /usr/local/bin/livestageassistant
