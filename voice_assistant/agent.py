@@ -3776,7 +3776,9 @@ class VoiceAssistant:
                     TTS_ENGINE.stop()
                 except Exception:
                     pass
-            if self.mcp_client and self.mcp_client.sessions:
+            if reload_requested and self.mcp_client and self.mcp_client.sessions:
+                print("MCP cleanup deferred for reload.")
+            elif self.mcp_client and self.mcp_client.sessions:
                 try:
                     await asyncio.wait_for(self.mcp_client.close_all_sessions(), timeout=3.0)
                 except Exception as e:
