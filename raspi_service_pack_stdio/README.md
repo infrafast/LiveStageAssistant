@@ -34,6 +34,8 @@ sudo apt install portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 l
 
 `alsa-utils` provides tools such as `aplay` for ALSA device checks, and `ffmpeg` is required for backend OpenAI/ElevenLabs MP3 TTS playback. Without `ffmpeg`, backend cloud TTS can fall back to `pyttsx3`.
 
+Backend TTS volume and pan are software controls applied before PyAudio writes to the selected output device. In the web Config -> Audio In/Out section, `BACKEND_AUDIO_OUTPUT_PAN=0.00` keeps backend audio centered; `-1.00` sends it left and `1.00` sends it right.
+
 On the Raspberry Pi, install the assistant dependencies first:
 
 ```bash

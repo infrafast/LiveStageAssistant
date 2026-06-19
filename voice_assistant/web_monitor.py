@@ -326,6 +326,7 @@ class WebMonitor:
                 float,
                 float,
                 float,
+                float,
                 int,
                 int,
                 int,
@@ -1075,8 +1076,9 @@ class WebMonitor:
                     try:
                         web_tts_volume = float(payload.get("web_tts_volume") if payload.get("web_tts_volume") is not None else 1.0)
                         backend_tts_volume = float(payload.get("backend_tts_volume") if payload.get("backend_tts_volume") is not None else 1.0)
+                        backend_audio_output_pan = float(payload.get("backend_audio_output_pan") if payload.get("backend_audio_output_pan") is not None else 0.0)
                     except (TypeError, ValueError):
-                        self.send_error(400, "TTS volume must be a number")
+                        self.send_error(400, "TTS volume and audio pan must be numbers")
                         return
                     try:
                         vad_speech_threshold = float(payload.get("vad_speech_threshold") or 0.5)
@@ -1111,6 +1113,7 @@ class WebMonitor:
                             openai_tts_speed,
                             web_tts_volume,
                             backend_tts_volume,
+                            backend_audio_output_pan,
                             vad_speech_threshold,
                             vad_negative_threshold,
                             vad_min_speech_ms,
@@ -3319,6 +3322,10 @@ INDEX_HTML = """<!doctype html>
                 <label for="backend-audio-output">Backend Audio Output</label>
                 <select id="backend-audio-output"></select>
               </div>
+              <div class="field" id="backend-audio-output-pan-field" title="BACKEND_AUDIO_OUTPUT_PAN">
+                <label for="backend-audio-output-pan">Panoramique sortie backend <span id="backend-audio-output-pan-label">Centre</span></label>
+                <input id="backend-audio-output-pan" type="range" min="-1" max="1" step="0.05" value="0">
+              </div>
             </div>
           </details>
         </section>
@@ -3500,6 +3507,9 @@ INDEX_HTML = """<!doctype html>
     const backendAudioMeter = document.querySelector("#backend-audio-meter .vu-fill");
     const backendAudioOutputField = document.querySelector("#backend-audio-output-field");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
+    const backendAudioOutputPanField = document.querySelector("#backend-audio-output-pan-field");
+    const backendAudioOutputPan = document.querySelector("#backend-audio-output-pan");
+    const backendAudioOutputPanLabel = document.querySelector("#backend-audio-output-pan-label");
     const thinkingSound = document.querySelector("#thinking-sound");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
@@ -5419,6 +5429,7 @@ INDEX_HTML = """<!doctype html>
         stt_input: selectedSttInput(),
         backend_audio_input_device: backendAudioInput.value || "",
         backend_audio_output_device: backendAudioOutput.value || "",
+        backend_audio_output_pan: Number(backendAudioOutputPan.value || 0),
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
         openai_tts_voice: openaiTtsVoice.value || "",
@@ -5539,6 +5550,17 @@ INDEX_HTML = """<!doctype html>
       backendTtsVolumeLabel.textContent = `${Math.round(Number(backendTtsVolume.value || 1) * 100)}%`;
     }
 
+    function syncBackendAudioOutputPanLabel() {
+      const value = Number(backendAudioOutputPan.value || 0);
+      if (Math.abs(value) < 0.025) {
+        backendAudioOutputPanLabel.textContent = "Centre";
+      } else if (value < 0) {
+        backendAudioOutputPanLabel.textContent = `Gauche ${Math.round(Math.abs(value) * 100)}%`;
+      } else {
+        backendAudioOutputPanLabel.textContent = `Droite ${Math.round(value * 100)}%`;
+      }
+    }
+
     function syncVadLabels() {
       vadSpeechThresholdLabel.textContent = Number(vadSpeechThreshold.value || 0.5).toFixed(2);
       vadNegativeThresholdLabel.textContent = Number(vadNegativeThreshold.value || 0.35).toFixed(2);
@@ -5578,6 +5600,7 @@ INDEX_HTML = """<!doctype html>
       const speed = Number(openaiTtsSpeed.value || 1);
       const volume = Number(webTtsVolume.value || 1);
       const backendVolume = Number(backendTtsVolume.value || 1);
+      const backendPan = Number(backendAudioOutputPan.value || 0);
       const output = selectedTtsOutput();
       ttsTest.disabled = true;
       llmMessage.textContent = "Testing voice...";
@@ -5592,7 +5615,8 @@ INDEX_HTML = """<!doctype html>
               model: provider === "openai" ? "gpt-4o-mini-tts" : "",
               voice,
               speed,
-              volume: backendVolume
+              volume: backendVolume,
+              pan: backendPan
             })
           });
           if (!response.ok) throw new Error(await response.text());
@@ -5623,10 +5647,15 @@ INDEX_HTML = """<!doctype html>
       backendAudioInputField.classList.toggle("hidden", !["both", "backend"].includes(sttInput));
       browserAudioOutputField.classList.toggle("hidden", output !== "browser");
       backendAudioOutputField.classList.toggle("hidden", output !== "backend");
+      backendAudioOutputPanField.classList.toggle("hidden", output !== "backend");
       if (browserAudioInputField.classList.contains("hidden") && browserAudioTestStream) stopBrowserAudioTest();
       if (backendAudioInputField.classList.contains("hidden") && backendAudioTestTimer) stopBackendAudioTest();
       browserAudioTest.disabled = browserAudioInputField.classList.contains("hidden") || !browserAudioCapabilities.input;
       backendAudioTest.disabled = backendAudioInputField.classList.contains("hidden") || !backendAudioCapabilities.input;
+      backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
+      backendAudioOutputPanField.title = backendAudioOutputPan.disabled
+        ? "BACKEND_AUDIO_OUTPUT_PAN - actif seulement avec TTS Output Backend et une sortie backend disponible"
+        : "BACKEND_AUDIO_OUTPUT_PAN";
     }
 
     function setSegmentOptionEnabled(input, enabled, reason = "") {
@@ -5766,8 +5795,10 @@ INDEX_HTML = """<!doctype html>
 	      openaiTtsSpeed.disabled = offline || provider === "none";
       webTtsVolume.disabled = offline || provider === "none" || selectedTtsOutput() !== "browser";
       backendTtsVolume.disabled = selectedTtsOutput() !== "backend";
+      backendAudioOutputPan.disabled = selectedTtsOutput() !== "backend" || !backendAudioCapabilities.output;
       webTtsVolumeField.title = webTtsVolume.disabled ? "WEB_TTS_VOLUME - actif seulement avec TTS Output Browser" : "WEB_TTS_VOLUME";
       backendTtsVolumeField.title = backendTtsVolume.disabled ? "BACKEND_TTS_VOLUME - actif seulement avec TTS Output Backend" : "BACKEND_TTS_VOLUME";
+      backendAudioOutputPanField.title = backendAudioOutputPan.disabled ? "BACKEND_AUDIO_OUTPUT_PAN - actif seulement avec TTS Output Backend et une sortie backend disponible" : "BACKEND_AUDIO_OUTPUT_PAN";
       ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
       syncAudioDeviceVisibility();
 	    }
@@ -5990,6 +6021,7 @@ INDEX_HTML = """<!doctype html>
       openaiTtsSpeed.disabled = true;
       webTtsVolume.disabled = true;
       backendTtsVolume.disabled = true;
+      backendAudioOutputPan.disabled = true;
       ttsTest.disabled = true;
       for (const control of vadControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
@@ -6081,8 +6113,10 @@ INDEX_HTML = """<!doctype html>
 	        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
 	        webTtsVolume.value = String(data.selected_web_tts_volume ?? 1.0);
 	        backendTtsVolume.value = String(data.selected_backend_tts_volume ?? 1.0);
+	        backendAudioOutputPan.value = String(data.selected_backend_audio_output_pan ?? 0.0);
 	        syncOpenAiSpeedLabel();
         syncTtsVolumeLabels();
+        syncBackendAudioOutputPanLabel();
         setVadControls(data);
 
         backendAudioInput.replaceChildren();
@@ -6150,6 +6184,7 @@ INDEX_HTML = """<!doctype html>
 	        syncConnectivityControls();
         backendAudioInput.disabled = !backendAudioCapabilities.input || backendAudioInput.options.length === 0;
         backendAudioOutput.disabled = !backendAudioCapabilities.output || backendAudioOutput.options.length === 0;
+        backendAudioOutputPan.disabled = !backendAudioCapabilities.output || backendAudioOutputPanField.classList.contains("hidden");
         browserAudioTest.disabled = !browserAudioCapabilities.input || browserAudioInputField.classList.contains("hidden");
         backendAudioTest.disabled = !backendAudioCapabilities.input || backendAudioInputField.classList.contains("hidden");
         thinkingSound.disabled = thinkingSound.options.length === 0 || !thinkingSound.value;
@@ -6568,6 +6603,7 @@ INDEX_HTML = """<!doctype html>
       const sttInputValue = selectedSttInput();
       const backendAudioInputDevice = backendAudioInput.value;
       const backendAudioOutputDevice = backendAudioOutput.value;
+      const backendAudioOutputPanValue = Number(backendAudioOutputPan.value || 0);
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
       const openAiTtsVoiceValue = openaiTtsVoice.value;
@@ -6600,6 +6636,7 @@ INDEX_HTML = """<!doctype html>
             stt_input: sttInputValue,
             backend_audio_input_device: backendAudioInputDevice,
             backend_audio_output_device: backendAudioOutputDevice,
+            backend_audio_output_pan: backendAudioOutputPanValue,
             wake_word: wakeWordValue,
             stt_prompt: sttPromptValue,
             system_prompt: systemPromptValue,
@@ -6635,6 +6672,7 @@ INDEX_HTML = """<!doctype html>
     openaiTtsSpeed.addEventListener("input", syncOpenAiSpeedLabel);
     webTtsVolume.addEventListener("input", syncTtsVolumeLabels);
     backendTtsVolume.addEventListener("input", syncTtsVolumeLabels);
+    backendAudioOutputPan.addEventListener("input", syncBackendAudioOutputPanLabel);
     for (const control of vadControls) {
       control.addEventListener("input", syncVadLabels);
     }

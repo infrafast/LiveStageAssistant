@@ -862,6 +862,49 @@ def decode_audio_file_to_pcm_bytes(
     return process.stdout
 
 
+def normalize_audio_pan(pan: float | None) -> float:
+    """Clamp audio pan to -1.0 left, 0.0 center, 1.0 right."""
+    return max(-1.0, min(1.0, float(pan if pan is not None else 0.0)))
+
+
+def pcm_with_volume_and_pan(
+    pcm_bytes: bytes,
+    volume: float,
+    *,
+    channels: int,
+    pan: float = 0.0,
+) -> tuple[bytes, int]:
+    """Apply gain and stereo pan to signed 16-bit PCM bytes."""
+    volume = max(0.0, min(2.0, float(volume if volume is not None else 1.0)))
+    pan = normalize_audio_pan(pan)
+    if not pcm_bytes:
+        return pcm_bytes, channels
+
+    samples = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+    if samples.size == 0:
+        return pcm_bytes, channels
+
+    if channels == 1 and abs(pan) > 1e-6:
+        mono = samples * volume
+        left_gain = 1.0 if pan <= 0.0 else 1.0 - pan
+        right_gain = 1.0 + pan if pan < 0.0 else 1.0
+        stereo = np.column_stack((mono * left_gain, mono * right_gain))
+        return np.clip(stereo, -32768, 32767).astype(np.int16).tobytes(), 2
+
+    if channels >= 2 and samples.size % channels == 0:
+        frames = samples.reshape(-1, channels)
+        frames *= volume
+        if abs(pan) > 1e-6:
+            left_gain = 1.0 if pan <= 0.0 else 1.0 - pan
+            right_gain = 1.0 + pan if pan < 0.0 else 1.0
+            frames[:, 0] *= left_gain
+            frames[:, 1] *= right_gain
+        return np.clip(frames, -32768, 32767).astype(np.int16).tobytes(), channels
+
+    samples *= volume
+    return np.clip(samples, -32768, 32767).astype(np.int16).tobytes(), channels
+
+
 def apply_pcm_volume(pcm_bytes: bytes, volume: float) -> bytes:
     """Apply software gain to signed 16-bit PCM bytes."""
     volume = max(0.0, min(2.0, float(volume if volume is not None else 1.0)))
@@ -881,21 +924,27 @@ def play_pcm_bytes(
     output_device_index: int | None = None,
     stop_event: threading.Event | None = None,
     volume: float = 1.0,
+    pan: float = 0.0,
 ) -> None:
     """Play signed 16-bit PCM through PyAudio, optionally using a configured output device."""
-    pcm_bytes = apply_pcm_volume(pcm_bytes, volume)
+    pcm_bytes, output_channels = pcm_with_volume_and_pan(
+        pcm_bytes,
+        volume,
+        channels=channels,
+        pan=pan,
+    )
     stream = None
     try:
         with suppress_native_stderr():
             stream = audio.open(
                 format=pyaudio.paInt16,
-                channels=channels,
+                channels=output_channels,
                 rate=sample_rate,
                 output=True,
                 output_device_index=output_device_index,
                 frames_per_buffer=1024,
             )
-        byte_step = 1024 * channels * 2
+        byte_step = 1024 * output_channels * 2
         for start in range(0, len(pcm_bytes), byte_step):
             if stop_event and stop_event.is_set():
                 break
@@ -915,6 +964,7 @@ def play_mp3_bytes(
     audio: pyaudio.PyAudio | None = None,
     output_device_index: int | None = None,
     volume: float = 1.0,
+    pan: float = 0.0,
 ) -> None:
     """Play MP3 bytes locally, preferring backend-controlled PyAudio playback."""
     if audio is not None:
@@ -929,6 +979,7 @@ def play_mp3_bytes(
             output_device_index=output_device_index,
             stop_event=TTS_STOP_EVENT,
             volume=volume,
+            pan=pan,
         )
         return
 
@@ -982,6 +1033,8 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
     if cloud_provider == "none" and web_tts_provider in {"openai", "elevenlabs"}:
         cloud_provider = web_tts_provider
     voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
+    backend_tts_volume = max(0.0, min(2.0, env_float_from_values(values, "BACKEND_TTS_VOLUME", 1.0)))
+    backend_audio_output_pan = normalize_audio_pan(env_float_from_values(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
 
     def play_auto_mp3(audio_bytes: bytes) -> None:
         temp_audio = None
@@ -993,7 +1046,13 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
                 values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
                 input_device=False,
             )
-            play_mp3_bytes(audio_bytes, audio=temp_audio, output_device_index=output_device_index)
+            play_mp3_bytes(
+                audio_bytes,
+                audio=temp_audio,
+                output_device_index=output_device_index,
+                volume=backend_tts_volume,
+                pan=backend_audio_output_pan,
+            )
         finally:
             if temp_audio is not None:
                 try:
@@ -1233,6 +1292,7 @@ class VoiceAssistant:
         backend_stt_enabled: bool = True,
         tts_speed: float = 1.0,
         backend_tts_volume: float = 1.0,
+        backend_audio_output_pan: float = 0.0,
         wake_words: list[str] | None = None,
         mcp_config: dict | None = None,
         mcp_load_server_prompt: bool = False,
@@ -1282,6 +1342,7 @@ class VoiceAssistant:
             backend_stt_enabled: Whether the backend microphone should listen for normal commands
             tts_speed: Cloud TTS speed for backend/non-web speech
             backend_tts_volume: Software gain for backend TTS playback, 0.0 to 2.0
+            backend_audio_output_pan: Backend output pan, -1.0 left to 1.0 right
             wake_words: Optional global wake word variants used to gate command processing
             mcp_config: Optional MCP server configuration dict
             mcp_load_server_prompt: Whether to load extra system instructions from an MCP server
@@ -1320,6 +1381,7 @@ class VoiceAssistant:
         )
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
+        self.backend_audio_output_pan = normalize_audio_pan(backend_audio_output_pan)
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
@@ -1528,11 +1590,13 @@ class VoiceAssistant:
                             self.thinking_sound_warning_shown = True
                         return
                     stream = None
+                    source_channels = wav_file.getnchannels()
+                    output_channels = 2 if source_channels == 1 and abs(self.backend_audio_output_pan) > 1e-6 else source_channels
                     try:
                         with suppress_native_stderr():
                             stream = self.audio.open(
                                 format=pyaudio.paInt16,
-                                channels=wav_file.getnchannels(),
+                                channels=output_channels,
                                 rate=wav_file.getframerate(),
                                 output=True,
                                 output_device_index=self.audio_output_device_index,
@@ -1542,7 +1606,12 @@ class VoiceAssistant:
                             data = wav_file.readframes(1024)
                             if not data:
                                 break
-                            data = apply_pcm_volume(data, self.backend_tts_volume)
+                            data, _ = pcm_with_volume_and_pan(
+                                data,
+                                self.backend_tts_volume,
+                                channels=source_channels,
+                                pan=self.backend_audio_output_pan,
+                            )
                             stream.write(data)
                     finally:
                         if stream:
@@ -2752,6 +2821,7 @@ class VoiceAssistant:
                             audio=self.audio,
                             output_device_index=self.audio_output_device_index,
                             volume=self.backend_tts_volume,
+                            pan=self.backend_audio_output_pan,
                         )
                     return True
                 except Exception as e:
@@ -2777,6 +2847,7 @@ class VoiceAssistant:
                             audio=self.audio,
                             output_device_index=self.audio_output_device_index,
                             volume=self.backend_tts_volume,
+                            pan=self.backend_audio_output_pan,
                         )
                     return True
                 except Exception as e:
@@ -2860,6 +2931,7 @@ class VoiceAssistant:
             output_device_index=self.audio_output_device_index,
             stop_event=stop_event,
             volume=self.backend_tts_volume,
+            pan=self.backend_audio_output_pan,
         )
 
     def play_wav_file(self, wav_path: str | Path, *, stop_event: threading.Event | None = None) -> None:
@@ -2869,11 +2941,13 @@ class VoiceAssistant:
             if sample_width != 2:
                 raise RuntimeError("only 16-bit PCM WAV playback is supported")
             stream = None
+            source_channels = wav_file.getnchannels()
+            output_channels = 2 if source_channels == 1 and abs(self.backend_audio_output_pan) > 1e-6 else source_channels
             try:
                 with suppress_native_stderr():
                     stream = self.audio.open(
                         format=pyaudio.paInt16,
-                        channels=wav_file.getnchannels(),
+                        channels=output_channels,
                         rate=wav_file.getframerate(),
                         output=True,
                         output_device_index=self.audio_output_device_index,
@@ -2885,7 +2959,12 @@ class VoiceAssistant:
                     data = wav_file.readframes(1024)
                     if not data:
                         break
-                    data = apply_pcm_volume(data, self.backend_tts_volume)
+                    data, _ = pcm_with_volume_and_pan(
+                        data,
+                        self.backend_tts_volume,
+                        channels=source_channels,
+                        pan=self.backend_audio_output_pan,
+                    )
                     stream.write(data)
             finally:
                 if stream:
@@ -2904,21 +2983,26 @@ class VoiceAssistant:
         voice: str | None = None,
         speed: float | None = None,
         volume: float | None = None,
+        pan: float | None = None,
     ) -> bool:
         """Play a TTS test phrase through the selected backend PyAudio output."""
         selected_provider = (provider or self.tts_provider or "").strip().lower()
         if selected_provider in {"", "none"}:
             raise ValueError("backend TTS output is disabled")
         test_volume = max(0.0, min(2.0, float(volume if volume is not None else self.backend_tts_volume)))
+        test_pan = normalize_audio_pan(pan if pan is not None else self.backend_audio_output_pan)
 
         TTS_STOP_EVENT.clear()
         if selected_provider == "pyttsx3":
             previous_volume = self.backend_tts_volume
+            previous_pan = self.backend_audio_output_pan
             self.backend_tts_volume = test_volume
+            self.backend_audio_output_pan = test_pan
             try:
                 return self.text_to_speech_pyttsx3(text)
             finally:
                 self.backend_tts_volume = previous_volume
+                self.backend_audio_output_pan = previous_pan
 
         if selected_provider == "openai":
             with TTS_LOCK:
@@ -2934,6 +3018,7 @@ class VoiceAssistant:
                     audio=self.audio,
                     output_device_index=self.audio_output_device_index,
                     volume=test_volume,
+                    pan=test_pan,
                 )
             return True
 
@@ -2942,11 +3027,14 @@ class VoiceAssistant:
                 if local_tts_playback_available():
                     print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
                     previous_volume = self.backend_tts_volume
+                    previous_pan = self.backend_audio_output_pan
                     self.backend_tts_volume = test_volume
+                    self.backend_audio_output_pan = test_pan
                     try:
                         return self.text_to_speech_pyttsx3(text)
                     finally:
                         self.backend_tts_volume = previous_volume
+                        self.backend_audio_output_pan = previous_pan
                 return False
             with TTS_LOCK:
                 TTS_STOP_EVENT.clear()
@@ -2961,6 +3049,7 @@ class VoiceAssistant:
                     audio=self.audio,
                     output_device_index=self.audio_output_device_index,
                     volume=test_volume,
+                    pan=test_pan,
                 )
             return True
 
@@ -4037,6 +4126,7 @@ async def main():
         current_openai_tts_speed = env_float_from_values(values, "WEB_TTS_SPEED", 1.0)
         current_web_tts_volume = min(1.0, env_float_from_values(values, "WEB_TTS_VOLUME", 1.0))
         current_backend_tts_volume = env_float_from_values(values, "BACKEND_TTS_VOLUME", 1.0)
+        current_backend_audio_output_pan = normalize_audio_pan(env_float_from_values(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
         current_vad_speech_threshold = env_float_from_values(values, "VAD_SPEECH_THRESHOLD", 0.5)
         current_vad_negative_threshold = env_float_from_values(values, "VAD_NEGATIVE_THRESHOLD", 0.35)
         current_vad_min_speech_ms = env_int_from_values(values, "VAD_MIN_SPEECH_MS", 120)
@@ -4099,6 +4189,7 @@ async def main():
             "selected_openai_tts_speed": current_openai_tts_speed,
             "selected_web_tts_volume": current_web_tts_volume,
             "selected_backend_tts_volume": current_backend_tts_volume,
+            "selected_backend_audio_output_pan": current_backend_audio_output_pan,
             "selected_vad_speech_threshold": current_vad_speech_threshold,
             "selected_vad_negative_threshold": current_vad_negative_threshold,
             "selected_vad_min_speech_ms": current_vad_min_speech_ms,
@@ -4136,6 +4227,7 @@ async def main():
         openai_tts_speed: float,
         web_tts_volume: float,
         backend_tts_volume: float,
+        backend_audio_output_pan: float,
         vad_speech_threshold: float,
         vad_negative_threshold: float,
         vad_min_speech_ms: int,
@@ -4166,6 +4258,7 @@ async def main():
         openai_tts_speed = max(0.6, min(1.8, float(openai_tts_speed or 1.0)))
         web_tts_volume = max(0.0, min(1.0, float(web_tts_volume if web_tts_volume is not None else 1.0)))
         backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
+        backend_audio_output_pan = normalize_audio_pan(backend_audio_output_pan)
         vad_speech_threshold = max(0.05, min(0.95, float(vad_speech_threshold or 0.5)))
         vad_negative_threshold = max(0.01, min(0.95, float(vad_negative_threshold or 0.35)))
         if vad_negative_threshold >= vad_speech_threshold:
@@ -4332,6 +4425,7 @@ async def main():
                 "WEB_TTS_SPEED": f"{openai_tts_speed:.2f}",
                 "WEB_TTS_VOLUME": f"{web_tts_volume:.2f}",
                 "BACKEND_TTS_VOLUME": f"{backend_tts_volume:.2f}",
+                "BACKEND_AUDIO_OUTPUT_PAN": f"{backend_audio_output_pan:.2f}",
             },
             remove_keys={"WEB_AUDIO_ENABLED"},
         )
@@ -4380,6 +4474,7 @@ async def main():
             "openai_tts_speed": openai_tts_speed,
             "web_tts_volume": web_tts_volume,
             "backend_tts_volume": backend_tts_volume,
+            "backend_audio_output_pan": backend_audio_output_pan,
             "vad_speech_threshold": vad_speech_threshold,
             "vad_negative_threshold": vad_negative_threshold,
             "vad_min_speech_ms": vad_min_speech_ms,
@@ -4458,6 +4553,7 @@ async def main():
         web_tts_speed = max(0.6, min(1.8, env_float("WEB_TTS_SPEED", 1.0)))
         web_tts_volume = max(0.0, min(1.0, env_float("WEB_TTS_VOLUME", 1.0)))
         backend_tts_volume = max(0.0, min(2.0, env_float("BACKEND_TTS_VOLUME", 1.0)))
+        backend_audio_output_pan = normalize_audio_pan(env_float("BACKEND_AUDIO_OUTPUT_PAN", 0.0))
         web_stt_model = os.getenv("WEB_STT_MODEL", "whisper-1").strip()
         wake_words = parse_wake_words(env_optional("WAKE_WORD"))
         system_prompt = env_optional("ASSISTANT_SYSTEM_PROMPT")
@@ -4514,6 +4610,7 @@ async def main():
         print(f"Using thinking sound file: {thinking_sound_file}")
         print(f"Using backend audio input: {backend_audio_input_device or 'default'}")
         print(f"Using backend audio output: {backend_audio_output_device or 'default'}")
+        print(f"Using backend audio output pan: {backend_audio_output_pan:+.2f}")
         if voice_cancel_during_thinking:
             print("Using voice cancel during thinking: enabled")
         if interrupt_conversation_enabled:
@@ -4640,6 +4737,7 @@ async def main():
             backend_stt_enabled=backend_stt_enabled,
             tts_speed=web_tts_speed,
             backend_tts_volume=backend_tts_volume,
+            backend_audio_output_pan=backend_audio_output_pan,
             wake_words=wake_words,
             mcp_config=mcp_config,
             mcp_load_server_prompt=env_bool("MCP_LOAD_SERVER_PROMPT", False),
@@ -4770,6 +4868,7 @@ async def main():
                     voice=str(requested.get("voice") or ""),
                     speed=max(0.6, min(1.8, float(requested.get("speed") or web_tts_speed or 1.0))),
                     volume=max(0.0, min(2.0, float(requested.get("volume") if requested.get("volume") is not None else active_assistant.backend_tts_volume))),
+                    pan=normalize_audio_pan(float(requested.get("pan") if requested.get("pan") is not None else active_assistant.backend_audio_output_pan)),
                 )
                 if not ok:
                     raise ValueError("Backend TTS playback failed")
@@ -4956,7 +5055,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -4978,6 +5077,7 @@ async def main():
                 openai_tts_speed,
                 web_tts_volume,
                 backend_tts_volume,
+                backend_audio_output_pan,
                 vad_speech_threshold,
                 vad_negative_threshold,
                 vad_min_speech_ms,
