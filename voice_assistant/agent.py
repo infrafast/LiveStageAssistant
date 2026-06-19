@@ -2895,6 +2895,65 @@ class VoiceAssistant:
                     except Exception:
                         pass
 
+    def test_backend_text_to_speech(
+        self,
+        text: str,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+        voice: str | None = None,
+        speed: float | None = None,
+    ) -> bool:
+        """Play a TTS test phrase through the selected backend PyAudio output."""
+        selected_provider = (provider or self.tts_provider or "").strip().lower()
+        if selected_provider in {"", "none"}:
+            raise ValueError("backend TTS output is disabled")
+
+        TTS_STOP_EVENT.clear()
+        if selected_provider == "pyttsx3":
+            return self.text_to_speech_pyttsx3(text)
+
+        if selected_provider == "openai":
+            with TTS_LOCK:
+                TTS_STOP_EVENT.clear()
+                audio = self.generate_openai_tts_audio(
+                    text,
+                    model=(model or DEFAULT_OPENAI_TTS_MODEL).strip() or DEFAULT_OPENAI_TTS_MODEL,
+                    voice=(voice or DEFAULT_OPENAI_TTS_VOICE).strip() or DEFAULT_OPENAI_TTS_VOICE,
+                    speed=speed if speed is not None else self.tts_speed,
+                )
+                play_mp3_bytes(
+                    audio,
+                    audio=self.audio,
+                    output_device_index=self.audio_output_device_index,
+                    volume=self.backend_tts_volume,
+                )
+            return True
+
+        if selected_provider == "elevenlabs":
+            if not elevenlabs_playback_available():
+                if local_tts_playback_available():
+                    print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
+                    return self.text_to_speech_pyttsx3(text)
+                return False
+            with TTS_LOCK:
+                TTS_STOP_EVENT.clear()
+                audio = self.generate_elevenlabs_tts_audio(
+                    text,
+                    speed=speed if speed is not None else self.tts_speed,
+                    voice_id=(voice or self.elevenlabs_voice_id).strip() or self.elevenlabs_voice_id,
+                )
+                audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
+                play_mp3_bytes(
+                    audio_bytes,
+                    audio=self.audio,
+                    output_device_index=self.audio_output_device_index,
+                    volume=self.backend_tts_volume,
+                )
+            return True
+
+        raise ValueError(f"unsupported backend TTS provider: {selected_provider}")
+
     def generate_openai_tts_audio(
         self,
         text: str,
@@ -4629,6 +4688,23 @@ async def main():
                         )
                     raise ValueError("Web audio TTS is not available")
 
+            def backend_tts_test_handler(
+                text: str,
+                options: dict[str, Any] | None = None,
+                active_assistant: VoiceAssistant = assistant,
+            ) -> dict[str, Any]:
+                requested = options or {}
+                ok = active_assistant.test_backend_text_to_speech(
+                    text,
+                    provider=str(requested.get("provider") or active_assistant.tts_provider),
+                    model=str(requested.get("model") or DEFAULT_OPENAI_TTS_MODEL),
+                    voice=str(requested.get("voice") or ""),
+                    speed=max(0.6, min(1.8, float(requested.get("speed") or web_tts_speed or 1.0))),
+                )
+                if not ok:
+                    raise ValueError("Backend TTS playback failed")
+                return {"ok": True}
+
             web_monitor.set_web_audio_handlers(
                 transcribe_handler=(
                     lambda audio_bytes, mime_type, apply_wake_word_gate, active_assistant=assistant: active_assistant.web_audio_transcription_result(
@@ -4643,6 +4719,7 @@ async def main():
                 tts_handler=web_tts_handler,
             )
             web_monitor.set_backend_audio_level_handler(backend_audio_input_level)
+            web_monitor.set_backend_tts_test_handler(backend_tts_test_handler)
             web_monitor.set_cancel_handler(assistant.stop_tts)
 
         return assistant

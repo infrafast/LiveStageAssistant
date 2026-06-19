@@ -325,6 +325,7 @@ class WebMonitor:
         self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
         self._remote_screen_save_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
+        self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
@@ -419,6 +420,14 @@ class WebMonitor:
         """Register callback used by the web UI to test backend microphone level."""
         with self._lock:
             self._backend_audio_level_handler = handler
+
+    def set_backend_tts_test_handler(
+        self,
+        handler: Callable[[str, dict[str, Any] | None], dict[str, Any]],
+    ) -> None:
+        """Register callback used by the web UI to test backend TTS output."""
+        with self._lock:
+            self._backend_tts_test_handler = handler
 
     def set_session_context_handlers(
         self,
@@ -590,6 +599,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/backend-audio-level":
                         self._handle_backend_audio_level()
+                        return
+                    if self.path == "/api/backend-tts-test":
+                        self._handle_backend_tts_test()
                         return
                     if self.path == "/api/llm-config":
                         self._handle_llm_config_save()
@@ -1414,6 +1426,35 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self._send_json_error(500, {"ok": False, "error": {"message": f"Could not test backend audio input: {e}"}})
+                        return
+                    self._send_json(result)
+
+                def _handle_backend_tts_test(self) -> None:
+                    handler = monitor._backend_tts_test_handler
+                    if handler is None:
+                        self.send_error(503, "Backend TTS test is not available")
+                        return
+
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    text = str(payload.get("text") or "").strip()
+                    if not text:
+                        self.send_error(400, "text is required")
+                        return
+                    options = {
+                        "provider": str(payload.get("provider") or "").strip().lower(),
+                        "model": str(payload.get("model") or "").strip(),
+                        "voice": str(payload.get("voice") or "").strip(),
+                        "speed": payload.get("speed"),
+                    }
+                    try:
+                        result = handler(text, options)
+                    except ValueError as e:
+                        self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        return
+                    except Exception as e:
+                        self._send_json_error(500, {"ok": False, "error": {"message": f"Could not test backend TTS: {e}"}})
                         return
                     self._send_json(result)
 
@@ -5363,17 +5404,35 @@ INDEX_HTML = """<!doctype html>
       const voice = provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value;
       const speed = Number(openaiTtsSpeed.value || 1);
       const volume = Number(webTtsVolume.value || 1);
+      const output = selectedTtsOutput();
       ttsTest.disabled = true;
       llmMessage.textContent = "Testing voice...";
       try {
-        await playWebTts(ttsTestPhrase, {
-          force: true,
-          provider,
-          model: provider === "openai" ? "gpt-4o-mini-tts" : "",
-          voice,
-          speed,
-          volume
-        });
+        if (output === "backend") {
+          const response = await fetch("/api/backend-tts-test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: ttsTestPhrase,
+              provider,
+              model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+              voice,
+              speed
+            })
+          });
+          if (!response.ok) throw new Error(await response.text());
+        } else if (output === "browser") {
+          await playWebTts(ttsTestPhrase, {
+            force: true,
+            provider,
+            model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+            voice,
+            speed,
+            volume
+          });
+        } else {
+          throw new Error("TTS Output is Silent");
+        }
         llmMessage.textContent = "Voice test played.";
       } catch (error) {
         llmMessage.textContent = `Voice test failed: ${error}`;
