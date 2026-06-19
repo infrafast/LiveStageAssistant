@@ -2795,6 +2795,9 @@ INDEX_HTML = """<!doctype html>
       font-size: 12px;
       overflow-wrap: anywhere;
     }
+    .mcp-routing-box.disabled {
+      opacity: 0.58;
+    }
     .mcp-server-frame {
       display: block;
       width: 100%;
@@ -3833,6 +3836,10 @@ INDEX_HTML = """<!doctype html>
 
         const routingBox = document.createElement("div");
         routingBox.className = "mcp-routing-box";
+        const routingDisabled = !selectedMcpToolRoutingEnabled();
+        const routingDisabledReason = "Tool Routing is Off. Enable Config -> IA model -> Tool Routing to edit routing words.";
+        routingBox.classList.toggle("disabled", routingDisabled);
+        routingBox.title = routingDisabled ? routingDisabledReason : "";
         const routingLabel = document.createElement("label");
         routingLabel.textContent = "Routing words";
         routingLabel.title = "assistantOptions.routing";
@@ -3844,13 +3851,19 @@ INDEX_HTML = """<!doctype html>
         routingInput.value = server.routing || "";
         routingInput.placeholder = "mixer,mix,volume,bus";
         routingInput.spellcheck = false;
+        routingInput.disabled = routingDisabled;
+        routingInput.title = routingDisabled ? routingDisabledReason : "assistantOptions.routing";
         const routingSave = document.createElement("button");
         routingSave.className = "mcp-routing-save";
         routingSave.type = "button";
         routingSave.textContent = "Save";
+        routingSave.disabled = routingDisabled;
+        routingSave.title = routingDisabled ? routingDisabledReason : "Save routing words";
         const routingMessage = document.createElement("div");
         routingMessage.className = "mcp-routing-message";
-        routingMessage.textContent = "Comma-separated words; max 10 per server, no duplicates.";
+        routingMessage.textContent = routingDisabled
+          ? "Tool Routing is Off; enable it to edit these words."
+          : "Comma-separated words; max 10 per server, no duplicates.";
         routingSave.addEventListener("click", () => saveMcpRouting(routingMessage));
         routingRow.append(routingInput, routingSave);
         routingBox.append(routingLabel, routingRow, routingMessage);
@@ -3891,6 +3904,10 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function saveMcpRouting(messageEl) {
+      if (!selectedMcpToolRoutingEnabled()) {
+        if (messageEl) messageEl.textContent = "Tool Routing is Off; enable it to edit routing words.";
+        return;
+      }
       const routing = {};
       for (const input of mcpServerGrid.querySelectorAll(".mcp-routing-input")) {
         const name = input.dataset.serverName || "";
@@ -3911,6 +3928,28 @@ INDEX_HTML = """<!doctype html>
         await refresh();
       } catch (error) {
         if (messageEl) messageEl.textContent = `Save failed: ${error}`;
+      }
+    }
+
+    function syncMcpRoutingEditors() {
+      const disabled = !selectedMcpToolRoutingEnabled();
+      const reason = "Tool Routing is Off. Enable Config -> IA model -> Tool Routing to edit routing words.";
+      for (const box of mcpServerGrid.querySelectorAll(".mcp-routing-box")) {
+        box.classList.toggle("disabled", disabled);
+        box.title = disabled ? reason : "";
+      }
+      for (const input of mcpServerGrid.querySelectorAll(".mcp-routing-input")) {
+        input.disabled = disabled;
+        input.title = disabled ? reason : "assistantOptions.routing";
+      }
+      for (const button of mcpServerGrid.querySelectorAll(".mcp-routing-save")) {
+        button.disabled = disabled;
+        button.title = disabled ? reason : "Save routing words";
+      }
+      for (const message of mcpServerGrid.querySelectorAll(".mcp-routing-message")) {
+        message.textContent = disabled
+          ? "Tool Routing is Off; enable it to edit these words."
+          : "Comma-separated words; max 10 per server, no duplicates.";
       }
     }
 
@@ -6150,6 +6189,7 @@ INDEX_HTML = """<!doctype html>
         stateEl.innerHTML = rows.join("");
         configEl.value = data.config_text || "";
         renderMcpServers(data.mcp_servers || []);
+        syncMcpRoutingEditors();
         const remoteScreen = data.remote_screen || {};
         if (!vncUrlDirty && snapshotEnvChanged && currentVncFrameUrl) {
           disconnectVnc("reconnexion VNC...");
@@ -6492,7 +6532,7 @@ INDEX_HTML = """<!doctype html>
       renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
     });
     for (const input of mcpToolRoutingInputs) {
-      input.addEventListener("change", () => {});
+      input.addEventListener("change", syncMcpRoutingEditors);
     }
     setSelectedMcpAdminRoute(window.localStorage.getItem("mcp-admin-route") || "proxy");
     for (const input of mcpAdminRouteInputs) {
