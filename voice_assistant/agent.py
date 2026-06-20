@@ -3144,6 +3144,7 @@ class VoiceAssistant:
         speed: float | None = None,
         volume: float | None = None,
         pan: float | None = None,
+        output_device: str | None = None,
     ) -> bool:
         """Play a TTS test phrase through the selected backend PyAudio output."""
         selected_provider = (provider or self.tts_provider or "").strip().lower()
@@ -3151,18 +3152,30 @@ class VoiceAssistant:
             raise ValueError("backend TTS output is disabled")
         test_volume = max(0.0, min(2.0, float(volume if volume is not None else self.backend_tts_volume)))
         test_pan = normalize_audio_pan(pan if pan is not None else self.backend_audio_output_pan)
+        test_output_device_index = self.audio_output_device_index
+        if output_device is not None:
+            test_output_device_index, output_status, output_detail = resolve_pyaudio_device_index(
+                self.audio,
+                output_device,
+                input_device=False,
+            )
+            if output_status in {"invalid", "unavailable"}:
+                raise ValueError(f"backend audio output device is not available: {output_detail}")
 
         TTS_STOP_EVENT.clear()
         if selected_provider == "pyttsx3":
             previous_volume = self.backend_tts_volume
             previous_pan = self.backend_audio_output_pan
+            previous_output_device_index = self.audio_output_device_index
             self.backend_tts_volume = test_volume
             self.backend_audio_output_pan = test_pan
+            self.audio_output_device_index = test_output_device_index
             try:
                 return self.text_to_speech_pyttsx3(text)
             finally:
                 self.backend_tts_volume = previous_volume
                 self.backend_audio_output_pan = previous_pan
+                self.audio_output_device_index = previous_output_device_index
 
         if selected_provider == "openai":
             with TTS_LOCK:
@@ -3176,7 +3189,7 @@ class VoiceAssistant:
                 play_mp3_bytes(
                     audio,
                     audio=self.audio,
-                    output_device_index=self.audio_output_device_index,
+                    output_device_index=test_output_device_index,
                     volume=test_volume,
                     pan=test_pan,
                 )
@@ -3188,13 +3201,16 @@ class VoiceAssistant:
                     print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
                     previous_volume = self.backend_tts_volume
                     previous_pan = self.backend_audio_output_pan
+                    previous_output_device_index = self.audio_output_device_index
                     self.backend_tts_volume = test_volume
                     self.backend_audio_output_pan = test_pan
+                    self.audio_output_device_index = test_output_device_index
                     try:
                         return self.text_to_speech_pyttsx3(text)
                     finally:
                         self.backend_tts_volume = previous_volume
                         self.backend_audio_output_pan = previous_pan
+                        self.audio_output_device_index = previous_output_device_index
                 return False
             with TTS_LOCK:
                 TTS_STOP_EVENT.clear()
@@ -3207,7 +3223,7 @@ class VoiceAssistant:
                 play_mp3_bytes(
                     audio_bytes,
                     audio=self.audio,
-                    output_device_index=self.audio_output_device_index,
+                    output_device_index=test_output_device_index,
                     volume=test_volume,
                     pan=test_pan,
                 )
@@ -5072,15 +5088,19 @@ async def main():
                 active_assistant: VoiceAssistant = assistant,
             ) -> dict[str, Any]:
                 requested = options or {}
-                ok = active_assistant.test_backend_text_to_speech(
-                    text,
-                    provider=str(requested.get("provider") or active_assistant.tts_provider),
-                    model=str(requested.get("model") or DEFAULT_OPENAI_TTS_MODEL),
-                    voice=str(requested.get("voice") or ""),
-                    speed=max(0.6, min(1.8, float(requested.get("speed") or web_tts_speed or 1.0))),
-                    volume=max(0.0, min(2.0, float(requested.get("volume") if requested.get("volume") is not None else active_assistant.backend_tts_volume))),
-                    pan=normalize_audio_pan(float(requested.get("pan") if requested.get("pan") is not None else active_assistant.backend_audio_output_pan)),
-                )
+                try:
+                    ok = active_assistant.test_backend_text_to_speech(
+                        text,
+                        provider=str(requested.get("provider") or active_assistant.tts_provider),
+                        model=str(requested.get("model") or DEFAULT_OPENAI_TTS_MODEL),
+                        voice=str(requested.get("voice") or ""),
+                        speed=max(0.6, min(1.8, float(requested.get("speed") or web_tts_speed or 1.0))),
+                        volume=max(0.0, min(2.0, float(requested.get("volume") if requested.get("volume") is not None else active_assistant.backend_tts_volume))),
+                        pan=normalize_audio_pan(float(requested.get("pan") if requested.get("pan") is not None else active_assistant.backend_audio_output_pan)),
+                        output_device=str(requested.get("output_device") or ""),
+                    )
+                except Exception as e:
+                    raise RuntimeError(concise_pyaudio_error(e)) from e
                 if not ok:
                     raise ValueError("Backend TTS playback failed")
                 return {"ok": True}

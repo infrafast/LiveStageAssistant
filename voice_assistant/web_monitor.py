@@ -1492,6 +1492,9 @@ class WebMonitor:
                         "model": str(payload.get("model") or "").strip(),
                         "voice": str(payload.get("voice") or "").strip(),
                         "speed": payload.get("speed"),
+                        "volume": payload.get("volume"),
+                        "pan": payload.get("pan"),
+                        "output_device": str(payload.get("output_device") or "").strip(),
                     }
                     try:
                         result = handler(text, options)
@@ -5726,10 +5729,20 @@ INDEX_HTML = """<!doctype html>
               voice,
               speed,
               volume: backendVolume,
-              pan: backendPan
+              pan: backendPan,
+              output_device: backendAudioOutput.value || ""
             })
           });
-          if (!response.ok) throw new Error(await response.text());
+          if (!response.ok) {
+            const text = await response.text();
+            try {
+              const data = JSON.parse(text);
+              throw new Error(data.error?.message || text);
+            } catch (parseError) {
+              if (parseError instanceof SyntaxError) throw new Error(text);
+              throw parseError;
+            }
+          }
         } else if (output === "browser") {
           await playWebTts(ttsTestPhrase, {
             force: true,
