@@ -12,6 +12,7 @@ This version includes better error handling and fallback options.
 import asyncio
 import base64
 from contextlib import contextmanager
+from dataclasses import dataclass
 import io
 import json
 import logging
@@ -171,6 +172,24 @@ TTS_OUTPUT_OPTIONS = [
 DEFAULT_BACKEND_MP3_SAMPLE_RATE = 24000
 DEFAULT_BACKEND_MP3_CHANNELS = 1
 COMMAND_ACK_SOUND_CANDIDATES = ("ring.wav", "bell.wav")
+
+
+@dataclass(frozen=True)
+class ResolvedTtsConfig:
+    """Normalized TTS routing derived from legacy and current env keys."""
+
+    cloud_provider: str
+    backend_provider: str
+    web_provider: str
+    output: str
+
+    @property
+    def backend_active(self) -> bool:
+        return self.backend_provider != "none"
+
+    @property
+    def web_requested(self) -> bool:
+        return self.web_provider in {"openai", "elevenlabs"}
 
 
 @contextmanager
@@ -766,13 +785,42 @@ def cloud_tts_provider_from_values(values: dict) -> str:
 
 def tts_output_from_values(values: dict) -> str:
     """Return whether speech is played by the browser, backend, or nowhere."""
-    backend_provider = (values.get("TTS_PROVIDER") or "").strip().lower()
-    web_provider = (values.get("WEB_TTS_PROVIDER") or "").strip().lower()
+    return resolve_tts_config_from_values(values).output
+
+
+def resolve_tts_config_from_values(values: dict) -> ResolvedTtsConfig:
+    """Normalize cloud/backend/browser TTS providers from env-style values."""
+    backend_provider = (values.get("TTS_PROVIDER") or "elevenlabs").strip().lower()
+    web_provider = (values.get("WEB_TTS_PROVIDER") or "openai").strip().lower()
+    cloud_provider = (values.get("CLOUD_TTS_PROVIDER") or "").strip().lower()
+
+    if cloud_provider not in {"none", "openai", "elevenlabs"}:
+        cloud_provider = cloud_tts_provider_from_values(
+            {
+                "CLOUD_TTS_PROVIDER": cloud_provider,
+                "WEB_TTS_PROVIDER": web_provider,
+                "TTS_PROVIDER": backend_provider,
+            }
+        )
+
+    if backend_provider in {"openai", "elevenlabs"} or cloud_provider == "none":
+        backend_provider = cloud_provider
+    if web_provider in {"openai", "elevenlabs"} or cloud_provider == "none":
+        web_provider = cloud_provider
+
     if backend_provider in {"openai", "elevenlabs", "pyttsx3"}:
-        return "backend"
-    if web_provider in {"openai", "elevenlabs"}:
-        return "browser"
-    return "silent"
+        output = "backend"
+    elif web_provider in {"openai", "elevenlabs"}:
+        output = "browser"
+    else:
+        output = "silent"
+
+    return ResolvedTtsConfig(
+        cloud_provider=cloud_provider,
+        backend_provider=backend_provider,
+        web_provider=web_provider,
+        output=output,
+    )
 
 
 def connectivity_mode_from_values(values: dict, env_file: Path | None = None) -> str:
@@ -1033,6 +1081,55 @@ def play_mp3_bytes(
                 os.unlink(temp_path)
             except OSError:
                 pass
+
+
+def play_wav_file_backend(
+    audio: pyaudio.PyAudio,
+    wav_path: str | Path,
+    *,
+    output_device_index: int | None = None,
+    stop_event: threading.Event | None = None,
+    volume: float = 1.0,
+    pan: float = 0.0,
+) -> None:
+    """Play a 16-bit PCM WAV file through backend PyAudio output selection."""
+    with wave.open(str(wav_path), "rb") as wav_file:
+        sample_width = wav_file.getsampwidth()
+        if sample_width != 2:
+            raise RuntimeError("only 16-bit PCM WAV playback is supported")
+        stream = None
+        source_channels = wav_file.getnchannels()
+        output_channels = 2 if source_channels == 1 and abs(normalize_audio_pan(pan)) > 1e-6 else source_channels
+        try:
+            with suppress_native_stderr():
+                stream = audio.open(
+                    format=pyaudio.paInt16,
+                    channels=output_channels,
+                    rate=wav_file.getframerate(),
+                    output=True,
+                    output_device_index=output_device_index,
+                    frames_per_buffer=1024,
+                )
+            while True:
+                if stop_event and stop_event.is_set():
+                    break
+                data = wav_file.readframes(1024)
+                if not data:
+                    break
+                data, _ = pcm_with_volume_and_pan(
+                    data,
+                    volume,
+                    channels=source_channels,
+                    pan=pan,
+                )
+                stream.write(data)
+        finally:
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
 
 
 def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> None:
@@ -3095,44 +3192,14 @@ class VoiceAssistant:
         volume: float | None = None,
     ) -> None:
         """Play a WAV file through backend PyAudio output selection."""
-        with wave.open(str(wav_path), "rb") as wav_file:
-            sample_width = wav_file.getsampwidth()
-            if sample_width != 2:
-                raise RuntimeError("only 16-bit PCM WAV playback is supported")
-            stream = None
-            source_channels = wav_file.getnchannels()
-            output_channels = 2 if source_channels == 1 and abs(self.backend_audio_output_pan) > 1e-6 else source_channels
-            playback_volume = self.backend_tts_volume if volume is None else volume
-            try:
-                with suppress_native_stderr():
-                    stream = self.audio.open(
-                        format=pyaudio.paInt16,
-                        channels=output_channels,
-                        rate=wav_file.getframerate(),
-                        output=True,
-                        output_device_index=self.audio_output_device_index,
-                        frames_per_buffer=1024,
-                    )
-                while True:
-                    if stop_event and stop_event.is_set():
-                        break
-                    data = wav_file.readframes(1024)
-                    if not data:
-                        break
-                    data, _ = pcm_with_volume_and_pan(
-                        data,
-                        playback_volume,
-                        channels=source_channels,
-                        pan=self.backend_audio_output_pan,
-                    )
-                    stream.write(data)
-            finally:
-                if stream:
-                    try:
-                        stream.stop_stream()
-                        stream.close()
-                    except Exception:
-                        pass
+        play_wav_file_backend(
+            self.audio,
+            wav_path,
+            output_device_index=self.audio_output_device_index,
+            stop_event=stop_event,
+            volume=self.backend_tts_volume if volume is None else volume,
+            pan=self.backend_audio_output_pan,
+        )
 
     def test_backend_text_to_speech(
         self,
@@ -4309,6 +4376,7 @@ async def main():
         current_stt_prompt = (values.get("STT_PROMPT") or DEFAULT_STT_PROMPT).strip()
         current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip()
         current_session_context_size = env_int_from_values(values, "SESSION_CONTEXT_SIZE", 6000)
+        current_mcp_agent_max_steps = env_int_from_values(values, "MCP_AGENT_MAX_STEPS", DEFAULT_MCP_AGENT_MAX_STEPS)
         current_mcp_tool_routing_enabled = env_bool_from_values(values, "MCP_TOOL_ROUTING_ENABLED", False)
         current_interrupt_conversation_enabled = env_bool_from_values(values, "INTERRUPT_CONVERSATION_ENABLED", False)
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
@@ -4374,6 +4442,7 @@ async def main():
             "selected_stt_prompt": current_stt_prompt,
             "selected_system_prompt": current_system_prompt,
             "selected_session_context_size": current_session_context_size,
+            "selected_mcp_agent_max_steps": current_mcp_agent_max_steps,
             "selected_mcp_tool_routing_enabled": current_mcp_tool_routing_enabled,
             "selected_interrupt_conversation_enabled": current_interrupt_conversation_enabled,
             "voices": list_elevenlabs_voice_options(values),
@@ -4414,6 +4483,7 @@ async def main():
         stt_prompt: str,
         system_prompt: str,
         session_context_size: int,
+        mcp_agent_max_steps: int,
         mcp_tool_routing_enabled: bool,
         interrupt_conversation_enabled: bool,
         backend_audio_input_device: str,
@@ -4448,6 +4518,7 @@ async def main():
         stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
         system_prompt = (system_prompt or "").strip()
         session_context_size = max(0, min(12000, int(session_context_size or 0)))
+        mcp_agent_max_steps = max(5, min(60, int(mcp_agent_max_steps or DEFAULT_MCP_AGENT_MAX_STEPS)))
         mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
         interrupt_conversation_enabled = bool(interrupt_conversation_enabled)
         backend_audio_input_device = str(backend_audio_input_device or "").strip()
@@ -4623,6 +4694,7 @@ async def main():
                 "STT_PROMPT": stt_prompt,
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
                 "SESSION_CONTEXT_SIZE": str(session_context_size),
+                "MCP_AGENT_MAX_STEPS": str(mcp_agent_max_steps),
                 "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",
                 "INTERRUPT_CONVERSATION_ENABLED": "true" if interrupt_conversation_enabled else "false",
                 "BACKEND_AUDIO_INPUT_DEVICE": backend_audio_input_device,
@@ -4677,6 +4749,7 @@ async def main():
             "wake_word": wake_word,
             "system_prompt": system_prompt,
             "session_context_size": session_context_size,
+            "mcp_agent_max_steps": mcp_agent_max_steps,
             "backend_audio_input_device": backend_audio_input_device,
             "backend_audio_output_device": backend_audio_output_device,
             "voice_id": voice_id,
@@ -4731,7 +4804,10 @@ async def main():
         stt_language_value = os.getenv("STT_LANGUAGE", "auto")
         stt_language = None if stt_language_value.lower() == "auto" else stt_language_value
         stt_prompt = os.getenv("STT_PROMPT", DEFAULT_STT_PROMPT)
-        tts_provider = os.getenv("TTS_PROVIDER", "elevenlabs").lower()
+        tts_config = resolve_tts_config_from_values(os.environ)
+        cloud_tts_provider = tts_config.cloud_provider
+        tts_provider = tts_config.backend_provider
+        web_tts_provider = tts_config.web_provider
         voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
         thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
         command_ack_sound_enabled = env_bool("COMMAND_ACK_SOUND_ENABLED", False)
@@ -4747,22 +4823,6 @@ async def main():
         voice_cancel_during_thinking = env_bool("VOICE_CANCEL_DURING_THINKING", False)
         interrupt_conversation_enabled = env_bool("INTERRUPT_CONVERSATION_ENABLED", False)
         web_stt_provider = os.getenv("WEB_STT_PROVIDER", "openai").strip().lower()
-        raw_web_tts_provider = os.getenv("WEB_TTS_PROVIDER")
-        web_tts_provider = (raw_web_tts_provider or "openai").strip().lower()
-        raw_cloud_tts_provider = os.getenv("CLOUD_TTS_PROVIDER")
-        cloud_tts_provider = (raw_cloud_tts_provider or "").strip().lower()
-        if cloud_tts_provider not in {"none", "openai", "elevenlabs"}:
-            cloud_tts_provider = cloud_tts_provider_from_values(
-                {
-                    "CLOUD_TTS_PROVIDER": raw_cloud_tts_provider or "",
-                    "WEB_TTS_PROVIDER": raw_web_tts_provider or "",
-                    "TTS_PROVIDER": tts_provider,
-                }
-            )
-        if tts_provider in {"openai", "elevenlabs"} or cloud_tts_provider == "none":
-            tts_provider = cloud_tts_provider
-        if web_tts_provider in {"openai", "elevenlabs"} or cloud_tts_provider == "none":
-            web_tts_provider = cloud_tts_provider
         web_tts_voice = os.getenv("WEB_TTS_VOICE", DEFAULT_OPENAI_TTS_VOICE).strip()
         web_tts_model = os.getenv("WEB_TTS_MODEL", DEFAULT_OPENAI_TTS_MODEL).strip()
         web_tts_speed = max(0.6, min(1.8, env_float("WEB_TTS_SPEED", 1.0)))
@@ -4816,9 +4876,9 @@ async def main():
 
         backend_stt_enabled = stt_input in {"both", "backend"}
         browser_stt_enabled = stt_input in {"both", "browser"}
-        backend_tts_active = tts_provider != "none"
-        web_tts_requested = web_tts_provider in {"openai", "elevenlabs"}
-        active_tts_output = "backend" if backend_tts_active else "browser" if web_tts_requested else "silent"
+        backend_tts_active = tts_config.backend_active
+        web_tts_requested = tts_config.web_requested
+        active_tts_output = tts_config.output
         web_audio_enabled = browser_stt_enabled or web_tts_requested
 
         print(f"Using env file: {env_file}")
@@ -5286,7 +5346,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -5298,6 +5358,7 @@ async def main():
                 stt_prompt,
                 system_prompt,
                 session_context_size,
+                mcp_agent_max_steps,
                 mcp_tool_routing_enabled,
                 interrupt_conversation_enabled,
                 backend_audio_input_device,

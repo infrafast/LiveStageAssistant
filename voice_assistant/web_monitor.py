@@ -325,6 +325,7 @@ class WebMonitor:
                 str,
                 str,
                 int,
+                int,
                 bool,
                 bool,
                 str,
@@ -399,6 +400,7 @@ class WebMonitor:
                 str,
                 str,
                 str,
+                int,
                 int,
                 bool,
                 bool,
@@ -1071,8 +1073,9 @@ class WebMonitor:
                     system_prompt = str(payload.get("system_prompt") or "").strip()
                     try:
                         session_context_size = int(payload.get("session_context_size") or 0)
+                        mcp_agent_max_steps = int(payload.get("mcp_agent_max_steps") or 20)
                     except (TypeError, ValueError):
-                        self.send_error(400, "Session context size must be an integer")
+                        self.send_error(400, "Session context size and MCP max steps must be integers")
                         return
                     mcp_tool_routing_enabled = bool(payload.get("mcp_tool_routing_enabled"))
                     interrupt_conversation_enabled = bool(payload.get("interrupt_conversation_enabled"))
@@ -1119,6 +1122,7 @@ class WebMonitor:
                             stt_prompt,
                             system_prompt,
                             session_context_size,
+                            mcp_agent_max_steps,
                             mcp_tool_routing_enabled,
                             interrupt_conversation_enabled,
                             backend_audio_input_device,
@@ -3386,6 +3390,10 @@ INDEX_HTML = """<!doctype html>
                 <input id="session-context-size" type="range" min="0" max="12000" step="500" value="6000">
               </div>
               <div class="field">
+                <label for="mcp-agent-max-steps" title="MCP_AGENT_MAX_STEPS">MCP Steps <span id="mcp-agent-max-steps-label">20</span></label>
+                <input id="mcp-agent-max-steps" type="range" min="5" max="60" step="1" value="20">
+              </div>
+              <div class="field">
                 <label>Tool Routing</label>
                 <div class="segmented" id="mcp-tool-routing" role="radiogroup" aria-label="Tool Routing">
                   <label><input type="radio" name="mcp-tool-routing" value="false">Off</label>
@@ -3486,6 +3494,8 @@ INDEX_HTML = """<!doctype html>
 	    const llmModel = document.querySelector("#llm-model");
 	    const sessionContextSize = document.querySelector("#session-context-size");
     const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
+    const mcpAgentMaxSteps = document.querySelector("#mcp-agent-max-steps");
+    const mcpAgentMaxStepsLabel = document.querySelector("#mcp-agent-max-steps-label");
     const mcpToolRoutingInputs = Array.from(document.querySelectorAll('input[name="mcp-tool-routing"]'));
     const interruptConversationInputs = Array.from(document.querySelectorAll('input[name="interrupt-conversation"]'));
     const envProfile = document.querySelector("#env-profile");
@@ -4325,10 +4335,20 @@ INDEX_HTML = """<!doctype html>
       sessionContextSizeLabel.textContent = value === 0 ? "Off" : String(value);
     }
 
+    function syncMcpAgentMaxStepsLabel() {
+      mcpAgentMaxStepsLabel.textContent = String(mcpAgentMaxSteps.value || 20);
+    }
+
     function setSessionContextSize(value) {
       const nextValue = Math.max(0, Math.min(12000, Number(value || 0)));
       sessionContextSize.value = String(nextValue);
       syncSessionContextSizeLabel();
+    }
+
+    function setMcpAgentMaxSteps(value) {
+      const nextValue = Math.max(5, Math.min(60, Number(value || 20)));
+      mcpAgentMaxSteps.value = String(Math.round(nextValue));
+      syncMcpAgentMaxStepsLabel();
     }
 
     function summaryLineForMessage(message) {
@@ -5503,6 +5523,7 @@ INDEX_HTML = """<!doctype html>
         provider: llmProvider.value || "",
         model: llmModel.value || "",
         session_context_size: Number(sessionContextSize.value || 0),
+        mcp_agent_max_steps: Number(mcpAgentMaxSteps.value || 20),
         mcp_tool_routing_enabled: selectedMcpToolRoutingEnabled(),
         interrupt_conversation_enabled: selectedInterruptConversationEnabled(),
         wake_word: wakeWord.value.trim(),
@@ -6222,6 +6243,7 @@ INDEX_HTML = """<!doctype html>
           llmProvider.value = selectedProvider;
         }
         setSessionContextSize(data.selected_session_context_size || 0);
+        setMcpAgentMaxSteps(data.selected_mcp_agent_max_steps || 20);
         setSelectedMcpToolRoutingEnabled(Boolean(data.selected_mcp_tool_routing_enabled));
         setSelectedInterruptConversationEnabled(Boolean(data.selected_interrupt_conversation_enabled));
         interruptConversationEnabled = selectedInterruptConversationEnabled();
@@ -6748,6 +6770,7 @@ INDEX_HTML = """<!doctype html>
       syncSessionContextSizeLabel();
       renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
     });
+    mcpAgentMaxSteps.addEventListener("input", syncMcpAgentMaxStepsLabel);
     for (const input of mcpToolRoutingInputs) {
       input.addEventListener("change", syncMcpRoutingEditors);
     }
@@ -6774,6 +6797,7 @@ INDEX_HTML = """<!doctype html>
       const provider = llmProvider.value;
       const model = llmModel.value;
       const sessionContextSizeValue = Number(sessionContextSize.value || 0);
+      const mcpAgentMaxStepsValue = Number(mcpAgentMaxSteps.value || 20);
       const mcpToolRoutingEnabled = selectedMcpToolRoutingEnabled();
       const interruptConversation = selectedInterruptConversationEnabled();
       const wakeWordValue = wakeWord.value.trim();
@@ -6813,6 +6837,7 @@ INDEX_HTML = """<!doctype html>
             provider,
             model,
             session_context_size: sessionContextSizeValue,
+            mcp_agent_max_steps: mcpAgentMaxStepsValue,
             mcp_tool_routing_enabled: mcpToolRoutingEnabled,
             interrupt_conversation_enabled: interruptConversation,
             connectivity_mode: connectivityModeValue,
