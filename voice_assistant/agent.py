@@ -1386,6 +1386,7 @@ class VoiceAssistant:
         stt_language: str | None = None,
         stt_prompt: str | None = None,
         tts_provider: str = "elevenlabs",
+        web_tts_enabled: bool = False,
         elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
         thinking_sound_file: str = "thinking.wav",
         command_ack_sound_enabled: bool = False,
@@ -1439,6 +1440,7 @@ class VoiceAssistant:
             stt_language: Transcription language code, or None for auto-detect
             stt_prompt: Optional STT context prompt to bias short command transcription
             tts_provider: Text-to-speech provider (elevenlabs, pyttsx3, or none)
+            web_tts_enabled: Whether browser TTS is the active speech output
             elevenlabs_voice_id: ElevenLabs voice ID (default: Rachel)
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
             command_ack_sound_enabled: Play a short backend chime when a command is accepted
@@ -1554,6 +1556,7 @@ class VoiceAssistant:
         self.openai_api_key = openai_api_key
         self.stt_provider = stt_provider.lower()
         self.tts_provider = tts_provider.lower()
+        self.web_tts_enabled = bool(web_tts_enabled)
         self.local_whisper_model_name = local_whisper_model
         self.stt_language = stt_language or None
         base_stt_prompt = stt_prompt or DEFAULT_STT_PROMPT
@@ -2418,6 +2421,39 @@ class VoiceAssistant:
 
         return self._mcp_config_subset(config, available_servers), failed_servers
 
+    def _loaded_mcp_server_names(self, config: dict | None = None) -> list[str]:
+        """Return MCP server names that have an active session."""
+        if self.mcp_client and getattr(self.mcp_client, "sessions", None):
+            return sorted(str(name) for name in self.mcp_client.sessions.keys())
+        return sorted(str(name) for name in (config or {}).get("mcpServers", {}).keys())
+
+    def _startup_ready_message(self, loaded_servers: list[str]) -> str:
+        parts = ["Assistant vocal prêt."]
+        if loaded_servers:
+            server_text = ", ".join(loaded_servers)
+            parts.append(f"Serveurs MCP chargés : {server_text}.")
+        else:
+            parts.append("Aucun serveur MCP chargé.")
+
+        if self.web_monitor and self.web_monitor.listen_address:
+            _host, port = self.web_monitor.listen_address
+            parts.append(f"Interface web disponible sur le port {port}.")
+
+        if self.wake_words:
+            parts.append(f"Mot de réveil actif : {self.wake_words[0]}.")
+
+        return " ".join(parts)
+
+    async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
+        """Announce that the assistant is ready, using the configured speech side."""
+        message = self._startup_ready_message(loaded_servers)
+        print(message)
+        if self.web_monitor:
+            self.web_monitor.append_dialogue("assistant", message, speak=self.web_tts_enabled)
+
+        if self.tts_provider != "none":
+            await asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message)))
+
     async def initialize_mcp(self):
         """Initialize MCP client and agent with proper error handling."""
         print("Initializing MCP servers...")
@@ -2499,7 +2535,7 @@ class VoiceAssistant:
 
             print("✓ MCP servers initialized successfully!")
             if self.web_monitor:
-                server_names = sorted(config.get("mcpServers", {}).keys())
+                server_names = self._loaded_mcp_server_names(config)
                 detail = ", ".join(server_names) if server_names else "no configured servers"
                 self.web_monitor.update(services={"MCP": {"status": "initialized", "detail": detail}})
             return True
@@ -3669,6 +3705,7 @@ class VoiceAssistant:
                 self.web_monitor.set_environment_loading(False)
         else:
             await self.refresh_session_llm_summary()
+            await self.announce_startup_ready(self._loaded_mcp_server_names(self.mcp_config))
 
         try:
             while True:
@@ -4952,6 +4989,7 @@ async def main():
             "vad_max_speech_seconds": vad_max_speech_seconds,
             "interrupt_conversation_enabled": interrupt_conversation_enabled,
         }
+        web_tts_enabled = bool(web_audio_state["tts_enabled"])
 
         mcp_config = None
         if mcp_config_path:
@@ -5007,6 +5045,7 @@ async def main():
             stt_language=stt_language,
             stt_prompt=stt_prompt,
             tts_provider=tts_provider,
+            web_tts_enabled=web_tts_enabled,
             elevenlabs_voice_id=voice_id,
             thinking_sound_file=thinking_sound_file,
             command_ack_sound_enabled=command_ack_sound_enabled,

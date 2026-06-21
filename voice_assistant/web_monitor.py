@@ -366,6 +366,7 @@ class WebMonitor:
         self._web_audio_tts_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._mcp_admin_proxy_targets: dict[str, dict[str, Any]] = {}
         self._started_at = time.time()
+        self._listen_address: tuple[str, int] | None = None
         self._snapshot: dict[str, Any] = {
             "mode": "unknown",
             "env_file": None,
@@ -1541,7 +1542,8 @@ class WebMonitor:
                 daemon=True,
             )
             self._thread.start()
-            return self._server.server_address
+            self._listen_address = self._server.server_address
+            return self._listen_address
 
     def stop(self) -> None:
         with self._lock:
@@ -1549,12 +1551,18 @@ class WebMonitor:
             thread = self._thread
             self._server = None
             self._thread = None
+            self._listen_address = None
 
         if server:
             server.shutdown()
             server.server_close()
         if thread:
             thread.join(timeout=2)
+
+    @property
+    def listen_address(self) -> tuple[str, int] | None:
+        with self._lock:
+            return self._listen_address
 
     def append_log(self, value: str, source: str = "stdout") -> None:
         if not value:
