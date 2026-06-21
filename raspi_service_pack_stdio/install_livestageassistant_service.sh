@@ -53,6 +53,7 @@ require_node_stack
 echo "Installing Live Stage Assistant service files..."
 
 sudo install -d -o "$SERVICE_USER" -g "$SERVICE_USER" /etc/livestageassistant
+sudo loginctl enable-linger "$SERVICE_USER"
 sudo cp "$SCRIPT_DIR/.env.online" /etc/livestageassistant/.env.online
 sudo cp "$SCRIPT_DIR/.env.offline" /etc/livestageassistant/.env.offline
 sudo cp "$SCRIPT_DIR/livestageassistant.service" /etc/systemd/system/livestageassistant.service

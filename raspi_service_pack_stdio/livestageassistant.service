@@ -9,6 +9,8 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/LiveStageAssistant
 Environment=ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 ExecStart=/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file auto
 Restart=always
 RestartSec=5

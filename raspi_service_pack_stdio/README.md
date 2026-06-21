@@ -43,6 +43,21 @@ wpctl status
 wpctl set-default <USB_SINK_ID>
 ```
 
+The installed system service runs as `pi` but outside the interactive login shell. To let PyAudio see the same PipeWire/Pulse devices as an interactive `pi` terminal, the service exports:
+
+```ini
+XDG_RUNTIME_DIR=/run/user/1000
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+```
+
+The installer also enables linger for `pi` so `/run/user/1000` can exist at boot before an interactive login. If `pipewire` is visible when running the agent manually but missing when running it as a service, reinstall the service pack or run:
+
+```bash
+sudo loginctl enable-linger pi
+sudo systemctl daemon-reload
+sudo systemctl restart livestageassistant
+```
+
 Set `COMMAND_ACK_SOUND_ENABLED=true` from the web Config -> Other section to play `assets/ring.wav` after the LLM/MCP response is ready and just before TTS generation/playback begins. The sound uses the selected speech side: backend PyAudio for backend TTS, or browser audio for browser TTS. It does not stop the thinking sound.
 
 On the Raspberry Pi, install the assistant dependencies first:
