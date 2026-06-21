@@ -2440,7 +2440,8 @@ class VoiceAssistant:
             parts.append(f"Interface web disponible sur le port {port}.")
 
         if self.wake_words:
-            parts.append(f"Mot de réveil actif : {self.wake_words[0]}.")
+            wake_word_text = ", ".join(self.wake_words)
+            parts.append(f"Mots de réveil actifs : {wake_word_text}.")
 
         return " ".join(parts)
 
