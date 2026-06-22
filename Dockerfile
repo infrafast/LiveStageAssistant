@@ -42,7 +42,7 @@ RUN python -m pip install --upgrade pip \
 
 RUN if [ "$INSTALL_SPEAKER_RECOGNITION" = "1" ]; then \
         python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-        && python -m pip install --no-cache-dir resemblyzer; \
+        && python -m pip install --no-cache-dir ".[speaker]"; \
     fi
 
 RUN chmod +x /usr/local/bin/live-stage-assistant-entrypoint \

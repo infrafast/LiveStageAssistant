@@ -74,11 +74,11 @@ Speaker recognition is optional. Do not install `LiveStageAssistant[speaker]` di
 cd /home/pi/LiveStageAssistant
 source .venv/bin/activate
 python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install --no-cache-dir resemblyzer
+python -m pip install --no-cache-dir ".[speaker]"
 pip freeze | grep -Ei "nvidia|cuda|triton"
 ```
 
-The last command should print nothing. If Resemblyzer still pulls CUDA packages on your platform, remove them and install Resemblyzer without dependencies after Torch and its required CPU dependencies are already present:
+The last command should print nothing. If Resemblyzer still pulls CUDA packages on your platform, remove them and install Resemblyzer without dependencies after Torch and its required CPU dependencies are already present. Keep `scipy` and `platformdirs` explicit because the speaker backend validates `scipy.special.loggamma` and `platformdirs.user_cache_dir` at runtime:
 
 ```bash
 python -m pip uninstall -y resemblyzer torch triton cuda-toolkit cuda-bindings cuda-pathfinder \
@@ -87,6 +87,7 @@ python -m pip uninstall -y resemblyzer torch triton cuda-toolkit cuda-bindings c
   nvidia-cusparse nvidia-cufft nvidia-cublas nvidia-cusolver nvidia-cudnn-cu13
 python -m pip cache purge
 python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install --no-cache-dir --force-reinstall "scipy==1.12.0" "platformdirs>=4,<5"
 python -m pip install --no-cache-dir resemblyzer --no-deps
 ```
 

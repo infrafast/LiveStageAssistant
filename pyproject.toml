@@ -40,6 +40,8 @@ dependencies = [
 
 [project.optional-dependencies]
 speaker = [
+    "platformdirs>=4,<5",
+    "scipy>=1.11,<1.13",
     "resemblyzer>=0.1.4",
 ]
 dev = [
