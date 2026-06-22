@@ -68,6 +68,28 @@ uv venv
 uv pip install -e .
 ```
 
+Speaker recognition is optional. Do not install `LiveStageAssistant[speaker]` directly on Raspberry Pi: depending on the current PyTorch wheels, pip may try to install CUDA/NVIDIA packages that are useless and heavy on Pi. If you enable `SPEAKER_RECOGNITION_ENABLED=true`, install the CPU Torch wheel first, then Resemblyzer:
+
+```bash
+cd /home/pi/LiveStageAssistant
+source .venv/bin/activate
+python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install --no-cache-dir resemblyzer
+pip freeze | grep -Ei "nvidia|cuda|triton"
+```
+
+The last command should print nothing. If Resemblyzer still pulls CUDA packages on your platform, remove them and install Resemblyzer without dependencies after Torch and its required CPU dependencies are already present:
+
+```bash
+python -m pip uninstall -y resemblyzer torch triton cuda-toolkit cuda-bindings cuda-pathfinder \
+  nvidia-cusparselt-cu13 nvidia-nvtx nvidia-nvshmem-cu13 nvidia-nvjitlink nvidia-nccl-cu13 \
+  nvidia-curand nvidia-cufile nvidia-cuda-runtime nvidia-cuda-nvrtc nvidia-cuda-cupti \
+  nvidia-cusparse nvidia-cufft nvidia-cublas nvidia-cusolver nvidia-cudnn-cu13
+python -m pip cache purge
+python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+python -m pip install --no-cache-dir resemblyzer --no-deps
+```
+
 Build the MCP servers before starting the assistant:
 
 ```bash
