@@ -3152,7 +3152,7 @@ INDEX_HTML = """<!doctype html>
 	      </div>
 	      <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
         <section>
-          <details open>
+          <details>
             <summary>Connectivity</summary>
             <div class="config-controls">
               <div class="field full-row">
@@ -3182,7 +3182,7 @@ INDEX_HTML = """<!doctype html>
           </details>
         </section>
 	        <section>
-	          <details open>
+	          <details>
 	            <summary>STT/TTS</summary>
 	            <div class="config-controls">
               <div class="field">
@@ -3401,7 +3401,7 @@ INDEX_HTML = """<!doctype html>
           </details>
         </section>
         <section>
-          <details open>
+          <details>
             <summary>IA model</summary>
             <div class="config-controls">
               <div class="field">
