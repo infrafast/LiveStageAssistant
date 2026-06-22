@@ -790,6 +790,8 @@ For best speaker recognition, upload one clean WAV per profile slot. The web UI 
 
 The assistant never maps a recognized speaker to a mixer bus, channel, light, or scene by itself. It only adds `speaker`, `speaker_confidence`, and `speaker_backend` to the MCP context or injected command payload. MCP servers that understand that context, such as XMSeries-MCP through `osc_get_speaker_context`, decide what the speaker means for their own domain.
 
+The local diagnostic commands `qui suis-je ?`, `détecte ma voix`, `reconnais ma voix`, and similar phrases are handled by the assistant itself before any MCP call. They report the detected speaker profile and confidence for the current utterance, or explain why no profile was recognized.
+
 For MCP servers launched in `stdio`, the web Config -> MCP Servers section can edit each server's `env` object from the active `MCP_CONFIG` JSON. Use this for server-side options that do not belong to `assistantOptions`, such as XMSeries-MCP speaker mapping:
 
 ```json

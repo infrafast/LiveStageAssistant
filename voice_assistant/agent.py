@@ -3811,6 +3811,9 @@ class VoiceAssistant:
                     )
             return "Conversation history cleared."
 
+        if self.is_speaker_identity_query(text):
+            return self.voice_detected_response(speaker_result)
+
         # Process with MCP agent
         if not self.agent:
             detail = self.mcp_initialization_error or "MCP initialization failed"
@@ -3843,6 +3846,58 @@ class VoiceAssistant:
                     "Je vais redémarrer la session MCP, puis tu pourras relancer la commande."
                 )
             return f"Sorry, I encountered an error: {error_text}"
+
+    def is_speaker_identity_query(self, text: str) -> bool:
+        """Return true for local speaker-recognition diagnostic commands."""
+        normalized = normalize_stt_hallucination_candidate(text)
+        if not normalized:
+            return False
+        exact_phrases = {
+            "qui suis je",
+            "qui suis",
+            "detecte ma voix",
+            "detecter ma voix",
+            "reconnais ma voix",
+            "reconnait ma voix",
+            "reconnaitre ma voix",
+            "identifie ma voix",
+            "identifier ma voix",
+            "quel profil vocal",
+            "profil vocal",
+            "voice detected",
+        }
+        if normalized in exact_phrases:
+            return True
+        return (
+            ("qui" in normalized.split() and "suis" in normalized.split() and "je" in normalized.split())
+            or ("detect" in normalized and "voix" in normalized)
+            or ("reconnais" in normalized and "voix" in normalized)
+            or ("identifie" in normalized and "voix" in normalized)
+            or ("profil" in normalized and "vocal" in normalized)
+        )
+
+    def voice_detected_response(self, speaker_result: SpeakerRecognitionResult | None) -> str:
+        """Local voice_detected pseudo-tool response; no MCP call is needed."""
+        if not self.speaker_recognition_enabled:
+            return "La reconnaissance de locuteur est désactivée dans la configuration."
+        if not self.speaker_recognizer:
+            return "La reconnaissance de locuteur est activée, mais le moteur n'est pas disponible."
+        if not speaker_result or speaker_result.backend == "none":
+            return "Je n'ai pas reçu d'échantillon vocal à analyser pour cette commande."
+
+        confidence = max(0.0, min(1.0, float(speaker_result.confidence or 0.0)))
+        percent = round(confidence * 100)
+        if speaker_result.speaker and speaker_result.speaker != UNKNOWN_SPEAKER:
+            return (
+                f"Profil vocal détecté: {speaker_result.speaker}, "
+                f"confiance environ {percent} pour cent."
+            )
+
+        reason = speaker_result.reason or "unknown"
+        return (
+            "Je n'ai pas reconnu de profil vocal avec assez de certitude. "
+            f"Meilleur score environ {percent} pour cent. Raison: {reason}."
+        )
 
     def _is_mcp_connection_loss_error(self, error_text: str) -> bool:
         normalized = error_text.lower()
