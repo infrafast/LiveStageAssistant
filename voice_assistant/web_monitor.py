@@ -271,6 +271,19 @@ def compact_tool_result_log_value(value: str) -> str:
     return "".join(output_lines)
 
 
+def mcp_env_value_for_display(value: Any) -> Any:
+    """Return a friendlier JSON value for editing MCP server env values."""
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped or stripped[0] not in "{[":
+        return value
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        return value
+
+
 def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Return browser-embeddable MCP admin page targets from the active config."""
     servers = (mcp_config or {}).get("mcpServers")
@@ -287,6 +300,7 @@ def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dic
             "embeddable": False,
             "auth_required": False,
             "routing": "",
+            "env_options": {},
             "detail": "",
         }
         if not isinstance(server_config, dict):
@@ -305,6 +319,13 @@ def build_mcp_server_admin_frames(mcp_config: dict[str, Any] | None) -> list[dic
                 entry["routing"] = ", ".join(str(item).strip() for item in routing if str(item).strip())
             elif routing is not None:
                 entry["routing"] = str(routing)
+
+        server_env = server_config.get("env")
+        if isinstance(server_env, dict):
+            entry["env_options"] = {
+                str(key): mcp_env_value_for_display(value)
+                for key, value in sorted(server_env.items())
+            }
 
         server_type = str(server_config.get("type") or "stdio")
         entry["type"] = server_type
@@ -467,6 +488,7 @@ class WebMonitor:
         self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._mcp_routing_save_handler: Callable[[dict[str, str]], dict[str, Any]] | None = None
+        self._mcp_server_options_save_handler: Callable[[dict[str, dict[str, Any]]], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
         self._session_context_new_handler: Callable[[str | None], dict[str, Any]] | None = None
         self._session_context_select_handler: Callable[[str], dict[str, Any]] | None = None
@@ -576,6 +598,11 @@ class WebMonitor:
         """Register callback used by the web UI to persist MCP routing words."""
         with self._lock:
             self._mcp_routing_save_handler = handler
+
+    def set_mcp_server_options_save_handler(self, handler: Callable[[dict[str, dict[str, Any]]], dict[str, Any]]) -> None:
+        """Register callback used by the web UI to persist MCP server env options."""
+        with self._lock:
+            self._mcp_server_options_save_handler = handler
 
     def set_session_context_handlers(
         self,
@@ -774,6 +801,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/mcp-routing":
                         self._handle_mcp_routing_save()
+                        return
+                    if self.path == "/api/mcp-server-options":
+                        self._handle_mcp_server_options_save()
                         return
                     if self.path == "/api/llm-config":
                         self._handle_llm_config_save()
@@ -1848,6 +1878,35 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self._send_json_error(500, {"ok": False, "error": {"message": f"Could not save MCP routing: {e}"}})
+                        return
+                    self._send_json(result)
+
+                def _handle_mcp_server_options_save(self) -> None:
+                    handler = monitor._mcp_server_options_save_handler
+                    if handler is None:
+                        self.send_error(503, "MCP server options save is not available")
+                        return
+
+                    payload = self._read_json_body(max_bytes=512 * 1024)
+                    if payload is None:
+                        return
+                    raw_options = payload.get("options")
+                    if not isinstance(raw_options, dict):
+                        self.send_error(400, "options must be an object")
+                        return
+                    options: dict[str, dict[str, Any]] = {}
+                    for name, value in raw_options.items():
+                        if not isinstance(value, dict):
+                            self.send_error(400, f"options for {name} must be an object")
+                            return
+                        options[str(name)] = value
+                    try:
+                        result = handler(options)
+                    except ValueError as e:
+                        self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        return
+                    except Exception as e:
+                        self._send_json_error(500, {"ok": False, "error": {"message": f"Could not save MCP server options: {e}"}})
                         return
                     self._send_json(result)
 
@@ -4288,6 +4347,7 @@ INDEX_HTML = """<!doctype html>
         Boolean(item.embeddable),
         Boolean(item.auth_required),
         item.routing || "",
+        JSON.stringify(item.env_options || {}),
         item.detail || ""
       ])) + "|" + route;
       if (signature === mcpServersSignature) return;
@@ -4384,6 +4444,37 @@ INDEX_HTML = """<!doctype html>
         routingBox.append(routingLabel, routingRow, routingMessage);
         card.append(routingBox);
 
+        const hasEnvOptions = server.env_options && Object.keys(server.env_options).length > 0;
+        const isStdioServer = !server.admin_url && String(server.type || "stdio") === "stdio";
+        if (hasEnvOptions || isStdioServer) {
+          const optionsBox = document.createElement("div");
+          optionsBox.className = "mcp-routing-box";
+          const optionsLabel = document.createElement("label");
+          optionsLabel.textContent = "Server env options";
+          optionsLabel.title = "mcpServers.<server>.env";
+          const optionsRow = document.createElement("div");
+          optionsRow.className = "mcp-routing-row";
+          const optionsInput = document.createElement("textarea");
+          optionsInput.className = "mcp-options-input";
+          optionsInput.dataset.serverName = server.name || "";
+          optionsInput.value = JSON.stringify(server.env_options || {}, null, 2);
+          optionsInput.placeholder = '{\n  "XMS_SPEAKER_MAP": {\n    "laurent": { "bus": "Laurent", "channel": "Talk Laurent" }\n  }\n}';
+          optionsInput.spellcheck = false;
+          optionsInput.title = "JSON object saved into mcpServers.<server>.env. Nested objects are stored as compact JSON strings.";
+          const optionsSave = document.createElement("button");
+          optionsSave.className = "mcp-routing-save";
+          optionsSave.type = "button";
+          optionsSave.textContent = "Save";
+          optionsSave.title = "Save MCP server env options";
+          const optionsMessage = document.createElement("div");
+          optionsMessage.className = "mcp-routing-message";
+          optionsMessage.textContent = "Advanced JSON env options; saved to the active MCP config.";
+          optionsSave.addEventListener("click", () => saveMcpServerOptions(optionsMessage));
+          optionsRow.append(optionsInput, optionsSave);
+          optionsBox.append(optionsLabel, optionsRow, optionsMessage);
+          card.append(optionsBox);
+        }
+
         if (server.embeddable && selectedUrl) {
           const placeholder = document.createElement("div");
           placeholder.className = "mcp-server-placeholder";
@@ -4438,6 +4529,40 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         if (messageEl) messageEl.textContent = data.message || "Routing saved.";
+        setEnvironmentLoading(true, "rafraichissement de l'environnement");
+        mcpServersSignature = "";
+        await refresh();
+      } catch (error) {
+        if (messageEl) messageEl.textContent = `Save failed: ${error}`;
+      }
+    }
+
+    async function saveMcpServerOptions(messageEl) {
+      const options = {};
+      for (const input of mcpServerGrid.querySelectorAll(".mcp-options-input")) {
+        const name = input.dataset.serverName || "";
+        if (!name) continue;
+        try {
+          const parsed = JSON.parse(input.value || "{}");
+          if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+            throw new Error("expected a JSON object");
+          }
+          options[name] = parsed;
+        } catch (error) {
+          if (messageEl) messageEl.textContent = `Invalid JSON for ${name}: ${error.message || error}`;
+          return;
+        }
+      }
+      if (messageEl) messageEl.textContent = "Saving...";
+      try {
+        const response = await fetch("/api/mcp-server-options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ options })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        if (messageEl) messageEl.textContent = data.message || "MCP server options saved.";
         setEnvironmentLoading(true, "rafraichissement de l'environnement");
         mcpServersSignature = "";
         await refresh();

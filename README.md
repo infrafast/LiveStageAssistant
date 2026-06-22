@@ -790,6 +790,19 @@ For best speaker recognition, upload one clean WAV per profile slot. The web UI 
 
 The assistant never maps a recognized speaker to a mixer bus, channel, light, or scene by itself. It only adds `speaker`, `speaker_confidence`, and `speaker_backend` to the MCP context or injected command payload. MCP servers that understand that context, such as XMSeries-MCP through `osc_get_speaker_context`, decide what the speaker means for their own domain.
 
+For MCP servers launched in `stdio`, the web Config -> MCP Servers section can edit each server's `env` object from the active `MCP_CONFIG` JSON. Use this for server-side options that do not belong to `assistantOptions`, such as XMSeries-MCP speaker mapping:
+
+```json
+{
+  "XMS_SPEAKER_MAP": {
+    "laurent": { "bus": "Laurent", "channel": "Talk Laurent" },
+    "marie": { "bus": "Marie" }
+  }
+}
+```
+
+Nested objects are saved back as compact JSON strings because MCP stdio servers receive environment variables as strings. `assistantOptions.routing` remains reserved for LiveStageAssistant's tool-routing words.
+
 Main speaker-recognition settings:
 
 ```env

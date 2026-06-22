@@ -4332,6 +4332,41 @@ async def main():
             normalized_updates[str(server_name)] = ",".join(words)
         return normalized_updates
 
+    def normalize_mcp_env_options(value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            raise ValueError("MCP server options must be JSON objects")
+        normalized: dict[str, str] = {}
+        for raw_key, raw_value in value.items():
+            key = str(raw_key).strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise ValueError(f"invalid MCP env option name: {key}")
+            if raw_value is None:
+                normalized[key] = ""
+            elif isinstance(raw_value, (dict, list)):
+                normalized[key] = json.dumps(raw_value, ensure_ascii=False, separators=(",", ":"))
+            elif isinstance(raw_value, bool):
+                normalized[key] = "true" if raw_value else "false"
+            else:
+                normalized[key] = str(raw_value)
+        return normalized
+
+    def validate_mcp_server_options_updates(
+        config: dict[str, Any],
+        options_updates: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, str]]:
+        servers = config.get("mcpServers")
+        if not isinstance(servers, dict):
+            raise ValueError("active MCP config has no mcpServers object")
+
+        unknown = sorted(name for name in options_updates if name not in servers)
+        if unknown:
+            raise ValueError(f"unknown MCP server(s): {', '.join(unknown)}")
+
+        normalized_updates: dict[str, dict[str, str]] = {}
+        for server_name, options in options_updates.items():
+            normalized_updates[str(server_name)] = normalize_mcp_env_options(options)
+        return normalized_updates
+
     def format_env_value(value: str) -> str:
         """Format an env value so python-dotenv can parse it back safely."""
         value = str(value)
@@ -5718,6 +5753,52 @@ async def main():
                 "routing": normalized_updates,
             }
 
+    def save_mcp_server_options_config(options_updates: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        with env_file_lock:
+            active_env_file = env_file
+            values = dict(dotenv_values(active_env_file))
+            mcp_config_path = mcp_config_path_from_values(values)
+
+            try:
+                with open(mcp_config_path) as config_file:
+                    config = json.load(config_file)
+            except OSError as e:
+                raise ValueError(f"could not read MCP_CONFIG '{mcp_config_path}': {e}") from e
+            except json.JSONDecodeError as e:
+                raise ValueError(f"invalid JSON in MCP_CONFIG '{mcp_config_path}': {e}") from e
+
+            if not isinstance(config, dict):
+                raise ValueError("active MCP config must be a JSON object")
+
+            normalized_updates = validate_mcp_server_options_updates(config, options_updates)
+            servers = config.get("mcpServers")
+            if not isinstance(servers, dict):
+                raise ValueError("active MCP config has no mcpServers object")
+
+            for server_name, options in normalized_updates.items():
+                server_config = servers.get(server_name)
+                if not isinstance(server_config, dict):
+                    continue
+                server_config["env"] = options
+
+            try:
+                with open(mcp_config_path, "w") as config_file:
+                    json.dump(config, config_file, ensure_ascii=False, indent=2)
+                    config_file.write("\n")
+            except OSError as e:
+                raise ValueError(f"could not write MCP_CONFIG '{mcp_config_path}': {e}") from e
+
+            if web_monitor:
+                web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
+                web_monitor.update(env_values=values, mcp_config=config)
+            reload_event.set()
+            return {
+                "ok": True,
+                "message": f"MCP server options saved to {display_env_path(mcp_config_path)}.",
+                "mcp_config": str(mcp_config_path),
+                "options": normalized_updates,
+            }
+
     web_monitor = None
     if web_enabled:
         web_monitor = WebMonitor(web_password=profile_values.get("WEB_PASSWORD"))
@@ -5744,6 +5825,7 @@ async def main():
             )
         )
         web_monitor.set_mcp_routing_save_handler(save_mcp_routing_config)
+        web_monitor.set_mcp_server_options_save_handler(save_mcp_server_options_config)
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),

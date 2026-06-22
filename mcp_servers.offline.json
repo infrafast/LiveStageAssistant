@@ -33,7 +33,8 @@
         "OSC_FX_COUNT": "4",
         "OSC_DCA_COUNT": "4",
         "DEBUG": "${DEBUG}",
-        "MCP_PROMPT_FILE": "../XMSeries-MCP/PROMPT.md"
+        "MCP_PROMPT_FILE": "../XMSeries-MCP/PROMPT.md",
+        "XMS_SPEAKER_MAP": "{\"laurent\":{\"bus\":\"Laurent\",\"channel\":\"Guitar-loran\"},\"thomas\":{\"bus\":\"Laurent\",\"channel\":\"Guitar-loran\"}}"
       },
       "assistantOptions": {
         "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"

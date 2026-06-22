@@ -10,7 +10,8 @@
         "OSC_PORT": "10023",
         "OSC_PROTOCOL": "OSCX32M32",
         "MCP_PROMPT_FILE": "../XMSeries-MCP/PROMPT.md",
-        "DEBUG": "${DEBUG}"
+        "DEBUG": "${DEBUG}",
+        "XMS_SPEAKER_MAP": "{\"laurent\":{\"bus\":\"Laurent\",\"channel\":\"Guitar-loran\"},\"thomas\":{\"bus\":\"Laurent\",\"channel\":\"Guitar-loran\"}}"
       },
       "assistantOptions": {
         "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"

@@ -92,6 +92,16 @@ python -m pip install --no-cache-dir resemblyzer --no-deps
 
 For reliable recognition, upload one clean WAV per speaker slot from the web Config -> STT/TTS -> Voice Activity Detection -> Speaker profiles section. Uploads are saved as `profil1.wav` to `profil5.wav` under `SPEAKER_PROFILES_DIR` (`data/speaker_profiles` locally, `/data/speaker_profiles` in Docker). When Resemblyzer is installed, upload also saves `profil1.npy` to `profil5.npy` embeddings next to the WAV files, so runtime does not need to analyze the full reference sample again unless the WAV changes. Use 10 to 30 seconds of normal speech from the same microphone path used live when possible; avoid music, crowd noise, reverb, clipping, long silences, and multiple voices.
 
+For XMSeries-MCP speaker-aware first-person commands such as `mon retour`, edit `XMS_SPEAKER_MAP` in the web Config -> MCP Servers -> mixer -> Server env options box. The value is shown as JSON in the UI and saved into `mcp_servers_raspi.json` as an environment variable string for the stdio MCP server:
+
+```json
+{
+  "XMS_SPEAKER_MAP": {
+    "laurent": { "bus": "Laurent", "channel": "Talk Laurent" }
+  }
+}
+```
+
 Build the MCP servers before starting the assistant:
 
 ```bash
