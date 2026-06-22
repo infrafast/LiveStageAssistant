@@ -5082,9 +5082,9 @@ async def main():
         for index, profile in enumerate((speaker_profiles or [])[:5], start=1):
             name = str(profile.get("name") or "").strip()
             enabled = bool(profile.get("enabled"))
-            if not name:
+            if not name and not enabled:
                 continue
-            normalized_speaker_profiles.append({"index": index, "name": name, "enabled": enabled})
+            normalized_speaker_profiles.append({"index": index, "name": name or f"speaker_{index}", "enabled": enabled})
         if stt_input not in {"both", "backend", "browser", "silent"}:
             raise ValueError(f"unsupported STT input: {stt_input}")
         if provider not in {"openai", "ollama"}:
@@ -5354,7 +5354,7 @@ async def main():
             name = (values.get(f"{prefix}NAME") or "").strip()
             wav_path = speaker_profile_wav_path_from_values(values, index)
             enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
-            if not name:
+            if not name and not enabled:
                 continue
             paths = [Path(wav_path)] if wav_path else []
             profiles.append(

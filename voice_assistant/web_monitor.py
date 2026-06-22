@@ -6474,7 +6474,7 @@ INDEX_HTML = """<!doctype html>
         const name = document.createElement("input");
         name.type = "text";
         name.placeholder = `speaker ${index}`;
-        name.value = profile.name || "";
+        name.value = profile.name || `speaker_${index}`;
         name.dataset.role = "name";
 
         const uploadWrap = document.createElement("div");
