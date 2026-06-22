@@ -2646,6 +2646,8 @@ class VoiceAssistant:
         self.stop_startup_loader_sound()
         if self.tts_provider != "none":
             await asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message)))
+        if self.web_monitor:
+            self.web_monitor.set_environment_loading(False)
 
     async def initialize_mcp(self):
         """Initialize MCP client and agent with proper error handling."""
@@ -6104,7 +6106,6 @@ async def main():
                     reload_complete_message = "Configuration mise à jour."
                     announce_reload_complete = False
                 if web_monitor:
-                    web_monitor.set_environment_loading(False)
                     if reload_complete_message:
                         # Browser TTS can announce this after reload; backend TTS stays out of the reload path.
                         web_monitor.append_dialogue("assistant", reload_complete_message, speak=True)
@@ -6149,7 +6150,6 @@ async def main():
                 reload_complete_message = "Environnement mis à jour."
                 announce_reload_complete = False
             if web_monitor:
-                web_monitor.set_environment_loading(False)
                 if reload_complete_message:
                     # Browser TTS can announce this after reload; backend TTS stays out of the reload path.
                     web_monitor.append_dialogue("assistant", reload_complete_message, speak=True)
