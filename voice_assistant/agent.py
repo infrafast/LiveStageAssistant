@@ -1598,12 +1598,14 @@ class VoiceAssistant:
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
         self.backend_stt_enabled = bool(backend_stt_enabled)
         self.voice_cancel_words = DEFAULT_VOICE_CANCEL_WORDS
-        self.speaker_recognition_enabled = bool(speaker_recognition_enabled)
+        self.speaker_recognition_requested = bool(speaker_recognition_enabled)
+        self.speaker_recognition_enabled = self.speaker_recognition_requested
         self.speaker_backend = (speaker_backend or "resemblyzer").strip().lower()
         self.speaker_threshold = max(0.0, min(1.0, float(speaker_threshold)))
         self.speaker_margin = max(0.0, min(1.0, float(speaker_margin)))
         self.speaker_profiles = list(speaker_profiles or [])
         self.speaker_recognizer = None
+        self.speaker_recognition_unavailable_reason = ""
         self.last_speaker_result = SpeakerRecognitionResult()
         if self.speaker_recognition_enabled:
             try:
@@ -1614,9 +1616,13 @@ class VoiceAssistant:
                     margin=self.speaker_margin,
                     profiles=self.speaker_profiles,
                 )
+                if self.speaker_recognizer:
+                    self.speaker_recognizer.validate_runtime()
             except Exception as e:
                 print(f"Speaker recognition unavailable: {e}")
                 self.speaker_recognition_enabled = False
+                self.speaker_recognizer = None
+                self.speaker_recognition_unavailable_reason = str(e)
 
         # Initialize audio components
         with suppress_native_stderr():
@@ -3011,6 +3017,14 @@ class VoiceAssistant:
                 reason=f"error: {e}",
             )
             print(f"Speaker recognition failed: {e}")
+            self.speaker_recognition_enabled = False
+            self.speaker_recognizer = None
+            self.speaker_recognition_unavailable_reason = str(e)
+            if self.web_monitor:
+                self.web_monitor.update(
+                    runtime={"speaker_recognition": self.speaker_recognition_runtime_state()}
+                )
+            print("Speaker recognition disabled for this session after runtime failure.")
         self.last_speaker_result = result
         if result.speaker != UNKNOWN_SPEAKER:
             print(
@@ -3023,6 +3037,14 @@ class VoiceAssistant:
                 f"({result.confidence:.2f}, second={result.second_confidence:.2f}, reason={result.reason})"
             )
         return result
+
+    def speaker_recognition_runtime_state(self) -> dict[str, Any]:
+        return {
+            "requested": self.speaker_recognition_requested,
+            "enabled": self.speaker_recognition_enabled,
+            "backend": self.speaker_backend,
+            "unavailable_reason": self.speaker_recognition_unavailable_reason,
+        }
 
     def injected_command_parts(self, injected: str | dict[str, Any] | None) -> tuple[str | None, SpeakerRecognitionResult]:
         if injected is None:
@@ -4012,18 +4034,22 @@ class VoiceAssistant:
                     elif not audio_data:
                         continue
                     else:
+                        self.start_thinking_sound()
                         # Convert to text
                         text = self.audio_to_text(audio_data)
                         speaker_result = self.recognize_speaker(audio_data)
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Stopping current assistant.")
+                            self.stop_thinking_sound()
                             return "reload"
                         if not text:
+                            self.stop_thinking_sound()
                             continue
 
                         should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
                         if not should_process:
                             print("Wake word not detected. Ignoring transcription.")
+                            self.stop_thinking_sound()
                             self.play_rejected_backend_audio(audio_data)
                             continue
                         if matched_wake_word:
@@ -4758,6 +4784,14 @@ async def main():
         current_speaker_backend = (values.get("SPEAKER_BACKEND") or "resemblyzer").strip().lower()
         current_speaker_threshold = env_float_from_values(values, "SPEAKER_THRESHOLD", 0.75)
         current_speaker_margin = env_float_from_values(values, "SPEAKER_MARGIN", 0.10)
+        current_speaker_runtime = {}
+        if web_monitor:
+            try:
+                current_speaker_runtime = (
+                    (web_monitor.snapshot().get("runtime") or {}).get("speaker_recognition") or {}
+                )
+            except Exception:
+                current_speaker_runtime = {}
         internet_online = check_internet_connection()
         backend_audio_devices = list_pyaudio_devices()
 
@@ -4826,6 +4860,7 @@ async def main():
             "selected_speaker_backend": current_speaker_backend,
             "selected_speaker_threshold": current_speaker_threshold,
             "selected_speaker_margin": current_speaker_margin,
+            "speaker_recognition_runtime": current_speaker_runtime,
             "selected_speaker_profiles_max": current_speaker_profiles_max,
             "speaker_profiles": speaker_profile_statuses(values, current_speaker_profiles_max),
             "backend_audio_inputs": backend_audio_devices["inputs"],
@@ -5526,6 +5561,10 @@ async def main():
             reload_event=reload_event,
             web_monitor=web_monitor,
         )
+        if web_monitor:
+            web_monitor.update(
+                runtime={"speaker_recognition": assistant.speaker_recognition_runtime_state()}
+            )
 
         if web_monitor:
             def session_context_response() -> dict[str, Any]:

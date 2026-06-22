@@ -517,6 +517,7 @@ class WebMonitor:
             "environment_loading": {"active": False, "title": ""},
             "remote_screen": {"vnc_url": "vnc://192.168.0.160:5900?password=ronron", "view_only": True},
             "web_audio": {"enabled": False, "stt_enabled": False, "tts_enabled": False},
+            "runtime": {},
             "command_ack_sound_url": command_ack_sound_url(),
             "updated_at": time.time(),
         }
@@ -2102,6 +2103,7 @@ class WebMonitor:
         prompt: str | None = None,
         web_audio: dict[str, Any] | None = None,
         remote_screen: dict[str, Any] | None = None,
+        runtime: dict[str, Any] | None = None,
         thinking_sound_file: str | None = None,
     ) -> None:
         with self._lock:
@@ -2134,6 +2136,10 @@ class WebMonitor:
                 self._snapshot["web_audio"] = web_audio
             if remote_screen is not None:
                 self._snapshot["remote_screen"] = remote_screen
+            if runtime is not None:
+                merged_runtime = dict(self._snapshot.get("runtime") or {})
+                merged_runtime.update(runtime)
+                self._snapshot["runtime"] = merged_runtime
             if thinking_sound_file is not None:
                 cleaned_file = Path(thinking_sound_file).name if thinking_sound_file else ""
                 if cleaned_file:
@@ -3315,6 +3321,9 @@ INDEX_HTML = """<!doctype html>
     .mcp-routing-box.disabled {
       opacity: 0.58;
     }
+    .vad-group.disabled {
+      opacity: 0.58;
+    }
     .mcp-server-frame {
       display: block;
       width: 100%;
@@ -3796,7 +3805,7 @@ INDEX_HTML = """<!doctype html>
               <details class="nested-details">
                 <summary>Speaker profiles</summary>
                 <div class="vad-groups">
-                  <div class="vad-group">
+                  <div class="vad-group" id="speaker-recognition-group">
                     <div class="vad-group-title">
                       <span>Reconnaissance locuteur</span>
                       <span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span>
@@ -4085,6 +4094,7 @@ INDEX_HTML = """<!doctype html>
     const vadMaxSpeechSeconds = document.querySelector("#vad-max-speech-seconds");
     const vadMaxSpeechSecondsLabel = document.querySelector("#vad-max-speech-seconds-label");
     const vadPresetButtons = Array.from(document.querySelectorAll(".vad-preset"));
+    const speakerRecognitionGroup = document.querySelector("#speaker-recognition-group");
     const speakerRecognitionInputs = Array.from(document.querySelectorAll('input[name="speaker-recognition"]'));
     const speakerBackend = document.querySelector("#speaker-backend");
     const speakerThreshold = document.querySelector("#speaker-threshold");
@@ -4165,6 +4175,8 @@ INDEX_HTML = """<!doctype html>
     let envProfileSwitchingEnabled = false;
     let connectivityLocked = false;
     let configBaseline = "";
+    let speakerRecognitionUnavailableReason = "";
+    let speakerRecognitionEnvEnabled = false;
     let environmentLoadingActive = false;
     let vncConnectTimer = null;
     let vncUrlDirty = false;
@@ -6375,6 +6387,9 @@ INDEX_HTML = """<!doctype html>
     }
 
     function selectedSpeakerRecognitionEnabled() {
+      if (speakerRecognitionUnavailableReason) {
+        return speakerRecognitionEnvEnabled;
+      }
       const selected = speakerRecognitionInputs.find((input) => input.checked);
       return selected ? selected.value === "on" : false;
     }
@@ -6383,6 +6398,34 @@ INDEX_HTML = """<!doctype html>
       speakerRecognitionInputs.forEach((input) => {
         input.checked = enabled ? input.value === "on" : input.value === "off";
       });
+    }
+
+    function speakerRuntimeUnavailableReason(data) {
+      const runtime = data.speaker_recognition_runtime || {};
+      if (runtime.requested && !runtime.enabled && runtime.unavailable_reason) {
+        return `Speaker recognition unavailable: ${runtime.unavailable_reason}`;
+      }
+      return "";
+    }
+
+    function setSpeakerControlsDisabled(disabled, reason = "") {
+      if (speakerRecognitionGroup) {
+        speakerRecognitionGroup.classList.toggle("disabled", disabled);
+        speakerRecognitionGroup.title = disabled ? reason : "";
+      }
+      const controls = [
+        ...speakerRecognitionInputs,
+        speakerBackend,
+        speakerThreshold,
+        speakerMargin,
+        ...speakerProfileGrid.querySelectorAll("input, button")
+      ];
+      for (const control of controls) {
+        control.disabled = Boolean(disabled);
+        control.title = disabled ? reason : "";
+        const label = control.closest("label");
+        if (label) label.title = disabled ? reason : "";
+      }
     }
 
     function syncSpeakerLabels() {
@@ -6521,11 +6564,15 @@ INDEX_HTML = """<!doctype html>
     }
 
     function setSpeakerControls(data) {
-      setSpeakerRecognitionEnabled(Boolean(data.selected_speaker_recognition_enabled));
+      const unavailableReason = speakerRuntimeUnavailableReason(data);
+      speakerRecognitionEnvEnabled = Boolean(data.selected_speaker_recognition_enabled);
+      speakerRecognitionUnavailableReason = unavailableReason;
+      setSpeakerRecognitionEnabled(unavailableReason ? false : speakerRecognitionEnvEnabled);
       speakerBackend.value = data.selected_speaker_backend || "resemblyzer";
       speakerThreshold.value = String(data.selected_speaker_threshold ?? 0.75);
       speakerMargin.value = String(data.selected_speaker_margin ?? 0.10);
       renderSpeakerProfiles(data.speaker_profiles || []);
+      setSpeakerControlsDisabled(Boolean(unavailableReason), unavailableReason);
       syncSpeakerLabels();
     }
 
@@ -7032,6 +7079,7 @@ INDEX_HTML = """<!doctype html>
       ttsTest.disabled = true;
       for (const control of vadControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
+      setSpeakerControlsDisabled(true, "Loading speaker recognition options...");
       backendAudioInput.disabled = true;
       browserAudioTest.disabled = true;
       backendAudioTest.disabled = true;
@@ -7194,6 +7242,7 @@ INDEX_HTML = """<!doctype html>
         for (const input of sttInputInputs) input.disabled = false;
         for (const control of vadControls) control.disabled = false;
         for (const button of vadPresetButtons) button.disabled = false;
+        setSpeakerControlsDisabled(Boolean(speakerRecognitionUnavailableReason), speakerRecognitionUnavailableReason);
 	        syncConnectivityControls();
         backendAudioInput.disabled = !backendAudioCapabilities.input || backendAudioInput.options.length === 0;
         backendAudioOutput.disabled = !backendAudioCapabilities.output || backendAudioOutput.options.length === 0;

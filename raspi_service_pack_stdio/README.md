@@ -90,6 +90,15 @@ python -m pip install --no-cache-dir torch --index-url https://download.pytorch.
 python -m pip install --no-cache-dir resemblyzer --no-deps
 ```
 
+If speaker recognition logs an error like `cannot import name 'loggamma' from 'scipy.special'`, the venv has an incompatible SciPy version. Upgrade SciPy inside the assistant venv, then restart the service:
+
+```bash
+cd /home/pi/LiveStageAssistant
+source .venv/bin/activate
+python -m pip install --no-cache-dir --upgrade scipy
+sudo systemctl restart livestageassistant
+```
+
 For reliable recognition, upload one clean WAV per speaker slot from the web Config -> STT/TTS -> Voice Activity Detection -> Speaker profiles section. Uploads are saved as `profil1.wav` to `profil5.wav` under `SPEAKER_PROFILES_DIR` (`data/speaker_profiles` locally, `/data/speaker_profiles` in Docker). When Resemblyzer is installed, upload also saves `profil1.npy` to `profil5.npy` embeddings next to the WAV files, so runtime does not need to analyze the full reference sample again unless the WAV changes. Use 10 to 30 seconds of normal speech from the same microphone path used live when possible; avoid music, crowd noise, reverb, clipping, long silences, and multiple voices.
 
 For XMSeries-MCP speaker-aware first-person commands such as `mon retour`, edit `XMS_SPEAKER_MAP` in the web Config -> MCP Servers -> mixer -> Server env options box. The value is shown as JSON in the UI and saved into `mcp_servers_raspi.json` as an environment variable string for the stdio MCP server:

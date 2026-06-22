@@ -46,6 +46,10 @@ class SpeakerRecognizerBase(ABC):
     def recognize_wav_bytes(self, audio_data: bytes) -> SpeakerRecognitionResult:
         raise NotImplementedError
 
+    def validate_runtime(self) -> None:
+        """Raise when optional backend dependencies are unavailable."""
+        return None
+
 
 class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
     backend_name = "resemblyzer"
@@ -59,8 +63,11 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
         try:
             from resemblyzer import VoiceEncoder, preprocess_wav
         except Exception as exc:  # pragma: no cover - depends on optional package
-            raise RuntimeError("Resemblyzer is not installed or could not be imported") from exc
+            raise RuntimeError(f"Resemblyzer is not installed or could not be imported: {exc}") from exc
         return VoiceEncoder, preprocess_wav
+
+    def validate_runtime(self) -> None:
+        self._load_resemblyzer()
 
     def _encoder_instance(self) -> Any:
         if self._encoder is None:
