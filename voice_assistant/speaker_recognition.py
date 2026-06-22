@@ -68,6 +68,16 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
 
     def validate_runtime(self) -> None:
         try:
+            import platformdirs
+        except Exception as exc:  # pragma: no cover - depends on optional package
+            raise RuntimeError("platformdirs is required by Resemblyzer but is not installed") from exc
+        if not callable(getattr(platformdirs, "user_cache_dir", None)):
+            location = getattr(platformdirs, "__file__", "unknown location")
+            raise RuntimeError(
+                "platformdirs is installed but platformdirs.user_cache_dir is unavailable; "
+                f"force-reinstall platformdirs inside the assistant venv ({location})"
+            )
+        try:
             from scipy.special import loggamma as _loggamma  # noqa: F401
         except Exception as exc:  # pragma: no cover - depends on optional package
             raise RuntimeError(
