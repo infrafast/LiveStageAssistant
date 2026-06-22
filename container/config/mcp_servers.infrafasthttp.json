@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "mixer": {
+      "type": "streamable-http",
+      "url": "https://xmseriesmcp.infrafast.fr/mcp",
+      "headers": {},
+      "assistantOptions": {
+        "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"
+      }
+    },
+    "qlcplus": {
+      "type": "streamable-http",
+      "url": "https://qlcplusmcp.infrafast.fr/mcp",
+      "headers": {},
+      "assistantOptions": {
+        "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
+      }
+    }
+  }
+}

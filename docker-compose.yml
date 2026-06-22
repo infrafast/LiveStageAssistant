@@ -20,7 +20,7 @@ services:
     # group_add:
     #   - audio
     environment:
-      ASSISTANT_ENV_FILE: /config/.env.tailscale
+      ASSISTANT_ENV_FILE: /config/.env.infrafast
       HF_HOME: /data/huggingface
       XDG_CACHE_HOME: /data/cache
       NPM_CONFIG_CACHE: /data/npm-cache
