@@ -786,6 +786,8 @@ Speaker recognition is optional and runs after VAD/STT has accepted a speech seg
 
 Resemblyzer is not installed by the base package because it depends on PyTorch. On desktops, install it with `python -m pip install -e '.[speaker]'`. On Raspberry Pi, install the CPU Torch wheel first, then Resemblyzer, as documented in `raspi_service_pack_stdio/README.md`, to avoid accidental CUDA/NVIDIA packages.
 
+For best speaker recognition, upload one clean WAV per profile slot. The web UI saves uploaded files as `profil1.wav` to `profil5.wav` under `SPEAKER_PROFILES_DIR`. Use 10 to 30 seconds of the person speaking normally, recorded with the same microphone or at least the same kind of microphone as runtime. Avoid music, stage noise, reverb, long silences, clipping, heavy compression, and other voices. Mono WAV at 16 kHz or 44.1/48 kHz is fine; Resemblyzer will resample internally.
+
 The assistant never maps a recognized speaker to a mixer bus, channel, light, or scene by itself. It only adds `speaker`, `speaker_confidence`, and `speaker_backend` to the MCP context or injected command payload. MCP servers that understand that context, such as XMSeries-MCP through `osc_get_speaker_context`, decide what the speaker means for their own domain.
 
 Main speaker-recognition settings:

@@ -90,6 +90,8 @@ python -m pip install --no-cache-dir torch --index-url https://download.pytorch.
 python -m pip install --no-cache-dir resemblyzer --no-deps
 ```
 
+For reliable recognition, upload one clean WAV per speaker slot from the web Config -> STT/TTS -> Voice Activity Detection -> Speaker profiles section. Uploads are saved as `profil1.wav` to `profil5.wav` under `SPEAKER_PROFILES_DIR` (`data/speaker_profiles` locally, `/data/speaker_profiles` in Docker). Use 10 to 30 seconds of normal speech from the same microphone path used live when possible; avoid music, crowd noise, reverb, clipping, long silences, and multiple voices.
+
 Build the MCP servers before starting the assistant:
 
 ```bash

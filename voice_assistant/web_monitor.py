@@ -1279,12 +1279,19 @@ class WebMonitor:
                         self.send_error(400, f"Invalid speaker profile WAV: {e}")
                         return
 
+                    try:
+                        profile_index = int(payload.get("profile_index") or 0)
+                    except (TypeError, ValueError):
+                        profile_index = 0
+                    if profile_index < 1 or profile_index > 5:
+                        self.send_error(400, "Speaker profile index must be between 1 and 5")
+                        return
+
                     slug = self._safe_speaker_profile_slug(profile_name)
                     profile_root = Path(os.getenv("SPEAKER_PROFILES_DIR", "data/speaker_profiles"))
-                    profile_dir = profile_root / slug
                     try:
-                        profile_dir.mkdir(parents=True, exist_ok=True)
-                        target = profile_dir / "reference.wav"
+                        profile_root.mkdir(parents=True, exist_ok=True)
+                        target = profile_root / f"profil{profile_index}.wav"
                         target.write_bytes(audio_data)
                     except OSError as e:
                         self.send_error(500, f"Could not save speaker profile WAV: {e}")
@@ -1295,6 +1302,7 @@ class WebMonitor:
                             "ok": True,
                             "profile_name": profile_name,
                             "slug": slug,
+                            "profile_index": profile_index,
                             "wav_path": target.as_posix(),
                             "status": "ready",
                         }
@@ -3673,6 +3681,11 @@ INDEX_HTML = """<!doctype html>
                     <div class="vad-group-title">
                       <span>Reconnaissance locuteur</span>
                       <span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span>
+                    </div>
+                    <div class="field-hint">
+                      WAV conseillé: 10 à 30 s d'une seule voix, parole normale, même micro que le live si possible.
+                      Évite musique, souffle, réverb, saturation, longs silences et autres voix.
+                      Mono 16 kHz, 44.1 kHz ou 48 kHz convient.
                     </div>
                     <div class="field">
                       <label>Speaker recognition</label>
@@ -6173,7 +6186,7 @@ INDEX_HTML = """<!doctype html>
 
         const wav = document.createElement("input");
         wav.type = "text";
-        wav.placeholder = "data/speaker_profiles/laurent/reference.wav";
+        wav.placeholder = `data/speaker_profiles/profil${index}.wav`;
         wav.value = profile.wav_path || "";
         wav.dataset.role = "wav";
 
@@ -6244,6 +6257,7 @@ INDEX_HTML = """<!doctype html>
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             profile_name: profileName,
+            profile_index: Number(row.dataset.index || 0),
             filename: file.name,
             audio_base64: dataUrl
           })
