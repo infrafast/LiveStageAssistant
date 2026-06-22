@@ -90,14 +90,33 @@ python -m pip install --no-cache-dir torch --index-url https://download.pytorch.
 python -m pip install --no-cache-dir resemblyzer --no-deps
 ```
 
-If speaker recognition logs an error like `cannot import name 'loggamma' from 'scipy.special'`, the venv has an incompatible SciPy version. Upgrade SciPy inside the assistant venv, then restart the service:
+If speaker recognition logs an error like `cannot import name 'loggamma' from 'scipy.special'`, the venv has an incompatible or incomplete SciPy wheel. `pip install --upgrade scipy` may still say `Requirement already satisfied`, so first test the exact import, then force-reinstall a known compatible SciPy wheel inside the assistant venv:
 
 ```bash
 cd /home/pi/LiveStageAssistant
 source .venv/bin/activate
-python -m pip install --no-cache-dir --upgrade scipy
+
+python - <<'PY'
+import scipy
+print("scipy", scipy.__version__, scipy.__file__)
+from scipy.special import loggamma
+print("scipy.special.loggamma OK")
+PY
+
+python -m pip uninstall -y scipy
+python -m pip install --no-cache-dir --force-reinstall "scipy==1.12.0"
+
+python - <<'PY'
+import scipy
+print("scipy", scipy.__version__, scipy.__file__)
+from scipy.special import loggamma
+print("scipy.special.loggamma OK")
+PY
+
 sudo systemctl restart livestageassistant
 ```
+
+If `scipy==1.12.0` is not available for your Raspberry Pi/Python combination, try another piwheels-provided CPU wheel such as `scipy==1.11.4`. The important check is that `from scipy.special import loggamma` works before restarting the service.
 
 For reliable recognition, upload one clean WAV per speaker slot from the web Config -> STT/TTS -> Voice Activity Detection -> Speaker profiles section. Uploads are saved as `profil1.wav` to `profil5.wav` under `SPEAKER_PROFILES_DIR` (`data/speaker_profiles` locally, `/data/speaker_profiles` in Docker). When Resemblyzer is installed, upload also saves `profil1.npy` to `profil5.npy` embeddings next to the WAV files, so runtime does not need to analyze the full reference sample again unless the WAV changes. Use 10 to 30 seconds of normal speech from the same microphone path used live when possible; avoid music, crowd noise, reverb, clipping, long silences, and multiple voices.
 

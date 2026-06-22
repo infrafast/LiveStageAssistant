@@ -67,6 +67,13 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
         return VoiceEncoder, preprocess_wav
 
     def validate_runtime(self) -> None:
+        try:
+            from scipy.special import loggamma as _loggamma  # noqa: F401
+        except Exception as exc:  # pragma: no cover - depends on optional package
+            raise RuntimeError(
+                "SciPy is installed but scipy.special.loggamma is unavailable; "
+                "force-reinstall a compatible SciPy wheel inside the assistant venv"
+            ) from exc
         self._load_resemblyzer()
 
     def _encoder_instance(self) -> Any:
