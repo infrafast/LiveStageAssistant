@@ -14,6 +14,7 @@ import numpy as np
 UNKNOWN_SPEAKER = "unknown"
 DEFAULT_SPEAKER_PROFILES_DIR = Path("data/speaker_profiles")
 MAX_SPEAKER_PROFILE_WAV_BYTES = 10 * 1024 * 1024
+SPEAKER_EMBEDDING_SUFFIX = ".npy"
 
 
 @dataclass
@@ -72,6 +73,34 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
         wav = preprocess_wav(path)
         return self._encoder_instance().embed_utterance(wav)
 
+    def _embedding_cache_path(self, wav_path: Path) -> Path:
+        return wav_path.with_suffix(SPEAKER_EMBEDDING_SUFFIX)
+
+    def _load_cached_embedding(self, wav_path: Path) -> np.ndarray | None:
+        cache_path = self._embedding_cache_path(wav_path)
+        if not cache_path.exists() or not cache_path.is_file():
+            return None
+        try:
+            if cache_path.stat().st_mtime < wav_path.stat().st_mtime:
+                return None
+            embedding = np.load(cache_path)
+            if embedding.ndim != 1:
+                return None
+            return embedding.astype(np.float32)
+        except Exception:
+            return None
+
+    def _embedding_for_profile_path(self, wav_path: Path) -> np.ndarray:
+        cached = self._load_cached_embedding(wav_path)
+        if cached is not None:
+            return cached
+        embedding = self._embedding_for_path(wav_path)
+        try:
+            np.save(self._embedding_cache_path(wav_path), embedding)
+        except OSError:
+            pass
+        return embedding
+
     def _load_profile_embeddings(self) -> list[tuple[SpeakerProfile, np.ndarray]]:
         if self._profile_embeddings is not None:
             return self._profile_embeddings
@@ -81,7 +110,7 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
             profile_vectors = []
             for wav_path in profile.wav_paths:
                 if wav_path.exists() and wav_path.is_file():
-                    profile_vectors.append(self._embedding_for_path(wav_path))
+                    profile_vectors.append(self._embedding_for_profile_path(wav_path))
             if profile_vectors:
                 embeddings.append((profile, np.mean(profile_vectors, axis=0)))
         self._profile_embeddings = embeddings
@@ -149,6 +178,19 @@ def validate_wav_bytes(audio_data: bytes, *, max_bytes: int = MAX_SPEAKER_PROFIL
                     raise ValueError("WAV file contains no audio frames")
         except wave.Error as exc:
             raise ValueError(f"invalid WAV file: {exc}") from exc
+
+
+def compute_resemblyzer_embedding_file(wav_path: str | Path, embedding_path: str | Path | None = None) -> Path:
+    """Compute and persist a Resemblyzer embedding for a profile WAV file."""
+    wav_path = Path(wav_path)
+    if embedding_path is None:
+        embedding_path = wav_path.with_suffix(SPEAKER_EMBEDDING_SUFFIX)
+    embedding_path = Path(embedding_path)
+    recognizer = ResemblyzerSpeakerRecognizer([])
+    embedding = recognizer._embedding_for_path(wav_path)
+    embedding_path.parent.mkdir(parents=True, exist_ok=True)
+    np.save(embedding_path, embedding)
+    return embedding_path
 
 
 def build_speaker_recognizer(

@@ -5118,8 +5118,6 @@ async def main():
         return profiles
 
     def speaker_profile_statuses(values: dict, max_profiles: int = 5) -> list[dict[str, Any]]:
-        profiles = speaker_profiles_from_values(values, max_profiles=max_profiles)
-        by_index: dict[int, SpeakerProfile] = {idx + 1: profile for idx, profile in enumerate(profiles)}
         statuses = []
         for index in range(1, max(0, min(5, int(max_profiles or 5))) + 1):
             prefix = f"SPEAKER_PROFILE_{index}_"
@@ -5127,6 +5125,7 @@ async def main():
             wav_path = (values.get(f"{prefix}WAV") or "").strip()
             enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
             path = Path(wav_path) if wav_path else None
+            embedding_path = path.with_suffix(".npy") if path else None
             if not wav_path:
                 status = "missing wav"
             elif not path.exists():
@@ -5135,6 +5134,11 @@ async def main():
                 try:
                     with wave.open(str(path), "rb") as reader:
                         status = "ready" if reader.getnframes() > 0 else "error"
+                    if status == "ready":
+                        if embedding_path and embedding_path.exists() and embedding_path.stat().st_mtime >= path.stat().st_mtime:
+                            status = "ready cached"
+                        else:
+                            status = "ready, embedding pending"
                 except Exception:
                     status = "error"
             statuses.append(
@@ -5144,7 +5148,8 @@ async def main():
                     "enabled": enabled,
                     "wav_path": wav_path,
                     "status": status,
-                    "slug": by_index.get(index).slug if index in by_index else safe_speaker_profile_slug(name or f"speaker_{index}"),
+                    "embedding_path": embedding_path.as_posix() if embedding_path else "",
+                    "slug": safe_speaker_profile_slug(name or f"speaker_{index}"),
                 }
             )
         return statuses

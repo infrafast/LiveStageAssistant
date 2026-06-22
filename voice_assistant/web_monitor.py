@@ -27,6 +27,14 @@ from urllib import request as urllib_request
 from urllib.parse import parse_qs, quote, unquote, urlparse
 import wave
 
+try:
+    from .speaker_recognition import compute_resemblyzer_embedding_file
+except ImportError:  # pragma: no cover - direct script fallback
+    try:
+        from speaker_recognition import compute_resemblyzer_embedding_file
+    except ImportError:  # pragma: no cover - optional helper unavailable
+        compute_resemblyzer_embedding_file = None
+
 
 SECRET_KEY_MARKERS = (
     "API_KEY",
@@ -1296,6 +1304,14 @@ class WebMonitor:
                     except OSError as e:
                         self.send_error(500, f"Could not save speaker profile WAV: {e}")
                         return
+                    embedding_status = "embedding unavailable"
+                    embedding_path = target.with_suffix(".npy")
+                    if compute_resemblyzer_embedding_file is not None:
+                        try:
+                            embedding_path = compute_resemblyzer_embedding_file(target, embedding_path)
+                            embedding_status = "embedding ready"
+                        except Exception as e:
+                            embedding_status = f"embedding pending: {e}"
 
                     self._send_json(
                         {
@@ -1304,7 +1320,9 @@ class WebMonitor:
                             "slug": slug,
                             "profile_index": profile_index,
                             "wav_path": target.as_posix(),
+                            "embedding_path": embedding_path.as_posix(),
                             "status": "ready",
+                            "embedding_status": embedding_status,
                         }
                     )
 
@@ -6269,7 +6287,7 @@ INDEX_HTML = """<!doctype html>
         }
         wavInput.value = data.wav_path || "";
         enabledInput.checked = true;
-        status.textContent = data.status || "ready";
+        status.textContent = data.embedding_status || data.status || "ready";
         fileInput.value = "";
       } catch (error) {
         status.textContent = "upload failed";
