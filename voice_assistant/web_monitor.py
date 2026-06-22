@@ -491,6 +491,7 @@ class WebMonitor:
         self._remote_screen_save_handler: Callable[[str, bool], dict[str, Any]] | None = None
         self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
+        self._speaker_embedding_notice_handler: Callable[[str], None] | None = None
         self._mcp_routing_save_handler: Callable[[dict[str, str]], dict[str, Any]] | None = None
         self._mcp_server_options_save_handler: Callable[[dict[str, dict[str, Any]]], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
@@ -598,6 +599,11 @@ class WebMonitor:
         """Register callback used by the web UI to test backend TTS output."""
         with self._lock:
             self._backend_tts_test_handler = handler
+
+    def set_speaker_embedding_notice_handler(self, handler: Callable[[str], None]) -> None:
+        """Register callback used to announce speaker embedding preparation."""
+        with self._lock:
+            self._speaker_embedding_notice_handler = handler
 
     def set_mcp_routing_save_handler(self, handler: Callable[[dict[str, str]], dict[str, Any]]) -> None:
         """Register callback used by the web UI to persist MCP routing words."""
@@ -1343,6 +1349,10 @@ class WebMonitor:
                     embedding_path = target.with_suffix(".npy")
                     if compute_resemblyzer_embedding_file is not None:
                         try:
+                            with monitor._lock:
+                                notice_handler = monitor._speaker_embedding_notice_handler
+                            if notice_handler:
+                                notice_handler(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
                             embedding_path = compute_resemblyzer_embedding_file(target, embedding_path)
                             embedding_status = "embedding ready"
                         except Exception as e:
@@ -6544,6 +6554,9 @@ INDEX_HTML = """<!doctype html>
       }
       status.textContent = "embedding...";
       showToast("Préparation du profil vocal", speakerEmbeddingPreparationMessage, "ok", 6000);
+      if (webAudio.tts_enabled && webAudio.tts_output === "browser") {
+        playWebTts(speakerEmbeddingPreparationMessage);
+      }
       try {
         const dataUrl = await readFileAsDataUrl(file);
         const response = await fetch("/api/speaker-profile-upload", {
@@ -7383,7 +7396,6 @@ INDEX_HTML = """<!doctype html>
         );
         const willSpeakLatestAssistant = Boolean(
           shouldSpeakLatestAssistant &&
-          !showThinking &&
           webAudio.tts_enabled &&
           latestAssistantMessage &&
           latestAssistantMessage.id !== lastSpokenAssistantMessageId
@@ -7399,7 +7411,9 @@ INDEX_HTML = """<!doctype html>
             deferWebTtsUntilUserGesture(latestAssistantMessage);
           } else {
             lastSpokenAssistantMessageId = latestAssistantMessage.id;
-            playBrowserCommandAckSound();
+            if (!(latestAssistantMessage.speak === true && showThinking)) {
+              playBrowserCommandAckSound();
+            }
             playWebTts(latestAssistantMessage.text || "");
           }
         } else if (previousBusy && !showThinking && conversationEnabled) {

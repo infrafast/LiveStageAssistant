@@ -1676,6 +1676,8 @@ class VoiceAssistant:
         self.stt_provider = stt_provider.lower()
         self.tts_provider = tts_provider.lower()
         self.web_tts_enabled = bool(web_tts_enabled)
+        if self.web_monitor:
+            self.web_monitor.set_speaker_embedding_notice_handler(self.speak_speaker_embedding_notice_async)
         self.local_whisper_model_name = local_whisper_model
         self.stt_language = stt_language or None
         base_stt_prompt = stt_prompt or DEFAULT_STT_PROMPT
@@ -3135,19 +3137,20 @@ class VoiceAssistant:
         print(f"Speaker profile embedding preparation needed: {', '.join(str(path) for path in pending_paths)}")
         if self.web_monitor:
             self.web_monitor.append_dialogue("assistant", SPEAKER_EMBEDDING_PREPARATION_MESSAGE, speak=True)
+        self.speak_speaker_embedding_notice_async(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
+        self.start_thinking_sound()
+
+    def speak_speaker_embedding_notice_async(self, message: str) -> None:
         if self.tts_provider == "none":
             return
-
         def speak_notice() -> None:
             try:
-                asyncio.run(self.text_to_speech(SPEAKER_EMBEDDING_PREPARATION_MESSAGE))
+                asyncio.run(self.text_to_speech(message))
             except Exception as e:
                 print(f"Could not speak speaker embedding preparation notice: {e}")
 
         notice_thread = threading.Thread(target=speak_notice, name="speaker-embedding-notice", daemon=True)
         notice_thread.start()
-        notice_thread.join(timeout=20)
-        self.start_thinking_sound()
 
     def speaker_recognition_runtime_state(self) -> dict[str, Any]:
         return {
