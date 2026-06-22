@@ -3682,7 +3682,7 @@ INDEX_HTML = """<!doctype html>
                       <span>Reconnaissance locuteur</span>
                       <span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span>
                     </div>
-                    <div class="field-hint">
+                    <div class="field-hint" title="Exemple à lire: Bonjour, je m'appelle Laurent. Ceci est un enregistrement de référence pour reconnaître ma voix. Je parle normalement, avec le même micro que j'utiliserai pendant le spectacle. Régie, monte un peu ma voix dans mon retour. Régie, baisse légèrement la façade. Régie, coupe le clic dans mon retour, puis remets-le doucement. Je vais maintenant compter calmement: un, deux, trois, quatre, cinq, six, sept, huit, neuf, dix. Cette phrase est dite un peu plus lentement, pour garder quelques sons longs et naturels. Et maintenant une phrase plus courte, comme en situation réelle: régie, augmente ma guitare. Fin de l'enregistrement de référence.">
                       WAV conseillé: 10 à 30 s d'une seule voix, parole normale, même micro que le live si possible.
                       Évite musique, souffle, réverb, saturation, longs silences et autres voix.
                       Mono 16 kHz, 44.1 kHz ou 48 kHz convient.
