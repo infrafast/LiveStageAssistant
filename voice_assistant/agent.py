@@ -3064,7 +3064,7 @@ class VoiceAssistant:
                 reason="injected",
             )
         text = str(injected or "").strip()
-        return (text or None), SpeakerRecognitionResult()
+        return (text or None), SpeakerRecognitionResult(reason="text")
 
     async def listen_for_voice_interrupt_during_activity(
         self,
@@ -3900,6 +3900,8 @@ class VoiceAssistant:
 
     def voice_detected_response(self, speaker_result: SpeakerRecognitionResult | None) -> str:
         """Local voice_detected pseudo-tool response; no MCP call is needed."""
+        if speaker_result and speaker_result.reason in {"text", "injected"} and speaker_result.backend == "none":
+            return "Je n'ai pas reçu d'échantillon vocal à analyser pour cette commande."
         if not self.speaker_recognition_enabled:
             return "La reconnaissance de locuteur est désactivée dans la configuration."
         if not self.speaker_recognizer:

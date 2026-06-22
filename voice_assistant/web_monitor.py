@@ -4226,6 +4226,7 @@ INDEX_HTML = """<!doctype html>
     let webTtsPlaying = false;
     let webTtsAudioContext = null;
     let webTtsUnlocked = false;
+    let pendingWebTtsMessage = null;
     let selectedBrowserAudioInput = window.localStorage.getItem("browser-audio-input") || "";
     let selectedBrowserAudioOutput = window.localStorage.getItem("browser-audio-output") || "";
     let backendAudioCapabilities = { input: false, output: false };
@@ -5484,6 +5485,21 @@ INDEX_HTML = """<!doctype html>
       } catch (error) {
         webTtsUnlocked = false;
       }
+    }
+
+    async function unlockWebTtsAudioFromUserGesture() {
+      await unlockWebTtsAudio();
+      if (!webTtsUnlocked || !pendingWebTtsMessage) return;
+      const message = pendingWebTtsMessage;
+      pendingWebTtsMessage = null;
+      lastSpokenAssistantMessageId = message.id;
+      playBrowserCommandAckSound();
+      playWebTts(message.text || "");
+    }
+
+    function deferWebTtsUntilUserGesture(message) {
+      pendingWebTtsMessage = message;
+      setMeta("Audio navigateur bloqué: clique dans la page pour activer le TTS.", "warn", 15000);
     }
 
     async function ensureWebAudioContext() {
@@ -7363,9 +7379,13 @@ INDEX_HTML = """<!doctype html>
         if (
           willSpeakLatestAssistant
         ) {
-          lastSpokenAssistantMessageId = latestAssistantMessage.id;
-          playBrowserCommandAckSound();
-          playWebTts(latestAssistantMessage.text || "");
+          if (!webTtsUnlocked) {
+            deferWebTtsUntilUserGesture(latestAssistantMessage);
+          } else {
+            lastSpokenAssistantMessageId = latestAssistantMessage.id;
+            playBrowserCommandAckSound();
+            playWebTts(latestAssistantMessage.text || "");
+          }
         } else if (previousBusy && !showThinking && conversationEnabled) {
           const delay = interruptConversationEnabled
             ? 250
@@ -7585,6 +7605,12 @@ INDEX_HTML = """<!doctype html>
         closeSessionSummary();
       }
     });
+    document.addEventListener("pointerdown", () => {
+      unlockWebTtsAudioFromUserGesture();
+    }, { capture: true });
+    document.addEventListener("keydown", () => {
+      unlockWebTtsAudioFromUserGesture();
+    }, { capture: true });
     sessionList.addEventListener("scroll", () => closeSessionSummary());
     window.addEventListener("resize", () => {
       if (openSessionSummaryId && sessionSummaryAnchor) {
