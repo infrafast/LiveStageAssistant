@@ -782,6 +782,22 @@ Each entry uses `voice_id (Display name)`. The dropdown shows the display name a
 
 The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Output` control decides whether speech comes from the browser, from the backend speaker, or nowhere. When the browser is the active speech output (`TTS_PROVIDER=none` and `WEB_TTS_PROVIDER=openai|elevenlabs`), browser responses use that cloud provider with no pyttsx3 fallback. When backend speech is active (`TTS_PROVIDER=openai|elevenlabs`), backend speech uses that cloud provider and can fall back to pyttsx3. Selecting `none` sets cloud/browser TTS to silent and hides cloud voice controls. The `STT Input` control independently saves `STT_INPUT=both|backend|browser|silent`. In `CONNECTIVITY_MODE=offline`, the web config hides cloud STT/TTS controls and forces local output with `TTS_PROVIDER=pyttsx3` and `STT_INPUT=backend`.
 
+Speaker recognition is optional and runs after VAD/STT has accepted a speech segment. Enable it with `SPEAKER_RECOGNITION_ENABLED=true` or from the web config, then add up to five WAV reference profiles. The web UI can upload a WAV reference and persists the resulting path in `SPEAKER_PROFILE_N_WAV`; manual paths also work. The first backend is `SPEAKER_BACKEND=resemblyzer`; `speechbrain` is reserved for a later backend and currently returns `unknown`. Backend microphone PCM is wrapped as WAV automatically, and browser audio is decoded with `ffmpeg` when the browser sends WebM/Opus instead of WAV.
+
+The assistant never maps a recognized speaker to a mixer bus, channel, light, or scene by itself. It only adds `speaker`, `speaker_confidence`, and `speaker_backend` to the MCP context or injected command payload. MCP servers that understand that context, such as XMSeries-MCP through `osc_get_speaker_context`, decide what the speaker means for their own domain.
+
+Main speaker-recognition settings:
+
+```env
+SPEAKER_RECOGNITION_ENABLED=false
+SPEAKER_BACKEND=resemblyzer
+SPEAKER_THRESHOLD=0.75
+SPEAKER_MARGIN=0.10
+SPEAKER_PROFILE_1_NAME=
+SPEAKER_PROFILE_1_ENABLED=false
+SPEAKER_PROFILE_1_WAV=
+```
+
 ## Development And Maintenance Notes
 
 The recent web monitor work turned the monitor into the primary operator UI while keeping backend audio and terminal fallback intact. When continuing development, keep these boundaries in mind:

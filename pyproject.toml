@@ -36,6 +36,7 @@ dependencies = [
     "langchain-openai>=0.1.0",
     "langchain-ollama>=0.1.0",
     "faster-whisper>=1.0.0",
+    "resemblyzer>=0.1.4",
 ]
 
 [project.optional-dependencies]

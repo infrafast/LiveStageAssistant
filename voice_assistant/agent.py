@@ -50,10 +50,28 @@ try:
     from .web_monitor import WebMonitor, build_service_state
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .wake_word import apply_wake_word, parse_wake_words
+    from .speaker_recognition import (
+        DEFAULT_SPEAKER_PROFILES_DIR,
+        UNKNOWN_SPEAKER,
+        SpeakerProfile,
+        SpeakerRecognitionResult,
+        build_speaker_recognizer,
+        safe_speaker_profile_slug,
+        validate_wav_bytes,
+    )
 except ImportError:
     from web_monitor import WebMonitor, build_service_state
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from wake_word import apply_wake_word, parse_wake_words
+    from speaker_recognition import (
+        DEFAULT_SPEAKER_PROFILES_DIR,
+        UNKNOWN_SPEAKER,
+        SpeakerProfile,
+        SpeakerRecognitionResult,
+        build_speaker_recognizer,
+        safe_speaker_profile_slug,
+        validate_wav_bytes,
+    )
 
 TTS_ENGINE = pyttsx3.init()
 TTS_LOCK = threading.Lock()
@@ -935,6 +953,43 @@ def decode_audio_file_to_pcm_bytes(
     return process.stdout
 
 
+def decode_audio_bytes_to_wav_bytes(
+    audio_bytes: bytes,
+    *,
+    sample_rate: int = 16000,
+    channels: int = 1,
+) -> bytes:
+    """Decode arbitrary compressed audio bytes to a WAV container for speaker embeddings."""
+    if not ffmpeg_decode_available():
+        raise RuntimeError("ffmpeg is not available")
+
+    process = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-f",
+            "wav",
+            "-ac",
+            str(channels),
+            "-ar",
+            str(sample_rate),
+            "pipe:1",
+        ],
+        input=audio_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if process.returncode != 0:
+        detail = process.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffmpeg could not decode audio for speaker recognition: {detail}")
+    return process.stdout
+
+
 def normalize_audio_pan(pan: float | None) -> float:
     """Clamp audio pan to -1.0 left, 0.0 center, 1.0 right."""
     return max(-1.0, min(1.0, float(pan if pan is not None else 0.0)))
@@ -1446,6 +1501,11 @@ class VoiceAssistant:
         session_context_size: int = 6000,
         voice_cancel_during_thinking: bool = False,
         interrupt_conversation_enabled: bool = False,
+        speaker_recognition_enabled: bool = False,
+        speaker_backend: str = "resemblyzer",
+        speaker_threshold: float = 0.75,
+        speaker_margin: float = 0.10,
+        speaker_profiles: list[SpeakerProfile] | None = None,
         notes_dir: str | None = None,
         system_prompt: str | None = None,
         reload_event: threading.Event | None = None,
@@ -1500,6 +1560,11 @@ class VoiceAssistant:
             session_context_size: Maximum active session summary characters injected into each LLM/MCP turn; 0 disables injection
             voice_cancel_during_thinking: Listen for short spoken cancel words while the LLM/MCP agent is processing
             interrupt_conversation_enabled: Allow new text/STT commands to silently cancel current work before running
+            speaker_recognition_enabled: Recognize a known speaker from an accepted speech segment
+            speaker_backend: Speaker recognition backend, currently resemblyzer
+            speaker_threshold: Minimum best score needed to accept a speaker
+            speaker_margin: Minimum score gap between best and second-best speakers
+            speaker_profiles: Known speaker reference WAV profiles
             notes_dir: Directory for storing notes (default: temp dir)
             system_prompt: Optional custom system prompt for the assistant
             reload_event: Optional event used by auto mode to interrupt and reload the assistant
@@ -1533,6 +1598,25 @@ class VoiceAssistant:
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
         self.backend_stt_enabled = bool(backend_stt_enabled)
         self.voice_cancel_words = DEFAULT_VOICE_CANCEL_WORDS
+        self.speaker_recognition_enabled = bool(speaker_recognition_enabled)
+        self.speaker_backend = (speaker_backend or "resemblyzer").strip().lower()
+        self.speaker_threshold = max(0.0, min(1.0, float(speaker_threshold)))
+        self.speaker_margin = max(0.0, min(1.0, float(speaker_margin)))
+        self.speaker_profiles = list(speaker_profiles or [])
+        self.speaker_recognizer = None
+        self.last_speaker_result = SpeakerRecognitionResult()
+        if self.speaker_recognition_enabled:
+            try:
+                self.speaker_recognizer = build_speaker_recognizer(
+                    enabled=True,
+                    backend=self.speaker_backend,
+                    threshold=self.speaker_threshold,
+                    margin=self.speaker_margin,
+                    profiles=self.speaker_profiles,
+                )
+            except Exception as e:
+                print(f"Speaker recognition unavailable: {e}")
+                self.speaker_recognition_enabled = False
 
         # Initialize audio components
         with suppress_native_stderr():
@@ -1635,7 +1719,7 @@ class VoiceAssistant:
         self.mcp_initialization_error: str | None = None
         self.reload_event = reload_event
         self.web_monitor = web_monitor
-        self.pending_injected_command: str | None = None
+        self.pending_injected_command: str | dict[str, Any] | None = None
         self.last_processed_command_key: str | None = None
         self.last_processed_command_at: float = 0.0
         self.pending_mcp_confirmation_route: dict[str, Any] | None = None
@@ -2780,7 +2864,7 @@ class VoiceAssistant:
                 print("Type commands in the terminal prompt.")
             self.microphone_warning_shown = True
 
-    async def wait_for_text_fallback_command(self) -> str | None:
+    async def wait_for_text_fallback_command(self) -> str | dict[str, Any] | None:
         """Wait for a command when microphone input is unavailable."""
         if self.web_monitor:
             while True:
@@ -2906,6 +2990,59 @@ class VoiceAssistant:
                 return True
 
         return False
+
+    def recognize_speaker(self, audio_data: bytes | None, *, already_wav: bool = False) -> SpeakerRecognitionResult:
+        """Return a speaker recognition result without applying any business rule."""
+        if not self.speaker_recognition_enabled or not self.speaker_recognizer or not audio_data:
+            result = SpeakerRecognitionResult()
+            self.last_speaker_result = result
+            return result
+        try:
+            recognition_audio = audio_data
+            if not already_wav:
+                wav_buffer = io.BytesIO()
+                self._write_wav(audio_data, wav_buffer)
+                recognition_audio = wav_buffer.getvalue()
+            result = self.speaker_recognizer.recognize_wav_bytes(recognition_audio)
+        except Exception as e:
+            result = SpeakerRecognitionResult(
+                speaker=UNKNOWN_SPEAKER,
+                backend=self.speaker_backend,
+                reason=f"error: {e}",
+            )
+            print(f"Speaker recognition failed: {e}")
+        self.last_speaker_result = result
+        if result.speaker != UNKNOWN_SPEAKER:
+            print(
+                f"Speaker recognized: {result.speaker} "
+                f"({result.confidence:.2f}, backend={result.backend})"
+            )
+        elif self.speaker_recognition_enabled:
+            print(
+                f"Speaker unknown "
+                f"({result.confidence:.2f}, second={result.second_confidence:.2f}, reason={result.reason})"
+            )
+        return result
+
+    def injected_command_parts(self, injected: str | dict[str, Any] | None) -> tuple[str | None, SpeakerRecognitionResult]:
+        if injected is None:
+            return None, SpeakerRecognitionResult()
+        if isinstance(injected, dict):
+            text = str(injected.get("text") or injected.get("command") or "").strip()
+            if not text:
+                return None, SpeakerRecognitionResult()
+            try:
+                confidence = float(injected.get("speaker_confidence") or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            return text, SpeakerRecognitionResult(
+                speaker=str(injected.get("speaker") or UNKNOWN_SPEAKER).strip() or UNKNOWN_SPEAKER,
+                confidence=confidence,
+                backend=str(injected.get("speaker_backend") or "none").strip() or "none",
+                reason="injected",
+            )
+        text = str(injected or "").strip()
+        return (text or None), SpeakerRecognitionResult()
 
     async def listen_for_voice_interrupt_during_activity(
         self,
@@ -3038,6 +3175,15 @@ class VoiceAssistant:
         text = response.text.strip()
         return self.normalize_stt_command_text(text) if text else None
 
+    def speaker_audio_from_web_bytes(self, audio_data: bytes, mime_type: str) -> bytes | None:
+        if "wav" in (mime_type or "").lower():
+            return audio_data
+        try:
+            return decode_audio_bytes_to_wav_bytes(audio_data)
+        except Exception as e:
+            print(f"Could not prepare browser audio for speaker recognition: {e}")
+            return None
+
     def web_audio_transcription_result(
         self,
         audio_data: bytes,
@@ -3046,8 +3192,15 @@ class VoiceAssistant:
         apply_wake_word_gate: bool = False,
     ) -> dict[str, Any]:
         text = self.web_audio_to_text_openai(audio_data, mime_type, model=model) or ""
+        speaker_audio = self.speaker_audio_from_web_bytes(audio_data, mime_type)
+        speaker_result = self.recognize_speaker(speaker_audio, already_wav=True)
+        speaker_payload = {
+            "speaker": speaker_result.speaker,
+            "speaker_confidence": speaker_result.confidence,
+            "speaker_backend": speaker_result.backend,
+        }
         if not text:
-            return {"text": "", "accepted": False, "command_text": "", "message": "No speech detected."}
+            return {"text": "", "accepted": False, "command_text": "", "message": "No speech detected.", **speaker_payload}
 
         if apply_wake_word_gate and self.wake_words:
             should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
@@ -3058,15 +3211,17 @@ class VoiceAssistant:
                     "command_text": "",
                     "matched_wake_word": "",
                     "message": "Wake word not detected.",
+                    **speaker_payload,
                 }
             return {
                 "text": text,
                 "accepted": True,
                 "command_text": command_text,
                 "matched_wake_word": matched_wake_word or "",
+                **speaker_payload,
             }
 
-        return {"text": text, "accepted": True, "command_text": text, "matched_wake_word": ""}
+        return {"text": text, "accepted": True, "command_text": text, "matched_wake_word": "", **speaker_payload}
 
     def audio_to_text_local_whisper(self, audio_data: bytes) -> str | None:
         """Convert audio to text using faster-whisper locally."""
@@ -3521,11 +3676,15 @@ class VoiceAssistant:
         finally:
             await self._set_agent_tool_subset(original_tools or self.mcp_all_tools)
 
-    async def _run_agent_with_optional_tool_routing(self, text: str) -> str:
+    async def _run_agent_with_optional_tool_routing(
+        self,
+        text: str,
+        speaker_result: SpeakerRecognitionResult | None = None,
+    ) -> str:
         if not self.agent:
             return "Sorry, the assistant is not properly initialized."
 
-        agent_input = self._with_runtime_instructions(text)
+        agent_input = self._with_runtime_instructions(text, speaker_result=speaker_result)
         route = self._select_mcp_tool_route(text)
         confirmation_route = False
         if not route and self.pending_mcp_confirmation_route and self._is_mcp_confirmation_reply(text):
@@ -3613,7 +3772,11 @@ class VoiceAssistant:
         )
         return response if isinstance(response, str) else str(response)
 
-    async def process_command(self, text: str) -> str:
+    async def process_command(
+        self,
+        text: str,
+        speaker_result: SpeakerRecognitionResult | None = None,
+    ) -> str:
         """Process user command with MCP agent."""
         print(f"\nYou said: {text}")
         if self.session_context_store:
@@ -3659,7 +3822,7 @@ class VoiceAssistant:
 
         self.start_thinking_sound()
         try:
-            return await self._run_agent_with_optional_tool_routing(text)
+            return await self._run_agent_with_optional_tool_routing(text, speaker_result=speaker_result)
         except asyncio.CancelledError:
             self.stop_thinking_sound()
             raise
@@ -3698,8 +3861,24 @@ class VoiceAssistant:
         normalized = text.lower()
         return any(marker in normalized for marker in CURRENT_STATE_QUERY_MARKERS)
 
-    def _with_runtime_instructions(self, text: str) -> str:
+    def _with_runtime_instructions(
+        self,
+        text: str,
+        speaker_result: SpeakerRecognitionResult | None = None,
+    ) -> str:
         instructions = [TOOL_ACTION_FRESHNESS_RULE]
+        speaker = speaker_result.speaker if speaker_result else UNKNOWN_SPEAKER
+        speaker_context = {
+            "command": text,
+            "speaker": speaker or UNKNOWN_SPEAKER,
+            "speaker_confidence": round(float(speaker_result.confidence), 4) if speaker_result else 0.0,
+            "speaker_backend": speaker_result.backend if speaker_result else "none",
+        }
+        instructions.append(
+            "Internal speaker context: pass the speaker value to MCP tool calls when a tool accepts it. "
+            "Do not map speaker names to buses, channels, lights, faders, or other domain entities in the voice agent. "
+            f"Current command payload: {json.dumps(speaker_context, ensure_ascii=False)}"
+        )
         if self.session_context_size > 0 and self.session_context_store:
             session_context = self.session_context_store.context_text(
                 exclude_last_user=True,
@@ -3741,8 +3920,12 @@ class VoiceAssistant:
 
                 text = self.pending_injected_command
                 self.pending_injected_command = None
+                speaker_result = SpeakerRecognitionResult()
                 if not text and self.web_monitor:
                     text = self.web_monitor.pop_injected_command()
+                text, injected_speaker_result = self.injected_command_parts(text)
+                if injected_speaker_result.speaker != UNKNOWN_SPEAKER or injected_speaker_result.backend != "none":
+                    speaker_result = injected_speaker_result
                 if text:
                     print(f"Injected command consumed: {text}")
                 else:
@@ -3752,6 +3935,10 @@ class VoiceAssistant:
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Stopping current assistant.")
                             return "reload"
+                        if not text:
+                            continue
+                        text, fallback_speaker_result = self.injected_command_parts(text)
+                        speaker_result = fallback_speaker_result
                         if not text:
                             continue
                         print(f"Text fallback command consumed: {text}")
@@ -3772,6 +3959,7 @@ class VoiceAssistant:
                     else:
                         # Convert to text
                         text = self.audio_to_text(audio_data)
+                        speaker_result = self.recognize_speaker(audio_data)
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Stopping current assistant.")
                             return "reload"
@@ -3794,7 +3982,7 @@ class VoiceAssistant:
                     continue
 
                 # Process command
-                process_task = asyncio.create_task(self.process_command(text))
+                process_task = asyncio.create_task(self.process_command(text, speaker_result=speaker_result))
                 voice_cancel_stop_event = None
                 voice_cancel_task = None
                 interrupt_command: str | None = None
@@ -4460,6 +4648,11 @@ async def main():
         current_vad_max_speech_seconds = env_float_from_values(values, "VAD_MAX_SPEECH_SECONDS", 8.0)
         current_backend_audio_input_device = (values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
         current_backend_audio_output_device = (values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
+        current_speaker_profiles_max = max(0, min(5, env_int_from_values(values, "SPEAKER_PROFILES_MAX", 5)))
+        current_speaker_recognition_enabled = env_bool_from_values(values, "SPEAKER_RECOGNITION_ENABLED", False)
+        current_speaker_backend = (values.get("SPEAKER_BACKEND") or "resemblyzer").strip().lower()
+        current_speaker_threshold = env_float_from_values(values, "SPEAKER_THRESHOLD", 0.75)
+        current_speaker_margin = env_float_from_values(values, "SPEAKER_MARGIN", 0.10)
         internet_online = check_internet_connection()
         backend_audio_devices = list_pyaudio_devices()
 
@@ -4524,6 +4717,12 @@ async def main():
             "selected_vad_min_silence_ms": current_vad_min_silence_ms,
             "selected_vad_speech_pad_ms": current_vad_speech_pad_ms,
             "selected_vad_max_speech_seconds": current_vad_max_speech_seconds,
+            "selected_speaker_recognition_enabled": current_speaker_recognition_enabled,
+            "selected_speaker_backend": current_speaker_backend,
+            "selected_speaker_threshold": current_speaker_threshold,
+            "selected_speaker_margin": current_speaker_margin,
+            "selected_speaker_profiles_max": current_speaker_profiles_max,
+            "speaker_profiles": speaker_profile_statuses(values, current_speaker_profiles_max),
             "backend_audio_inputs": backend_audio_devices["inputs"],
             "backend_audio_outputs": backend_audio_devices["outputs"],
             "selected_backend_audio_input_device": current_backend_audio_input_device,
@@ -4567,6 +4766,11 @@ async def main():
         vad_min_silence_ms: int,
         vad_speech_pad_ms: int,
         vad_max_speech_seconds: float,
+        speaker_recognition_enabled: bool,
+        speaker_backend: str,
+        speaker_threshold: float,
+        speaker_margin: float,
+        speaker_profiles: list[dict[str, Any]],
         web_monitor: WebMonitor | None,
         reload_event: threading.Event | None,
         auto_env_mode: bool = False,
@@ -4609,6 +4813,20 @@ async def main():
         vad_min_silence_ms = max(100, min(5000, int(vad_min_silence_ms or 650)))
         vad_speech_pad_ms = max(0, min(1000, int(vad_speech_pad_ms or 100)))
         vad_max_speech_seconds = max(1.0, min(30.0, float(vad_max_speech_seconds or 8.0)))
+        speaker_recognition_enabled = bool(speaker_recognition_enabled)
+        speaker_backend = (speaker_backend or "resemblyzer").strip().lower()
+        if speaker_backend not in {"resemblyzer", "speechbrain"}:
+            raise ValueError(f"unsupported speaker backend: {speaker_backend}")
+        speaker_threshold = max(0.0, min(1.0, float(speaker_threshold if speaker_threshold is not None else 0.75)))
+        speaker_margin = max(0.0, min(1.0, float(speaker_margin if speaker_margin is not None else 0.10)))
+        normalized_speaker_profiles = []
+        for index, profile in enumerate((speaker_profiles or [])[:5], start=1):
+            name = str(profile.get("name") or "").strip()
+            wav_path = str(profile.get("wav_path") or "").strip()
+            enabled = bool(profile.get("enabled"))
+            if not name and not wav_path:
+                continue
+            normalized_speaker_profiles.append({"index": index, "name": name, "wav_path": wav_path, "enabled": enabled})
         if stt_input not in {"both", "backend", "browser", "silent"}:
             raise ValueError(f"unsupported STT input: {stt_input}")
         if provider not in {"openai", "ollama"}:
@@ -4733,6 +4951,19 @@ async def main():
             )
             backend_audio_output_device = ""
 
+        speaker_updates: dict[str, str] = {
+            "SPEAKER_RECOGNITION_ENABLED": "true" if speaker_recognition_enabled else "false",
+            "SPEAKER_BACKEND": speaker_backend,
+            "SPEAKER_THRESHOLD": f"{speaker_threshold:.2f}".rstrip("0").rstrip("."),
+            "SPEAKER_MARGIN": f"{speaker_margin:.2f}".rstrip("0").rstrip("."),
+            "SPEAKER_PROFILES_MAX": "5",
+        }
+        for index in range(1, 6):
+            profile = normalized_speaker_profiles[index - 1] if index <= len(normalized_speaker_profiles) else {}
+            speaker_updates[f"SPEAKER_PROFILE_{index}_NAME"] = str(profile.get("name") or "")
+            speaker_updates[f"SPEAKER_PROFILE_{index}_ENABLED"] = "true" if profile.get("enabled") else "false"
+            speaker_updates[f"SPEAKER_PROFILE_{index}_WAV"] = str(profile.get("wav_path") or "")
+
         update_env_file_values(
             env_file,
             {
@@ -4772,6 +5003,7 @@ async def main():
                 "BACKEND_AUDIO_OUTPUT_PAN": f"{backend_audio_output_pan:.2f}",
                 "BACKEND_AUDIO_MONITOR_MODE": backend_audio_monitor_mode,
                 "BACKEND_AUDIO_MONITOR_VOLUME": f"{backend_audio_monitor_volume:.2f}",
+                **speaker_updates,
             },
             remove_keys={"WEB_AUDIO_ENABLED"},
         )
@@ -4831,6 +5063,11 @@ async def main():
             "vad_min_silence_ms": vad_min_silence_ms,
             "vad_speech_pad_ms": vad_speech_pad_ms,
             "vad_max_speech_seconds": vad_max_speech_seconds,
+            "speaker_recognition_enabled": speaker_recognition_enabled,
+            "speaker_backend": speaker_backend,
+            "speaker_threshold": speaker_threshold,
+            "speaker_margin": speaker_margin,
+            "speaker_profiles": normalized_speaker_profiles,
             "message": "Configuration saved. Restarting assistant with the new settings.",
         }
 
@@ -4843,6 +5080,59 @@ async def main():
 
         for key in env_keys:
             os.environ.pop(key, None)
+
+    def speaker_profiles_from_values(values: dict, max_profiles: int = 5) -> list[SpeakerProfile]:
+        profiles: list[SpeakerProfile] = []
+        max_profiles = max(0, min(5, int(max_profiles or 5)))
+        for index in range(1, max_profiles + 1):
+            prefix = f"SPEAKER_PROFILE_{index}_"
+            name = (values.get(f"{prefix}NAME") or "").strip()
+            wav_path = (values.get(f"{prefix}WAV") or "").strip()
+            enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
+            if not name and not wav_path:
+                continue
+            paths = [Path(wav_path)] if wav_path else []
+            profiles.append(
+                SpeakerProfile(
+                    name=name or f"speaker_{index}",
+                    wav_paths=paths,
+                    enabled=enabled,
+                    slug=safe_speaker_profile_slug(name or f"speaker_{index}"),
+                )
+            )
+        return profiles
+
+    def speaker_profile_statuses(values: dict, max_profiles: int = 5) -> list[dict[str, Any]]:
+        profiles = speaker_profiles_from_values(values, max_profiles=max_profiles)
+        by_index: dict[int, SpeakerProfile] = {idx + 1: profile for idx, profile in enumerate(profiles)}
+        statuses = []
+        for index in range(1, max(0, min(5, int(max_profiles or 5))) + 1):
+            prefix = f"SPEAKER_PROFILE_{index}_"
+            name = (values.get(f"{prefix}NAME") or "").strip()
+            wav_path = (values.get(f"{prefix}WAV") or "").strip()
+            enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
+            path = Path(wav_path) if wav_path else None
+            if not wav_path:
+                status = "missing wav"
+            elif not path.exists():
+                status = "missing wav"
+            else:
+                try:
+                    with wave.open(str(path), "rb") as reader:
+                        status = "ready" if reader.getnframes() > 0 else "error"
+                except Exception:
+                    status = "error"
+            statuses.append(
+                {
+                    "index": index,
+                    "name": name,
+                    "enabled": enabled,
+                    "wav_path": wav_path,
+                    "status": status,
+                    "slug": by_index.get(index).slug if index in by_index else safe_speaker_profile_slug(name or f"speaker_{index}"),
+                }
+            )
+        return statuses
 
     def build_assistant_from_env(
         env_file: Path,
@@ -4894,6 +5184,12 @@ async def main():
         backend_audio_output_pan = normalize_audio_pan(env_float("BACKEND_AUDIO_OUTPUT_PAN", 0.0))
         backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(os.getenv("BACKEND_AUDIO_MONITOR_MODE", "off"))
         backend_audio_monitor_volume = max(0.0, min(2.0, env_float("BACKEND_AUDIO_MONITOR_VOLUME", 1.0)))
+        speaker_recognition_enabled = env_bool("SPEAKER_RECOGNITION_ENABLED", False)
+        speaker_backend = os.getenv("SPEAKER_BACKEND", "resemblyzer").strip().lower()
+        speaker_threshold = max(0.0, min(1.0, env_float("SPEAKER_THRESHOLD", 0.75)))
+        speaker_margin = max(0.0, min(1.0, env_float("SPEAKER_MARGIN", 0.10)))
+        speaker_profiles_max = max(0, min(5, env_int("SPEAKER_PROFILES_MAX", 5)))
+        speaker_profiles = speaker_profiles_from_values(os.environ, speaker_profiles_max)
         web_stt_model = os.getenv("WEB_STT_MODEL", "whisper-1").strip()
         wake_words = parse_wake_words(env_optional("WAKE_WORD"))
         if backend_audio_monitor_mode == "rejected" and not wake_words:
@@ -4961,6 +5257,11 @@ async def main():
             print("Using voice cancel during thinking: enabled")
         if interrupt_conversation_enabled:
             print("Using interrupt conversation mode: enabled")
+        print(
+            f"Using speaker recognition: "
+            f"{speaker_backend if speaker_recognition_enabled else 'disabled'} "
+            f"({len([profile for profile in speaker_profiles if profile.enabled])}/{speaker_profiles_max} profiles)"
+        )
         if web_audio_enabled:
             print(f"Using web audio: STT={web_stt_provider}, TTS={web_tts_provider}")
         print(f"Using wake word: {', '.join(wake_words) if wake_words else 'disabled'}")
@@ -5103,6 +5404,11 @@ async def main():
             session_context_size=session_context_size,
             voice_cancel_during_thinking=voice_cancel_during_thinking,
             interrupt_conversation_enabled=interrupt_conversation_enabled,
+            speaker_recognition_enabled=speaker_recognition_enabled,
+            speaker_backend=speaker_backend,
+            speaker_threshold=speaker_threshold,
+            speaker_margin=speaker_margin,
+            speaker_profiles=speaker_profiles,
             system_prompt=system_prompt,
             reload_event=reload_event,
             web_monitor=web_monitor,
@@ -5413,7 +5719,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -5446,6 +5752,11 @@ async def main():
                 vad_min_silence_ms,
                 vad_speech_pad_ms,
                 vad_max_speech_seconds,
+                speaker_recognition_enabled,
+                speaker_backend,
+                speaker_threshold,
+                speaker_margin,
+                speaker_profiles,
                 web_monitor,
                 reload_event,
                 auto_env_mode,

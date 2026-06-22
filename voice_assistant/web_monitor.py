@@ -24,6 +24,7 @@ from typing import Any, Callable, TextIO
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import parse_qs, quote, unquote, urlparse
+import wave
 
 
 SECRET_KEY_MARKERS = (
@@ -408,7 +409,7 @@ class WebMonitor:
         self._log_chars = 0
         self._messages: deque[dict[str, Any]] = deque()
         self._next_message_id = 1
-        self._injected_commands: deque[str] = deque()
+        self._injected_commands: deque[dict[str, Any]] = deque()
         self._cancel_requested = False
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -521,36 +522,7 @@ class WebMonitor:
         self,
         *,
         options_handler: Callable[[str | None], dict[str, Any]],
-        save_handler: Callable[
-            [
-                str,
-                str,
-                str,
-                str,
-                str,
-                str,
-                str,
-                str,
-                str,
-                int,
-                int,
-                bool,
-                bool,
-                str,
-                str,
-                str,
-                str,
-                str,
-                float,
-                float,
-                float,
-                int,
-                int,
-                int,
-                float,
-            ],
-            dict[str, Any],
-        ],
+        save_handler: Callable[..., dict[str, Any]],
     ) -> None:
         """Register callbacks used by the web UI to list and save LLM settings."""
         with self._lock:
@@ -787,6 +759,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/backend-tts-test":
                         self._handle_backend_tts_test()
+                        return
+                    if self.path == "/api/speaker-profile-upload":
+                        self._handle_speaker_profile_upload()
                         return
                     if self.path == "/api/mcp-routing":
                         self._handle_mcp_routing_save()
@@ -1259,6 +1234,70 @@ class WebMonitor:
                         return None
                     return payload
 
+                def _safe_speaker_profile_slug(self, name: str) -> str:
+                    normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name.strip().lower()).strip("._-")
+                    return normalized[:64] or "speaker"
+
+                def _handle_speaker_profile_upload(self) -> None:
+                    payload = self._read_json_body(max_bytes=12 * 1024 * 1024)
+                    if payload is None:
+                        return
+
+                    profile_name = str(payload.get("profile_name") or "").strip()
+                    if not profile_name:
+                        self.send_error(400, "Speaker profile name is required")
+                        return
+
+                    filename = Path(str(payload.get("filename") or "reference.wav")).name
+                    if not filename.lower().endswith(".wav"):
+                        self.send_error(400, "Speaker profile upload must be a WAV file")
+                        return
+
+                    encoded = str(payload.get("audio_base64") or "")
+                    if "," in encoded:
+                        encoded = encoded.split(",", 1)[1]
+                    try:
+                        audio_data = base64.b64decode(encoded, validate=True)
+                    except (binascii.Error, ValueError):
+                        self.send_error(400, "Invalid speaker profile audio data")
+                        return
+                    if not audio_data:
+                        self.send_error(400, "Speaker profile WAV is empty")
+                        return
+                    if len(audio_data) > 10 * 1024 * 1024:
+                        self.send_error(413, "Speaker profile WAV is too large")
+                        return
+
+                    try:
+                        import io
+
+                        with wave.open(io.BytesIO(audio_data), "rb") as wav_file:
+                            if wav_file.getnframes() <= 0:
+                                raise ValueError("WAV file has no audio frames")
+                    except (wave.Error, ValueError) as e:
+                        self.send_error(400, f"Invalid speaker profile WAV: {e}")
+                        return
+
+                    slug = self._safe_speaker_profile_slug(profile_name)
+                    profile_dir = Path("data") / "speaker_profiles" / slug
+                    try:
+                        profile_dir.mkdir(parents=True, exist_ok=True)
+                        target = profile_dir / "reference.wav"
+                        target.write_bytes(audio_data)
+                    except OSError as e:
+                        self.send_error(500, f"Could not save speaker profile WAV: {e}")
+                        return
+
+                    self._send_json(
+                        {
+                            "ok": True,
+                            "profile_name": profile_name,
+                            "slug": slug,
+                            "wav_path": target.as_posix(),
+                            "status": "ready",
+                        }
+                    )
+
                 def _handle_llm_options(self, query: str) -> None:
                     handler = monitor._llm_options_handler
                     if handler is None:
@@ -1280,7 +1319,7 @@ class WebMonitor:
                         self.send_error(503, "LLM configuration is not available")
                         return
 
-                    payload = self._read_json_body(max_bytes=512 * 1024)
+                    payload = self._read_json_body(max_bytes=2 * 1024 * 1024)
                     if payload is None:
                         return
 
@@ -1331,8 +1370,16 @@ class WebMonitor:
                         vad_min_silence_ms = int(payload.get("vad_min_silence_ms") or 650)
                         vad_speech_pad_ms = int(payload.get("vad_speech_pad_ms") or 100)
                         vad_max_speech_seconds = float(payload.get("vad_max_speech_seconds") or 8.0)
+                        speaker_threshold = float(payload.get("speaker_threshold") or 0.75)
+                        speaker_margin = float(payload.get("speaker_margin") or 0.10)
                     except (TypeError, ValueError):
-                        self.send_error(400, "Voice detection settings must be numeric")
+                        self.send_error(400, "Voice detection and speaker settings must be numeric")
+                        return
+                    speaker_recognition_enabled = bool(payload.get("speaker_recognition_enabled"))
+                    speaker_backend = str(payload.get("speaker_backend") or "resemblyzer").strip().lower()
+                    speaker_profiles = payload.get("speaker_profiles") or []
+                    if not isinstance(speaker_profiles, list):
+                        self.send_error(400, "speaker_profiles must be a list")
                         return
 
                     try:
@@ -1368,6 +1415,11 @@ class WebMonitor:
                             vad_min_silence_ms,
                             vad_speech_pad_ms,
                             vad_max_speech_seconds,
+                            speaker_recognition_enabled,
+                            speaker_backend,
+                            speaker_threshold,
+                            speaker_margin,
+                            speaker_profiles,
                         )
                     except ValueError as e:
                         self.send_error(400, str(e))
@@ -1596,11 +1648,22 @@ class WebMonitor:
                         return
 
                     command = str(payload.get("command") or "").strip()
+                    speaker = str(payload.get("speaker") or "unknown").strip() or "unknown"
+                    try:
+                        speaker_confidence = float(payload.get("speaker_confidence") or 0.0)
+                    except (TypeError, ValueError):
+                        speaker_confidence = 0.0
+                    speaker_backend = str(payload.get("speaker_backend") or "none").strip() or "none"
                     if not command:
                         self.send_error(400, "Command is required")
                         return
 
-                    monitor.inject_command(command)
+                    monitor.inject_command(
+                        command,
+                        speaker=speaker,
+                        speaker_confidence=speaker_confidence,
+                        speaker_backend=speaker_backend,
+                    )
                     self._send_json({"accepted": True})
 
                 def _handle_cancel_command(self) -> None:
@@ -1817,16 +1880,30 @@ class WebMonitor:
                 self._log_chars -= len(self._log_chunks.popleft())
             self._snapshot["updated_at"] = time.time()
 
-    def inject_command(self, command: str) -> None:
+    def inject_command(
+        self,
+        command: str,
+        *,
+        speaker: str = "unknown",
+        speaker_confidence: float = 0.0,
+        speaker_backend: str = "none",
+    ) -> None:
         cleaned_command = command.strip()
         if not cleaned_command:
             return
 
         with self._lock:
-            self._injected_commands.append(cleaned_command)
+            self._injected_commands.append(
+                {
+                    "text": cleaned_command,
+                    "speaker": speaker or "unknown",
+                    "speaker_confidence": float(speaker_confidence or 0.0),
+                    "speaker_backend": speaker_backend or "none",
+                }
+            )
             self._snapshot["updated_at"] = time.time()
 
-    def pop_injected_command(self) -> str | None:
+    def pop_injected_command(self) -> dict[str, Any] | None:
         with self._lock:
             if not self._injected_commands:
                 return None
@@ -2830,6 +2907,35 @@ INDEX_HTML = """<!doctype html>
       font-size: 12px;
       font-weight: 650;
     }
+    .speaker-profile-grid {
+      display: grid;
+      gap: 8px;
+    }
+    .speaker-profile-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1.3fr) minmax(140px, auto) auto minmax(80px, auto);
+      gap: 8px;
+      align-items: center;
+    }
+    .speaker-profile-row input[type="text"] {
+      width: 100%;
+    }
+    .speaker-upload {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+    }
+    .speaker-upload input[type="file"] {
+      min-width: 0;
+      max-width: 160px;
+      font-size: 12px;
+    }
+    .speaker-status {
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
     .field-hint {
       color: var(--muted);
       font-size: 12px;
@@ -3558,6 +3664,49 @@ INDEX_HTML = """<!doctype html>
                   </div>
                 </div>
               </details>
+              <details class="nested-details">
+                <summary>Speaker profiles</summary>
+                <div class="vad-groups">
+                  <div class="vad-group">
+                    <div class="vad-group-title">
+                      <span>Reconnaissance locuteur</span>
+                      <span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span>
+                    </div>
+                    <div class="field">
+                      <label>Speaker recognition</label>
+                      <div class="segmented" id="speaker-recognition" role="radiogroup" aria-label="Speaker recognition">
+                        <label><input type="radio" name="speaker-recognition" value="off">Off</label>
+                        <label><input type="radio" name="speaker-recognition" value="on">On</label>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label for="speaker-backend">Backend</label>
+                      <select id="speaker-backend">
+                        <option value="resemblyzer">Resemblyzer</option>
+                      </select>
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="speaker-threshold" title="SPEAKER_THRESHOLD">
+                        <span>Confiance minimale</span>
+                        <span class="vad-value" id="speaker-threshold-label">0.75</span>
+                      </label>
+                      <div class="field-hint">Plus haut évite les erreurs; plus bas reconnaît plus facilement.</div>
+                      <input id="speaker-threshold" type="range" min="0" max="1" step="0.01" value="0.75">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="speaker-margin" title="SPEAKER_MARGIN">
+                        <span>Écart entre deux voix</span>
+                        <span class="vad-value" id="speaker-margin-label">0.10</span>
+                      </label>
+                      <div class="field-hint">Demande que la meilleure voix soit clairement au-dessus de la deuxième.</div>
+                      <input id="speaker-margin" type="range" min="0" max="1" step="0.01" value="0.10">
+                    </div>
+                    <div class="field full-row">
+                      <div class="speaker-profile-grid" id="speaker-profile-grid"></div>
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
           </details>
         </section>
@@ -3787,6 +3936,13 @@ INDEX_HTML = """<!doctype html>
     const vadMaxSpeechSeconds = document.querySelector("#vad-max-speech-seconds");
     const vadMaxSpeechSecondsLabel = document.querySelector("#vad-max-speech-seconds-label");
     const vadPresetButtons = Array.from(document.querySelectorAll(".vad-preset"));
+    const speakerRecognitionInputs = Array.from(document.querySelectorAll('input[name="speaker-recognition"]'));
+    const speakerBackend = document.querySelector("#speaker-backend");
+    const speakerThreshold = document.querySelector("#speaker-threshold");
+    const speakerThresholdLabel = document.querySelector("#speaker-threshold-label");
+    const speakerMargin = document.querySelector("#speaker-margin");
+    const speakerMarginLabel = document.querySelector("#speaker-margin-label");
+    const speakerProfileGrid = document.querySelector("#speaker-profile-grid");
     const vadControls = [
       vadSpeechThreshold,
       vadNegativeThreshold,
@@ -5327,7 +5483,12 @@ INDEX_HTML = """<!doctype html>
         const response = await fetch("/api/inject-command", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ command: cleanedCommand })
+          body: JSON.stringify({
+            command: cleanedCommand,
+            speaker: options.speaker || "unknown",
+            speaker_confidence: Number(options.speakerConfidence || 0),
+            speaker_backend: options.speakerBackend || "none"
+          })
         });
         if (!response.ok) throw new Error(await response.text());
         injectCommand.value = "";
@@ -5391,7 +5552,12 @@ INDEX_HTML = """<!doctype html>
         if (text) {
           if (!options.conversation) injectCommand.value = text;
           autoSizeComposer();
-          await submitCommand(text, { interrupt: Boolean(options.conversation) });
+          await submitCommand(text, {
+            interrupt: Boolean(options.conversation),
+            speaker: data.speaker || "unknown",
+            speakerConfidence: data.speaker_confidence || 0,
+            speakerBackend: data.speaker_backend || "none"
+          });
         } else if (options.conversation) {
           scheduleConversationRestart();
         }
@@ -5802,7 +5968,12 @@ INDEX_HTML = """<!doctype html>
         vad_min_speech_ms: Number(vadMinSpeechMs.value || 120),
         vad_min_silence_ms: Number(vadMinSilenceMs.value || 650),
         vad_speech_pad_ms: Number(vadSpeechPadMs.value || 100),
-        vad_max_speech_seconds: Number(vadMaxSpeechSeconds.value || 8)
+        vad_max_speech_seconds: Number(vadMaxSpeechSeconds.value || 8),
+        speaker_recognition_enabled: selectedSpeakerRecognitionEnabled(),
+        speaker_backend: speakerBackend.value || "resemblyzer",
+        speaker_threshold: Number(speakerThreshold.value || 0.75),
+        speaker_margin: Number(speakerMargin.value || 0.10),
+        speaker_profiles: collectSpeakerProfiles()
       });
     }
 
@@ -5965,6 +6136,146 @@ INDEX_HTML = """<!doctype html>
       vadSpeechPadMs.value = String(data.selected_vad_speech_pad_ms ?? 100);
       vadMaxSpeechSeconds.value = String(data.selected_vad_max_speech_seconds ?? 8);
       syncVadLabels();
+    }
+
+    function selectedSpeakerRecognitionEnabled() {
+      const selected = speakerRecognitionInputs.find((input) => input.checked);
+      return selected ? selected.value === "on" : false;
+    }
+
+    function setSpeakerRecognitionEnabled(enabled) {
+      speakerRecognitionInputs.forEach((input) => {
+        input.checked = enabled ? input.value === "on" : input.value === "off";
+      });
+    }
+
+    function syncSpeakerLabels() {
+      speakerThresholdLabel.textContent = Number(speakerThreshold.value || 0.75).toFixed(2);
+      speakerMarginLabel.textContent = Number(speakerMargin.value || 0.10).toFixed(2);
+    }
+
+    function renderSpeakerProfiles(profiles) {
+      speakerProfileGrid.replaceChildren();
+      const rows = profiles && profiles.length ? profiles : Array.from({ length: 5 }, (_, index) => ({ index: index + 1 }));
+      for (let index = 1; index <= 5; index += 1) {
+        const profile = rows.find((item) => Number(item.index) === index) || { index };
+        const row = document.createElement("div");
+        row.className = "speaker-profile-row";
+        row.dataset.index = String(index);
+
+        const name = document.createElement("input");
+        name.type = "text";
+        name.placeholder = `speaker ${index}`;
+        name.value = profile.name || "";
+        name.dataset.role = "name";
+
+        const wav = document.createElement("input");
+        wav.type = "text";
+        wav.placeholder = "data/speaker_profiles/laurent/reference.wav";
+        wav.value = profile.wav_path || "";
+        wav.dataset.role = "wav";
+
+        const uploadWrap = document.createElement("div");
+        uploadWrap.className = "speaker-upload";
+        const file = document.createElement("input");
+        file.type = "file";
+        file.accept = ".wav,audio/wav,audio/x-wav";
+        file.dataset.role = "file";
+        const upload = document.createElement("button");
+        upload.type = "button";
+        upload.className = "small-button";
+        upload.textContent = "Upload WAV";
+        upload.addEventListener("click", () => uploadSpeakerProfile(row));
+        uploadWrap.append(file, upload);
+
+        const enabledLabel = document.createElement("label");
+        const enabled = document.createElement("input");
+        enabled.type = "checkbox";
+        enabled.checked = Boolean(profile.enabled);
+        enabled.dataset.role = "enabled";
+        enabledLabel.appendChild(enabled);
+        enabledLabel.append(" actif");
+
+        const status = document.createElement("span");
+        status.className = "speaker-status";
+        status.textContent = profile.status || "missing wav";
+
+        row.append(name, wav, uploadWrap, enabledLabel, status);
+        speakerProfileGrid.appendChild(row);
+      }
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener("load", () => resolve(String(reader.result || "")));
+        reader.addEventListener("error", () => reject(reader.error || new Error("File read failed")));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function uploadSpeakerProfile(row) {
+      const nameInput = row.querySelector('[data-role="name"]');
+      const wavInput = row.querySelector('[data-role="wav"]');
+      const fileInput = row.querySelector('[data-role="file"]');
+      const enabledInput = row.querySelector('[data-role="enabled"]');
+      const status = row.querySelector(".speaker-status");
+      const profileName = nameInput.value.trim();
+      const file = fileInput.files && fileInput.files[0];
+      if (!profileName) {
+        status.textContent = "name required";
+        return;
+      }
+      if (!file) {
+        status.textContent = "choose wav";
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith(".wav")) {
+        status.textContent = "wav only";
+        return;
+      }
+      status.textContent = "upload...";
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        const response = await fetch("/api/speaker-profile-upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            profile_name: profileName,
+            filename: file.name,
+            audio_base64: dataUrl
+          })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error?.message || data.message || response.statusText || "Upload failed");
+        }
+        wavInput.value = data.wav_path || "";
+        enabledInput.checked = true;
+        status.textContent = data.status || "ready";
+        fileInput.value = "";
+      } catch (error) {
+        status.textContent = "upload failed";
+        alert(`Speaker WAV upload failed: ${error.message || error}`);
+      }
+    }
+
+    function collectSpeakerProfiles() {
+      return Array.from(speakerProfileGrid.querySelectorAll(".speaker-profile-row")).map((row) => ({
+        index: Number(row.dataset.index || 0),
+        name: row.querySelector('[data-role="name"]').value.trim(),
+        wav_path: row.querySelector('[data-role="wav"]').value.trim(),
+        enabled: row.querySelector('[data-role="enabled"]').checked
+      }));
+    }
+
+    function setSpeakerControls(data) {
+      setSpeakerRecognitionEnabled(Boolean(data.selected_speaker_recognition_enabled));
+      speakerBackend.value = data.selected_speaker_backend || "resemblyzer";
+      speakerThreshold.value = String(data.selected_speaker_threshold ?? 0.75);
+      speakerMargin.value = String(data.selected_speaker_margin ?? 0.10);
+      renderSpeakerProfiles(data.speaker_profiles || []);
+      syncSpeakerLabels();
     }
 
     function applyVadPreset(name) {
@@ -6568,6 +6879,7 @@ INDEX_HTML = """<!doctype html>
         syncBackendAudioMonitorVolumeLabel();
         syncBackendAudioOutputPanLabel();
         setVadControls(data);
+        setSpeakerControls(data);
 
         backendAudioInput.replaceChildren();
         backendAudioCapabilities.input = Array.isArray(data.backend_audio_inputs) && data.backend_audio_inputs.length > 0;
@@ -7047,6 +7359,8 @@ INDEX_HTML = """<!doctype html>
         interruptConversationEnabled = selectedInterruptConversationEnabled();
       });
     }
+    speakerThreshold.addEventListener("input", syncSpeakerLabels);
+    speakerMargin.addEventListener("input", syncSpeakerLabels);
     cloudApiDetails.addEventListener("toggle", () => {
       if (cloudApiDetails.open) loadCloudApiStatus();
     });
@@ -7084,6 +7398,11 @@ INDEX_HTML = """<!doctype html>
       const vadMinSilenceMsValue = Number(vadMinSilenceMs.value || 650);
       const vadSpeechPadMsValue = Number(vadSpeechPadMs.value || 100);
       const vadMaxSpeechSecondsValue = Number(vadMaxSpeechSeconds.value || 8);
+      const speakerRecognitionEnabledValue = selectedSpeakerRecognitionEnabled();
+      const speakerBackendValue = speakerBackend.value || "resemblyzer";
+      const speakerThresholdValue = Number(speakerThreshold.value || 0.75);
+      const speakerMarginValue = Number(speakerMargin.value || 0.10);
+      const speakerProfilesValue = collectSpeakerProfiles();
       if (!provider) return;
 
       llmSave.disabled = true;
@@ -7123,7 +7442,12 @@ INDEX_HTML = """<!doctype html>
             vad_min_speech_ms: vadMinSpeechMsValue,
             vad_min_silence_ms: vadMinSilenceMsValue,
             vad_speech_pad_ms: vadSpeechPadMsValue,
-            vad_max_speech_seconds: vadMaxSpeechSecondsValue
+            vad_max_speech_seconds: vadMaxSpeechSecondsValue,
+            speaker_recognition_enabled: speakerRecognitionEnabledValue,
+            speaker_backend: speakerBackendValue,
+            speaker_threshold: speakerThresholdValue,
+            speaker_margin: speakerMarginValue,
+            speaker_profiles: speakerProfilesValue
           })
         });
         if (!response.ok) throw new Error(await response.text());

@@ -32,7 +32,7 @@ sudo apt update
 sudo apt install portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
 ```
 
-`alsa-utils` provides tools such as `aplay` for ALSA device checks, and `ffmpeg` is required for backend OpenAI/ElevenLabs MP3 TTS playback. Without `ffmpeg`, backend cloud TTS can fall back to `pyttsx3`.
+`alsa-utils` provides tools such as `aplay` for ALSA device checks, and `ffmpeg` is required for backend OpenAI/ElevenLabs MP3 TTS playback. It is also used to decode browser WebM/Opus audio before optional Resemblyzer speaker recognition. Without `ffmpeg`, backend cloud TTS can fall back to `pyttsx3` and browser-side speaker recognition may return `unknown`.
 
 Backend TTS volume, backend microphone monitoring volume, and pan are software controls applied before PyAudio writes to the selected output device. In the web Config -> Audio In/Out section, `BACKEND_AUDIO_OUTPUT_PAN=0.00` keeps backend audio centered; `-1.00` sends it left and `1.00` sends it right. `BACKEND_AUDIO_MONITOR_MODE=off` keeps the current behavior, `passthrough` forwards backend microphone chunks to backend output while capture is running, and `rejected` replays only wake-word-rejected phrases. `BACKEND_AUDIO_MONITOR_VOLUME=1.00` controls that microphone monitoring path separately from TTS gain.
 
