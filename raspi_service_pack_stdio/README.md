@@ -58,7 +58,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart livestageassistant
 ```
 
-Set `COMMAND_ACK_SOUND_ENABLED=true` from the web Config -> Other section to play `assets/ring.wav` after the LLM/MCP response is ready and just before TTS generation/playback begins. The sound uses the selected speech side: backend PyAudio for backend TTS, or browser audio for browser TTS. It does not stop the thinking sound.
+Set `STARTUP_LOADER_SOUND_ENABLED=true` to loop `assets/loader.wav` on the selected backend audio output while the assistant starts. The loop stops just before the startup announcement says `Assistant vocal prêt`, and it uses `BACKEND_TTS_VOLUME` plus `BACKEND_AUDIO_OUTPUT_PAN`. Set `COMMAND_ACK_SOUND_ENABLED=true` from the web Config -> Other section to play `assets/ring.wav` after the LLM/MCP response is ready and just before TTS generation/playback begins. The acknowledgement sound uses the selected speech side: backend PyAudio for backend TTS, or browser audio for browser TTS. It does not stop the thinking sound.
 
 On the Raspberry Pi, install the assistant dependencies first:
 

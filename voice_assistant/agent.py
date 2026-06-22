@@ -1470,6 +1470,8 @@ class VoiceAssistant:
         web_tts_enabled: bool = False,
         elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
         thinking_sound_file: str = "thinking.wav",
+        startup_loader_sound_enabled: bool = False,
+        startup_loader_sound_file: str = "loader.wav",
         command_ack_sound_enabled: bool = False,
         backend_audio_input_device: str | None = None,
         backend_audio_output_device: str | None = None,
@@ -1700,6 +1702,13 @@ class VoiceAssistant:
         self.thinking_sound_lock = threading.Lock()
         self.thinking_sound_stop_event = threading.Event()
         self.thinking_sound_thread: threading.Thread | None = None
+        self.startup_loader_sound_enabled = bool(startup_loader_sound_enabled)
+        self.startup_loader_sound_file = startup_loader_sound_file or "loader.wav"
+        self.startup_loader_sound_path = self._resolve_asset_path(self.startup_loader_sound_file)
+        self.startup_loader_sound_warning_shown = False
+        self.startup_loader_sound_lock = threading.Lock()
+        self.startup_loader_sound_stop_event = threading.Event()
+        self.startup_loader_sound_thread: threading.Thread | None = None
         self.command_ack_sound_enabled = bool(command_ack_sound_enabled)
         self.command_ack_sound_path = self._resolve_command_ack_sound_path()
         self.command_ack_sound_warning_shown = False
@@ -1825,6 +1834,41 @@ class VoiceAssistant:
         if thread and thread.is_alive():
             thread.join(timeout=0.5)
 
+    def start_startup_loader_sound(self) -> None:
+        """Loop the startup loader sound through backend output until startup is ready."""
+        if not self.startup_loader_sound_enabled:
+            return
+        if self.tts_provider == "none" or self.audio_output_device_status == "unavailable":
+            return
+        if not self.startup_loader_sound_path:
+            if not self.startup_loader_sound_warning_shown:
+                print(
+                    f"Startup loader sound '{self.startup_loader_sound_file}' not found. "
+                    "Set STARTUP_LOADER_SOUND_FILE to a WAV file or place it in assets/."
+                )
+                self.startup_loader_sound_warning_shown = True
+            return
+        with self.startup_loader_sound_lock:
+            if self.startup_loader_sound_thread and self.startup_loader_sound_thread.is_alive():
+                return
+            self.startup_loader_sound_stop_event.clear()
+            self.startup_loader_sound_thread = threading.Thread(
+                target=self._play_startup_loader_sound_loop,
+                name="backend-startup-loader-sound",
+                daemon=True,
+            )
+            self.startup_loader_sound_thread.start()
+
+    def stop_startup_loader_sound(self) -> None:
+        """Stop the startup loader sound if it is currently playing."""
+        thread = None
+        with self.startup_loader_sound_lock:
+            self.startup_loader_sound_stop_event.set()
+            thread = self.startup_loader_sound_thread
+            self.startup_loader_sound_thread = None
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+
     def play_command_ack_sound(self) -> None:
         """Play a short non-blocking asset when a command is accepted."""
         if (
@@ -1860,6 +1904,36 @@ class VoiceAssistant:
                     self.command_ack_sound_warning_shown = True
 
         threading.Thread(target=_play, name="backend-command-ack-sound", daemon=True).start()
+
+    def _play_startup_loader_sound_loop(self) -> None:
+        """Loop the configured startup WAV through the backend PyAudio output."""
+        if not self.startup_loader_sound_path:
+            return
+        try:
+            while not self.startup_loader_sound_stop_event.is_set():
+                try:
+                    self.play_wav_file(
+                        self.startup_loader_sound_path,
+                        stop_event=self.startup_loader_sound_stop_event,
+                    )
+                except Exception as wav_error:
+                    if not ffmpeg_decode_available():
+                        raise wav_error
+                    pcm_bytes = decode_audio_file_to_pcm_bytes(self.startup_loader_sound_path)
+                    play_pcm_bytes(
+                        self.audio,
+                        pcm_bytes,
+                        sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+                        channels=DEFAULT_BACKEND_MP3_CHANNELS,
+                        output_device_index=self.audio_output_device_index,
+                        stop_event=self.startup_loader_sound_stop_event,
+                        volume=self.backend_tts_volume,
+                        pan=self.backend_audio_output_pan,
+                    )
+        except Exception as e:
+            if not self.startup_loader_sound_warning_shown:
+                print(f"Could not play startup loader sound '{self.startup_loader_sound_path}': {e}")
+                self.startup_loader_sound_warning_shown = True
 
     def _play_thinking_sound_loop(self) -> None:
         """Loop the configured WAV through the same PyAudio output path as backend TTS."""
@@ -2569,6 +2643,7 @@ class VoiceAssistant:
         if self.web_monitor:
             self.web_monitor.append_dialogue("assistant", message, speak=self.web_tts_enabled)
 
+        self.stop_startup_loader_sound()
         if self.tts_provider != "none":
             await asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message)))
 
@@ -4017,7 +4092,9 @@ class VoiceAssistant:
         print("===============================================\n")
 
         # Initialize MCP
+        self.start_startup_loader_sound()
         if not await self.initialize_mcp():
+            self.stop_startup_loader_sound()
             print("Failed to initialize MCP. Continuing without MCP tools; use the web config to fix and reload.")
             if self.web_monitor:
                 self.web_monitor.set_environment_loading(False)
@@ -4272,6 +4349,10 @@ class VoiceAssistant:
             reload_requested = bool(self.reload_event and self.reload_event.is_set())
             if reload_requested:
                 print("Reload cleanup started.")
+            try:
+                self.stop_startup_loader_sound()
+            except Exception:
+                pass
             try:
                 self.stop_thinking_sound()
             except Exception:
@@ -5344,6 +5425,8 @@ async def main():
         web_tts_provider = tts_config.web_provider
         voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
         thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
+        startup_loader_sound_enabled = env_bool("STARTUP_LOADER_SOUND_ENABLED", False)
+        startup_loader_sound_file = os.getenv("STARTUP_LOADER_SOUND_FILE", "loader.wav")
         command_ack_sound_enabled = env_bool("COMMAND_ACK_SOUND_ENABLED", False)
         backend_audio_input_device = os.getenv("BACKEND_AUDIO_INPUT_DEVICE", "").strip()
         backend_audio_output_device = os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE", "").strip()
@@ -5560,6 +5643,8 @@ async def main():
             web_tts_enabled=web_tts_enabled,
             elevenlabs_voice_id=voice_id,
             thinking_sound_file=thinking_sound_file,
+            startup_loader_sound_enabled=startup_loader_sound_enabled,
+            startup_loader_sound_file=startup_loader_sound_file,
             command_ack_sound_enabled=command_ack_sound_enabled,
             backend_audio_input_device=backend_audio_input_device,
             backend_audio_output_device=backend_audio_output_device,
