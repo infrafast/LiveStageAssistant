@@ -5,7 +5,8 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HOME=/data/huggingface \
     XDG_CACHE_HOME=/data/cache \
-    NPM_CONFIG_CACHE=/data/npm-cache
+    NPM_CONFIG_CACHE=/data/npm-cache \
+    SPEAKER_PROFILES_DIR=/data/speaker_profiles
 
 WORKDIR /app
 
@@ -38,7 +39,7 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install .
 
 RUN chmod +x /usr/local/bin/live-stage-assistant-entrypoint \
-    && mkdir -p /data/huggingface /data/cache /data/npm-cache /data/notes
+    && mkdir -p /data/huggingface /data/cache /data/npm-cache /data/notes /data/speaker_profiles
 
 VOLUME ["/config", "/data"]
 

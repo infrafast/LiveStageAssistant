@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import mimetypes
+import os
 from pathlib import Path
 import re
 import select
@@ -1279,7 +1280,8 @@ class WebMonitor:
                         return
 
                     slug = self._safe_speaker_profile_slug(profile_name)
-                    profile_dir = Path("data") / "speaker_profiles" / slug
+                    profile_root = Path(os.getenv("SPEAKER_PROFILES_DIR", "data/speaker_profiles"))
+                    profile_dir = profile_root / slug
                     try:
                         profile_dir.mkdir(parents=True, exist_ok=True)
                         target = profile_dir / "reference.wav"
