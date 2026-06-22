@@ -1854,13 +1854,14 @@ VNC_HTML = """<!doctype html>
       setStatus(`Connexion WebSocket VNC ${host}:${port}...`, false);
       console.info("[LSA noVNC] TCP target reachable, opening WebSocket proxy", { host, port, proxyUrl });
       const rfb = new RFB(screenEl, proxyUrl, { credentials: { password } });
-      rfb.viewOnly = false;
+      const viewOnly = params.get("viewOnly") !== "0";
+      rfb.viewOnly = viewOnly;
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
       console.info("[LSA noVNC] RFB instance created");
       rfb.addEventListener("connect", () => {
         console.info("[LSA noVNC] connected");
-        setStatus(`Connecté à ${host}:${port}`, true);
+        setStatus(`Connecté à ${host}:${port}${viewOnly ? " - lecture seule" : ""}`, true);
       });
       rfb.addEventListener("disconnect", (event) => {
         console.info("[LSA noVNC] disconnected", event.detail || {});
@@ -2187,10 +2188,24 @@ INDEX_HTML = """<!doctype html>
     .vnc-status.offline { color: var(--bad); }
     .vnc-controls {
       display: grid;
-      grid-template-columns: minmax(220px, 1fr) auto;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
       gap: 10px;
       padding: 12px;
       border-top: 1px solid var(--border);
+      align-items: center;
+    }
+    .vnc-view-only {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+      font-weight: 700;
+      color: var(--muted);
+    }
+    .vnc-view-only input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
     }
     .vnc-frame-wrap {
       width: min(1368px, calc(100vw - 300px));
@@ -3082,6 +3097,10 @@ INDEX_HTML = """<!doctype html>
           <summary>Remote screen <span class="vnc-status offline" id="vnc-status">hors ligne</span></summary>
           <div class="vnc-controls">
             <input id="vnc-url" type="text" value="vnc://192.168.0.160:5900?password=ronron" spellcheck="false" aria-label="VNC URL">
+            <label class="vnc-view-only" title="Lecture seule: affiche l'écran distant sans envoyer clavier ni souris">
+              <input id="vnc-view-only" type="checkbox" checked>
+              Lecture seule
+            </label>
             <button class="small-button" id="vnc-connect" type="button">Connecter</button>
           </div>
           <div class="vnc-frame-wrap">
@@ -3478,6 +3497,7 @@ INDEX_HTML = """<!doctype html>
     const messagesEl = document.querySelector("#messages");
     const chatPanel = document.querySelector("#chat-panel");
     const vncUrl = document.querySelector("#vnc-url");
+    const vncViewOnly = document.querySelector("#vnc-view-only");
     const vncConnect = document.querySelector("#vnc-connect");
     const vncFrame = document.querySelector("#vnc-frame");
     const vncStatus = document.querySelector("#vnc-status");
@@ -4065,6 +4085,7 @@ INDEX_HTML = """<!doctype html>
       params.set("port", parsed.port || "5900");
       params.set("autoconnect", "1");
       params.set("resize", "scale");
+      params.set("viewOnly", vncViewOnly.checked ? "1" : "0");
       const password = parsed.searchParams.get("password") || "ronron";
       if (password) params.set("password", password);
       return `/vnc.html?${params.toString()}`;
@@ -6528,6 +6549,12 @@ INDEX_HTML = """<!doctype html>
 
     vncUrl.addEventListener("input", () => {
       vncUrlDirty = true;
+    });
+    vncViewOnly.addEventListener("change", () => {
+      if (currentVncFrameUrl) {
+        disconnectVnc("reconnexion VNC...");
+        connectVnc({ force: true });
+      }
     });
     vncConnect.addEventListener("click", () => connectVnc({ save: true }));
     vncUrl.addEventListener("keydown", (event) => {
