@@ -144,6 +144,7 @@ DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
     "to be suitable for text-to-speech and API calls. Don't be verbose but summarize your results. "
     "Reply in French by default. Reply in English only when the user's latest request is clearly in English; for terse, mixed, ambiguous, or domain commands such as 'qlc rouge', answer in French. "
     "Use plain text only. Do not use emojis, emoticons, markdown, bullets, symbols, or decorative characters. "
+    "For spoken numeric values, write explicit signs as words: use 'moins 17,5 dB' instead of '-17,5 dB' and 'plus 3 dB' instead of '+3 dB'. "
     "Treat user-provided names, labels, routing keywords, and free-text targets as case-insensitive unless a specific MCP tool explicitly documents a case-sensitive identifier. "
     "Behave like a friendly calm and motivating assistant. Use conversation memory for context, preferences, "
     "and follow-up references, but not as the source of truth for live external state. When the user asks about "
@@ -299,6 +300,29 @@ def normalize_stt_hallucination_candidate(text: str) -> str:
     normalized = re.sub(r"\b(d|l|j|m|t|s|c|n|qu)'", r"\1 ", normalized)
     normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
     return re.sub(r"\s+", " ", normalized).strip()
+
+
+def prepare_text_for_tts(text: str) -> str:
+    """Make sign-bearing numbers explicit for speech engines that skip symbols."""
+    if not text:
+        return text
+
+    unit_pattern = r"(?:dB|db|décibels?|decibels?|%|pour\s*cent|secondes?|seconds?|ms|Hz|hertz)"
+
+    def replace_signed_number(match: re.Match) -> str:
+        prefix = match.group("prefix") or ""
+        sign_word = "moins" if match.group("sign") == "-" else "plus"
+        number = match.group("number")
+        unit = (match.group("unit") or "").strip()
+        separator = " " if unit else ""
+        return f"{prefix}{sign_word} {number}{separator}{unit}"
+
+    return re.sub(
+        rf"(?P<prefix>^|[^\w])(?P<sign>[+-])\s*(?P<number>\d+(?:[,.]\d+)?)(?P<unit>\s*(?:{unit_pattern}))?",
+        replace_signed_number,
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 STT_SILENCE_HALLUCINATION_KEYS = {
@@ -3156,13 +3180,14 @@ class VoiceAssistant:
         if not local_tts_playback_available():
             return False
 
+        spoken_text = prepare_text_for_tts(text)
         temp_path = None
         try:
             with TTS_LOCK:
                 TTS_STOP_EVENT.clear()
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                     temp_path = temp_file.name
-                TTS_ENGINE.save_to_file(text, temp_path)
+                TTS_ENGINE.save_to_file(spoken_text, temp_path)
                 TTS_ENGINE.runAndWait()
                 file_rendered = temp_path and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
                 if file_rendered:
@@ -3182,7 +3207,7 @@ class VoiceAssistant:
                 if not file_rendered:
                     print("Local pyttsx3 file rendering failed. Falling back to direct system TTS...")
                 self.stop_thinking_sound()
-                TTS_ENGINE.say(text)
+                TTS_ENGINE.say(spoken_text)
                 TTS_ENGINE.runAndWait()
             return True
         except Exception as e:
@@ -3345,7 +3370,7 @@ class VoiceAssistant:
         """Generate MP3 speech with OpenAI."""
         if not self.openai_client:
             raise ValueError("OpenAI client is not configured")
-        cleaned_text = text.strip()
+        cleaned_text = prepare_text_for_tts(text).strip()
         if not cleaned_text:
             raise ValueError("text is required")
 
@@ -3367,7 +3392,7 @@ class VoiceAssistant:
         """Generate MP3 speech with ElevenLabs."""
         if not self.elevenlabs_client:
             raise ValueError("ElevenLabs client is not configured")
-        cleaned_text = text.strip()
+        cleaned_text = prepare_text_for_tts(text).strip()
         if not cleaned_text:
             raise ValueError("text is required")
 
