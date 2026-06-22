@@ -2834,6 +2834,47 @@ INDEX_HTML = """<!doctype html>
     .loading-overlay.open {
       display: grid;
     }
+    .toast-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 45;
+      display: none;
+      place-items: center;
+      pointer-events: none;
+      padding: 18px;
+    }
+    .toast-overlay.open {
+      display: grid;
+    }
+    .toast-panel {
+      width: min(420px, calc(100vw - 36px));
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: var(--shadow);
+      display: grid;
+      gap: 10px;
+      pointer-events: auto;
+    }
+    .toast-panel.ok {
+      border-color: color-mix(in srgb, var(--ok) 50%, var(--border));
+    }
+    .toast-panel.error {
+      border-color: color-mix(in srgb, var(--bad) 55%, var(--border));
+    }
+    .toast-title {
+      font-weight: 700;
+    }
+    .toast-detail {
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .toast-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
     .loading-panel {
       min-width: min(320px, calc(100vw - 36px));
       border: 1px solid var(--border);
@@ -3950,6 +3991,16 @@ INDEX_HTML = """<!doctype html>
     </div>
   </div>
 
+  <div class="toast-overlay" id="toast-overlay" aria-hidden="true">
+    <div class="toast-panel ok" id="toast-panel" role="status" aria-live="polite">
+      <div class="toast-title" id="toast-title">OK</div>
+      <div class="toast-detail" id="toast-detail"></div>
+      <div class="toast-actions">
+        <button class="small-button" id="toast-ok" type="button">OK</button>
+      </div>
+    </div>
+  </div>
+
   <div class="session-summary-popover" id="session-summary-popover" role="status" aria-live="polite"></div>
 
   <script>
@@ -3967,6 +4018,11 @@ INDEX_HTML = """<!doctype html>
     const vncConnect = document.querySelector("#vnc-connect");
     const vncFrame = document.querySelector("#vnc-frame");
     const vncStatus = document.querySelector("#vnc-status");
+    const toastOverlay = document.querySelector("#toast-overlay");
+    const toastPanel = document.querySelector("#toast-panel");
+    const toastTitle = document.querySelector("#toast-title");
+    const toastDetail = document.querySelector("#toast-detail");
+    const toastOk = document.querySelector("#toast-ok");
     const sessionList = document.querySelector("#session-list");
     const sessionNew = document.querySelector("#session-new");
     const injectForm = document.querySelector("#inject-form");
@@ -4186,6 +4242,27 @@ INDEX_HTML = """<!doctype html>
       metaEl.textContent = text;
       metaEl.classList.toggle("error", mode === "error");
       metaErrorUntil = mode === "error" && holdMs > 0 ? Date.now() + holdMs : 0;
+    }
+
+    let toastTimer = null;
+
+    function hideToast() {
+      window.clearTimeout(toastTimer);
+      toastOverlay.classList.remove("open");
+      toastOverlay.setAttribute("aria-hidden", "true");
+    }
+
+    function showToast(title, detail = "", mode = "ok", holdMs = 5000) {
+      window.clearTimeout(toastTimer);
+      toastTitle.textContent = title;
+      toastDetail.textContent = detail;
+      toastPanel.classList.toggle("ok", mode !== "error");
+      toastPanel.classList.toggle("error", mode === "error");
+      toastOverlay.classList.add("open");
+      toastOverlay.setAttribute("aria-hidden", "false");
+      if (holdMs > 0) {
+        toastTimer = window.setTimeout(hideToast, holdMs);
+      }
     }
 
     function conciseClientTtsError(error) {
@@ -6414,9 +6491,23 @@ INDEX_HTML = """<!doctype html>
         enabledInput.checked = true;
         status.textContent = data.embedding_status || data.status || "ready";
         fileInput.value = "";
+        const generated = String(data.embedding_status || "").toLowerCase().includes("ready");
+        showToast(
+          generated ? "Génération du profil faite" : "Fichier profil sauvegardé",
+          generated
+            ? `Profil ${row.dataset.index || ""} prêt: ${data.wav_path || ""}`
+            : `${data.embedding_status || "Embedding non généré pour l'instant."} Le WAV est sauvegardé.`,
+          "ok",
+          7000
+        );
       } catch (error) {
         status.textContent = "upload failed";
-        alert(`Speaker WAV upload failed: ${error.message || error}`);
+        showToast(
+          "Erreur génération profil",
+          String(error.message || error),
+          "error",
+          9000
+        );
       }
     }
 
@@ -7245,6 +7336,16 @@ INDEX_HTML = """<!doctype html>
 
     refresh();
     setInterval(refresh, 1500);
+
+    toastOk.addEventListener("click", hideToast);
+    toastOverlay.addEventListener("click", (event) => {
+      if (event.target === toastOverlay) hideToast();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && toastOverlay.classList.contains("open")) {
+        hideToast();
+      }
+    });
 
     vncUrl.addEventListener("input", () => {
       vncUrlDirty = true;
