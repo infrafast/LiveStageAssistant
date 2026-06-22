@@ -28,11 +28,14 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 import wave
 
 try:
-    from .speaker_recognition import compute_resemblyzer_embedding_file
+    from .speaker_recognition import SPEAKER_EMBEDDING_PREPARATION_MESSAGE, compute_resemblyzer_embedding_file
 except ImportError:  # pragma: no cover - direct script fallback
     try:
-        from speaker_recognition import compute_resemblyzer_embedding_file
+        from speaker_recognition import SPEAKER_EMBEDDING_PREPARATION_MESSAGE, compute_resemblyzer_embedding_file
     except ImportError:  # pragma: no cover - optional helper unavailable
+        SPEAKER_EMBEDDING_PREPARATION_MESSAGE = (
+            "Je prépare l'empreinte vocale du profil. Cela peut prendre un moment la première fois."
+        )
         compute_resemblyzer_embedding_file = None
 
 
@@ -44,6 +47,7 @@ SECRET_KEY_MARKERS = (
     "PASS",
     "CONNECTION_STRING",
 )
+
 LOGGER = logging.getLogger(__name__)
 TOOL_RESULT_MARKER = "Tool result:"
 COMMAND_ACK_SOUND_CANDIDATES = ("ring.wav", "bell.wav")
@@ -4142,6 +4146,7 @@ INDEX_HTML = """<!doctype html>
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
     const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
+    const speakerEmbeddingPreparationMessage = __SPEAKER_EMBEDDING_PREPARATION_MESSAGE__;
     const vadPresets = {
       "quick-word": {
         vadSpeechThreshold: 0.42,
@@ -6529,7 +6534,8 @@ INDEX_HTML = """<!doctype html>
         status.textContent = "wav only";
         return;
       }
-      status.textContent = "upload...";
+      status.textContent = "embedding...";
+      showToast("Préparation du profil vocal", speakerEmbeddingPreparationMessage, "ok", 6000);
       try {
         const dataUrl = await readFileAsDataUrl(file);
         const response = await fetch("/api/speaker-profile-upload", {
@@ -6555,7 +6561,7 @@ INDEX_HTML = """<!doctype html>
           generated ? "Génération du profil faite" : "Fichier profil sauvegardé",
           generated
             ? `Profil ${row.dataset.index || ""} prêt: ${data.wav_path || ""}`
-            : `${data.embedding_status || "Embedding non généré pour l'instant."} Le WAV est sauvegardé.`,
+            : `${speakerEmbeddingPreparationMessage} ${data.embedding_status || "Embedding non généré pour l'instant."} Le WAV est sauvegardé.`,
           "ok",
           7000
         );
@@ -7836,3 +7842,8 @@ INDEX_HTML = """<!doctype html>
 </body>
 </html>
 """
+
+INDEX_HTML = INDEX_HTML.replace(
+    "__SPEAKER_EMBEDDING_PREPARATION_MESSAGE__",
+    json.dumps(SPEAKER_EMBEDDING_PREPARATION_MESSAGE, ensure_ascii=False),
+)

@@ -52,6 +52,7 @@ try:
     from .wake_word import apply_wake_word, parse_wake_words
     from .speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
+        SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
         UNKNOWN_SPEAKER,
         SpeakerProfile,
         SpeakerRecognitionResult,
@@ -65,6 +66,7 @@ except ImportError:
     from wake_word import apply_wake_word, parse_wake_words
     from speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
+        SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
         UNKNOWN_SPEAKER,
         SpeakerProfile,
         SpeakerRecognitionResult,
@@ -1606,6 +1608,7 @@ class VoiceAssistant:
         self.speaker_profiles = list(speaker_profiles or [])
         self.speaker_recognizer = None
         self.speaker_recognition_unavailable_reason = ""
+        self.speaker_embedding_notice_keys: set[str] = set()
         self.last_speaker_result = SpeakerRecognitionResult()
         if self.speaker_recognition_enabled:
             try:
@@ -3004,6 +3007,7 @@ class VoiceAssistant:
             self.last_speaker_result = result
             return result
         try:
+            self.announce_pending_speaker_embeddings()
             recognition_audio = audio_data
             if not already_wav:
                 wav_buffer = io.BytesIO()
@@ -3037,6 +3041,36 @@ class VoiceAssistant:
                 f"({result.confidence:.2f}, second={result.second_confidence:.2f}, reason={result.reason})"
             )
         return result
+
+    def announce_pending_speaker_embeddings(self) -> None:
+        if not self.speaker_recognizer:
+            return
+        try:
+            pending_paths = self.speaker_recognizer.pending_embedding_paths()
+        except Exception:
+            return
+        if not pending_paths:
+            return
+        notice_key = "|".join(sorted(str(path) for path in pending_paths))
+        if notice_key in self.speaker_embedding_notice_keys:
+            return
+        self.speaker_embedding_notice_keys.add(notice_key)
+        print(f"Speaker profile embedding preparation needed: {', '.join(str(path) for path in pending_paths)}")
+        if self.web_monitor:
+            self.web_monitor.append_dialogue("assistant", SPEAKER_EMBEDDING_PREPARATION_MESSAGE, speak=True)
+        if self.tts_provider == "none":
+            return
+
+        def speak_notice() -> None:
+            try:
+                asyncio.run(self.text_to_speech(SPEAKER_EMBEDDING_PREPARATION_MESSAGE))
+            except Exception as e:
+                print(f"Could not speak speaker embedding preparation notice: {e}")
+
+        notice_thread = threading.Thread(target=speak_notice, name="speaker-embedding-notice", daemon=True)
+        notice_thread.start()
+        notice_thread.join(timeout=20)
+        self.start_thinking_sound()
 
     def speaker_recognition_runtime_state(self) -> dict[str, Any]:
         return {

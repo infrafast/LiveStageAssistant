@@ -15,6 +15,9 @@ UNKNOWN_SPEAKER = "unknown"
 DEFAULT_SPEAKER_PROFILES_DIR = Path("data/speaker_profiles")
 MAX_SPEAKER_PROFILE_WAV_BYTES = 10 * 1024 * 1024
 SPEAKER_EMBEDDING_SUFFIX = ".npy"
+SPEAKER_EMBEDDING_PREPARATION_MESSAGE = (
+    "Je prépare l'empreinte vocale du profil. Cela peut prendre un moment la première fois."
+)
 
 
 @dataclass
@@ -49,6 +52,9 @@ class SpeakerRecognizerBase(ABC):
     def validate_runtime(self) -> None:
         """Raise when optional backend dependencies are unavailable."""
         return None
+
+    def pending_embedding_paths(self) -> list[Path]:
+        return []
 
 
 class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
@@ -113,6 +119,14 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
             return embedding.astype(np.float32)
         except Exception:
             return None
+
+    def pending_embedding_paths(self) -> list[Path]:
+        pending: list[Path] = []
+        for profile in self.profiles:
+            for wav_path in profile.wav_paths:
+                if wav_path.exists() and wav_path.is_file() and self._load_cached_embedding(wav_path) is None:
+                    pending.append(wav_path)
+        return pending
 
     def _embedding_for_profile_path(self, wav_path: Path) -> np.ndarray:
         cached = self._load_cached_embedding(wav_path)
