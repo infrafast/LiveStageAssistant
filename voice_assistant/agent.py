@@ -1676,8 +1676,6 @@ class VoiceAssistant:
         self.stt_provider = stt_provider.lower()
         self.tts_provider = tts_provider.lower()
         self.web_tts_enabled = bool(web_tts_enabled)
-        if self.web_monitor:
-            self.web_monitor.set_speaker_embedding_notice_handler(self.speak_speaker_embedding_notice_async)
         self.local_whisper_model_name = local_whisper_model
         self.stt_language = stt_language or None
         base_stt_prompt = stt_prompt or DEFAULT_STT_PROMPT
@@ -1739,6 +1737,8 @@ class VoiceAssistant:
         self.mcp_initialization_error: str | None = None
         self.reload_event = reload_event
         self.web_monitor = web_monitor
+        if self.web_monitor:
+            self.web_monitor.set_speaker_embedding_notice_handler(self.speak_speaker_embedding_notice_async)
         self.pending_injected_command: str | dict[str, Any] | None = None
         self.last_processed_command_key: str | None = None
         self.last_processed_command_at: float = 0.0
