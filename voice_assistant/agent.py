@@ -2632,7 +2632,7 @@ class VoiceAssistant:
 
         if self.wake_words:
             wake_word_text = ", ".join(self.wake_words)
-            parts.append(f"Mots de réveil actifs : {wake_word_text}.")
+            parts.append(f"Mots de réveil actifs : {wake_word_text}. Prêt à éxécuter des commandes.")
 
         return " ".join(parts)
 
