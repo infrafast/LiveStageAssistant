@@ -165,7 +165,10 @@ Keep Live Stage Assistant listening locally on the Raspberry Pi:
 ```env
 WEB_MONITOR_HOST=127.0.0.1
 WEB_MONITOR_PORT=8765
+WEB_PASSWORD=
 ```
+
+Set `WEB_PASSWORD=your-password` if you want the web monitor to ask for a password before opening. Leave it empty to disable web login.
 
 Install Caddy:
 

@@ -142,6 +142,8 @@ container: /config/ELEVENLABS_API_KEY.txt
 
 The Docker image entrypoint uses `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and if that file is missing it auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. The bundled compose file uses bridge networking and publishes the web monitor as `${WEB_MONITOR_HOST_PORT:-8765}:8765/tcp`; keep that port mapping when you want to open the monitor from the NAS/LAN. Vendored noVNC files are copied into the image at build time; do not mount `./static` over `/app/static` unless the host folder contains the complete `static/novnc` tree, including `vendor/pako/lib`.
 
+Set `WEB_PASSWORD` in the active env file to require a password before the web monitor opens. Leave it empty or unset to keep the monitor open as before. Authentication is kept in an in-memory browser session cookie and resets when the assistant restarts.
+
 The assistant can run without working audio devices: if microphone capture fails because no input device is available, it falls back to text commands from the web monitor or terminal; if speech playback is unavailable, responses are still printed in the console and monitor. For a first run on Synology or another headless Docker host, `TTS_PROVIDER=none` is only the quietest starting point while you validate the container, MCP, and web monitor. Microphone and speaker passthrough can be tested later.
 
 Build and start:

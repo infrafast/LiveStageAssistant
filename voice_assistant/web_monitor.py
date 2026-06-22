@@ -6,6 +6,7 @@ import base64
 import binascii
 from collections import deque
 import hashlib
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
@@ -13,6 +14,7 @@ import mimetypes
 from pathlib import Path
 import re
 import select
+import secrets
 import socket
 import struct
 import sys
@@ -35,6 +37,100 @@ SECRET_KEY_MARKERS = (
 LOGGER = logging.getLogger(__name__)
 TOOL_RESULT_MARKER = "Tool result:"
 COMMAND_ACK_SOUND_CANDIDATES = ("ring.wav", "bell.wav")
+WEB_SESSION_COOKIE = "lsa_web_session"
+
+
+LOGIN_HTML = """<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Stage Assistant</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f8fb;
+      --surface: #fff;
+      --text: #20242b;
+      --muted: #68707d;
+      --border: #d7dde5;
+      --accent: #16833d;
+      --bad: #b3261e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101418;
+        --surface: #171d24;
+        --text: #edf2f7;
+        --muted: #9aa6b2;
+        --border: #303a45;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    form {
+      width: min(420px, calc(100vw - 32px));
+      display: grid;
+      gap: 16px;
+      padding: 24px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface);
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+    label {
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    input, button {
+      width: 100%;
+      min-height: 44px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 12px;
+      font: inherit;
+      color: var(--text);
+      background: var(--surface);
+    }
+    button {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+    }
+    .error {
+      color: var(--bad);
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <form method="post" action="/login">
+    <h1>Live Stage Assistant</h1>
+    <label>
+      Mot de passe
+      <input name="password" type="password" autocomplete="current-password" autofocus>
+    </label>
+    {error}
+    <button type="submit">Entrer</button>
+  </form>
+</body>
+</html>
+"""
 
 
 def command_ack_sound_url() -> str:
@@ -297,10 +393,17 @@ class TeeStream:
 class WebMonitor:
     """Thread-safe runtime state served over a tiny local HTTP server."""
 
-    def __init__(self, max_log_chars: int = 200_000, max_messages: int = 80):
+    def __init__(
+        self,
+        max_log_chars: int = 200_000,
+        max_messages: int = 80,
+        web_password: str | None = None,
+    ):
         self.max_log_chars = max_log_chars
         self.max_messages = max_messages
         self._lock = threading.RLock()
+        self._web_password = (web_password or "").strip()
+        self._web_sessions: set[str] = set()
         self._log_chunks: deque[str] = deque()
         self._log_chars = 0
         self._messages: deque[dict[str, Any]] = deque()
@@ -385,6 +488,34 @@ class WebMonitor:
             "command_ack_sound_url": command_ack_sound_url(),
             "updated_at": time.time(),
         }
+
+    def set_web_password(self, web_password: str | None) -> None:
+        password = (web_password or "").strip()
+        with self._lock:
+            if password != self._web_password:
+                self._web_sessions.clear()
+            self._web_password = password
+
+    def web_auth_enabled(self) -> bool:
+        with self._lock:
+            return bool(self._web_password)
+
+    def validate_web_password(self, password: str) -> bool:
+        with self._lock:
+            expected = self._web_password
+        return bool(expected) and hmac.compare_digest(password, expected)
+
+    def create_web_session(self) -> str:
+        token = secrets.token_urlsafe(32)
+        with self._lock:
+            self._web_sessions.add(token)
+        return token
+
+    def has_web_session(self, token: str | None) -> bool:
+        if not token:
+            return False
+        with self._lock:
+            return token in self._web_sessions
 
     def set_llm_config_handlers(
         self,
@@ -559,6 +690,12 @@ class WebMonitor:
             class MonitorHandler(BaseHTTPRequestHandler):
                 def do_GET(self) -> None:
                     parsed = urlparse(self.path)
+                    if parsed.path == "/login":
+                        self._send_login_page()
+                        return
+                    if self._auth_required(parsed.path):
+                        self._redirect_to_login()
+                        return
                     if parsed.path in {"/", "/index.html"}:
                         self._send_text(INDEX_HTML, "text/html; charset=utf-8")
                         return
@@ -599,6 +736,12 @@ class WebMonitor:
 
                 def do_HEAD(self) -> None:
                     parsed = urlparse(self.path)
+                    if parsed.path == "/login":
+                        self._send_login_page(send_body=False)
+                        return
+                    if self._auth_required(parsed.path):
+                        self._send_auth_required(send_body=False)
+                        return
                     if parsed.path in {"/", "/index.html"}:
                         self._send_text(INDEX_HTML, "text/html; charset=utf-8", send_body=False)
                         return
@@ -618,6 +761,12 @@ class WebMonitor:
 
                 def do_POST(self) -> None:
                     parsed = urlparse(self.path)
+                    if parsed.path == "/login":
+                        self._handle_login()
+                        return
+                    if self._auth_required(parsed.path):
+                        self._send_auth_required()
+                        return
                     if parsed.path.startswith("/api/mcp-admin/"):
                         self._handle_mcp_admin_proxy("POST", parsed.path, parsed.query)
                         return
@@ -674,6 +823,72 @@ class WebMonitor:
                 def log_message(self, format: str, *args: Any) -> None:
                     return
 
+                def _cookie_value(self, name: str) -> str | None:
+                    raw_cookie = self.headers.get("Cookie", "")
+                    for chunk in raw_cookie.split(";"):
+                        key, _, value = chunk.strip().partition("=")
+                        if key == name:
+                            return value
+                    return None
+
+                def _is_authenticated(self) -> bool:
+                    if not monitor.web_auth_enabled():
+                        return True
+                    return monitor.has_web_session(self._cookie_value(WEB_SESSION_COOKIE))
+
+                def _auth_required(self, _path: str) -> bool:
+                    return not self._is_authenticated()
+
+                def _send_login_page(self, *, error: bool = False, send_body: bool = True) -> None:
+                    error_html = '<div class="error">Mot de passe incorrect.</div>' if error else ""
+                    html = LOGIN_HTML.replace("{error}", error_html)
+                    self._send_text(html, "text/html; charset=utf-8", send_body=send_body, no_store=True)
+
+                def _redirect_to_login(self) -> None:
+                    self.send_response(303)
+                    self.send_header("Location", "/login")
+                    self.send_header("Cache-Control", "no-store")
+                    self._send_isolation_headers()
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+                def _send_auth_required(self, *, send_body: bool = True) -> None:
+                    encoded = b"Authentication required" if send_body else b""
+                    self.send_response(401)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Cache-Control", "no-store")
+                    self._send_isolation_headers()
+                    self.send_header("Content-Length", str(len(encoded)))
+                    self.end_headers()
+                    if encoded:
+                        self._write_body(encoded)
+
+                def _handle_login(self) -> None:
+                    try:
+                        length = int(self.headers.get("Content-Length", "0"))
+                    except ValueError:
+                        length = 0
+                    if length > 16_384:
+                        self.send_error(413, "Login request is too large")
+                        return
+                    raw_body = self.rfile.read(length).decode("utf-8", errors="replace") if length else ""
+                    fields = parse_qs(raw_body)
+                    password = (fields.get("password") or [""])[0]
+                    if not monitor.validate_web_password(password):
+                        self._send_login_page(error=True)
+                        return
+                    token = monitor.create_web_session()
+                    self.send_response(303)
+                    self.send_header("Location", "/")
+                    self.send_header(
+                        "Set-Cookie",
+                        f"{WEB_SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax",
+                    )
+                    self.send_header("Cache-Control", "no-store")
+                    self._send_isolation_headers()
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
                 def _send_isolation_headers(self) -> None:
                     self.send_header("Cross-Origin-Opener-Policy", "same-origin")
                     self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
@@ -690,10 +905,19 @@ class WebMonitor:
                         LOGGER.info("HTTP response aborted while sending %s: %s", self.path, e)
                         return False
 
-                def _send_text(self, value: str, content_type: str, *, send_body: bool = True) -> None:
+                def _send_text(
+                    self,
+                    value: str,
+                    content_type: str,
+                    *,
+                    send_body: bool = True,
+                    no_store: bool = False,
+                ) -> None:
                     encoded = value.encode("utf-8")
                     self.send_response(200)
                     self.send_header("Content-Type", content_type)
+                    if no_store:
+                        self.send_header("Cache-Control", "no-store")
                     self._send_isolation_headers()
                     self.send_header("Content-Length", str(len(encoded)))
                     self.end_headers()

@@ -5011,6 +5011,7 @@ async def main():
 
         if web_monitor:
             env_values = dict(dotenv_values(env_file))
+            web_monitor.set_web_password(env_values.get("WEB_PASSWORD"))
             internet_status = env_file == AUTO_ENV_ONLINE if auto_env_mode else "unknown"
             web_monitor.update(
                 mode="auto" if auto_env_mode else "fixed",
@@ -5291,6 +5292,7 @@ async def main():
             values = dict(dotenv_values(env_file))
             mcp_config = load_mcp_config_from_values(values)
             if web_monitor:
+                web_monitor.set_web_password(values.get("WEB_PASSWORD"))
                 web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
                 web_monitor.update(
                     env_file=env_file,
@@ -5364,7 +5366,7 @@ async def main():
 
     web_monitor = None
     if web_enabled:
-        web_monitor = WebMonitor()
+        web_monitor = WebMonitor(web_password=profile_values.get("WEB_PASSWORD"))
         web_monitor.install_console_capture()
         try:
             actual_host, actual_port = web_monitor.start(web_host, web_port)
