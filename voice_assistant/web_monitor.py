@@ -3822,7 +3822,7 @@ INDEX_HTML = """<!doctype html>
                       <span>Reconnaissance locuteur</span>
                       <span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span>
                     </div>
-                    <div class="field-hint" title="Exemple à lire: Bonjour, je m'appelle <prénom>. Ceci est un enregistrement de référence pour reconnaître ma voix avec Live Stage Assistant. Je parle normalement, avec le même micro que pendant le live. QLC lecture aléatoire. QLC lecture pause. QLC rouge. QLC reset. QLC blackout. Console mixeur, quel est le volume de la façade. Console, monte le volume principal de deux débés. Console, baisse ma guitare dans mon retour. Console, coupe le clic dans mon retour. Console, fais un fade out de la snare dans cinq secondes. Je répète maintenant plus lentement: QLC rouge, QLC reset, monte le volume, baisse ma guitare, coupe le clic. Fin de l'enregistrement de référence.">
+                    <div class="field-hint" title="Exemple à lire: Je suis <prénom>. QLC lecture aléatoire. QLC lecture pause. QLC rouge. Un, deux, trois, quatre, cinq, six, sept, huit, neuf, zero! Console, quel est le volume de la façade? Console, monte le volume principal de deux décibel. Console, baisse ma guitare dans mon retour. Console, coupe le clic dans mon retour. Régie, fais un fade out dans cinq secondes. Régie, monte le clic.">
                       WAV conseillé: 10 à 30 s d'une seule voix, parole normale, même micro que le live si possible.
                       Évite musique, souffle, réverb, saturation, longs silences et autres voix.
                       Mono 16 kHz, 44.1 kHz ou 48 kHz convient.
