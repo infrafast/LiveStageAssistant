@@ -455,7 +455,7 @@ class WebMonitor:
         self._cloud_api_status_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
-        self._remote_screen_save_handler: Callable[[str], dict[str, Any]] | None = None
+        self._remote_screen_save_handler: Callable[[str, bool], dict[str, Any]] | None = None
         self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._mcp_routing_save_handler: Callable[[dict[str, str]], dict[str, Any]] | None = None
@@ -485,7 +485,7 @@ class WebMonitor:
             "session_context_size": 6000,
             "assistant_busy": False,
             "environment_loading": {"active": False, "title": ""},
-            "remote_screen": {"vnc_url": "vnc://192.168.0.160:5900?password=ronron"},
+            "remote_screen": {"vnc_url": "vnc://192.168.0.160:5900?password=ronron", "view_only": True},
             "web_audio": {"enabled": False, "stt_enabled": False, "tts_enabled": False},
             "command_ack_sound_url": command_ack_sound_url(),
             "updated_at": time.time(),
@@ -546,7 +546,7 @@ class WebMonitor:
             self._env_profile_handler = list_handler
             self._env_profile_switch_handler = switch_handler
 
-    def set_remote_screen_handler(self, save_handler: Callable[[str], dict[str, Any]]) -> None:
+    def set_remote_screen_handler(self, save_handler: Callable[[str, bool], dict[str, Any]]) -> None:
         """Register callback used by the web UI to save remote-screen settings."""
         with self._lock:
             self._remote_screen_save_handler = save_handler
@@ -1500,8 +1500,9 @@ class WebMonitor:
                     if not vnc_url:
                         self.send_error(400, "VNC URL is required")
                         return
+                    view_only = bool(payload.get("view_only"))
                     try:
-                        result = handler(vnc_url)
+                        result = handler(vnc_url, view_only)
                     except ValueError as e:
                         self.send_error(400, str(e))
                         return
@@ -4491,7 +4492,7 @@ INDEX_HTML = """<!doctype html>
       const response = await fetch("/api/remote-screen-config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vnc_url: nextUrl })
+        body: JSON.stringify({ vnc_url: nextUrl, view_only: Boolean(vncViewOnly.checked) })
       });
       if (!response.ok) throw new Error(await response.text());
       vncUrlDirty = false;
@@ -7014,6 +7015,9 @@ INDEX_HTML = """<!doctype html>
           if (remoteScreenUrlChanged) {
             vncUrl.value = remoteScreen.vnc_url;
           }
+          if (typeof remoteScreen.view_only === "boolean" && vncViewOnly.checked !== remoteScreen.view_only) {
+            vncViewOnly.checked = remoteScreen.view_only;
+          }
           let remoteScreenFrameUrl = "";
           try {
             remoteScreenFrameUrl = noVncUrlFromInput(remoteScreen.vnc_url);
@@ -7105,7 +7109,11 @@ INDEX_HTML = """<!doctype html>
     vncViewOnly.addEventListener("change", () => {
       if (currentVncFrameUrl) {
         disconnectVnc("reconnexion VNC...");
-        connectVnc({ force: true });
+        connectVnc({ force: true, save: true });
+      } else {
+        saveRemoteScreenUrl().catch((error) => {
+          console.warn("Could not save VNC view-only option", error);
+        });
       }
     });
     vncConnect.addEventListener("click", () => connectVnc({ save: true }));

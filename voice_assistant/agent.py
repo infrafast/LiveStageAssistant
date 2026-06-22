@@ -4482,7 +4482,15 @@ async def main():
     def remote_screen_url_from_values(values: dict) -> str:
         return (values.get("REMOTE_SCREEN_VNC_URL") or "vnc://192.168.0.160:5900?password=ronron").strip()
 
-    def save_remote_screen_config(env_file: Path, vnc_url: str, web_monitor: WebMonitor | None) -> dict[str, Any]:
+    def remote_screen_view_only_from_values(values: dict) -> bool:
+        return env_bool_from_values(values, "REMOTE_SCREEN_VNC_VIEW_ONLY", True)
+
+    def save_remote_screen_config(
+        env_file: Path,
+        vnc_url: str,
+        view_only: bool,
+        web_monitor: WebMonitor | None,
+    ) -> dict[str, Any]:
         cleaned_url = vnc_url.strip()
         if not cleaned_url:
             raise ValueError("VNC URL is required")
@@ -4492,10 +4500,17 @@ async def main():
         if not parsed.netloc:
             raise ValueError("VNC URL must include a host")
 
-        update_env_file_values(env_file, {"REMOTE_SCREEN_VNC_URL": cleaned_url})
+        view_only = bool(view_only)
+        update_env_file_values(
+            env_file,
+            {
+                "REMOTE_SCREEN_VNC_URL": cleaned_url,
+                "REMOTE_SCREEN_VNC_VIEW_ONLY": "true" if view_only else "false",
+            },
+        )
         if web_monitor:
-            web_monitor.update(remote_screen={"vnc_url": cleaned_url})
-        return {"saved": True, "vnc_url": cleaned_url}
+            web_monitor.update(remote_screen={"vnc_url": cleaned_url, "view_only": view_only})
+        return {"saved": True, "vnc_url": cleaned_url, "view_only": view_only}
 
     def build_cloud_api_status(env_file: Path) -> dict[str, Any]:
         values = dict(dotenv_values(env_file))
@@ -5353,7 +5368,10 @@ async def main():
                     mcp_config=mcp_config,
                 ),
                 web_audio=web_audio_state,
-                remote_screen={"vnc_url": remote_screen_url_from_values(env_values)},
+                remote_screen={
+                    "vnc_url": remote_screen_url_from_values(env_values),
+                    "view_only": remote_screen_view_only_from_values(env_values),
+                },
                 thinking_sound_file=thinking_sound_file,
             )
             web_monitor.replace_dialogue(session_context_store.snapshot().get("messages") or [])
@@ -5713,7 +5731,12 @@ async def main():
             switch_handler=switch_active_env_file,
         )
         web_monitor.set_remote_screen_handler(
-            lambda vnc_url: save_remote_screen_config(get_active_env_file(), vnc_url, web_monitor)
+            lambda vnc_url, view_only: save_remote_screen_config(
+                get_active_env_file(),
+                vnc_url,
+                view_only,
+                web_monitor,
+            )
         )
         web_monitor.set_mcp_routing_save_handler(save_mcp_routing_config)
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
