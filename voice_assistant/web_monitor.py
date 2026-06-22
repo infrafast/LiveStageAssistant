@@ -3052,7 +3052,7 @@ INDEX_HTML = """<!doctype html>
     }
     .speaker-profile-row {
       display: grid;
-      grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1.3fr) minmax(140px, auto) auto minmax(80px, auto);
+      grid-template-columns: minmax(120px, 0.8fr) minmax(140px, auto) auto minmax(80px, auto) minmax(180px, 1.2fr);
       gap: 8px;
       align-items: center;
     }
@@ -3073,6 +3073,14 @@ INDEX_HTML = """<!doctype html>
     .speaker-status {
       color: var(--muted);
       font-size: 12px;
+      white-space: nowrap;
+    }
+    .speaker-path {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
       white-space: nowrap;
     }
     .field-hint {
@@ -6469,12 +6477,6 @@ INDEX_HTML = """<!doctype html>
         name.value = profile.name || "";
         name.dataset.role = "name";
 
-        const wav = document.createElement("input");
-        wav.type = "text";
-        wav.placeholder = `data/speaker_profiles/profil${index}.wav`;
-        wav.value = profile.wav_path || "";
-        wav.dataset.role = "wav";
-
         const uploadWrap = document.createElement("div");
         uploadWrap.className = "speaker-upload";
         const file = document.createElement("input");
@@ -6500,7 +6502,13 @@ INDEX_HTML = """<!doctype html>
         status.className = "speaker-status";
         status.textContent = profile.status || "missing wav";
 
-        row.append(name, wav, uploadWrap, enabledLabel, status);
+        const path = document.createElement("span");
+        path.className = "speaker-path";
+        path.dataset.role = "path";
+        path.title = profile.wav_path || `data/speaker_profiles/profil${index}.wav`;
+        path.textContent = profile.wav_path || `profil${index}.wav`;
+
+        row.append(name, uploadWrap, enabledLabel, status, path);
         speakerProfileGrid.appendChild(row);
       }
     }
@@ -6516,7 +6524,7 @@ INDEX_HTML = """<!doctype html>
 
     async function uploadSpeakerProfile(row) {
       const nameInput = row.querySelector('[data-role="name"]');
-      const wavInput = row.querySelector('[data-role="wav"]');
+      const pathLabel = row.querySelector('[data-role="path"]');
       const fileInput = row.querySelector('[data-role="file"]');
       const enabledInput = row.querySelector('[data-role="enabled"]');
       const status = row.querySelector(".speaker-status");
@@ -6552,7 +6560,10 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok || !data.ok) {
           throw new Error(data.error?.message || data.message || response.statusText || "Upload failed");
         }
-        wavInput.value = data.wav_path || "";
+        if (pathLabel) {
+          pathLabel.textContent = data.wav_path || `profil${row.dataset.index || ""}.wav`;
+          pathLabel.title = data.wav_path || "";
+        }
         enabledInput.checked = true;
         status.textContent = data.embedding_status || data.status || "ready";
         fileInput.value = "";
@@ -6580,7 +6591,6 @@ INDEX_HTML = """<!doctype html>
       return Array.from(speakerProfileGrid.querySelectorAll(".speaker-profile-row")).map((row) => ({
         index: Number(row.dataset.index || 0),
         name: row.querySelector('[data-role="name"]').value.trim(),
-        wav_path: row.querySelector('[data-role="wav"]').value.trim(),
         enabled: row.querySelector('[data-role="enabled"]').checked
       }));
     }

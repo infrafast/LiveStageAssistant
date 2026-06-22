@@ -5081,11 +5081,10 @@ async def main():
         normalized_speaker_profiles = []
         for index, profile in enumerate((speaker_profiles or [])[:5], start=1):
             name = str(profile.get("name") or "").strip()
-            wav_path = str(profile.get("wav_path") or "").strip()
             enabled = bool(profile.get("enabled"))
-            if not name and not wav_path:
+            if not name:
                 continue
-            normalized_speaker_profiles.append({"index": index, "name": name, "wav_path": wav_path, "enabled": enabled})
+            normalized_speaker_profiles.append({"index": index, "name": name, "enabled": enabled})
         if stt_input not in {"both", "backend", "browser", "silent"}:
             raise ValueError(f"unsupported STT input: {stt_input}")
         if provider not in {"openai", "ollama"}:
@@ -5217,11 +5216,13 @@ async def main():
             "SPEAKER_MARGIN": f"{speaker_margin:.2f}".rstrip("0").rstrip("."),
             "SPEAKER_PROFILES_MAX": "5",
         }
+        normalized_speaker_profiles_by_index = {
+            int(profile.get("index") or 0): profile for profile in normalized_speaker_profiles
+        }
         for index in range(1, 6):
-            profile = normalized_speaker_profiles[index - 1] if index <= len(normalized_speaker_profiles) else {}
+            profile = normalized_speaker_profiles_by_index.get(index, {})
             speaker_updates[f"SPEAKER_PROFILE_{index}_NAME"] = str(profile.get("name") or "")
             speaker_updates[f"SPEAKER_PROFILE_{index}_ENABLED"] = "true" if profile.get("enabled") else "false"
-            speaker_updates[f"SPEAKER_PROFILE_{index}_WAV"] = str(profile.get("wav_path") or "")
 
         update_env_file_values(
             env_file,
@@ -5340,15 +5341,20 @@ async def main():
         for key in env_keys:
             os.environ.pop(key, None)
 
+    def speaker_profile_wav_path_from_values(values: dict, index: int) -> str:
+        profile_root = Path((values.get("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR).strip())
+        default_path = profile_root / f"profil{index}.wav"
+        return default_path.as_posix()
+
     def speaker_profiles_from_values(values: dict, max_profiles: int = 5) -> list[SpeakerProfile]:
         profiles: list[SpeakerProfile] = []
         max_profiles = max(0, min(5, int(max_profiles or 5)))
         for index in range(1, max_profiles + 1):
             prefix = f"SPEAKER_PROFILE_{index}_"
             name = (values.get(f"{prefix}NAME") or "").strip()
-            wav_path = (values.get(f"{prefix}WAV") or "").strip()
+            wav_path = speaker_profile_wav_path_from_values(values, index)
             enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
-            if not name and not wav_path:
+            if not name:
                 continue
             paths = [Path(wav_path)] if wav_path else []
             profiles.append(
@@ -5366,7 +5372,7 @@ async def main():
         for index in range(1, max(0, min(5, int(max_profiles or 5))) + 1):
             prefix = f"SPEAKER_PROFILE_{index}_"
             name = (values.get(f"{prefix}NAME") or "").strip()
-            wav_path = (values.get(f"{prefix}WAV") or "").strip()
+            wav_path = speaker_profile_wav_path_from_values(values, index)
             enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
             path = Path(wav_path) if wav_path else None
             embedding_path = path.with_suffix(".npy") if path else None

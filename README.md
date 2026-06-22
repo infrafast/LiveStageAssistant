@@ -784,7 +784,7 @@ Each entry uses `voice_id (Display name)`. The dropdown shows the display name a
 
 The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Output` control decides whether speech comes from the browser, from the backend speaker, or nowhere. When the browser is the active speech output (`TTS_PROVIDER=none` and `WEB_TTS_PROVIDER=openai|elevenlabs`), browser responses use that cloud provider with no pyttsx3 fallback. When backend speech is active (`TTS_PROVIDER=openai|elevenlabs`), backend speech uses that cloud provider and can fall back to pyttsx3. Selecting `none` sets cloud/browser TTS to silent and hides cloud voice controls. The `STT Input` control independently saves `STT_INPUT=both|backend|browser|silent`. In `CONNECTIVITY_MODE=offline`, the web config hides cloud STT/TTS controls and forces local output with `TTS_PROVIDER=pyttsx3` and `STT_INPUT=backend`.
 
-Speaker recognition is optional and runs after VAD/STT has accepted a speech segment. Enable it with `SPEAKER_RECOGNITION_ENABLED=true` or from the web config, then add up to five WAV reference profiles. The web UI can upload a WAV reference and persists the resulting path in `SPEAKER_PROFILE_N_WAV`; manual paths also work. Uploaded references are stored under `SPEAKER_PROFILES_DIR`, which defaults to `data/speaker_profiles` locally and `/data/speaker_profiles` in Docker. The first backend is `SPEAKER_BACKEND=resemblyzer`; `speechbrain` is reserved for a later backend and currently returns `unknown`. Backend microphone PCM is wrapped as WAV automatically, and browser audio is decoded with `ffmpeg` when the browser sends WebM/Opus instead of WAV.
+Speaker recognition is optional and runs after VAD/STT has accepted a speech segment. Enable it with `SPEAKER_RECOGNITION_ENABLED=true` or from the web config, then add up to five WAV reference profiles. Profile slots use a fixed filename convention: profile 1 reads `profil1.wav`, profile 2 reads `profil2.wav`, and so on under `SPEAKER_PROFILES_DIR`, which defaults to `data/speaker_profiles` locally and `/data/speaker_profiles` in Docker. The web UI upload follows the same convention and replaces the corresponding `profilN.wav`. The first backend is `SPEAKER_BACKEND=resemblyzer`; `speechbrain` is reserved for a later backend and currently returns `unknown`. Backend microphone PCM is wrapped as WAV automatically, and browser audio is decoded with `ffmpeg` when the browser sends WebM/Opus instead of WAV.
 
 Resemblyzer is not installed by the base package because it depends on PyTorch. On desktops and regular Linux hosts, install it with `python -m pip install -e '.[speaker]'`; the extra also pins `scipy` and `platformdirs` ranges known to expose the APIs used by Resemblyzer. In Docker, build with `--build-arg INSTALL_SPEAKER_RECOGNITION=1` to install CPU Torch first and then the same `speaker` extra. On Raspberry Pi, install the CPU Torch wheel first, then the speaker dependencies as documented in `raspi_service_pack_stdio/README.md`, to avoid accidental CUDA/NVIDIA packages.
 
@@ -816,7 +816,6 @@ SPEAKER_THRESHOLD=0.75
 SPEAKER_MARGIN=0.10
 SPEAKER_PROFILE_1_NAME=
 SPEAKER_PROFILE_1_ENABLED=false
-SPEAKER_PROFILE_1_WAV=
 ```
 
 ## Development And Maintenance Notes
