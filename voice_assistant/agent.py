@@ -2642,8 +2642,6 @@ class VoiceAssistant:
         """Announce that the assistant is ready, using the configured speech side."""
         message = self._startup_ready_message(loaded_servers)
         print(message)
-        if self.web_monitor:
-            self.web_monitor.append_dialogue("assistant", message, speak=self.web_tts_enabled)
 
         self.stop_startup_loader_sound()
         if self.tts_provider != "none":
