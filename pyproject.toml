@@ -42,7 +42,9 @@ dependencies = [
 speaker = [
     "platformdirs>=4,<5",
     "scipy>=1.11,<1.13",
-    "resemblyzer>=0.1.4",
+    "librosa>=0.10",
+    "webrtcvad>=2.0.10",
+    "typing>=3.7",
 ]
 dev = [
     "pytest>=7.0",

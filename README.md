@@ -102,12 +102,14 @@ source .venv/bin/activate
 # On Windows:
 # .venv\Scripts\activate
 
-# Install in development mode
-uv pip install -e .
+# Install in development mode, including non-CUDA speaker recognition on desktop/server
+./scripts/install.sh
 
-# Or install directly
+# Or install only the base package, without speaker-recognition extras
 uv pip install .
 ```
+
+On regular desktop/server platforms, `scripts/install.sh` installs the Resemblyzer speaker-recognition backend after first installing a non-CUDA PyTorch wheel, so CUDA/NVIDIA packages are not needed. Linux ARM platforms such as Raspberry Pi are intentionally treated separately to avoid accidentally pulling unsuitable PyTorch/CUDA packages; use the Raspberry Pi service-pack instructions when enabling speaker recognition there.
 
 ### Docker / Synology Quick Start
 
@@ -193,7 +195,7 @@ Offline mode works only after the required Python packages, Node packages, Ollam
 
 1. Install dependencies while online:
 ```bash
-uv pip install -e .
+./scripts/install.sh
 ```
 
 2. Install and start Ollama, then pull a tool-capable model:
@@ -786,7 +788,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
 
 Speaker recognition is optional and runs after VAD/STT has accepted a speech segment. Enable it with `SPEAKER_RECOGNITION_ENABLED=true` or from the web config, then add up to five WAV reference profiles. Profile slots use a fixed filename convention: profile 1 reads `profil1.wav`, profile 2 reads `profil2.wav`, and so on under `SPEAKER_PROFILES_DIR`, which defaults to `data/speaker_profiles` locally and `/data/speaker_profiles` in Docker. The web UI upload follows the same convention and replaces the corresponding `profilN.wav`. The first backend is `SPEAKER_BACKEND=resemblyzer`; `speechbrain` is reserved for a later backend and currently returns `unknown`. Backend microphone PCM is wrapped as WAV automatically, and browser audio is decoded with `ffmpeg` when the browser sends WebM/Opus instead of WAV.
 
-Resemblyzer is not installed by the base package because it depends on PyTorch. On desktops and regular Linux hosts, install it with `python -m pip install -e '.[speaker]'`; the extra also pins `scipy` and `platformdirs` ranges known to expose the APIs used by Resemblyzer. In Docker, build with `--build-arg INSTALL_SPEAKER_RECOGNITION=1` to install CPU Torch first and then the same `speaker` extra. On Raspberry Pi, install the CPU Torch wheel first, then the speaker dependencies as documented in `raspi_service_pack_stdio/README.md`, to avoid accidental CUDA/NVIDIA packages.
+Resemblyzer is installed by `scripts/install.sh` on regular desktop/server platforms after the script first installs a non-CUDA PyTorch wheel. This avoids the CUDA/NVIDIA packages that PyPI's default Torch resolution may otherwise select. Linux ARM platforms such as Raspberry Pi are intentionally excluded from automatic speaker dependency installation; on Raspberry Pi, use the service-pack flow documented in `raspi_service_pack_stdio/README.md`. In Docker, build with `--build-arg INSTALL_SPEAKER_RECOGNITION=1` to install the non-GPU speaker dependencies, CPU Torch, and Resemblyzer without letting Resemblyzer pull Torch from PyPI.
 
 For best speaker recognition, upload one clean WAV per profile slot. The web UI saves uploaded files as `profil1.wav` to `profil5.wav` under `SPEAKER_PROFILES_DIR`. When Resemblyzer is installed, upload also precomputes and saves `profil1.npy` to `profil5.npy` voice embeddings next to the WAV files; runtime loads those embeddings first and only recalculates from WAV if the cache is missing or older than the WAV. Use 10 to 30 seconds of the person speaking normally, recorded with the same microphone or at least the same kind of microphone as runtime. Avoid music, stage noise, reverb, long silences, clipping, heavy compression, and other voices. Mono WAV at 16 kHz or 44.1/48 kHz is fine; Resemblyzer will resample internally.
 

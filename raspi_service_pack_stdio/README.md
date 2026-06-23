@@ -60,12 +60,12 @@ sudo systemctl restart livestageassistant
 
 Set `STARTUP_LOADER_SOUND_ENABLED=true` to loop `assets/loader.wav` on the selected backend audio output while the assistant starts. The loop stops just before the startup announcement says `Assistant vocal prêt`, and it uses `BACKEND_TTS_VOLUME` plus `BACKEND_AUDIO_OUTPUT_PAN`. Set `COMMAND_ACK_SOUND_ENABLED=true` from the web Config -> Other section to play `assets/ring.wav` after the LLM/MCP response is ready and just before TTS generation/playback begins. The acknowledgement sound uses the selected speech side: backend PyAudio for backend TTS, or browser audio for browser TTS. It does not stop the thinking sound.
 
-On the Raspberry Pi, install the assistant dependencies first:
+On the Raspberry Pi, install the assistant dependencies first. The repository install script intentionally skips speaker-recognition dependencies on ARM unless `INSTALL_SPEAKER_RECOGNITION=1` is set:
 
 ```bash
 cd /home/pi/LiveStageAssistant
 uv venv
-uv pip install -e .
+./scripts/install.sh
 ```
 
 Speaker recognition is optional. Do not install `LiveStageAssistant[speaker]` directly on Raspberry Pi: depending on the current PyTorch wheels, pip may try to install CUDA/NVIDIA packages that are useless and heavy on Pi. If you enable `SPEAKER_RECOGNITION_ENABLED=true`, install the CPU Torch wheel first, then Resemblyzer:
@@ -73,8 +73,7 @@ Speaker recognition is optional. Do not install `LiveStageAssistant[speaker]` di
 ```bash
 cd /home/pi/LiveStageAssistant
 source .venv/bin/activate
-python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-python -m pip install --no-cache-dir ".[speaker]"
+INSTALL_SPEAKER_RECOGNITION=1 ./scripts/install.sh
 pip freeze | grep -Ei "nvidia|cuda|triton"
 ```
 
