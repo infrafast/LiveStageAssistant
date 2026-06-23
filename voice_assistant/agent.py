@@ -6152,12 +6152,7 @@ async def main():
                 reload_complete_message = None
                 if announce_reload_complete:
                     print("Configuration reload complete.")
-                    reload_complete_message = "Configuration mise à jour."
                     announce_reload_complete = False
-                if web_monitor:
-                    if reload_complete_message:
-                        # Browser TTS can announce this after reload; backend TTS stays out of the reload path.
-                        web_monitor.append_dialogue("assistant", reload_complete_message, speak=True)
 
                 run_result = await assistant.run()
                 if run_result != "reload":
@@ -6196,12 +6191,7 @@ async def main():
             reload_complete_message = None
             if announce_reload_complete:
                 print("Auto environment reload complete.")
-                reload_complete_message = "Environnement mis à jour."
                 announce_reload_complete = False
-            if web_monitor:
-                if reload_complete_message:
-                    # Browser TTS can announce this after reload; backend TTS stays out of the reload path.
-                    web_monitor.append_dialogue("assistant", reload_complete_message, speak=True)
 
             run_result = await assistant.run()
             if run_result != "reload":
