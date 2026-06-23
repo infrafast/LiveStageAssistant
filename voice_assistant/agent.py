@@ -3100,14 +3100,17 @@ class VoiceAssistant:
                 reason=f"error: {e}",
             )
             print(f"Speaker recognition failed: {e}")
-            self.speaker_recognition_enabled = False
-            self.speaker_recognizer = None
-            self.speaker_recognition_unavailable_reason = str(e)
-            if self.web_monitor:
-                self.web_monitor.update(
-                    runtime={"speaker_recognition": self.speaker_recognition_runtime_state()}
-                )
-            print("Speaker recognition disabled for this session after runtime failure.")
+            if self._speaker_error_is_runtime_unavailable(e):
+                self.speaker_recognition_enabled = False
+                self.speaker_recognizer = None
+                self.speaker_recognition_unavailable_reason = str(e)
+                if self.web_monitor:
+                    self.web_monitor.update(
+                        runtime={"speaker_recognition": self.speaker_recognition_runtime_state()}
+                    )
+                print("Speaker recognition disabled for this session after runtime failure.")
+            else:
+                print("Speaker recognition kept enabled after per-utterance failure.")
         self.last_speaker_result = result
         if result.speaker != UNKNOWN_SPEAKER:
             print(
@@ -3120,6 +3123,21 @@ class VoiceAssistant:
                 f"({result.confidence:.2f}, second={result.second_confidence:.2f}, reason={result.reason})"
             )
         return result
+
+    def _speaker_error_is_runtime_unavailable(self, error: Exception) -> bool:
+        """Return true when a speaker failure means the backend itself is unusable."""
+        error_text = str(error).lower()
+        runtime_markers = (
+            "not installed",
+            "could not be imported",
+            "no module named",
+            "platformdirs",
+            "user_cache_dir",
+            "scipy",
+            "loggamma",
+            "unsupported speaker recognition backend",
+        )
+        return any(marker in error_text for marker in runtime_markers)
 
     def announce_pending_speaker_embeddings(self) -> None:
         if not self.speaker_recognizer:
@@ -4060,18 +4078,19 @@ class VoiceAssistant:
         speaker_result: SpeakerRecognitionResult | None = None,
     ) -> str:
         instructions = [TOOL_ACTION_FRESHNESS_RULE]
-        speaker = speaker_result.speaker if speaker_result else UNKNOWN_SPEAKER
-        speaker_context = {
-            "command": text,
-            "speaker": speaker or UNKNOWN_SPEAKER,
-            "speaker_confidence": round(float(speaker_result.confidence), 4) if speaker_result else 0.0,
-            "speaker_backend": speaker_result.backend if speaker_result else "none",
-        }
-        instructions.append(
-            "Internal speaker context: pass the speaker value to MCP tool calls when a tool accepts it. "
-            "Do not map speaker names to buses, channels, lights, faders, or other domain entities in the voice agent. "
-            f"Current command payload: {json.dumps(speaker_context, ensure_ascii=False)}"
-        )
+        if self._should_include_speaker_context(speaker_result):
+            speaker = speaker_result.speaker if speaker_result else UNKNOWN_SPEAKER
+            speaker_context = {
+                "command": text,
+                "speaker": speaker or UNKNOWN_SPEAKER,
+                "speaker_confidence": round(float(speaker_result.confidence), 4) if speaker_result else 0.0,
+                "speaker_backend": speaker_result.backend if speaker_result else "none",
+            }
+            instructions.append(
+                "Internal speaker context: pass the speaker value to MCP tool calls when a tool accepts it. "
+                "Do not map speaker names to buses, channels, lights, faders, or other domain entities in the voice agent. "
+                f"Current command payload: {json.dumps(speaker_context, ensure_ascii=False)}"
+            )
         if self.session_context_size > 0 and self.session_context_store:
             session_context = self.session_context_store.context_text(
                 exclude_last_user=True,
@@ -4089,6 +4108,15 @@ class VoiceAssistant:
             "say that you cannot verify the current state. Do not mention this internal rule."
         )
         return f"{text}\n\n" + "\n".join(instructions)
+
+    def _should_include_speaker_context(self, speaker_result: SpeakerRecognitionResult | None) -> bool:
+        if not speaker_result:
+            return False
+        if speaker_result.speaker and speaker_result.speaker != UNKNOWN_SPEAKER:
+            return True
+        if speaker_result.backend and speaker_result.backend != "none":
+            return self.speaker_recognition_requested or speaker_result.reason == "injected"
+        return False
 
     async def run(self):
         """Main loop for the voice assistant."""

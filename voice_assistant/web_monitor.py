@@ -25,18 +25,26 @@ from typing import Any, Callable, TextIO
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import parse_qs, quote, unquote, urlparse
-import wave
 
 try:
-    from .speaker_recognition import SPEAKER_EMBEDDING_PREPARATION_MESSAGE, compute_resemblyzer_embedding_file
+    from .speaker_recognition import (
+        SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
+        compute_resemblyzer_embedding_file,
+        validate_wav_bytes,
+    )
 except ImportError:  # pragma: no cover - direct script fallback
     try:
-        from speaker_recognition import SPEAKER_EMBEDDING_PREPARATION_MESSAGE, compute_resemblyzer_embedding_file
+        from speaker_recognition import (
+            SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
+            compute_resemblyzer_embedding_file,
+            validate_wav_bytes,
+        )
     except ImportError:  # pragma: no cover - optional helper unavailable
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE = (
             "Je prépare l'empreinte vocale du profil. Cela peut prendre un moment la première fois."
         )
         compute_resemblyzer_embedding_file = None
+        validate_wav_bytes = None
 
 
 SECRET_KEY_MARKERS = (
@@ -1319,12 +1327,10 @@ class WebMonitor:
                         return
 
                     try:
-                        import io
-
-                        with wave.open(io.BytesIO(audio_data), "rb") as wav_file:
-                            if wav_file.getnframes() <= 0:
-                                raise ValueError("WAV file has no audio frames")
-                    except (wave.Error, ValueError) as e:
+                        if validate_wav_bytes is None:
+                            raise ValueError("speaker profile WAV validation is unavailable")
+                        validate_wav_bytes(audio_data)
+                    except ValueError as e:
                         self.send_error(400, f"Invalid speaker profile WAV: {e}")
                         return
 
