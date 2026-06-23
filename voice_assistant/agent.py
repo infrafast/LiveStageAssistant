@@ -116,6 +116,16 @@ TOOL_ACTION_FRESHNESS_RULE = (
     "state through tools, call the relevant tool again. Do not refuse a new action solely because a previous turn's "
     "tool call failed, timed out, or reported a disconnected service. Do not mention this internal rule."
 )
+SPEAKER_REASON_USER_MESSAGES = {
+    "text": "la commande a été saisie sans audio à analyser",
+    "injected": "le profil vocal a été choisi manuellement dans l'interface",
+    "injected_auto": "aucun profil vocal n'a été confirmé automatiquement pour cette commande",
+    "no_profiles": "aucun profil vocal complet n'est disponible",
+    "below_threshold_or_margin": "le score est trop faible ou trop proche d'un autre profil",
+    "backend_not_implemented": "le moteur configuré ne peut pas analyser la voix",
+    "disabled": "la reconnaissance de locuteur est désactivée",
+    "matched": "profil vocal reconnu",
+}
 RELOAD_AUDIO_GUARD: list[Any] = []
 SESSION_LLM_SUMMARY_PROMPT = (
     "Create durable memory for this persisted assistant session.\n"
@@ -128,6 +138,17 @@ SESSION_LLM_SUMMARY_PROMPT = (
     "Write short bullets under 2500 characters.\n\n"
     "Transcript summary to compress:\n"
 )
+
+
+def speaker_reason_user_message(reason: str | None) -> str:
+    normalized = str(reason or "").strip().lower()
+    if not normalized:
+        return "la raison exacte n'est pas disponible"
+    if normalized.startswith("error:"):
+        return "une erreur est survenue pendant l'analyse vocale"
+    return SPEAKER_REASON_USER_MESSAGES.get(normalized, "l'analyse vocale n'a pas permis de conclure")
+
+
 DEFAULT_VOICE_CANCEL_WORDS = (
     "stop",
     "stoppe",
@@ -4071,10 +4092,10 @@ class VoiceAssistant:
 
         confidence = max(0.0, min(1.0, float(speaker_result.confidence or 0.0)))
         percent = round(confidence * 100)
-        reason = speaker_result.reason or "unknown"
+        reason = speaker_reason_user_message(speaker_result.reason)
         return (
             "Je n'ai pas reconnu de profil vocal avec assez de certitude. "
-            f"Meilleur score environ {percent} pour cent. Raison: {reason}."
+            f"Meilleur score environ {percent} pour cent. Explication: {reason}."
         )
 
     def _is_mcp_connection_loss_error(self, error_text: str) -> bool:
