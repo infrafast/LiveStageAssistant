@@ -351,6 +351,7 @@ The web monitor is intentionally split between a clean chat surface and a techni
 - While the thinking animation is visible, the browser also loops the selected `THINKING_SOUND_FILE` from `assets/`, matching the backend thinking-sound behavior.
 - Pressing the stop button calls `/api/cancel-command`, cancels the active agent task, clears the busy state, and returns the assistant to listening.
 - If `STT_INPUT=both` or `STT_INPUT=browser`, a browser microphone button appears in the composer. The browser records audio, sends it to the backend, the backend calls OpenAI STT, and the transcribed text is injected as a normal command.
+- The composer `+` button can load a small text file into the prompt or send a WAV file through the same browser STT path as microphone audio. WAV uploads follow the active wake-word setting, so they can reproduce microphone command handling for tests.
 - The left sidebar lists persisted sessions. The `+` button creates a new session, and selecting a session restores its chat bubbles and clears the in-memory MCPAgent history for a clean switch.
 - The top-right settings button opens an overlay. The first tab contains **State** and **Console Log** collapsibles. The second tab contains **Config** with a top-level connectivity switch, **MCP Servers** links, routing-word editing, and optional iframe loading for proxied HTTP MCP `/mcp` admin pages, then **STT/TTS**, **IA model**, **Other**, **Prompt**, and **Env file** collapsibles.
 

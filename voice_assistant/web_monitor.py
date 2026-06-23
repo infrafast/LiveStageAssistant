@@ -2742,7 +2742,7 @@ INDEX_HTML = """<!doctype html>
       min-height: 56px;
       margin: 0 auto;
       display: grid;
-      grid-template-columns: 40px 40px minmax(112px, 150px) minmax(0, 1fr);
+      grid-template-columns: 40px 40px minmax(112px, 150px) minmax(0, 1fr) 40px;
       gap: 8px;
       align-items: end;
       border: 1px solid var(--border);
@@ -2752,7 +2752,7 @@ INDEX_HTML = """<!doctype html>
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
     }
     .inject-form.busy {
-      grid-template-columns: 40px 40px minmax(112px, 150px) minmax(0, 1fr) 40px;
+      grid-template-columns: 40px 40px minmax(112px, 150px) minmax(0, 1fr) 40px 40px;
     }
     .composer-speaker {
       min-width: 0;
@@ -2818,6 +2818,7 @@ INDEX_HTML = """<!doctype html>
     }
     #web-mic,
     #web-conversation,
+    #composer-attach,
     #inject-stop {
       width: 40px;
       height: 40px;
@@ -2849,6 +2850,7 @@ INDEX_HTML = """<!doctype html>
     }
     #web-mic:disabled,
     #web-conversation:disabled,
+    #composer-attach:disabled,
     #inject-stop:disabled {
       color: var(--muted);
       cursor: not-allowed;
@@ -3604,6 +3606,12 @@ INDEX_HTML = """<!doctype html>
       .composer-speaker {
         grid-column: 1 / -1;
       }
+      .command-field {
+        grid-column: 1 / -1;
+      }
+      #composer-attach {
+        grid-column: 1;
+      }
       .config-controls { grid-template-columns: 1fr; }
       .cloud-api-grid { grid-template-columns: 1fr; }
       .mcp-server-toolbar { grid-template-columns: 1fr; }
@@ -3675,6 +3683,8 @@ INDEX_HTML = """<!doctype html>
           <canvas id="soundwave" aria-hidden="true"></canvas>
           <textarea id="inject-command" rows="1" autocomplete="off" enterkeyhint="send" placeholder="Message"></textarea>
         </div>
+        <button id="composer-attach" type="button" title="Upload WAV or text file" aria-label="Upload WAV or text file">+</button>
+        <input id="composer-file" type="file" accept=".wav,audio/wav,audio/x-wav,.txt,text/plain" hidden>
         <button id="inject-stop" type="button" title="Stop" aria-label="Stop">&#9632;</button>
       </form>
     </div>
@@ -4124,6 +4134,8 @@ INDEX_HTML = """<!doctype html>
     const commandField = document.querySelector("#command-field");
     const soundwave = document.querySelector("#soundwave");
     const injectCommand = document.querySelector("#inject-command");
+    const composerAttach = document.querySelector("#composer-attach");
+    const composerFile = document.querySelector("#composer-file");
     const injectStop = document.querySelector("#inject-stop");
     const webConversation = document.querySelector("#web-conversation");
     const webMic = document.querySelector("#web-mic");
@@ -4231,6 +4243,8 @@ INDEX_HTML = """<!doctype html>
     const llmMessage = document.querySelector("#llm-message");
     const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
     const speakerEmbeddingPreparationMessage = __SPEAKER_EMBEDDING_PREPARATION_MESSAGE__;
+    const composerTextUploadMaxBytes = 64 * 1024;
+    const composerAudioUploadMaxBytes = 20 * 1024 * 1024;
     const vadPresets = {
       "quick-word": {
         vadSpeechThreshold: 0.42,
@@ -5162,6 +5176,7 @@ INDEX_HTML = """<!doctype html>
       injectStop.disabled = !composerLocked || cancelRequestInFlight;
       webConversation.disabled = !webAudio.stt_enabled;
       webMic.disabled = (composerLocked && !interruptConversationEnabled) || !webAudio.stt_enabled || isRecording || conversationEnabled;
+      composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
       injectCommand.placeholder = composerLocked ? "Assistant is thinking..." : "Message";
       if (wasLocked && !composerLocked && !settingsOverlay.classList.contains("open")) {
         window.setTimeout(() => injectCommand.focus({ preventScroll: true }), 0);
@@ -5176,6 +5191,7 @@ INDEX_HTML = """<!doctype html>
       webMic.title = isRecording ? "Stop recording" : "Voice input";
       webMic.setAttribute("aria-label", isRecording ? "Stop recording" : "Voice input");
       webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
       injectCommand.placeholder = isRecording ? "Recording..." : (composerLocked ? "Assistant is thinking..." : "Message");
     }
 
@@ -5185,6 +5201,7 @@ INDEX_HTML = """<!doctype html>
       webConversation.setAttribute("aria-label", conversationEnabled ? "Stop conversation mode" : "Conversation mode");
       webConversation.disabled = !webAudio.stt_enabled;
       webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
     }
 
     function clearRecordingTimer() {
@@ -5952,6 +5969,48 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       await submitCommand(command, { interrupt: interruptConversationEnabled });
+    }
+
+    function fileLooksLikeText(file) {
+      const name = String(file.name || "").toLowerCase();
+      const type = String(file.type || "").toLowerCase();
+      return type.startsWith("text/") || name.endsWith(".txt") || name.endsWith(".md");
+    }
+
+    function fileLooksLikeWav(file) {
+      const name = String(file.name || "").toLowerCase();
+      const type = String(file.type || "").toLowerCase();
+      return type.includes("wav") || name.endsWith(".wav");
+    }
+
+    async function handleComposerFile(file) {
+      if (!file) return;
+      if (fileLooksLikeText(file)) {
+        if (file.size > composerTextUploadMaxBytes) {
+          setMeta("text file too large: max 64 KB", "error", 5000);
+          return;
+        }
+        const text = await file.text();
+        injectCommand.value = text.trim();
+        autoSizeComposer();
+        injectCommand.focus({ preventScroll: true });
+        setMeta(`loaded text file: ${file.name}`);
+        return;
+      }
+      if (fileLooksLikeWav(file)) {
+        if (file.size > composerAudioUploadMaxBytes) {
+          setMeta("WAV file too large: max 20 MB", "error", 5000);
+          return;
+        }
+        if (!webAudio.stt_enabled) {
+          setMeta("audio file STT unavailable in current web audio configuration", "error", 5000);
+          return;
+        }
+        const applyWakeWord = Boolean((wakeWord.value || "").trim());
+        await handleRecordedAudio(file, { applyWakeWord });
+        return;
+      }
+      setMeta("unsupported file type: use WAV audio or TXT text", "error", 5000);
     }
 
     async function handleRecordedAudio(blob, options = {}) {
@@ -7662,6 +7721,18 @@ INDEX_HTML = """<!doctype html>
     injectCommand.addEventListener("input", autoSizeComposer);
     composerSpeaker.addEventListener("change", () => {
       window.localStorage.setItem("lsaComposerSpeaker", composerSpeaker.value || "auto");
+    });
+    composerAttach.addEventListener("click", () => {
+      composerFile.click();
+    });
+    composerFile.addEventListener("change", async () => {
+      const file = composerFile.files && composerFile.files[0];
+      composerFile.value = "";
+      try {
+        await handleComposerFile(file);
+      } catch (error) {
+        setMeta(`file upload failed: ${error.message || error}`, "error", 7000);
+      }
     });
     injectCommand.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
