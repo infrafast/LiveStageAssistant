@@ -1366,6 +1366,7 @@ class WebMonitor:
                     samples_complete = all(item["ready"] for item in sample_statuses)
                     embedding_status = "waiting for 3 samples"
                     embedding_path = profile_root / f"profil{profile_index}.npy"
+                    embedding_ready = False
                     if samples_complete and compute_resemblyzer_mean_embedding_file is not None:
                         try:
                             with monitor._lock:
@@ -1374,10 +1375,13 @@ class WebMonitor:
                                 notice_handler(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
                             embedding_path = compute_resemblyzer_mean_embedding_file(sample_paths, embedding_path)
                             embedding_status = "mean embedding ready"
+                            embedding_ready = True
                         except Exception as e:
                             embedding_status = f"embedding pending: {e}"
                     elif samples_complete:
                         embedding_status = "embedding unavailable"
+                    else:
+                        embedding_ready = False
 
                     self._send_json(
                         {
@@ -1390,6 +1394,7 @@ class WebMonitor:
                             "samples": sample_statuses,
                             "complete": samples_complete,
                             "embedding_path": embedding_path.as_posix(),
+                            "embedding_ready": bool(embedding_ready),
                             "status": "ready" if samples_complete else "incomplete",
                             "embedding_status": embedding_status,
                         }

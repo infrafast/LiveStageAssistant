@@ -100,6 +100,8 @@
     "speaker_profile_file_saved": "Profile file saved",
     "speaker_profile_ready_detail": "Profile {index} ready: {path}",
     "speaker_profile_pending_detail": "{message} {status} The WAV is saved.",
-    "speaker_embedding_not_generated": "Embedding has not been generated yet."
+    "speaker_embedding_not_generated": "Embedding has not been generated yet.",
+    "speaker_voiceprint_ready": "voiceprint computed",
+    "speaker_voiceprint_unavailable": "voiceprint unavailable"
   }
 }

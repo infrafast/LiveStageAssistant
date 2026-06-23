@@ -2660,8 +2660,10 @@
         const path = document.createElement("span");
         path.className = "speaker-path";
         path.dataset.role = "path";
-        path.title = profile.embedding_path || `data/speaker_profiles/profil${index}.npy`;
-        path.textContent = profile.embedding_path || `profil${index}.npy`;
+        path.title = profile.embedding_ready && profile.embedding_path ? profile.embedding_path : "";
+        path.textContent = profile.embedding_ready
+          ? tr("speaker_voiceprint_ready", "empreinte vocale calculée")
+          : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
 
         row.append(name, uploadWrap, enabledLabel, status, path);
         speakerProfileGrid.appendChild(row);
@@ -2720,8 +2722,10 @@
           throw new Error(data.error?.message || data.message || response.statusText || "Upload failed");
         }
         if (pathLabel) {
-          pathLabel.textContent = data.embedding_path || `profil${row.dataset.index || ""}.npy`;
-          pathLabel.title = data.embedding_path || "";
+          pathLabel.textContent = data.embedding_ready
+            ? tr("speaker_voiceprint_ready", "empreinte vocale calculée")
+            : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
+          pathLabel.title = data.embedding_ready && data.embedding_path ? data.embedding_path : "";
         }
         for (const sample of data.samples || []) {
           const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);

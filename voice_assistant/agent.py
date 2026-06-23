@@ -5473,11 +5473,13 @@ async def main():
                     }
                 )
             embedding_path = Path(speaker_profile_embedding_path_from_values(values, index))
+            embedding_ready = False
             if len(ready_paths) < 3:
                 status = f"{len(ready_paths)}/3 samples"
             else:
                 try:
                     if embedding_path.exists() and all(embedding_path.stat().st_mtime >= path.stat().st_mtime for path in ready_paths):
+                        embedding_ready = True
                         status = "ready cached"
                     else:
                         status = "ready, embedding pending"
@@ -5492,6 +5494,7 @@ async def main():
                     "samples": samples,
                     "complete": len(ready_paths) == 3,
                     "status": status,
+                    "embedding_ready": embedding_ready,
                     "embedding_path": embedding_path.as_posix() if embedding_path else "",
                     "slug": safe_speaker_profile_slug(name or f"speaker_{index}"),
                 }
