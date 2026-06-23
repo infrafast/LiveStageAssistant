@@ -8,6 +8,7 @@ Required documentation check:
 - Review `docs/*.md` for deployment-specific instructions.
 - Review the README development/maintenance notes when the change affects recently tracked web monitor, audio, MCP, or Docker behavior.
 - Update `.env.example` and profile env files when adding, renaming, or changing the meaning of config keys.
+- When adding or changing user-facing Web GUI text, update every locale file under `assets/i18n/` in the same pass. Do not translate technical identifiers such as env var names, API keys, model IDs, route paths, or log-only diagnostics unless they are deliberately shown as prose to the user.
 - Mention in the final response whether docs were updated or explicitly verified as still current.
 
 Important local profiles:

@@ -833,6 +833,7 @@ The recent web monitor work turned the monitor into the primary operator UI whil
 - `voice_assistant/web_monitor.py` owns the browser UI, snapshot state, console-log mirroring, browser audio endpoints, noVNC bridge, MCP admin-page proxy, and settings overlay.
 - `voice_assistant/agent.py` owns runtime config loading, STT/TTS selection, wake-word handling, MCP initialization, prompt loading, tool routing, cancellation, and assistant reloads.
 - Runtime/config/audio/web/MCP/Docker behavior changes should update this README, relevant `docs/*.md`, `.env.example`, and active profile examples when meanings or defaults change.
+- User-facing Web GUI text should be localized through `assets/i18n/*.json`. When adding or changing a visible label, button, tooltip, toast, overlay, or browser-side status message, add/update the same key in every locale file under `assets/i18n/`. Keep technical identifiers such as env var names, API keys, model IDs, route paths, and log-only diagnostics untranslated unless they are intentionally presented as prose.
 - Active local/container profiles such as `container/config/.env.infrafast` and `container/config/.env.tailscale` may contain deployment-specific values; inspect them before normalizing or overwriting.
 
 Useful lightweight checks after changes:
