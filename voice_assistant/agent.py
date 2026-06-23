@@ -5373,7 +5373,8 @@ async def main():
             os.environ.pop(key, None)
 
     def speaker_profile_wav_path_from_values(values: dict, index: int) -> str:
-        profile_root = Path((values.get("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR).strip())
+        profile_root_value = values.get("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR
+        profile_root = Path(str(profile_root_value).strip())
         default_path = profile_root / f"profil{index}.wav"
         return default_path.as_posix()
 
