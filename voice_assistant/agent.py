@@ -47,6 +47,7 @@ from mcp_use import MCPAgent, MCPClient
 from pydantic import AnyUrl
 
 try:
+    from .i18n import available_locales, i18n_text, load_locale, normalize_locale
     from .web_monitor import WebMonitor, build_service_state
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .wake_word import apply_wake_word, parse_wake_words
@@ -61,6 +62,7 @@ try:
         validate_wav_bytes,
     )
 except ImportError:
+    from i18n import available_locales, i18n_text, load_locale, normalize_locale
     from web_monitor import WebMonitor, build_service_state
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from wake_word import apply_wake_word, parse_wake_words
@@ -1525,7 +1527,7 @@ class VoiceAssistant:
             ollama_base_url: Base URL for local Ollama server
             stt_provider: Speech-to-text provider (openai-whisper or local-whisper)
             local_whisper_model: Local faster-whisper model size or path
-            stt_language: Transcription language code, or None for auto-detect
+            stt_language: Required transcription language/locale code such as fr or en
             stt_prompt: Optional STT context prompt to bias short command transcription
             tts_provider: Text-to-speech provider (elevenlabs, pyttsx3, or none)
             web_tts_enabled: Whether browser TTS is the active speech output
@@ -2621,20 +2623,35 @@ class VoiceAssistant:
         return sorted(str(name) for name in (config or {}).get("mcpServers", {}).keys())
 
     def _startup_ready_message(self, loaded_servers: list[str]) -> str:
-        parts = ["Assistant vocal prêt."]
+        locale = load_locale(self.stt_language)
+        parts = [i18n_text(locale, "startup.ready", "Assistant vocal prêt.")]
         if loaded_servers:
             server_text = ", ".join(loaded_servers)
-            parts.append(f"Serveurs MCP chargés : {server_text}.")
+            parts.append(
+                i18n_text(locale, "startup.mcp_loaded", "Serveurs MCP chargés : {servers}.").format(
+                    servers=server_text
+                )
+            )
         else:
-            parts.append("Aucun serveur MCP chargé.")
+            parts.append(i18n_text(locale, "startup.mcp_none", "Aucun serveur MCP chargé."))
 
         if self.web_monitor and self.web_monitor.listen_address:
             _host, port = self.web_monitor.listen_address
-            parts.append(f"Interface web disponible sur le port {port}.")
+            parts.append(
+                i18n_text(locale, "startup.web_available", "Interface web disponible sur le port {port}.").format(
+                    port=port
+                )
+            )
 
         if self.wake_words:
             wake_word_text = ", ".join(self.wake_words)
-            parts.append(f"Mots de réveil actifs : {wake_word_text}. Prêt à éxécuter des commandes.")
+            parts.append(
+                i18n_text(
+                    locale,
+                    "startup.wake_words",
+                    "Mots de réveil actifs : {wake_words}. Prêt à exécuter des commandes.",
+                ).format(wake_words=wake_word_text)
+            )
 
         return " ".join(parts)
 
@@ -4911,6 +4928,7 @@ async def main():
         provider = (requested_provider or current_provider or "openai").strip().lower()
         current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
         current_stt_input = (values.get("STT_INPUT") or "both").strip().lower()
+        current_stt_language = normalize_locale(values.get("STT_LANGUAGE"))
         if current_stt_input not in {"both", "backend", "browser", "silent"}:
             current_stt_input = "both"
         current_cloud_tts_provider = cloud_tts_provider_from_values(values)
@@ -4992,6 +5010,8 @@ async def main():
             "cloud_tts_providers": CLOUD_TTS_PROVIDER_OPTIONS,
             "selected_cloud_tts_provider": current_cloud_tts_provider,
             "selected_stt_input": current_stt_input,
+            "selected_stt_language": current_stt_language,
+            "available_locales": available_locales(),
             "tts_outputs": TTS_OUTPUT_OPTIONS,
             "selected_tts_output": current_tts_output,
             "selected_wake_word": current_wake_word,
@@ -5041,6 +5061,7 @@ async def main():
         cloud_tts_provider: str,
         tts_output: str,
         stt_input: str,
+        stt_language: str,
         connectivity_mode: str,
         wake_word: str,
         stt_prompt: str,
@@ -5081,6 +5102,7 @@ async def main():
         cloud_tts_provider = (cloud_tts_provider or "").strip().lower()
         tts_output = (tts_output or "").strip().lower()
         stt_input = (stt_input or "both").strip().lower()
+        stt_language = normalize_locale(stt_language)
         connectivity_mode = (connectivity_mode or "").strip().lower()
         wake_word = (wake_word or "").strip()
         stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
@@ -5274,6 +5296,7 @@ async def main():
                 "CONNECTIVITY_MODE": connectivity_mode,
                 "STT_PROVIDER": "local-whisper" if connectivity_mode == "offline" else (values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
                 "STT_INPUT": stt_input,
+                "STT_LANGUAGE": stt_language,
                 "CLOUD_TTS_PROVIDER": cloud_tts_provider,
                 "TTS_PROVIDER": updated_tts_provider,
                 "WEB_STT_PROVIDER": "openai",
@@ -5323,7 +5346,10 @@ async def main():
                     mcp_config=mcp_config,
                 ),
             )
-            web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
+            web_monitor.set_environment_loading(
+                True,
+                i18n_text(load_locale(stt_language), "web.environment_refresh", "rafraichissement de l'environnement"),
+            )
 
         if reload_event:
             reload_event.set()
@@ -5343,6 +5369,7 @@ async def main():
             "cloud_tts_provider": cloud_tts_provider,
             "tts_output": tts_output,
             "stt_input": stt_input,
+            "stt_language": stt_language,
             "wake_word": wake_word,
             "system_prompt": system_prompt,
             "session_context_size": session_context_size,
@@ -5467,8 +5494,7 @@ async def main():
         stt_provider = os.getenv("STT_PROVIDER", "openai-whisper").lower()
         stt_input = os.getenv("STT_INPUT", "both").strip().lower()
         local_whisper_model = os.getenv("LOCAL_WHISPER_MODEL", "base")
-        stt_language_value = os.getenv("STT_LANGUAGE", "auto")
-        stt_language = None if stt_language_value.lower() == "auto" else stt_language_value
+        stt_language = normalize_locale(os.getenv("STT_LANGUAGE"))
         stt_prompt = os.getenv("STT_PROMPT", DEFAULT_STT_PROMPT)
         tts_config = resolve_tts_config_from_values(os.environ)
         cloud_tts_provider = tts_config.cloud_provider
@@ -6095,13 +6121,14 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
                 cloud_tts_provider,
                 tts_output,
                 stt_input,
+                stt_language,
                 connectivity_mode,
                 wake_word,
                 stt_prompt,

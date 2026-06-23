@@ -27,6 +27,7 @@ from urllib import request as urllib_request
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 try:
+    from .i18n import available_locales, load_locale, normalize_locale
     from .speaker_recognition import (
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
         compute_resemblyzer_embedding_file,
@@ -34,12 +35,16 @@ try:
     )
 except ImportError:  # pragma: no cover - direct script fallback
     try:
+        from i18n import available_locales, load_locale, normalize_locale
         from speaker_recognition import (
             SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
             compute_resemblyzer_embedding_file,
             validate_wav_bytes,
         )
     except ImportError:  # pragma: no cover - optional helper unavailable
+        available_locales = lambda: [{"id": "fr", "label": "Français"}]
+        load_locale = lambda locale=None: {"locale": "fr", "language_name": "Français", "web": {}}
+        normalize_locale = lambda locale=None: "fr"
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE = (
             "Je prépare l'empreinte vocale du profil. Cela peut prendre un moment la première fois."
         )
@@ -563,6 +568,19 @@ class WebMonitor:
         with self._lock:
             return token in self._web_sessions
 
+    def render_index_html(self) -> str:
+        """Render the monitor shell with the currently selected locale payload."""
+        with self._lock:
+            env_values = ((self._snapshot.get("config") or {}).get("env") or {}).copy()
+        locale = normalize_locale(str(env_values.get("STT_LANGUAGE") or os.getenv("STT_LANGUAGE") or "fr"))
+        locale_data = load_locale(locale)
+        payload = {
+            "locale": locale,
+            "messages": locale_data.get("web") or {},
+            "available_locales": available_locales(),
+        }
+        return INDEX_HTML.replace("__I18N_PAYLOAD__", json.dumps(payload, ensure_ascii=False))
+
     def set_llm_config_handlers(
         self,
         *,
@@ -724,7 +742,7 @@ class WebMonitor:
                         self._redirect_to_login()
                         return
                     if parsed.path in {"/", "/index.html"}:
-                        self._send_text(INDEX_HTML, "text/html; charset=utf-8")
+                        self._send_text(monitor.render_index_html(), "text/html; charset=utf-8")
                         return
                     if parsed.path == "/vnc.html":
                         self._send_text(VNC_HTML, "text/html; charset=utf-8")
@@ -770,7 +788,7 @@ class WebMonitor:
                         self._send_auth_required(send_body=False)
                         return
                     if parsed.path in {"/", "/index.html"}:
-                        self._send_text(INDEX_HTML, "text/html; charset=utf-8", send_body=False)
+                        self._send_text(monitor.render_index_html(), "text/html; charset=utf-8", send_body=False)
                         return
                     if parsed.path == "/vnc.html":
                         self._send_text(VNC_HTML, "text/html; charset=utf-8", send_body=False)
@@ -1410,6 +1428,7 @@ class WebMonitor:
                     cloud_tts_provider = str(payload.get("cloud_tts_provider") or "").strip().lower()
                     tts_output = str(payload.get("tts_output") or "").strip().lower()
                     stt_input = str(payload.get("stt_input") or "both").strip().lower()
+                    stt_language = normalize_locale(str(payload.get("stt_language") or "fr"))
                     connectivity_mode = str(payload.get("connectivity_mode") or "").strip().lower()
                     wake_word = str(payload.get("wake_word") or "").strip()
                     stt_prompt = str(payload.get("stt_prompt") or "").strip()
@@ -1468,6 +1487,7 @@ class WebMonitor:
                             cloud_tts_provider,
                             tts_output,
                             stt_input,
+                            stt_language,
                             connectivity_mode,
                             wake_word,
                             stt_prompt,
@@ -3637,29 +3657,29 @@ INDEX_HTML = """<!doctype html>
     <header class="topbar">
       <div class="brand">
         <h1>Live Stage Assistant</h1>
-        <div class="meta" id="meta">connecting...</div>
+        <div class="meta" id="meta" data-i18n="meta_connecting">connecting...</div>
       </div>
-      <button class="icon-button" id="settings-open" type="button" title="Settings" aria-label="Settings">&#9881;</button>
+      <button class="icon-button" id="settings-open" type="button" title="Settings" aria-label="Settings" data-i18n-title="settings" data-i18n-aria-label="settings">&#9881;</button>
     </header>
 
     <main class="main-layout">
-      <aside class="session-sidebar" aria-label="Sessions">
+      <aside class="session-sidebar" aria-label="Sessions" data-i18n-aria-label="sessions">
         <div class="session-header">
-          <span>Sessions</span>
-          <button class="small-button" id="session-new" type="button" title="New session" aria-label="New session">+</button>
+          <span data-i18n="sessions">Sessions</span>
+          <button class="small-button" id="session-new" type="button" title="New session" aria-label="New session" data-i18n-title="new_session" data-i18n-aria-label="new_session">+</button>
         </div>
         <div class="session-list" id="session-list"></div>
       </aside>
       <div class="chat-panel" id="chat-panel">
         <details class="vnc-panel" id="vnc-panel">
-          <summary>Remote screen <span class="vnc-status offline" id="vnc-status">hors ligne</span></summary>
+          <summary><span data-i18n="remote_screen">Remote screen</span> <span class="vnc-status offline" id="vnc-status" data-i18n="offline">hors ligne</span></summary>
           <div class="vnc-controls">
             <input id="vnc-url" type="text" value="vnc://192.168.0.160:5900?password=ronron" spellcheck="false" aria-label="VNC URL">
-            <label class="vnc-view-only" title="Lecture seule: affiche l'écran distant sans envoyer clavier ni souris">
+            <label class="vnc-view-only" title="Lecture seule: affiche l'écran distant sans envoyer clavier ni souris" data-i18n-title="readonly_title">
               <input id="vnc-view-only" type="checkbox" checked>
-              Lecture seule
+              <span data-i18n="readonly">Lecture seule</span>
             </label>
-            <button class="small-button" id="vnc-connect" type="button">Connecter</button>
+            <button class="small-button" id="vnc-connect" type="button" data-i18n="connect">Connecter</button>
           </div>
           <div class="vnc-frame-wrap">
             <iframe class="vnc-frame" id="vnc-frame" title="noVNC remote screen" loading="lazy" referrerpolicy="no-referrer"></iframe>
@@ -3673,19 +3693,19 @@ INDEX_HTML = """<!doctype html>
 
     <div class="composer-wrap">
       <form class="inject-form" id="inject-form">
-        <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" disabled>💬</button>
-        <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" disabled>🎙️</button>
-        <select class="composer-speaker" id="composer-speaker" title="Speaker recognition unavailable" aria-label="Speaker profile" disabled>
-          <option value="auto">Auto detect</option>
-          <option value="unknown">Unknown</option>
+        <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" data-i18n-title="conversation_mode" data-i18n-aria-label="conversation_mode" disabled>💬</button>
+        <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" data-i18n-title="voice_input" data-i18n-aria-label="voice_input" disabled>🎙️</button>
+        <select class="composer-speaker" id="composer-speaker" title="Speaker recognition unavailable" aria-label="Speaker profile" data-i18n-title="speaker_unavailable" data-i18n-aria-label="speaker_profile" disabled>
+          <option value="auto" data-i18n="auto_detect">Auto detect</option>
+          <option value="unknown" data-i18n="unknown">Unknown</option>
         </select>
         <div class="command-field" id="command-field">
           <canvas id="soundwave" aria-hidden="true"></canvas>
-          <textarea id="inject-command" rows="1" autocomplete="off" enterkeyhint="send" placeholder="Message"></textarea>
+          <textarea id="inject-command" rows="1" autocomplete="off" enterkeyhint="send" placeholder="Message" data-i18n-placeholder="message_placeholder"></textarea>
         </div>
-        <button id="composer-attach" type="button" title="Upload WAV or text file" aria-label="Upload WAV or text file">+</button>
+        <button id="composer-attach" type="button" title="Upload WAV or text file" aria-label="Upload WAV or text file" data-i18n-title="upload_file" data-i18n-aria-label="upload_file">+</button>
         <input id="composer-file" type="file" accept=".wav,audio/wav,audio/x-wav,.txt,text/plain" hidden>
-        <button id="inject-stop" type="button" title="Stop" aria-label="Stop">&#9632;</button>
+        <button id="inject-stop" type="button" title="Stop" aria-label="Stop" data-i18n-title="stop" data-i18n-aria-label="stop">&#9632;</button>
       </form>
     </div>
   </div>
@@ -3693,23 +3713,23 @@ INDEX_HTML = """<!doctype html>
   <div class="overlay" id="settings-overlay" aria-hidden="true">
     <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="settings-header">
-        <div class="settings-title" id="settings-title">Settings</div>
-        <button class="icon-button" id="settings-close" type="button" title="Close" aria-label="Close">&times;</button>
+        <div class="settings-title" id="settings-title" data-i18n="settings">Settings</div>
+        <button class="icon-button" id="settings-close" type="button" title="Close" aria-label="Close" data-i18n-title="close" data-i18n-aria-label="close">&times;</button>
       </div>
       <div class="tabs" role="tablist">
-        <button class="tab active" id="tab-monitor" type="button" role="tab" aria-selected="true" aria-controls="panel-monitor">Monitor</button>
-        <button class="tab" id="tab-config" type="button" role="tab" aria-selected="false" aria-controls="panel-config">Config</button>
+        <button class="tab active" id="tab-monitor" type="button" role="tab" aria-selected="true" aria-controls="panel-monitor" data-i18n="monitor">Monitor</button>
+        <button class="tab" id="tab-config" type="button" role="tab" aria-selected="false" aria-controls="panel-config" data-i18n="config">Config</button>
       </div>
       <div class="tab-panel active" id="panel-monitor" role="tabpanel" aria-labelledby="tab-monitor">
         <section>
           <details open>
-            <summary>State</summary>
+            <summary data-i18n="state">State</summary>
             <div class="state" id="state"></div>
           </details>
         </section>
         <section>
           <details open>
-            <summary>Console Log</summary>
+            <summary data-i18n="console_log">Console Log</summary>
             <textarea class="inspect" id="logs" readonly spellcheck="false"></textarea>
           </details>
         </section>
@@ -3717,10 +3737,10 @@ INDEX_HTML = """<!doctype html>
 	      <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
         <section>
           <details>
-            <summary>Connectivity</summary>
+            <summary data-i18n="connectivity">Connectivity</summary>
             <div class="config-controls">
               <div class="field full-row">
-                <label>Profile <span class="inline-badge hidden" id="connectivity-auto-badge">Auto</span></label>
+                <label><span data-i18n="profile">Profile</span> <span class="inline-badge hidden" id="connectivity-auto-badge">Auto</span></label>
                 <select id="env-profile"></select>
                 <div class="segmented" id="connectivity-mode" role="radiogroup" aria-label="Connectivity">
                   <label><input type="radio" name="connectivity-mode" value="online">Online</label>
@@ -3732,13 +3752,13 @@ INDEX_HTML = """<!doctype html>
         </section>
         <section>
           <details id="mcp-servers-details">
-            <summary>MCP Servers</summary>
+            <summary data-i18n="mcp_servers">MCP Servers</summary>
             <div class="mcp-server-panel">
               <div class="mcp-server-toolbar">
-                <div class="detail">HTTP MCP admin pages can load through LiveStageAssistant or directly from this browser.</div>
+                <div class="detail" data-i18n="mcp_admin_detail">HTTP MCP admin pages can load through LiveStageAssistant or directly from this browser.</div>
                 <div class="segmented" id="mcp-admin-route" role="radiogroup" aria-label="MCP admin route">
-                  <label><input type="radio" name="mcp-admin-route" value="proxy">HTTP proxy</label>
-                  <label><input type="radio" name="mcp-admin-route" value="direct">Direct</label>
+                  <label><input type="radio" name="mcp-admin-route" value="proxy"><span data-i18n="http_proxy">HTTP proxy</span></label>
+                  <label><input type="radio" name="mcp-admin-route" value="direct"><span data-i18n="direct">Direct</span></label>
                 </div>
               </div>
               <div class="mcp-server-grid" id="mcp-server-grid"></div>
@@ -3750,15 +3770,15 @@ INDEX_HTML = """<!doctype html>
 	            <summary>STT/TTS</summary>
 	            <div class="config-controls">
               <div class="field">
-                <label for="wake-word">Wake Word</label>
-                <input id="wake-word" type="text" placeholder="Disabled">
+                <label for="wake-word" data-i18n="wake_word">Wake Word</label>
+                <input id="wake-word" type="text" placeholder="Disabled" data-i18n-placeholder="disabled">
               </div>
               <div class="field full-row">
                 <label for="stt-prompt">STT_PROMPT</label>
                 <textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea>
               </div>
               <div class="field">
-                <label>Interrompre une conversation</label>
+                <label data-i18n="interrupt_conversation">Interrompre une conversation</label>
                 <div class="segmented" id="interrupt-conversation" role="radiogroup" aria-label="Interrompre une conversation">
                   <label><input type="radio" name="interrupt-conversation" value="off">Off</label>
                   <label><input type="radio" name="interrupt-conversation" value="on">On</label>
@@ -3769,49 +3789,49 @@ INDEX_HTML = """<!doctype html>
 	                <select id="cloud-tts-provider"></select>
 	              </div>
 	              <div class="field cloud-audio-control">
-	                <label>TTS Output</label>
+	                <label data-i18n="tts_output">TTS Output</label>
 	                <div class="segmented" id="tts-output" role="radiogroup" aria-label="TTS Output">
-	                  <label><input type="radio" name="tts-output" value="browser">Browser</label>
-	                  <label><input type="radio" name="tts-output" value="backend">Backend</label>
-	                  <label><input type="radio" name="tts-output" value="silent">Silent</label>
+	                  <label><input type="radio" name="tts-output" value="browser"><span data-i18n="browser">Browser</span></label>
+	                  <label><input type="radio" name="tts-output" value="backend"><span data-i18n="backend">Backend</span></label>
+	                  <label><input type="radio" name="tts-output" value="silent"><span data-i18n="silent">Silent</span></label>
 	                </div>
 	              </div>
 	              <div class="field" id="tts-speed-field">
-	                <label for="openai-tts-speed">TTS Speed <span id="openai-tts-speed-label">1.0x</span></label>
+	                <label for="openai-tts-speed"><span data-i18n="tts_speed">TTS Speed</span> <span id="openai-tts-speed-label">1.0x</span></label>
 	                <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
 	              </div>
 	              <div class="field" id="web-tts-volume-field">
-	                <label for="web-tts-volume" title="WEB_TTS_VOLUME">Volume TTS navigateur <span id="web-tts-volume-label">100%</span></label>
+	                <label for="web-tts-volume" title="WEB_TTS_VOLUME"><span data-i18n="web_tts_volume">Volume TTS navigateur</span> <span id="web-tts-volume-label">100%</span></label>
 	                <input id="web-tts-volume" type="range" min="0" max="1" step="0.05" value="1">
 	              </div>
               <div class="field">
-                <label>STT Input</label>
+                <label data-i18n="stt_input">STT Input</label>
                 <div class="segmented" id="stt-input" role="radiogroup" aria-label="STT Input">
-                  <label><input type="radio" name="stt-input" value="both">Both</label>
-                  <label><input type="radio" name="stt-input" value="browser">Browser</label>
-                  <label><input type="radio" name="stt-input" value="backend">Backend</label>
-                  <label><input type="radio" name="stt-input" value="silent">Silent</label>
+                  <label><input type="radio" name="stt-input" value="both"><span data-i18n="both">Both</span></label>
+                  <label><input type="radio" name="stt-input" value="browser"><span data-i18n="browser">Browser</span></label>
+                  <label><input type="radio" name="stt-input" value="backend"><span data-i18n="backend">Backend</span></label>
+                  <label><input type="radio" name="stt-input" value="silent"><span data-i18n="silent">Silent</span></label>
                 </div>
               </div>
 	              <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local pyttsx3</div>
               <div class="field" id="elevenlabs-voice-field">
-                <label for="elevenlabs-voice">ElevenLabs Voice</label>
+                <label for="elevenlabs-voice" data-i18n="elevenlabs_voice">ElevenLabs Voice</label>
                 <select id="elevenlabs-voice"></select>
               </div>
               <div class="field" id="openai-tts-voice-field">
-                <label for="openai-tts-voice">OpenAI Voice</label>
+                <label for="openai-tts-voice" data-i18n="openai_voice">OpenAI Voice</label>
                 <select id="openai-tts-voice"></select>
               </div>
 	              <div class="field" id="backend-tts-volume-field">
-	                <label for="backend-tts-volume" title="BACKEND_TTS_VOLUME">Volume TTS backend <span id="backend-tts-volume-label">100%</span></label>
+	                <label for="backend-tts-volume" title="BACKEND_TTS_VOLUME"><span data-i18n="backend_tts_volume">Volume TTS backend</span> <span id="backend-tts-volume-label">100%</span></label>
 	                <input id="backend-tts-volume" type="range" min="0" max="2" step="0.05" value="1">
 	              </div>
               <div class="field" id="tts-test-field">
-                <label>Voice Test</label>
-                <button class="small-button" id="tts-test" type="button">Test</button>
+                <label data-i18n="voice_test">Voice Test</label>
+                <button class="small-button" id="tts-test" type="button" data-i18n="test">Test</button>
               </div>
               <details class="nested-details">
-                <summary>Voice Activity Detection (VAD)</summary>
+                <summary data-i18n="vad">Voice Activity Detection (VAD)</summary>
                 <div class="vad-groups">
                   <div class="vad-group">
                     <div class="vad-group-title">
@@ -3899,11 +3919,11 @@ INDEX_HTML = """<!doctype html>
                 </div>
               </details>
               <details class="nested-details">
-                <summary>Speaker profiles</summary>
+                <summary data-i18n="speaker_profiles">Speaker profiles</summary>
                 <div class="vad-groups">
                   <div class="vad-group" id="speaker-recognition-group">
                     <div class="vad-group-title">
-                      <span>Reconnaissance locuteur</span>
+                      <span data-i18n="speaker_recognition">Reconnaissance locuteur</span>
                       <span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span>
                     </div>
                     <div class="field-hint" title="Exemple à lire: Je suis <prénom>. QLC lecture aléatoire. QLC lecture pause. QLC rouge. Un, deux, trois, quatre, cinq, six, sept, huit, neuf, zero! Console, quel est le volume de la façade? Console, monte le volume principal de deux décibel. Console, baisse ma guitare dans mon retour. Console, coupe le clic dans mon retour. Régie, fais un fade out dans cinq secondes. Régie, monte le clic.">
@@ -3951,11 +3971,11 @@ INDEX_HTML = """<!doctype html>
         </section>
         <section>
           <details id="cloud-api-details">
-            <summary>Cloud API</summary>
+            <summary data-i18n="cloud_api">Cloud API</summary>
             <div class="cloud-api-panel">
               <div class="cloud-api-header">
-                <div class="detail">API keys stay on the backend. OpenAI credit remaining is not exposed by the public API.</div>
-                <button class="small-button" id="cloud-api-refresh" type="button">Refresh</button>
+                <div class="detail" data-i18n="cloud_api_detail">API keys stay on the backend. OpenAI credit remaining is not exposed by the public API.</div>
+                <button class="small-button" id="cloud-api-refresh" type="button" data-i18n="refresh">Refresh</button>
               </div>
               <div class="cloud-api-grid" id="cloud-api-grid"></div>
             </div>
@@ -3963,13 +3983,13 @@ INDEX_HTML = """<!doctype html>
         </section>
         <section>
           <details>
-            <summary>Audio In/Out</summary>
+            <summary data-i18n="audio_in_out">Audio In/Out</summary>
             <div class="config-controls">
               <div class="field" id="browser-audio-input-field">
                 <label for="browser-audio-input">Browser Audio Input</label>
                 <div class="audio-test-row">
                   <select id="browser-audio-input"></select>
-                  <button class="small-button" id="browser-audio-test" type="button">Test</button>
+                  <button class="small-button" id="browser-audio-test" type="button" data-i18n="test">Test</button>
                   <div class="vu-meter" id="browser-audio-meter" aria-hidden="true"><div class="vu-fill"></div></div>
                 </div>
               </div>
@@ -3979,13 +3999,13 @@ INDEX_HTML = """<!doctype html>
               </div>
               <div class="field">
                 <label>&nbsp;</label>
-                <button class="small-button" id="browser-audio-refresh" type="button">Refresh</button>
+                <button class="small-button" id="browser-audio-refresh" type="button" data-i18n="refresh">Refresh</button>
               </div>
               <div class="field" id="backend-audio-input-field">
                 <label for="backend-audio-input">Backend Audio Input</label>
                 <div class="audio-test-row">
                   <select id="backend-audio-input"></select>
-                  <button class="small-button" id="backend-audio-test" type="button">Test</button>
+                  <button class="small-button" id="backend-audio-test" type="button" data-i18n="test">Test</button>
                   <div class="vu-meter" id="backend-audio-meter" aria-hidden="true"><div class="vu-fill"></div></div>
                 </div>
               </div>
@@ -4014,10 +4034,10 @@ INDEX_HTML = """<!doctype html>
         </section>
         <section>
           <details>
-            <summary>IA model</summary>
+            <summary data-i18n="ia_model">IA model</summary>
             <div class="config-controls">
               <div class="field">
-                <label for="llm-provider">Provider</label>
+                <label for="llm-provider" data-i18n="provider">Provider</label>
                 <select id="llm-provider"></select>
               </div>
               <div class="field">
@@ -4033,7 +4053,7 @@ INDEX_HTML = """<!doctype html>
                 <input id="mcp-agent-max-steps" type="range" min="5" max="60" step="1" value="20">
               </div>
               <div class="field">
-                <label>Tool Routing</label>
+                <label data-i18n="tool_routing">Tool Routing</label>
                 <div class="segmented" id="mcp-tool-routing" role="radiogroup" aria-label="Tool Routing">
                   <label><input type="radio" name="mcp-tool-routing" value="false">Off</label>
                   <label><input type="radio" name="mcp-tool-routing" value="true">Routing</label>
@@ -4044,10 +4064,14 @@ INDEX_HTML = """<!doctype html>
         </section>
         <section>
           <details>
-            <summary>Other</summary>
+            <summary data-i18n="language_other">Langue et divers</summary>
             <div class="config-controls">
               <div class="field">
-                <label for="thinking-sound">Thinking Sound</label>
+                <label for="stt-language" title="STT_LANGUAGE" data-i18n="stt_language">Langue STT</label>
+                <select id="stt-language"></select>
+              </div>
+              <div class="field">
+                <label for="thinking-sound" data-i18n="thinking_sound">Thinking Sound</label>
                 <select id="thinking-sound"></select>
               </div>
               <div class="field" id="command-ack-sound-field" title="COMMAND_ACK_SOUND_ENABLED">
@@ -4059,14 +4083,14 @@ INDEX_HTML = """<!doctype html>
         </section>
         <section>
           <details>
-            <summary>Prompt</summary>
+            <summary data-i18n="prompt">Prompt</summary>
             <div class="prompt-fields">
               <div class="field">
                 <label for="assistant-system-prompt">ASSISTANT_SYSTEM_PROMPT</label>
                 <textarea class="inspect" id="assistant-system-prompt" spellcheck="false"></textarea>
               </div>
               <div class="field">
-                <label for="prompt">Final Prompt</label>
+                <label for="prompt" data-i18n="final_prompt">Final Prompt</label>
                 <textarea class="inspect" id="prompt" readonly spellcheck="false"></textarea>
               </div>
             </div>
@@ -4074,13 +4098,13 @@ INDEX_HTML = """<!doctype html>
         </section>
         <section>
           <details>
-            <summary>Env file</summary>
+            <summary data-i18n="env_file">Env file</summary>
             <textarea class="inspect" id="config" readonly spellcheck="false"></textarea>
           </details>
         </section>
         <div class="config-footer">
           <div class="config-message" id="llm-message"></div>
-          <button id="llm-save" type="button">Save</button>
+          <button id="llm-save" type="button" data-i18n="save">Save</button>
         </div>
       </div>
     </div>
@@ -4109,6 +4133,31 @@ INDEX_HTML = """<!doctype html>
   <div class="session-summary-popover" id="session-summary-popover" role="status" aria-live="polite"></div>
 
   <script>
+    const i18nPayload = __I18N_PAYLOAD__;
+    const i18nMessages = i18nPayload.messages || {};
+    function tr(key, fallback = "") {
+      return Object.prototype.hasOwnProperty.call(i18nMessages, key) ? i18nMessages[key] : fallback;
+    }
+    function trf(key, fallback, values = {}) {
+      return tr(key, fallback).replace(/\\{([a-zA-Z0-9_]+)\\}/g, (match, name) => (
+        Object.prototype.hasOwnProperty.call(values, name) ? values[name] : match
+      ));
+    }
+    function applyI18n(root = document) {
+      for (const element of root.querySelectorAll("[data-i18n]")) {
+        element.textContent = tr(element.dataset.i18n, element.textContent);
+      }
+      for (const element of root.querySelectorAll("[data-i18n-title]")) {
+        element.title = tr(element.dataset.i18nTitle, element.title);
+      }
+      for (const element of root.querySelectorAll("[data-i18n-aria-label]")) {
+        element.setAttribute("aria-label", tr(element.dataset.i18nAriaLabel, element.getAttribute("aria-label") || ""));
+      }
+      for (const element of root.querySelectorAll("[data-i18n-placeholder]")) {
+        element.placeholder = tr(element.dataset.i18nPlaceholder, element.placeholder);
+      }
+    }
+
     const stateEl = document.querySelector("#state");
     const configEl = document.querySelector("#config");
     const logsEl = document.querySelector("#logs");
@@ -4236,6 +4285,7 @@ INDEX_HTML = """<!doctype html>
     const backendAudioOutputPanField = document.querySelector("#backend-audio-output-pan-field");
     const backendAudioOutputPan = document.querySelector("#backend-audio-output-pan");
     const backendAudioOutputPanLabel = document.querySelector("#backend-audio-output-pan-label");
+    const sttLanguage = document.querySelector("#stt-language");
     const thinkingSound = document.querySelector("#thinking-sound");
     const commandAckSoundField = document.querySelector("#command-ack-sound-field");
     const commandAckSound = document.querySelector("#command-ack-sound");
@@ -4245,6 +4295,7 @@ INDEX_HTML = """<!doctype html>
     const speakerEmbeddingPreparationMessage = __SPEAKER_EMBEDDING_PREPARATION_MESSAGE__;
     const composerTextUploadMaxBytes = 64 * 1024;
     const composerAudioUploadMaxBytes = 20 * 1024 * 1024;
+    applyI18n();
     const vadPresets = {
       "quick-word": {
         vadSpeechThreshold: 0.42,
@@ -4715,7 +4766,7 @@ INDEX_HTML = """<!doctype html>
         const name = input.dataset.serverName || "";
         if (name) routing[name] = input.value || "";
       }
-      if (messageEl) messageEl.textContent = "Saving...";
+      if (messageEl) messageEl.textContent = tr("saving", "Saving...");
       try {
         const response = await fetch("/api/mcp-routing", {
           method: "POST",
@@ -4725,11 +4776,11 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         if (messageEl) messageEl.textContent = data.message || "Routing saved.";
-        setEnvironmentLoading(true, "rafraichissement de l'environnement");
+        setEnvironmentLoading(true);
         mcpServersSignature = "";
         await refresh();
       } catch (error) {
-        if (messageEl) messageEl.textContent = `Save failed: ${error}`;
+        if (messageEl) messageEl.textContent = trf("save_failed", "Save failed: {error}", { error });
       }
     }
 
@@ -4749,7 +4800,7 @@ INDEX_HTML = """<!doctype html>
           return;
         }
       }
-      if (messageEl) messageEl.textContent = "Saving...";
+      if (messageEl) messageEl.textContent = tr("saving", "Saving...");
       try {
         const response = await fetch("/api/mcp-server-options", {
           method: "POST",
@@ -4759,11 +4810,11 @@ INDEX_HTML = """<!doctype html>
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         if (messageEl) messageEl.textContent = data.message || "MCP server options saved.";
-        setEnvironmentLoading(true, "rafraichissement de l'environnement");
+        setEnvironmentLoading(true);
         mcpServersSignature = "";
         await refresh();
       } catch (error) {
-        if (messageEl) messageEl.textContent = `Save failed: ${error}`;
+        if (messageEl) messageEl.textContent = trf("save_failed", "Save failed: {error}", { error });
       }
     }
 
@@ -6532,7 +6583,7 @@ INDEX_HTML = """<!doctype html>
       llmSave.disabled = true;
       stopBrowserAudioTest();
       stopBackendAudioTest();
-      setEnvironmentLoading(true, "rafraichissement de l'environnement");
+      setEnvironmentLoading(true);
       disconnectVnc("reconnexion VNC...");
       llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
       try {
@@ -6849,7 +6900,7 @@ INDEX_HTML = """<!doctype html>
       vadSpeechPadMs.value = String(preset.vadSpeechPadMs);
       vadMaxSpeechSeconds.value = String(preset.vadMaxSpeechSeconds);
       syncVadLabels();
-      llmMessage.textContent = "STT example applied. Save to persist.";
+      llmMessage.textContent = tr("stt_example_applied", "STT example applied. Save to persist.");
     }
 
     async function testSelectedTtsVoice() {
@@ -6862,7 +6913,7 @@ INDEX_HTML = """<!doctype html>
       const backendPan = Number(backendAudioOutputPan.value || 0);
       const output = selectedTtsOutput();
       ttsTest.disabled = true;
-      llmMessage.textContent = "Testing voice...";
+      llmMessage.textContent = tr("testing_voice", "Testing voice...");
       try {
         if (output === "backend") {
           const response = await fetch("/api/backend-tts-test", {
@@ -6901,9 +6952,9 @@ INDEX_HTML = """<!doctype html>
         } else {
           throw new Error("TTS Output is Silent");
         }
-        llmMessage.textContent = "Voice test played.";
+        llmMessage.textContent = tr("voice_test_played", "Voice test played.");
       } catch (error) {
-        llmMessage.textContent = `Voice test failed: ${error}`;
+        llmMessage.textContent = trf("voice_test_failed", "Voice test failed: {error}", { error });
       } finally {
         syncTtsProviderControls();
       }
@@ -7195,7 +7246,7 @@ INDEX_HTML = """<!doctype html>
       else settingsOpen.focus();
     }
 
-    function setLoadingOverlay(loading, title = "Loading", detail = "Preparing persisted context summary", mode = "loading") {
+    function setLoadingOverlay(loading, title = tr("loading", "Loading"), detail = "Preparing persisted context summary", mode = "loading") {
       sessionLoading.classList.toggle("open", Boolean(loading));
       sessionLoading.classList.toggle("done", mode === "done");
       sessionLoading.classList.toggle("error", mode === "error");
@@ -7204,12 +7255,12 @@ INDEX_HTML = """<!doctype html>
       sessionLoadingDetail.textContent = detail;
     }
 
-    function setEnvironmentLoading(loading, title = "rafraichissement de l'environnement") {
+    function setEnvironmentLoading(loading, title = tr("environment_refresh", "rafraichissement de l'environnement")) {
       environmentLoadingActive = Boolean(loading);
-      setLoadingOverlay(environmentLoadingActive, title, "Application de la nouvelle configuration");
+      setLoadingOverlay(environmentLoadingActive, title, tr("applying_config", "Application de la nouvelle configuration"));
     }
 
-    function setProfileLoading(loading, title = "Préparation du profil vocal", detail = speakerEmbeddingPreparationMessage, mode = "loading") {
+    function setProfileLoading(loading, title = tr("preparing_voice_profile", "Préparation du profil vocal"), detail = speakerEmbeddingPreparationMessage, mode = "loading") {
       profileLoadingActive = Boolean(loading);
       if (environmentLoadingActive && !loading) return;
       setLoadingOverlay(loading, title, detail, mode);
@@ -7232,11 +7283,11 @@ INDEX_HTML = """<!doctype html>
     }
 
     async function renameSession(sessionId, currentTitle) {
-      const title = window.prompt("Rename session", currentTitle || "Untitled session");
+      const title = window.prompt(tr("rename_session", "Rename session"), currentTitle || tr("untitled_session", "Untitled session"));
       if (title === null) return;
       const cleanedTitle = title.trim();
       if (!cleanedTitle) return;
-      setSessionLoading(true, "Renaming session");
+      setSessionLoading(true, tr("renaming_session", "Renaming session"));
       try {
         const response = await fetch("/api/session-context/rename", {
           method: "POST",
@@ -7335,6 +7386,7 @@ INDEX_HTML = """<!doctype html>
       for (const input of interruptConversationInputs) input.disabled = true;
       wakeWord.disabled = true;
       sttPromptEl.disabled = true;
+      sttLanguage.disabled = true;
       assistantSystemPromptEl.disabled = true;
       cloudTtsProvider.disabled = true;
       for (const input of ttsOutputInputs) input.disabled = true;
@@ -7358,7 +7410,7 @@ INDEX_HTML = """<!doctype html>
       backendAudioOutput.disabled = true;
       thinkingSound.disabled = true;
       llmSave.disabled = true;
-      llmMessage.textContent = "Loading LLM options...";
+      llmMessage.textContent = tr("loading_llm_options", "Loading LLM options...");
       try {
         const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
         const response = await fetch(`/api/llm-options${suffix}`, { cache: "no-store" });
@@ -7396,18 +7448,27 @@ INDEX_HTML = """<!doctype html>
         }
         setSelectedTtsOutput(data.selected_tts_output || "silent");
         setSelectedSttInput(data.selected_stt_input || "both");
+        sttLanguage.replaceChildren();
+        const selectedSttLanguage = data.selected_stt_language || i18nPayload.locale || "fr";
+        const locales = data.available_locales || i18nPayload.available_locales || [];
+        for (const locale of locales) {
+          sttLanguage.appendChild(option(locale.label || locale.id, locale.id, false, locale.id === selectedSttLanguage));
+        }
+        if (selectedSttLanguage && sttLanguage.value !== selectedSttLanguage) {
+          sttLanguage.value = selectedSttLanguage;
+        }
 
         llmModel.replaceChildren();
         const selectedModel = preferredModel || data.selected_model || "";
         const models = data.models || [];
         if (models.length === 0) {
-          llmModel.appendChild(option("No model available", "", true, true));
+          llmModel.appendChild(option(tr("no_model_available", "No model available"), "", true, true));
         } else {
           for (const model of models) {
             llmModel.appendChild(option(model.label || model.id, model.id, false, model.id === selectedModel));
           }
           if (selectedModel && !models.some((model) => model.id === selectedModel)) {
-            llmModel.appendChild(option(`${selectedModel} (current)`, selectedModel, false, true));
+            llmModel.appendChild(option(`${selectedModel} (${tr("current", "current")})`, selectedModel, false, true));
           }
         }
 
@@ -7415,13 +7476,13 @@ INDEX_HTML = """<!doctype html>
         const selectedVoiceId = data.selected_voice_id || "";
         const voices = data.voices || [];
         if (voices.length === 0) {
-          elevenlabsVoice.appendChild(option("No voice available", "", true, true));
+          elevenlabsVoice.appendChild(option(tr("no_voice_available", "No voice available"), "", true, true));
         } else {
           for (const voice of voices) {
             elevenlabsVoice.appendChild(option(voice.label || voice.id, voice.id, false, voice.id === selectedVoiceId));
           }
           if (selectedVoiceId && !voices.some((voice) => voice.id === selectedVoiceId)) {
-            elevenlabsVoice.appendChild(option(`${selectedVoiceId} (current)`, selectedVoiceId, false, true));
+            elevenlabsVoice.appendChild(option(`${selectedVoiceId} (${tr("current", "current")})`, selectedVoiceId, false, true));
           }
         }
 
@@ -7429,13 +7490,13 @@ INDEX_HTML = """<!doctype html>
         const selectedOpenAiTtsVoice = data.selected_openai_tts_voice || "";
         const openAiVoices = data.openai_tts_voices || [];
         if (openAiVoices.length === 0) {
-          openaiTtsVoice.appendChild(option("No voice available", "", true, true));
+          openaiTtsVoice.appendChild(option(tr("no_voice_available", "No voice available"), "", true, true));
         } else {
           for (const voice of openAiVoices) {
             openaiTtsVoice.appendChild(option(voice.label || voice.id, voice.id, false, voice.id === selectedOpenAiTtsVoice));
           }
           if (selectedOpenAiTtsVoice && !openAiVoices.some((voice) => voice.id === selectedOpenAiTtsVoice)) {
-            openaiTtsVoice.appendChild(option(`${selectedOpenAiTtsVoice} (current)`, selectedOpenAiTtsVoice, false, true));
+            openaiTtsVoice.appendChild(option(`${selectedOpenAiTtsVoice} (${tr("current", "current")})`, selectedOpenAiTtsVoice, false, true));
           }
         }
 	        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
@@ -7489,7 +7550,7 @@ INDEX_HTML = """<!doctype html>
             thinkingSound.appendChild(option(sound.label || sound.id, sound.id, false, sound.id === selectedThinkingSound));
           }
           if (selectedThinkingSound && !sounds.some((sound) => sound.id === selectedThinkingSound)) {
-            thinkingSound.appendChild(option(`${selectedThinkingSound} (current)`, selectedThinkingSound, false, true));
+            thinkingSound.appendChild(option(`${selectedThinkingSound} (${tr("current", "current")})`, selectedThinkingSound, false, true));
           }
         }
 
@@ -7508,6 +7569,7 @@ INDEX_HTML = """<!doctype html>
         for (const input of interruptConversationInputs) input.disabled = false;
         wakeWord.disabled = false;
         sttPromptEl.disabled = false;
+        sttLanguage.disabled = sttLanguage.options.length === 0 || !sttLanguage.value;
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
@@ -7586,7 +7648,7 @@ INDEX_HTML = """<!doctype html>
         const environmentLoading = data.environment_loading || {};
         setEnvironmentLoading(
           Boolean(environmentLoading.active),
-          environmentLoading.title || "rafraichissement de l'environnement"
+          environmentLoading.title || tr("environment_refresh", "rafraichissement de l'environnement")
         );
         const envProfileChanged = await loadEnvProfiles();
         if (envProfileChanged) {
@@ -8003,6 +8065,7 @@ INDEX_HTML = """<!doctype html>
       const cloudTtsProviderValue = cloudTtsProvider.value;
       const ttsOutputValue = selectedTtsOutput();
       const sttInputValue = selectedSttInput();
+      const sttLanguageValue = sttLanguage.value || i18nPayload.locale || "fr";
       const backendAudioInputDevice = backendAudioInput.value;
       const backendAudioOutputDevice = backendAudioOutput.value;
       const backendAudioOutputPanValue = Number(backendAudioOutputPan.value || 0);
@@ -8029,7 +8092,7 @@ INDEX_HTML = """<!doctype html>
       if (!provider) return;
 
       llmSave.disabled = true;
-      llmMessage.textContent = "Saving...";
+      llmMessage.textContent = tr("saving", "Saving...");
       try {
         const response = await fetch("/api/llm-config", {
           method: "POST",
@@ -8045,6 +8108,7 @@ INDEX_HTML = """<!doctype html>
             cloud_tts_provider: cloudTtsProviderValue,
             tts_output: ttsOutputValue,
             stt_input: sttInputValue,
+            stt_language: sttLanguageValue,
             backend_audio_input_device: backendAudioInputDevice,
             backend_audio_output_device: backendAudioOutputDevice,
             backend_audio_output_pan: backendAudioOutputPanValue,
@@ -8075,14 +8139,18 @@ INDEX_HTML = """<!doctype html>
         });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
-        llmMessage.textContent = data.message || "Saved.";
+        llmMessage.textContent = data.message || tr("saved", "Saved.");
         cloudApiLoaded = false;
-        setEnvironmentLoading(true, "rafraichissement de l'environnement");
+        setEnvironmentLoading(true);
         markConfigClean();
+        if ((data.stt_language || sttLanguageValue) !== i18nPayload.locale) {
+          window.setTimeout(() => window.location.reload(), 250);
+          return;
+        }
         await refresh();
       } catch (error) {
         setEnvironmentLoading(false);
-        llmMessage.textContent = `Save failed: ${error}`;
+        llmMessage.textContent = trf("save_failed", "Save failed: {error}", { error });
       } finally {
         llmSave.disabled = !llmProvider.value;
       }

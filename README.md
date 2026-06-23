@@ -243,7 +243,7 @@ OLLAMA_BASE_URL=http://localhost:11434
 # Speech-to-text settings
 STT_PROVIDER=openai-whisper                     # openai-whisper | local-whisper
 LOCAL_WHISPER_MODEL=base                        # faster-whisper model size or local model path
-STT_LANGUAGE=auto                               # auto-detect, or force en, fr, etc.
+STT_LANGUAGE=fr                                 # required locale/STT language; options come from assets/i18n/<locale>.json
 STT_PROMPT="Commandes courtes en français..."   # Optional context prompt for Whisper
 
 # Text-to-speech settings
@@ -353,7 +353,7 @@ The web monitor is intentionally split between a clean chat surface and a techni
 - If `STT_INPUT=both` or `STT_INPUT=browser`, a browser microphone button appears in the composer. The browser records audio, sends it to the backend, the backend calls OpenAI STT, and the transcribed text is injected as a normal command.
 - The composer `+` button can load a small text file into the prompt or send a WAV file through the same browser STT path as microphone audio. WAV uploads follow the active wake-word setting, so they can reproduce microphone command handling for tests.
 - The left sidebar lists persisted sessions. The `+` button creates a new session, and selecting a session restores its chat bubbles and clears the in-memory MCPAgent history for a clean switch.
-- The top-right settings button opens an overlay. The first tab contains **State** and **Console Log** collapsibles. The second tab contains **Config** with a top-level connectivity switch, **MCP Servers** links, routing-word editing, and optional iframe loading for proxied HTTP MCP `/mcp` admin pages, then **STT/TTS**, **IA model**, **Other**, **Prompt**, and **Env file** collapsibles.
+- The top-right settings button opens an overlay. The first tab contains **State** and **Console Log** collapsibles. The second tab contains **Config** with a top-level connectivity switch, **MCP Servers** links, routing-word editing, and optional iframe loading for proxied HTTP MCP `/mcp` admin pages, then **STT/TTS**, **IA model**, **Language and other**, **Prompt**, and **Env file** collapsibles.
 
 The monitor exposes these HTTP endpoints:
 
@@ -408,7 +408,7 @@ Browser audio input/output device choices are local to each browser and are save
 
 The conversation button next to the microphone enables continuous browser listening. In this mode the push-to-talk button is disabled, the browser detects speech/silence locally, sends each detected utterance to the backend, and then restarts listening after the assistant is done. If `WAKE_WORD` is configured, conversation-mode transcriptions must pass the same wake-word gate before being injected. Manual push-to-talk remains direct command input and does not require the wake word.
 
-Backend microphone STT and browser microphone STT now use the same bundled Silero VAD ONNX model offline. Backend microphone input uses `STT_PROVIDER`, `LOCAL_WHISPER_MODEL`, `STT_LANGUAGE`, and `STT_PROMPT` for transcription selection and Whisper biasing; browser microphone input uses `WEB_STT_PROVIDER` and `WEB_STT_MODEL`. Before either path sends audio to STT, Silero estimates speech probability. `VAD_SPEECH_THRESHOLD` starts speech, `VAD_NEGATIVE_THRESHOLD` allows accepted speech to end, `VAD_MIN_SPEECH_MS` rejects tiny noises, `VAD_MIN_SILENCE_MS` controls end-of-phrase timing, `VAD_SPEECH_PAD_MS` keeps backend pre-roll before detected speech, and `VAD_MAX_SPEECH_SECONDS` caps one utterance. Raise thresholds or minimum speech values to reject breaths/noise; lower them if short spoken commands are missed.
+Backend microphone STT and browser microphone STT now use the same bundled Silero VAD ONNX model offline. Backend microphone input uses `STT_PROVIDER`, `LOCAL_WHISPER_MODEL`, `STT_LANGUAGE`, and `STT_PROMPT` for transcription selection and Whisper biasing; browser microphone input uses `WEB_STT_PROVIDER` and `WEB_STT_MODEL`. `STT_LANGUAGE` is also the web GUI locale and is selected from Settings -> Config -> **Language and other**. Available choices are discovered from `assets/i18n/<locale>.json`; the repository ships `fr` and `en`, and changing the language saves the active `.env` file and reloads the assistant. Before either path sends audio to STT, Silero estimates speech probability. `VAD_SPEECH_THRESHOLD` starts speech, `VAD_NEGATIVE_THRESHOLD` allows accepted speech to end, `VAD_MIN_SPEECH_MS` rejects tiny noises, `VAD_MIN_SILENCE_MS` controls end-of-phrase timing, `VAD_SPEECH_PAD_MS` keeps backend pre-roll before detected speech, and `VAD_MAX_SPEECH_SECONDS` caps one utterance. Raise thresholds or minimum speech values to reject breaths/noise; lower them if short spoken commands are missed.
 
 The Settings -> Config -> STT/TTS section exposes these controls in a nested **Voice Activity Detection (VAD)** collapsible. Hover each slider label to see the exact `.env` variable it writes. The same VAD collapsible includes three Silero presets for quick isolated words, breath filtering, and slow soft speech; applying one fills the sliders and still requires Save to persist it.
 
