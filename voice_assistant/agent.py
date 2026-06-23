@@ -88,7 +88,7 @@ DEFAULT_OPENAI_TTS_VOICE = "alloy"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
-DEFAULT_SILERO_VAD_MODEL = Path("static/vendor/silero-vad/silero_vad_v6.onnx")
+DEFAULT_SILERO_VAD_MODEL = Path("assets/web/static/vendor/silero-vad/silero_vad_v6.onnx")
 OPENAI_MAX_TOOLS_PER_REQUEST = 128
 DEFAULT_MCP_PROMPT_NAME = "agent_prompt"
 DEFAULT_MCP_PROMPT_RESOURCE_URI = "agent://prompt/system"
@@ -5646,9 +5646,9 @@ async def main():
             "cloud_tts_provider": cloud_tts_provider,
             "tts_speed": web_tts_speed,
             "tts_volume": web_tts_volume,
-            "vad_model_url": "/static/vendor/silero-vad/silero_vad_v6.onnx",
-            "vad_ort_url": "/static/vendor/onnxruntime-web/ort.wasm.min.mjs",
-            "vad_ort_wasm_path": "/static/vendor/onnxruntime-web/",
+            "vad_model_url": "/assets/web/static/vendor/silero-vad/silero_vad_v6.onnx",
+            "vad_ort_url": "/assets/web/static/vendor/onnxruntime-web/ort.wasm.min.mjs",
+            "vad_ort_wasm_path": "/assets/web/static/vendor/onnxruntime-web/",
             "vad_speech_threshold": vad_speech_threshold,
             "vad_negative_threshold": vad_negative_threshold,
             "vad_min_speech_ms": vad_min_speech_ms,

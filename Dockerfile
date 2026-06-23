@@ -30,12 +30,12 @@ RUN apt-get update \
 COPY pyproject.toml README.md ./
 COPY voice_assistant ./voice_assistant
 COPY assets ./assets
-COPY static ./static
 COPY mcp_servers*.json ./
 COPY docker-entrypoint.sh /usr/local/bin/live-stage-assistant-entrypoint
 
-RUN test -f static/novnc/core/rfb.js \
-    && test -f static/novnc/vendor/pako/lib/zlib/inflate.js
+RUN test -f assets/web/static/novnc/core/rfb.js \
+    && test -f assets/web/static/novnc/vendor/pako/lib/zlib/inflate.js \
+    && test -f assets/web/static/vendor/silero-vad/silero_vad_v6.onnx
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install .

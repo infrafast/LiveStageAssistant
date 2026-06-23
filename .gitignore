@@ -15,8 +15,8 @@ downloads/
 eggs/
 .eggs/
 lib/
-!static/novnc/vendor/pako/lib/
-!static/novnc/vendor/pako/lib/**
+!assets/web/static/novnc/vendor/pako/lib/
+!assets/web/static/novnc/vendor/pako/lib/**
 lib64/
 parts/
 sdist/

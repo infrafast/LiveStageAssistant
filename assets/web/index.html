@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="__I18N_LOCALE__">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Stage Assistant</title>
+  <link rel="stylesheet" href="/assets/web/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1>Live Stage Assistant</h1>
+        <div class="meta" id="meta" data-i18n="meta_connecting">connecting...</div>
+      </div>
+      <button class="icon-button" id="settings-open" type="button" title="Settings" aria-label="Settings" data-i18n-title="settings" data-i18n-aria-label="settings">&#9881;</button>
+    </header>
+
+    <main class="main-layout">
+      <aside class="session-sidebar" aria-label="Sessions" data-i18n-aria-label="sessions">
+        <div class="session-header">
+          <span data-i18n="sessions">Sessions</span>
+          <button class="small-button" id="session-new" type="button" title="New session" aria-label="New session" data-i18n-title="new_session" data-i18n-aria-label="new_session">+</button>
+        </div>
+        <div class="session-list" id="session-list"></div>
+      </aside>
+      <div class="chat-panel" id="chat-panel">
+        <details class="vnc-panel" id="vnc-panel">
+          <summary><span data-i18n="remote_screen">Remote screen</span> <span class="vnc-status offline" id="vnc-status" data-i18n="offline">hors ligne</span></summary>
+          <div class="vnc-controls">
+            <input id="vnc-url" type="text" value="vnc://192.168.0.160:5900?password=ronron" spellcheck="false" aria-label="VNC URL">
+            <label class="vnc-view-only" title="Lecture seule: affiche l'écran distant sans envoyer clavier ni souris" data-i18n-title="readonly_title">
+              <input id="vnc-view-only" type="checkbox" checked>
+              <span data-i18n="readonly">Lecture seule</span>
+            </label>
+            <button class="small-button" id="vnc-connect" type="button" data-i18n="connect">Connecter</button>
+          </div>
+          <div class="vnc-frame-wrap">
+            <iframe class="vnc-frame" id="vnc-frame" title="noVNC remote screen" loading="lazy" referrerpolicy="no-referrer"></iframe>
+          </div>
+        </details>
+        <div class="chat-scroll" id="chat-scroll">
+          <div class="messages" id="messages"></div>
+        </div>
+      </div>
+    </main>
+
+    <div class="composer-wrap">
+      <form class="inject-form" id="inject-form">
+        <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" data-i18n-title="conversation_mode" data-i18n-aria-label="conversation_mode" disabled>💬</button>
+        <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" data-i18n-title="voice_input" data-i18n-aria-label="voice_input" disabled>🎙️</button>
+        <select class="composer-speaker" id="composer-speaker" title="Speaker recognition unavailable" aria-label="Speaker profile" data-i18n-title="speaker_unavailable" data-i18n-aria-label="speaker_profile" disabled>
+          <option value="auto" data-i18n="auto_detect">Auto detect</option>
+          <option value="unknown" data-i18n="unknown">Unknown</option>
+        </select>
+        <div class="command-field" id="command-field">
+          <canvas id="soundwave" aria-hidden="true"></canvas>
+          <textarea id="inject-command" rows="1" autocomplete="off" enterkeyhint="send" placeholder="Message" data-i18n-placeholder="message_placeholder"></textarea>
+        </div>
+        <button id="composer-attach" type="button" title="Upload WAV or text file" aria-label="Upload WAV or text file" data-i18n-title="upload_file" data-i18n-aria-label="upload_file">+</button>
+        <input id="composer-file" type="file" accept=".wav,audio/wav,audio/x-wav,.txt,text/plain" hidden>
+        <button id="inject-stop" type="button" title="Stop" aria-label="Stop" data-i18n-title="stop" data-i18n-aria-label="stop">&#9632;</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="overlay" id="settings-overlay" aria-hidden="true">
+    <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="settings-header">
+        <div class="settings-title" id="settings-title" data-i18n="settings">Settings</div>
+        <button class="icon-button" id="settings-close" type="button" title="Close" aria-label="Close" data-i18n-title="close" data-i18n-aria-label="close">&times;</button>
+      </div>
+      <div class="tabs" role="tablist">
+        <button class="tab active" id="tab-monitor" type="button" role="tab" aria-selected="true" aria-controls="panel-monitor" data-i18n="monitor">Monitor</button>
+        <button class="tab" id="tab-config" type="button" role="tab" aria-selected="false" aria-controls="panel-config" data-i18n="config">Config</button>
+      </div>
+      <div class="tab-panel active" id="panel-monitor" role="tabpanel" aria-labelledby="tab-monitor">
+        <section>
+          <details open>
+            <summary data-i18n="state">State</summary>
+            <div class="state" id="state"></div>
+          </details>
+        </section>
+        <section>
+          <details open>
+            <summary data-i18n="console_log">Console Log</summary>
+            <textarea class="inspect" id="logs" readonly spellcheck="false"></textarea>
+          </details>
+        </section>
+	      </div>
+	      <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
+        <section>
+          <details>
+            <summary data-i18n="connectivity">Connectivity</summary>
+            <div class="config-controls">
+              <div class="field full-row">
+                <label><span data-i18n="profile">Profile</span> <span class="inline-badge hidden" id="connectivity-auto-badge">Auto</span></label>
+                <select id="env-profile"></select>
+                <div class="segmented" id="connectivity-mode" role="radiogroup" aria-label="Connectivity">
+                  <label><input type="radio" name="connectivity-mode" value="online">Online</label>
+                  <label><input type="radio" name="connectivity-mode" value="offline">Offline</label>
+                </div>
+              </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details id="mcp-servers-details">
+            <summary data-i18n="mcp_servers">MCP Servers</summary>
+            <div class="mcp-server-panel">
+              <div class="mcp-server-toolbar">
+                <div class="detail" data-i18n="mcp_admin_detail">HTTP MCP admin pages can load through LiveStageAssistant or directly from this browser.</div>
+                <div class="segmented" id="mcp-admin-route" role="radiogroup" aria-label="MCP admin route">
+                  <label><input type="radio" name="mcp-admin-route" value="proxy"><span data-i18n="http_proxy">HTTP proxy</span></label>
+                  <label><input type="radio" name="mcp-admin-route" value="direct"><span data-i18n="direct">Direct</span></label>
+                </div>
+              </div>
+              <div class="mcp-server-grid" id="mcp-server-grid"></div>
+            </div>
+          </details>
+        </section>
+	        <section>
+	          <details>
+	            <summary>STT/TTS</summary>
+	            <div class="config-controls">
+              <div class="field">
+                <label for="wake-word" data-i18n="wake_word">Wake Word</label>
+                <input id="wake-word" type="text" placeholder="Disabled" data-i18n-placeholder="disabled">
+              </div>
+              <div class="field full-row">
+                <label for="stt-prompt">STT_PROMPT</label>
+                <textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea>
+              </div>
+              <div class="field">
+                <label data-i18n="interrupt_conversation">Interrompre une conversation</label>
+                <div class="segmented" id="interrupt-conversation" role="radiogroup" aria-label="Interrompre une conversation">
+                  <label><input type="radio" name="interrupt-conversation" value="off">Off</label>
+                  <label><input type="radio" name="interrupt-conversation" value="on">On</label>
+                </div>
+              </div>
+	              <div class="field cloud-audio-control">
+	                <label for="cloud-tts-provider">TTS</label>
+	                <select id="cloud-tts-provider"></select>
+	              </div>
+	              <div class="field cloud-audio-control">
+	                <label data-i18n="tts_output">TTS Output</label>
+	                <div class="segmented" id="tts-output" role="radiogroup" aria-label="TTS Output">
+	                  <label><input type="radio" name="tts-output" value="browser"><span data-i18n="browser">Browser</span></label>
+	                  <label><input type="radio" name="tts-output" value="backend"><span data-i18n="backend">Backend</span></label>
+	                  <label><input type="radio" name="tts-output" value="silent"><span data-i18n="silent">Silent</span></label>
+	                </div>
+	              </div>
+	              <div class="field" id="tts-speed-field">
+	                <label for="openai-tts-speed"><span data-i18n="tts_speed">TTS Speed</span> <span id="openai-tts-speed-label">1.0x</span></label>
+	                <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
+	              </div>
+	              <div class="field" id="web-tts-volume-field">
+	                <label for="web-tts-volume" title="WEB_TTS_VOLUME"><span data-i18n="web_tts_volume">Volume TTS navigateur</span> <span id="web-tts-volume-label">100%</span></label>
+	                <input id="web-tts-volume" type="range" min="0" max="1" step="0.05" value="1">
+	              </div>
+              <div class="field">
+                <label data-i18n="stt_input">STT Input</label>
+                <div class="segmented" id="stt-input" role="radiogroup" aria-label="STT Input">
+                  <label><input type="radio" name="stt-input" value="both"><span data-i18n="both">Both</span></label>
+                  <label><input type="radio" name="stt-input" value="browser"><span data-i18n="browser">Browser</span></label>
+                  <label><input type="radio" name="stt-input" value="backend"><span data-i18n="backend">Backend</span></label>
+                  <label><input type="radio" name="stt-input" value="silent"><span data-i18n="silent">Silent</span></label>
+                </div>
+              </div>
+	              <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local pyttsx3</div>
+              <div class="field" id="elevenlabs-voice-field">
+                <label for="elevenlabs-voice" data-i18n="elevenlabs_voice">ElevenLabs Voice</label>
+                <select id="elevenlabs-voice"></select>
+              </div>
+              <div class="field" id="openai-tts-voice-field">
+                <label for="openai-tts-voice" data-i18n="openai_voice">OpenAI Voice</label>
+                <select id="openai-tts-voice"></select>
+              </div>
+	              <div class="field" id="backend-tts-volume-field">
+	                <label for="backend-tts-volume" title="BACKEND_TTS_VOLUME"><span data-i18n="backend_tts_volume">Volume TTS backend</span> <span id="backend-tts-volume-label">100%</span></label>
+	                <input id="backend-tts-volume" type="range" min="0" max="2" step="0.05" value="1">
+	              </div>
+              <div class="field" id="tts-test-field">
+                <label data-i18n="voice_test">Voice Test</label>
+                <button class="small-button" id="tts-test" type="button" data-i18n="test">Test</button>
+              </div>
+              <details class="nested-details">
+                <summary data-i18n="vad">Voice Activity Detection (VAD)</summary>
+                <div class="vad-groups">
+                  <div class="vad-group">
+                    <div class="vad-group-title">
+                      <span>Silero</span>
+                      <span class="detail">Réglages communs au micro navigateur et au micro backend.</span>
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="vad-speech-threshold" title="VAD_SPEECH_THRESHOLD">
+                        <span>Seuil d'entrée voix</span>
+                        <span class="vad-value" id="vad-speech-threshold-label">0.5</span>
+                      </label>
+                      <div class="field-hint">Plus bas capte une voix faible; plus haut ignore mieux bruit, musique et souffle.</div>
+                      <input class="vad-control" id="vad-speech-threshold" type="range" min="0.05" max="0.95" step="0.01" value="0.5">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="vad-negative-threshold" title="VAD_NEGATIVE_THRESHOLD">
+                        <span>Seuil de sortie silence</span>
+                        <span class="vad-value" id="vad-negative-threshold-label">0.35</span>
+                      </label>
+                      <div class="field-hint">Doit rester sous le seuil d'entrée; plus bas évite les coupures sur syllabes faibles.</div>
+                      <input class="vad-control" id="vad-negative-threshold" type="range" min="0.01" max="0.9" step="0.01" value="0.35">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="vad-min-speech-ms" title="VAD_MIN_SPEECH_MS">
+                        <span>Durée minimale de voix</span>
+                        <span class="vad-value" id="vad-min-speech-ms-label">120 ms</span>
+                      </label>
+                      <div class="field-hint">Plus court accepte des commandes très brèves; plus long filtre mieux les faux départs.</div>
+                      <input class="vad-control" id="vad-min-speech-ms" type="range" min="0" max="1500" step="20" value="120">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="vad-min-silence-ms" title="VAD_MIN_SILENCE_MS">
+                        <span>Silence qui termine la phrase</span>
+                        <span class="vad-value" id="vad-min-silence-ms-label">650 ms</span>
+                      </label>
+                      <div class="field-hint">Plus court envoie vite; plus long laisse le temps de parler lentement sans couper.</div>
+                      <input class="vad-control" id="vad-min-silence-ms" type="range" min="100" max="5000" step="50" value="650">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="vad-speech-pad-ms" title="VAD_SPEECH_PAD_MS">
+                        <span>Marge avant la voix</span>
+                        <span class="vad-value" id="vad-speech-pad-ms-label">100 ms</span>
+                      </label>
+                      <div class="field-hint">Conserve un peu d'audio avant le déclenchement pour ne pas manger l'attaque du mot.</div>
+                      <input class="vad-control" id="vad-speech-pad-ms" type="range" min="0" max="1000" step="20" value="100">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="vad-max-speech-seconds" title="VAD_MAX_SPEECH_SECONDS">
+                        <span>Durée maximale d'une phrase</span>
+                        <span class="vad-value" id="vad-max-speech-seconds-label">8 s</span>
+                      </label>
+                      <div class="field-hint">Coupe un enregistrement trop long même si Silero pense entendre encore de la voix.</div>
+                      <input class="vad-control" id="vad-max-speech-seconds" type="range" min="1" max="30" step="0.5" value="8">
+                    </div>
+                  </div>
+                </div>
+                <div class="vad-examples">
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Mot rapide isolé, attaque nette</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="quick-word">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Entrée 0.42, sortie 0.25, voix minimale 80 ms, silence 450 ms, marge 120 ms, maximum 6 s</div>
+                    </div>
+                  </div>
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Filtrer le souffle, quelques mots rapprochés</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="noise-filter">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Entrée 0.62, sortie 0.42, voix minimale 180 ms, silence 700 ms, marge 100 ms, maximum 8 s</div>
+                    </div>
+                  </div>
+                  <div class="vad-example">
+                    <div class="vad-example-title">
+                      <span>Longue phrase lente, voix faible</span>
+                      <button class="small-button vad-preset" type="button" data-vad-preset="slow-soft">Apply</button>
+                    </div>
+                    <div class="vad-example-values">
+                      <div>Entrée 0.38, sortie 0.22, voix minimale 120 ms, silence 1600 ms, marge 180 ms, maximum 12 s</div>
+                    </div>
+                  </div>
+                </div>
+              </details>
+              <details class="nested-details">
+                <summary data-i18n="speaker_profiles">Speaker profiles</summary>
+                <div class="vad-groups">
+                  <div class="vad-group" id="speaker-recognition-group">
+                    <div class="vad-group-title">
+                      <span data-i18n="speaker_recognition">Reconnaissance locuteur</span>
+                      <span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span>
+                    </div>
+                    <div class="field-hint" title="Exemple à lire: Je suis <prénom>. QLC lecture aléatoire. QLC lecture pause. QLC rouge. Un, deux, trois, quatre, cinq, six, sept, huit, neuf, zero! Console, quel est le volume de la façade? Console, monte le volume principal de deux décibel. Console, baisse ma guitare dans mon retour. Console, coupe le clic dans mon retour. Régie, fais un fade out dans cinq secondes. Régie, monte le clic.">
+                      WAV conseillé: 10 à 30 s d'une seule voix, parole normale, même micro que le live si possible.
+                      Évite musique, souffle, réverb, saturation, longs silences et autres voix.
+                      Mono 16 kHz, 44.1 kHz ou 48 kHz convient.
+                    </div>
+                    <div class="field">
+                      <label>Speaker recognition</label>
+                      <div class="segmented" id="speaker-recognition" role="radiogroup" aria-label="Speaker recognition">
+                        <label><input type="radio" name="speaker-recognition" value="off">Off</label>
+                        <label><input type="radio" name="speaker-recognition" value="on">On</label>
+                      </div>
+                    </div>
+                    <div class="field">
+                      <label for="speaker-backend">Backend</label>
+                      <select id="speaker-backend">
+                        <option value="resemblyzer">Resemblyzer</option>
+                      </select>
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="speaker-threshold" title="SPEAKER_THRESHOLD">
+                        <span>Confiance minimale</span>
+                        <span class="vad-value" id="speaker-threshold-label">0.75</span>
+                      </label>
+                      <div class="field-hint">Plus haut évite les erreurs; plus bas reconnaît plus facilement.</div>
+                      <input id="speaker-threshold" type="range" min="0" max="1" step="0.01" value="0.75">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="speaker-margin" title="SPEAKER_MARGIN">
+                        <span>Écart entre deux voix</span>
+                        <span class="vad-value" id="speaker-margin-label">0.10</span>
+                      </label>
+                      <div class="field-hint">Demande que la meilleure voix soit clairement au-dessus de la deuxième.</div>
+                      <input id="speaker-margin" type="range" min="0" max="1" step="0.01" value="0.10">
+                    </div>
+                    <div class="field full-row">
+                      <div class="speaker-profile-grid" id="speaker-profile-grid"></div>
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details id="cloud-api-details">
+            <summary data-i18n="cloud_api">Cloud API</summary>
+            <div class="cloud-api-panel">
+              <div class="cloud-api-header">
+                <div class="detail" data-i18n="cloud_api_detail">API keys stay on the backend. OpenAI credit remaining is not exposed by the public API.</div>
+                <button class="small-button" id="cloud-api-refresh" type="button" data-i18n="refresh">Refresh</button>
+              </div>
+              <div class="cloud-api-grid" id="cloud-api-grid"></div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details>
+            <summary data-i18n="audio_in_out">Audio In/Out</summary>
+            <div class="config-controls">
+              <div class="field" id="browser-audio-input-field">
+                <label for="browser-audio-input">Browser Audio Input</label>
+                <div class="audio-test-row">
+                  <select id="browser-audio-input"></select>
+                  <button class="small-button" id="browser-audio-test" type="button" data-i18n="test">Test</button>
+                  <div class="vu-meter" id="browser-audio-meter" aria-hidden="true"><div class="vu-fill"></div></div>
+                </div>
+              </div>
+              <div class="field" id="browser-audio-output-field">
+                <label for="browser-audio-output">Browser Audio Output</label>
+                <select id="browser-audio-output"></select>
+              </div>
+              <div class="field">
+                <label>&nbsp;</label>
+                <button class="small-button" id="browser-audio-refresh" type="button" data-i18n="refresh">Refresh</button>
+              </div>
+              <div class="field" id="backend-audio-input-field">
+                <label for="backend-audio-input">Backend Audio Input</label>
+                <div class="audio-test-row">
+                  <select id="backend-audio-input"></select>
+                  <button class="small-button" id="backend-audio-test" type="button" data-i18n="test">Test</button>
+                  <div class="vu-meter" id="backend-audio-meter" aria-hidden="true"><div class="vu-fill"></div></div>
+                </div>
+              </div>
+              <div class="field" id="backend-audio-output-field">
+                <label for="backend-audio-output">Backend Audio Output</label>
+                <select id="backend-audio-output"></select>
+              </div>
+              <div class="field" id="backend-audio-monitor-mode-field" title="BACKEND_AUDIO_MONITOR_MODE">
+                <label>Monitoring micro backend</label>
+                <div class="segmented" id="backend-audio-monitor-mode" role="radiogroup" aria-label="Backend audio monitor mode">
+                  <label><input type="radio" name="backend-audio-monitor-mode" value="rejected">Rejected</label>
+                  <label><input type="radio" name="backend-audio-monitor-mode" value="passthrough">Pass through</label>
+                  <label><input type="radio" name="backend-audio-monitor-mode" value="off">Off</label>
+                </div>
+              </div>
+              <div class="field" id="backend-audio-monitor-volume-field" title="BACKEND_AUDIO_MONITOR_VOLUME">
+                <label for="backend-audio-monitor-volume">Volume monitoring backend <span id="backend-audio-monitor-volume-label">100%</span></label>
+                <input id="backend-audio-monitor-volume" type="range" min="0" max="2" step="0.05" value="1">
+              </div>
+              <div class="field" id="backend-audio-output-pan-field" title="BACKEND_AUDIO_OUTPUT_PAN">
+                <label for="backend-audio-output-pan">Panoramique sortie backend <span id="backend-audio-output-pan-label">Centre</span></label>
+                <input id="backend-audio-output-pan" type="range" min="-1" max="1" step="0.05" value="0">
+              </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details>
+            <summary data-i18n="ia_model">IA model</summary>
+            <div class="config-controls">
+              <div class="field">
+                <label for="llm-provider" data-i18n="provider">Provider</label>
+                <select id="llm-provider"></select>
+              </div>
+              <div class="field">
+                <label for="llm-model">LLM</label>
+                <select id="llm-model"></select>
+              </div>
+              <div class="field">
+                <label for="session-context-size">Session Context <span id="session-context-size-label">6000</span></label>
+                <input id="session-context-size" type="range" min="0" max="12000" step="500" value="6000">
+              </div>
+              <div class="field">
+                <label for="mcp-agent-max-steps" title="MCP_AGENT_MAX_STEPS">MCP Steps <span id="mcp-agent-max-steps-label">20</span></label>
+                <input id="mcp-agent-max-steps" type="range" min="5" max="60" step="1" value="20">
+              </div>
+              <div class="field">
+                <label data-i18n="tool_routing">Tool Routing</label>
+                <div class="segmented" id="mcp-tool-routing" role="radiogroup" aria-label="Tool Routing">
+                  <label><input type="radio" name="mcp-tool-routing" value="false">Off</label>
+                  <label><input type="radio" name="mcp-tool-routing" value="true">Routing</label>
+                </div>
+              </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details>
+            <summary data-i18n="language_other">Langue et divers</summary>
+            <div class="config-controls">
+              <div class="field">
+                <label for="stt-language" title="STT_LANGUAGE" data-i18n="stt_language">Langue STT</label>
+                <select id="stt-language"></select>
+              </div>
+              <div class="field">
+                <label for="thinking-sound" data-i18n="thinking_sound">Thinking Sound</label>
+                <select id="thinking-sound"></select>
+              </div>
+              <div class="field" id="command-ack-sound-field" title="COMMAND_ACK_SOUND_ENABLED">
+                <label for="command-ack-sound">Ding!</label>
+                <button class="small-button" id="command-ack-sound" type="button" role="switch" aria-checked="false">Off</button>
+              </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details>
+            <summary data-i18n="prompt">Prompt</summary>
+            <div class="prompt-fields">
+              <div class="field">
+                <label for="assistant-system-prompt">ASSISTANT_SYSTEM_PROMPT</label>
+                <textarea class="inspect" id="assistant-system-prompt" spellcheck="false"></textarea>
+              </div>
+              <div class="field">
+                <label for="prompt" data-i18n="final_prompt">Final Prompt</label>
+                <textarea class="inspect" id="prompt" readonly spellcheck="false"></textarea>
+              </div>
+            </div>
+          </details>
+        </section>
+        <section>
+          <details>
+            <summary data-i18n="env_file">Env file</summary>
+            <textarea class="inspect" id="config" readonly spellcheck="false"></textarea>
+          </details>
+        </section>
+        <div class="config-footer">
+          <div class="config-message" id="llm-message"></div>
+          <button id="llm-save" type="button" data-i18n="save">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="loading-overlay" id="session-loading" aria-hidden="true">
+    <div class="loading-panel" role="status" aria-live="polite">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <div>
+        <div class="loading-title" id="session-loading-title">Loading session</div>
+        <div class="loading-detail" id="session-loading-detail">Preparing persisted context summary</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-overlay" id="toast-overlay" aria-hidden="true">
+    <div class="toast-panel ok" id="toast-panel" role="status" aria-live="polite">
+      <div class="toast-title" id="toast-title">OK</div>
+      <div class="toast-detail" id="toast-detail"></div>
+      <div class="toast-actions">
+        <button class="small-button" id="toast-ok" type="button">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="session-summary-popover" id="session-summary-popover" role="status" aria-live="polite"></div>
+
+  <script>
+    window.LSA_I18N_PAYLOAD = __I18N_PAYLOAD__;
+    window.LSA_SPEAKER_EMBEDDING_PREPARATION_MESSAGE = __SPEAKER_EMBEDDING_PREPARATION_MESSAGE__;
+  </script>
+  <script src="/assets/web/app.js"></script>
+</body>
+</html>

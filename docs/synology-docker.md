@@ -54,7 +54,7 @@ container/
   data/
 ```
 
-The Docker image includes the `static/` folder, including the vendored noVNC client. Avoid mounting a host `static/` folder over `/app/static`; a partial host copy will hide the complete files from the image and can break noVNC module imports such as `static/novnc/vendor/pako/lib/zlib/inflate.js`.
+The Docker image includes `assets/web/static/`, including the vendored noVNC client, ONNX Runtime Web files, and the Silero VAD model. Docker Compose mounts `./assets:/app/assets:ro`; make sure that host folder is complete, otherwise a partial mount can hide required files such as `assets/web/static/novnc/vendor/pako/lib/zlib/inflate.js`.
 
 If the monitor is exposed on your LAN/NAS, set `WEB_PASSWORD` in the active env file to require a password before the web page opens. Leave `WEB_PASSWORD=` empty to keep the previous unauthenticated behavior.
 
