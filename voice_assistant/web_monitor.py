@@ -30,7 +30,7 @@ try:
     from .i18n import available_locales, load_locale, normalize_locale
     from .speaker_recognition import (
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
-        compute_resemblyzer_embedding_file,
+        compute_resemblyzer_mean_embedding_file,
         validate_wav_bytes,
     )
 except ImportError:  # pragma: no cover - direct script fallback
@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - direct script fallback
         from i18n import available_locales, load_locale, normalize_locale
         from speaker_recognition import (
             SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
-            compute_resemblyzer_embedding_file,
+            compute_resemblyzer_mean_embedding_file,
             validate_wav_bytes,
         )
     except ImportError:  # pragma: no cover - optional helper unavailable
@@ -48,7 +48,7 @@ except ImportError:  # pragma: no cover - direct script fallback
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE = (
             "Je prépare l'empreinte vocale du profil. Cela peut prendre un moment la première fois."
         )
-        compute_resemblyzer_embedding_file = None
+        compute_resemblyzer_mean_embedding_file = None
         validate_wav_bytes = None
 
 
@@ -1336,28 +1336,48 @@ class WebMonitor:
                     if profile_index < 1 or profile_index > 5:
                         self.send_error(400, "Speaker profile index must be between 1 and 5")
                         return
+                    try:
+                        sample_index = int(payload.get("sample_index") or 0)
+                    except (TypeError, ValueError):
+                        sample_index = 0
+                    if sample_index < 1 or sample_index > 3:
+                        self.send_error(400, "Speaker profile sample index must be between 1 and 3")
+                        return
 
                     slug = self._safe_speaker_profile_slug(profile_name)
                     profile_root = Path(os.getenv("SPEAKER_PROFILES_DIR", "data/speaker_profiles"))
+                    sample_paths = [profile_root / f"profil{profile_index}_{slot}.wav" for slot in range(1, 4)]
                     try:
                         profile_root.mkdir(parents=True, exist_ok=True)
-                        target = profile_root / f"profil{profile_index}.wav"
+                        target = sample_paths[sample_index - 1]
                         target.write_bytes(audio_data)
                     except OSError as e:
                         self.send_error(500, f"Could not save speaker profile WAV: {e}")
                         return
-                    embedding_status = "embedding unavailable"
-                    embedding_path = target.with_suffix(".npy")
-                    if compute_resemblyzer_embedding_file is not None:
+                    sample_statuses = [
+                        {
+                            "index": slot_index,
+                            "wav_path": sample_path.as_posix(),
+                            "filename": sample_path.name,
+                            "ready": sample_path.exists() and sample_path.is_file(),
+                        }
+                        for slot_index, sample_path in enumerate(sample_paths, start=1)
+                    ]
+                    samples_complete = all(item["ready"] for item in sample_statuses)
+                    embedding_status = "waiting for 3 samples"
+                    embedding_path = profile_root / f"profil{profile_index}.npy"
+                    if samples_complete and compute_resemblyzer_mean_embedding_file is not None:
                         try:
                             with monitor._lock:
                                 notice_handler = monitor._speaker_embedding_notice_handler
                             if notice_handler:
                                 notice_handler(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
-                            embedding_path = compute_resemblyzer_embedding_file(target, embedding_path)
-                            embedding_status = "embedding ready"
+                            embedding_path = compute_resemblyzer_mean_embedding_file(sample_paths, embedding_path)
+                            embedding_status = "mean embedding ready"
                         except Exception as e:
                             embedding_status = f"embedding pending: {e}"
+                    elif samples_complete:
+                        embedding_status = "embedding unavailable"
 
                     self._send_json(
                         {
@@ -1365,9 +1385,12 @@ class WebMonitor:
                             "profile_name": profile_name,
                             "slug": slug,
                             "profile_index": profile_index,
+                            "sample_index": sample_index,
                             "wav_path": target.as_posix(),
+                            "samples": sample_statuses,
+                            "complete": samples_complete,
                             "embedding_path": embedding_path.as_posix(),
-                            "status": "ready",
+                            "status": "ready" if samples_complete else "incomplete",
                             "embedding_status": embedding_status,
                         }
                     )

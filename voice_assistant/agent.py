@@ -5410,11 +5410,15 @@ async def main():
         for key in env_keys:
             os.environ.pop(key, None)
 
-    def speaker_profile_wav_path_from_values(values: dict, index: int) -> str:
+    def speaker_profile_wav_paths_from_values(values: dict, index: int) -> list[str]:
         profile_root_value = values.get("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR
         profile_root = Path(str(profile_root_value).strip())
-        default_path = profile_root / f"profil{index}.wav"
-        return default_path.as_posix()
+        return [(profile_root / f"profil{index}_{sample_index}.wav").as_posix() for sample_index in range(1, 4)]
+
+    def speaker_profile_embedding_path_from_values(values: dict, index: int) -> str:
+        profile_root_value = values.get("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR
+        profile_root = Path(str(profile_root_value).strip())
+        return (profile_root / f"profil{index}.npy").as_posix()
 
     def speaker_profiles_from_values(values: dict, max_profiles: int = 5) -> list[SpeakerProfile]:
         profiles: list[SpeakerProfile] = []
@@ -5422,17 +5426,19 @@ async def main():
         for index in range(1, max_profiles + 1):
             prefix = f"SPEAKER_PROFILE_{index}_"
             name = (values.get(f"{prefix}NAME") or "").strip()
-            wav_path = speaker_profile_wav_path_from_values(values, index)
+            wav_paths = speaker_profile_wav_paths_from_values(values, index)
             enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
             if not name and not enabled:
                 continue
-            paths = [Path(wav_path)] if wav_path else []
+            existing_paths = [Path(path) for path in wav_paths if Path(path).exists() and Path(path).is_file()]
+            paths = existing_paths if len(existing_paths) == 3 else []
             profiles.append(
                 SpeakerProfile(
                     name=name or f"speaker_{index}",
                     wav_paths=paths,
                     enabled=enabled,
                     slug=safe_speaker_profile_slug(name or f"speaker_{index}"),
+                    embedding_path=Path(speaker_profile_embedding_path_from_values(values, index)),
                 )
             )
         return profiles
@@ -5442,23 +5448,39 @@ async def main():
         for index in range(1, max(0, min(5, int(max_profiles or 5))) + 1):
             prefix = f"SPEAKER_PROFILE_{index}_"
             name = (values.get(f"{prefix}NAME") or "").strip()
-            wav_path = speaker_profile_wav_path_from_values(values, index)
             enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
-            path = Path(wav_path) if wav_path else None
-            embedding_path = path.with_suffix(".npy") if path else None
-            if not wav_path:
-                status = "missing wav"
-            elif not path.exists():
-                status = "missing wav"
+            wav_paths = speaker_profile_wav_paths_from_values(values, index)
+            samples = []
+            ready_paths = []
+            for sample_index, wav_path in enumerate(wav_paths, start=1):
+                path = Path(wav_path)
+                sample_status = "missing"
+                if path.exists() and path.is_file():
+                    try:
+                        with wave.open(str(path), "rb") as reader:
+                            sample_status = "ready" if reader.getnframes() > 0 else "error"
+                        if sample_status == "ready":
+                            ready_paths.append(path)
+                    except Exception:
+                        sample_status = "error"
+                samples.append(
+                    {
+                        "index": sample_index,
+                        "wav_path": wav_path,
+                        "filename": path.name,
+                        "ready": sample_status == "ready",
+                        "status": sample_status,
+                    }
+                )
+            embedding_path = Path(speaker_profile_embedding_path_from_values(values, index))
+            if len(ready_paths) < 3:
+                status = f"{len(ready_paths)}/3 samples"
             else:
                 try:
-                    with wave.open(str(path), "rb") as reader:
-                        status = "ready" if reader.getnframes() > 0 else "error"
-                    if status == "ready":
-                        if embedding_path and embedding_path.exists() and embedding_path.stat().st_mtime >= path.stat().st_mtime:
-                            status = "ready cached"
-                        else:
-                            status = "ready, embedding pending"
+                    if embedding_path.exists() and all(embedding_path.stat().st_mtime >= path.stat().st_mtime for path in ready_paths):
+                        status = "ready cached"
+                    else:
+                        status = "ready, embedding pending"
                 except Exception:
                     status = "error"
             statuses.append(
@@ -5466,7 +5488,9 @@ async def main():
                     "index": index,
                     "name": name,
                     "enabled": enabled,
-                    "wav_path": wav_path,
+                    "wav_paths": wav_paths,
+                    "samples": samples,
+                    "complete": len(ready_paths) == 3,
                     "status": status,
                     "embedding_path": embedding_path.as_posix() if embedding_path else "",
                     "slug": safe_speaker_profile_slug(name or f"speaker_{index}"),

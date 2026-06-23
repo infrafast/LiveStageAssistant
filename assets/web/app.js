@@ -4,7 +4,7 @@
       return Object.prototype.hasOwnProperty.call(i18nMessages, key) ? i18nMessages[key] : fallback;
     }
     function trf(key, fallback, values = {}) {
-      return tr(key, fallback).replace(/\\{([a-zA-Z0-9_]+)\\}/g, (match, name) => (
+      return tr(key, fallback).replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name) => (
         Object.prototype.hasOwnProperty.call(values, name) ? values[name] : match
       ));
     }
@@ -2611,16 +2611,33 @@
 
         const uploadWrap = document.createElement("div");
         uploadWrap.className = "speaker-upload";
-        const file = document.createElement("input");
-        file.type = "file";
-        file.accept = ".wav,audio/wav,audio/x-wav";
-        file.dataset.role = "file";
-        const upload = document.createElement("button");
-        upload.type = "button";
-        upload.className = "small-button";
-        upload.textContent = "Upload WAV";
-        upload.addEventListener("click", () => uploadSpeakerProfile(row));
-        uploadWrap.append(file, upload);
+        const samples = Array.isArray(profile.samples) && profile.samples.length
+          ? profile.samples
+          : Array.from({ length: 3 }, (_, sampleOffset) => ({
+              index: sampleOffset + 1,
+              filename: `profil${index}_${sampleOffset + 1}.wav`,
+              ready: false
+            }));
+        for (let sampleIndex = 1; sampleIndex <= 3; sampleIndex += 1) {
+          const sample = samples.find((item) => Number(item.index) === sampleIndex) || { index: sampleIndex };
+          const sampleWrap = document.createElement("label");
+          sampleWrap.className = `speaker-sample${sample.ready ? " ready" : ""}`;
+          sampleWrap.title = sample.wav_path || `data/speaker_profiles/profil${index}_${sampleIndex}.wav`;
+          const led = document.createElement("span");
+          led.className = "speaker-sample-led";
+          led.setAttribute("aria-hidden", "true");
+          const file = document.createElement("input");
+          file.type = "file";
+          file.accept = ".wav,audio/wav,audio/x-wav";
+          file.dataset.role = "file";
+          file.dataset.sampleIndex = String(sampleIndex);
+          file.setAttribute("aria-label", trf("speaker_sample_upload", "Sample {index}", { index: sampleIndex }));
+          file.addEventListener("change", () => {
+            if (file.files && file.files[0]) uploadSpeakerProfile(row, sampleIndex);
+          });
+          sampleWrap.append(led, file);
+          uploadWrap.append(sampleWrap);
+        }
 
         const enabledLabel = document.createElement("label");
         const enabled = document.createElement("input");
@@ -2636,13 +2653,13 @@
 
         const status = document.createElement("span");
         status.className = "speaker-status";
-        status.textContent = profile.status || "missing wav";
+        status.textContent = profile.status || tr("speaker_samples_missing", "0/3 samples");
 
         const path = document.createElement("span");
         path.className = "speaker-path";
         path.dataset.role = "path";
-        path.title = profile.wav_path || `data/speaker_profiles/profil${index}.wav`;
-        path.textContent = profile.wav_path || `profil${index}.wav`;
+        path.title = profile.embedding_path || `data/speaker_profiles/profil${index}.npy`;
+        path.textContent = profile.embedding_path || `profil${index}.npy`;
 
         row.append(name, uploadWrap, enabledLabel, status, path);
         speakerProfileGrid.appendChild(row);
@@ -2658,28 +2675,28 @@
       });
     }
 
-    async function uploadSpeakerProfile(row) {
+    async function uploadSpeakerProfile(row, sampleIndex) {
       const nameInput = row.querySelector('[data-role="name"]');
       const pathLabel = row.querySelector('[data-role="path"]');
-      const fileInput = row.querySelector('[data-role="file"]');
+      const fileInput = row.querySelector(`[data-role="file"][data-sample-index="${sampleIndex}"]`);
       const enabledInput = row.querySelector('[data-role="enabled"]');
       const status = row.querySelector(".speaker-status");
       const profileName = nameInput.value.trim();
       const file = fileInput.files && fileInput.files[0];
       if (!profileName) {
-        status.textContent = "name required";
+        status.textContent = tr("speaker_name_required", "name required");
         return;
       }
       if (!file) {
-        status.textContent = "choose wav";
+        status.textContent = tr("speaker_choose_wav", "choose wav");
         return;
       }
       if (!file.name.toLowerCase().endsWith(".wav")) {
-        status.textContent = "wav only";
+        status.textContent = tr("speaker_wav_only", "wav only");
         return;
       }
-      status.textContent = "embedding...";
-      setProfileLoading(true, "Préparation du profil vocal", speakerEmbeddingPreparationMessage);
+      status.textContent = tr("speaker_embedding_progress", "embedding...");
+      setProfileLoading(true, tr("preparing_voice_profile", "Préparation du profil vocal"), speakerEmbeddingPreparationMessage);
       if (webAudio.tts_enabled && webAudio.tts_output === "browser") {
         playWebTts(speakerEmbeddingPreparationMessage);
       }
@@ -2691,6 +2708,7 @@
           body: JSON.stringify({
             profile_name: profileName,
             profile_index: Number(row.dataset.index || 0),
+            sample_index: sampleIndex,
             filename: file.name,
             audio_base64: dataUrl
           })
@@ -2700,8 +2718,16 @@
           throw new Error(data.error?.message || data.message || response.statusText || "Upload failed");
         }
         if (pathLabel) {
-          pathLabel.textContent = data.wav_path || `profil${row.dataset.index || ""}.wav`;
-          pathLabel.title = data.wav_path || "";
+          pathLabel.textContent = data.embedding_path || `profil${row.dataset.index || ""}.npy`;
+          pathLabel.title = data.embedding_path || "";
+        }
+        for (const sample of data.samples || []) {
+          const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);
+          const sampleWrap = input ? input.closest(".speaker-sample") : null;
+          if (sampleWrap) {
+            sampleWrap.classList.toggle("ready", Boolean(sample.ready));
+            sampleWrap.title = sample.wav_path || sample.filename || "";
+          }
         }
         enabledInput.checked = true;
         speakerProfileChoices = activeSpeakerProfilesFromConfig();
@@ -2711,18 +2737,24 @@
         const generated = String(data.embedding_status || "").toLowerCase().includes("ready");
         setProfileLoading(
           true,
-          generated ? "Génération du profil faite" : "Fichier profil sauvegardé",
+          generated ? tr("speaker_profile_done", "Génération du profil faite") : tr("speaker_profile_file_saved", "Fichier profil sauvegardé"),
           generated
-            ? `Profil ${row.dataset.index || ""} prêt: ${data.wav_path || ""}`
-            : `${speakerEmbeddingPreparationMessage} ${data.embedding_status || "Embedding non généré pour l'instant."} Le WAV est sauvegardé.`,
+            ? trf("speaker_profile_ready_detail", "Profil {index} prêt: {path}", {
+                index: row.dataset.index || "",
+                path: data.embedding_path || ""
+              })
+            : trf("speaker_profile_pending_detail", "{message} {status} Le WAV est sauvegardé.", {
+                message: speakerEmbeddingPreparationMessage,
+                status: data.embedding_status || tr("speaker_embedding_not_generated", "Embedding non généré pour l'instant.")
+              }),
           "done"
         );
         window.setTimeout(() => setProfileLoading(false), 1400);
       } catch (error) {
-        status.textContent = "upload failed";
+        status.textContent = tr("speaker_upload_failed", "upload failed");
         setProfileLoading(
           true,
-          "Erreur génération profil",
+          tr("profile_generation_error", "Erreur génération profil"),
           String(error.message || error),
           "error"
         );

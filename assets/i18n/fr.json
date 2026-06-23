@@ -88,6 +88,18 @@
     "testing_voice": "Test de la voix...",
     "voice_test_played": "Test voix joué.",
     "voice_test_failed": "Échec du test voix : {error}",
-    "stt_example_applied": "Exemple STT appliqué. Sauvegarde pour le conserver."
+    "stt_example_applied": "Exemple STT appliqué. Sauvegarde pour le conserver.",
+    "speaker_sample_upload": "Sample {index}",
+    "speaker_samples_missing": "0/3 samples",
+    "speaker_name_required": "nom requis",
+    "speaker_choose_wav": "choisis un WAV",
+    "speaker_wav_only": "WAV uniquement",
+    "speaker_embedding_progress": "embedding...",
+    "speaker_upload_failed": "échec upload",
+    "speaker_profile_done": "Génération du profil faite",
+    "speaker_profile_file_saved": "Fichier profil sauvegardé",
+    "speaker_profile_ready_detail": "Profil {index} prêt: {path}",
+    "speaker_profile_pending_detail": "{message} {status} Le WAV est sauvegardé.",
+    "speaker_embedding_not_generated": "Embedding non généré pour l'instant."
   }
 }
