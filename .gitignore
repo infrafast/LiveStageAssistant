@@ -250,3 +250,5 @@ LSA-LSA-Localhost-OPENAI_API_KEY.txt
 mcp_servers_cbtoinfrafast.json
 LSA-admin-OPENAI_API_KEY.txt
 CONVERSATION_HANDOFF_2026-06-10.md
+data/speaker_profiles/profil1.npy
+data/speaker_profiles/profil2.npy
