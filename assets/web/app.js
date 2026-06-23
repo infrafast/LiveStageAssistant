@@ -245,6 +245,8 @@
     let conversationDiscard = false;
     let conversationStopStreamAfterSegment = false;
     let lastSpokenAssistantMessageId = null;
+    let messagesHydrated = false;
+    const seenAssistantMessageIds = new Set();
     let webTtsPlaying = false;
     let webTtsAudioContext = null;
     let webTtsUnlocked = false;
@@ -3582,10 +3584,17 @@
         const serverBusy = Boolean(data.assistant_busy);
         const showThinking = serverBusy || pendingMessages.length > 0;
         const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
+        const latestAssistantMessageId = latestAssistantMessage ? latestAssistantMessage.id : null;
+        const isNewAssistantMessage = Boolean(
+          messagesHydrated &&
+          latestAssistantMessageId !== null &&
+          latestAssistantMessageId !== undefined &&
+          !seenAssistantMessageIds.has(latestAssistantMessageId)
+        );
         const latestAssistantMessageAgeMs = latestAssistantMessage && latestAssistantMessage.created_at
           ? Date.now() - Number(latestAssistantMessage.created_at) * 1000
           : Infinity;
-        const shouldSpeakLatestAssistant = latestAssistantMessage && (
+        const shouldSpeakLatestAssistant = latestAssistantMessage && isNewAssistantMessage && (
           previousBusy || (latestAssistantMessage.speak === true && latestAssistantMessageAgeMs < 30000)
         );
         const willSpeakLatestAssistant = Boolean(
@@ -3598,6 +3607,12 @@
         else stopThinkingAudio();
         setComposerLocked(showThinking);
         renderMessages(lastServerMessages, showThinking);
+        for (const message of lastServerMessages) {
+          if (message.role === "assistant" && message.id !== null && message.id !== undefined) {
+            seenAssistantMessageIds.add(message.id);
+          }
+        }
+        messagesHydrated = true;
         if (
           willSpeakLatestAssistant
         ) {
