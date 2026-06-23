@@ -95,11 +95,12 @@
     "speaker_choose_wav": "choisis un WAV",
     "speaker_wav_only": "WAV uniquement",
     "speaker_embedding_progress": "embedding...",
+    "speaker_uploading_sample": "upload du sample...",
     "speaker_upload_failed": "échec upload",
     "speaker_profile_done": "Génération du profil faite",
     "speaker_profile_file_saved": "Fichier profil sauvegardé",
     "speaker_profile_ready_detail": "Profil {index} prêt: {path}",
-    "speaker_profile_pending_detail": "{message} {status} Le WAV est sauvegardé.",
+    "speaker_profile_pending_detail": "{status} Le WAV est sauvegardé.",
     "speaker_embedding_not_generated": "Embedding non généré pour l'instant.",
     "speaker_voiceprint_ready": "empreinte vocale calculée",
     "speaker_voiceprint_unavailable": "empreinte vocale indisponible"
