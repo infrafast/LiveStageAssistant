@@ -3189,11 +3189,12 @@ class VoiceAssistant:
                 confidence = float(injected.get("speaker_confidence") or 0.0)
             except (TypeError, ValueError):
                 confidence = 0.0
+            explicit_speaker_context = bool(injected.get("speaker_context_explicit"))
             return text, SpeakerRecognitionResult(
                 speaker=str(injected.get("speaker") or UNKNOWN_SPEAKER).strip() or UNKNOWN_SPEAKER,
                 confidence=confidence,
                 backend=str(injected.get("speaker_backend") or "none").strip() or "none",
-                reason="injected",
+                reason="injected" if explicit_speaker_context else "injected_auto",
             )
         text = str(injected or "").strip()
         return (text or None), SpeakerRecognitionResult(reason="text")
@@ -4032,8 +4033,20 @@ class VoiceAssistant:
 
     def voice_detected_response(self, speaker_result: SpeakerRecognitionResult | None) -> str:
         """Local voice_detected pseudo-tool response; no MCP call is needed."""
-        if speaker_result and speaker_result.reason in {"text", "injected"} and speaker_result.backend == "none":
+        if (
+            speaker_result
+            and speaker_result.reason in {"text", "injected", "injected_auto"}
+            and speaker_result.backend == "none"
+            and speaker_result.speaker == UNKNOWN_SPEAKER
+        ):
             return "Je n'ai pas reçu d'échantillon vocal à analyser pour cette commande."
+        if speaker_result and speaker_result.speaker and speaker_result.speaker != UNKNOWN_SPEAKER:
+            confidence = max(0.0, min(1.0, float(speaker_result.confidence or 0.0)))
+            percent = round(confidence * 100)
+            return (
+                f"Profil vocal détecté: {speaker_result.speaker}, "
+                f"confiance environ {percent} pour cent."
+            )
         if not self.speaker_recognition_enabled:
             return "La reconnaissance de locuteur est désactivée dans la configuration."
         if not self.speaker_recognizer:
@@ -4043,12 +4056,6 @@ class VoiceAssistant:
 
         confidence = max(0.0, min(1.0, float(speaker_result.confidence or 0.0)))
         percent = round(confidence * 100)
-        if speaker_result.speaker and speaker_result.speaker != UNKNOWN_SPEAKER:
-            return (
-                f"Profil vocal détecté: {speaker_result.speaker}, "
-                f"confiance environ {percent} pour cent."
-            )
-
         reason = speaker_result.reason or "unknown"
         return (
             "Je n'ai pas reconnu de profil vocal avec assez de certitude. "
@@ -4114,8 +4121,10 @@ class VoiceAssistant:
             return False
         if speaker_result.speaker and speaker_result.speaker != UNKNOWN_SPEAKER:
             return True
+        if speaker_result.reason == "injected":
+            return True
         if speaker_result.backend and speaker_result.backend != "none":
-            return self.speaker_recognition_requested or speaker_result.reason == "injected"
+            return self.speaker_recognition_requested
         return False
 
     async def run(self):
@@ -4147,7 +4156,11 @@ class VoiceAssistant:
                 if not text and self.web_monitor:
                     text = self.web_monitor.pop_injected_command()
                 text, injected_speaker_result = self.injected_command_parts(text)
-                if injected_speaker_result.speaker != UNKNOWN_SPEAKER or injected_speaker_result.backend != "none":
+                if (
+                    injected_speaker_result.speaker != UNKNOWN_SPEAKER
+                    or injected_speaker_result.backend != "none"
+                    or injected_speaker_result.reason == "injected"
+                ):
                     speaker_result = injected_speaker_result
                 if text:
                     print(f"Injected command consumed: {text}")

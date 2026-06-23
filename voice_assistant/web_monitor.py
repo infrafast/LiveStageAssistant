@@ -2742,7 +2742,7 @@ INDEX_HTML = """<!doctype html>
       min-height: 56px;
       margin: 0 auto;
       display: grid;
-      grid-template-columns: 40px 40px minmax(0, 1fr);
+      grid-template-columns: 40px 40px minmax(112px, 150px) minmax(0, 1fr);
       gap: 8px;
       align-items: end;
       border: 1px solid var(--border);
@@ -2752,7 +2752,25 @@ INDEX_HTML = """<!doctype html>
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
     }
     .inject-form.busy {
-      grid-template-columns: 40px 40px minmax(0, 1fr) 40px;
+      grid-template-columns: 40px 40px minmax(112px, 150px) minmax(0, 1fr) 40px;
+    }
+    .composer-speaker {
+      min-width: 0;
+      height: 40px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 28px 0 9px;
+      background: var(--surface-soft);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 650;
+      outline: none;
+      text-overflow: ellipsis;
+    }
+    .composer-speaker:disabled {
+      color: var(--muted);
+      cursor: not-allowed;
+      opacity: 0.58;
     }
     .command-field {
       position: relative;
@@ -2859,6 +2877,35 @@ INDEX_HTML = """<!doctype html>
     }
     .loading-overlay.open {
       display: grid;
+    }
+    .loading-overlay.done .loading-spinner {
+      animation: none;
+      border-color: var(--ok);
+      border-top-color: var(--ok);
+      display: grid;
+      place-items: center;
+    }
+    .loading-overlay.done .loading-spinner::after {
+      content: "";
+      width: 9px;
+      height: 14px;
+      border-right: 3px solid #ffffff;
+      border-bottom: 3px solid #ffffff;
+      transform: rotate(45deg) translate(-1px, -1px);
+    }
+    .loading-overlay.error .loading-spinner {
+      animation: none;
+      border-color: var(--bad);
+      border-top-color: var(--bad);
+      display: grid;
+      place-items: center;
+    }
+    .loading-overlay.error .loading-spinner::after {
+      content: "!";
+      color: #ffffff;
+      font-weight: 800;
+      font-size: 14px;
+      line-height: 1;
     }
     .toast-overlay {
       position: fixed;
@@ -3550,6 +3597,13 @@ INDEX_HTML = """<!doctype html>
       .bubble { max-width: 88%; }
       .overlay { padding: 8px; }
       .settings-panel { height: 100%; }
+      .inject-form,
+      .inject-form.busy {
+        grid-template-columns: 40px 40px minmax(0, 1fr);
+      }
+      .composer-speaker {
+        grid-column: 1 / -1;
+      }
       .config-controls { grid-template-columns: 1fr; }
       .cloud-api-grid { grid-template-columns: 1fr; }
       .mcp-server-toolbar { grid-template-columns: 1fr; }
@@ -3613,6 +3667,10 @@ INDEX_HTML = """<!doctype html>
       <form class="inject-form" id="inject-form">
         <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" disabled>💬</button>
         <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" disabled>🎙️</button>
+        <select class="composer-speaker" id="composer-speaker" title="Speaker recognition unavailable" aria-label="Speaker profile" disabled>
+          <option value="auto">Auto detect</option>
+          <option value="unknown">Unknown</option>
+        </select>
         <div class="command-field" id="command-field">
           <canvas id="soundwave" aria-hidden="true"></canvas>
           <textarea id="inject-command" rows="1" autocomplete="off" enterkeyhint="send" placeholder="Message"></textarea>
@@ -4023,7 +4081,7 @@ INDEX_HTML = """<!doctype html>
       <div class="loading-spinner" aria-hidden="true"></div>
       <div>
         <div class="loading-title" id="session-loading-title">Loading session</div>
-        <div class="loading-detail">Preparing persisted context summary</div>
+        <div class="loading-detail" id="session-loading-detail">Preparing persisted context summary</div>
       </div>
     </div>
   </div>
@@ -4069,11 +4127,13 @@ INDEX_HTML = """<!doctype html>
     const injectStop = document.querySelector("#inject-stop");
     const webConversation = document.querySelector("#web-conversation");
     const webMic = document.querySelector("#web-mic");
+    const composerSpeaker = document.querySelector("#composer-speaker");
     const settingsOpen = document.querySelector("#settings-open");
     const settingsClose = document.querySelector("#settings-close");
     const settingsOverlay = document.querySelector("#settings-overlay");
     const sessionLoading = document.querySelector("#session-loading");
     const sessionLoadingTitle = document.querySelector("#session-loading-title");
+    const sessionLoadingDetail = document.querySelector("#session-loading-detail");
     const sessionSummaryPopover = document.querySelector("#session-summary-popover");
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const panels = Array.from(document.querySelectorAll(".tab-panel"));
@@ -4206,7 +4266,10 @@ INDEX_HTML = """<!doctype html>
     let configBaseline = "";
     let speakerRecognitionUnavailableReason = "";
     let speakerRecognitionEnvEnabled = false;
+    let speakerRecognitionRuntimeEnabled = false;
+    let speakerProfileChoices = [];
     let environmentLoadingActive = false;
+    let profileLoadingActive = false;
     let vncConnectTimer = null;
     let vncUrlDirty = false;
     let currentVncFrameUrl = "";
@@ -5103,6 +5166,7 @@ INDEX_HTML = """<!doctype html>
       if (wasLocked && !composerLocked && !settingsOverlay.classList.contains("open")) {
         window.setTimeout(() => injectCommand.focus({ preventScroll: true }), 0);
       }
+      syncComposerSpeakerControl();
     }
 
     function setRecording(recording) {
@@ -5754,6 +5818,75 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
+    function activeSpeakerProfilesFromConfig() {
+      return collectSpeakerProfiles()
+        .filter((profile) => profile.enabled && profile.name)
+        .map((profile) => ({ name: profile.name }));
+    }
+
+    function composerSpeakerDisabledReason() {
+      if (!speakerRecognitionEnvEnabled) return "Speaker recognition is disabled in the active config.";
+      if (!speakerRecognitionRuntimeEnabled) return speakerRecognitionUnavailableReason || "Speaker recognition backend is unavailable.";
+      if (speakerProfileChoices.length === 0) return "No active speaker profile is configured.";
+      return "";
+    }
+
+    function syncComposerSpeakerControl() {
+      const previousValue = composerSpeaker.value || window.localStorage.getItem("lsaComposerSpeaker") || "auto";
+      composerSpeaker.replaceChildren();
+      composerSpeaker.appendChild(option("Auto detect", "auto", false, previousValue === "auto"));
+      composerSpeaker.appendChild(option("Unknown", "unknown", false, previousValue === "unknown"));
+      for (const profile of speakerProfileChoices) {
+        composerSpeaker.appendChild(option(profile.name, `profile:${profile.name}`, false, previousValue === `profile:${profile.name}`));
+      }
+      if (![...composerSpeaker.options].some((item) => item.value === previousValue)) {
+        composerSpeaker.value = "auto";
+        window.localStorage.setItem("lsaComposerSpeaker", "auto");
+      } else {
+        composerSpeaker.value = previousValue;
+      }
+      const disabledReason = composerSpeakerDisabledReason();
+      composerSpeaker.disabled = Boolean(disabledReason);
+      composerSpeaker.title = disabledReason || "Speaker profile for browser commands";
+    }
+
+    function forcedComposerSpeakerPayload() {
+      if (composerSpeaker.disabled) return null;
+      const selected = composerSpeaker.value || "auto";
+      if (selected === "auto") return null;
+      if (selected === "unknown") {
+        return {
+          speaker: "unknown",
+          speaker_confidence: 0,
+          speaker_backend: "none",
+          speaker_context_explicit: true
+        };
+      }
+      if (selected.startsWith("profile:")) {
+        const speaker = selected.slice("profile:".length).trim();
+        if (speaker) {
+          return {
+            speaker,
+            speaker_confidence: 1,
+            speaker_backend: "none",
+            speaker_context_explicit: true
+          };
+        }
+      }
+      return null;
+    }
+
+    function speakerPayloadForSubmit(options = {}) {
+      const forcedSpeaker = forcedComposerSpeakerPayload();
+      if (forcedSpeaker) return forcedSpeaker;
+      return {
+        speaker: options.speaker || "unknown",
+        speaker_confidence: Number(options.speakerConfidence || 0),
+        speaker_backend: options.speakerBackend || "none",
+        speaker_context_explicit: Boolean(options.speakerContextExplicit)
+      };
+    }
+
     async function submitCommand(command, options = {}) {
       const cleanedCommand = command.trim();
       if (!cleanedCommand) return;
@@ -5773,14 +5906,16 @@ INDEX_HTML = """<!doctype html>
       setComposerLocked(true);
       renderMessages(lastServerMessages, true);
       try {
+        const speakerPayload = speakerPayloadForSubmit(options);
         const response = await fetch("/api/inject-command", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             command: cleanedCommand,
-            speaker: options.speaker || "unknown",
-            speaker_confidence: Number(options.speakerConfidence || 0),
-            speaker_backend: options.speakerBackend || "none"
+            speaker: speakerPayload.speaker,
+            speaker_confidence: speakerPayload.speaker_confidence,
+            speaker_backend: speakerPayload.speaker_backend,
+            speaker_context_explicit: speakerPayload.speaker_context_explicit
           })
         });
         if (!response.ok) throw new Error(await response.text());
@@ -5845,11 +5980,13 @@ INDEX_HTML = """<!doctype html>
         if (text) {
           if (!options.conversation) injectCommand.value = text;
           autoSizeComposer();
+          const forcedSpeaker = forcedComposerSpeakerPayload();
           await submitCommand(text, {
             interrupt: Boolean(options.conversation),
-            speaker: data.speaker || "unknown",
-            speakerConfidence: data.speaker_confidence || 0,
-            speakerBackend: data.speaker_backend || "none"
+            speaker: forcedSpeaker ? forcedSpeaker.speaker : (data.speaker || "unknown"),
+            speakerConfidence: forcedSpeaker ? forcedSpeaker.speaker_confidence : (data.speaker_confidence || 0),
+            speakerBackend: forcedSpeaker ? forcedSpeaker.speaker_backend : (data.speaker_backend || "none"),
+            speakerContextExplicit: forcedSpeaker ? forcedSpeaker.speaker_context_explicit : false
           });
         } else if (options.conversation) {
           scheduleConversationRestart();
@@ -6492,6 +6629,10 @@ INDEX_HTML = """<!doctype html>
         name.placeholder = `speaker ${index}`;
         name.value = profile.name || `speaker_${index}`;
         name.dataset.role = "name";
+        name.addEventListener("input", () => {
+          speakerProfileChoices = activeSpeakerProfilesFromConfig();
+          syncComposerSpeakerControl();
+        });
 
         const uploadWrap = document.createElement("div");
         uploadWrap.className = "speaker-upload";
@@ -6511,6 +6652,10 @@ INDEX_HTML = """<!doctype html>
         enabled.type = "checkbox";
         enabled.checked = Boolean(profile.enabled);
         enabled.dataset.role = "enabled";
+        enabled.addEventListener("change", () => {
+          speakerProfileChoices = activeSpeakerProfilesFromConfig();
+          syncComposerSpeakerControl();
+        });
         enabledLabel.appendChild(enabled);
         enabledLabel.append(" actif");
 
@@ -6559,7 +6704,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       status.textContent = "embedding...";
-      showToast("Préparation du profil vocal", speakerEmbeddingPreparationMessage, "ok", 6000);
+      setProfileLoading(true, "Préparation du profil vocal", speakerEmbeddingPreparationMessage);
       if (webAudio.tts_enabled && webAudio.tts_output === "browser") {
         playWebTts(speakerEmbeddingPreparationMessage);
       }
@@ -6584,25 +6729,29 @@ INDEX_HTML = """<!doctype html>
           pathLabel.title = data.wav_path || "";
         }
         enabledInput.checked = true;
+        speakerProfileChoices = activeSpeakerProfilesFromConfig();
+        syncComposerSpeakerControl();
         status.textContent = data.embedding_status || data.status || "ready";
         fileInput.value = "";
         const generated = String(data.embedding_status || "").toLowerCase().includes("ready");
-        showToast(
+        setProfileLoading(
+          true,
           generated ? "Génération du profil faite" : "Fichier profil sauvegardé",
           generated
             ? `Profil ${row.dataset.index || ""} prêt: ${data.wav_path || ""}`
             : `${speakerEmbeddingPreparationMessage} ${data.embedding_status || "Embedding non généré pour l'instant."} Le WAV est sauvegardé.`,
-          "ok",
-          7000
+          "done"
         );
+        window.setTimeout(() => setProfileLoading(false), 1400);
       } catch (error) {
         status.textContent = "upload failed";
-        showToast(
+        setProfileLoading(
+          true,
           "Erreur génération profil",
           String(error.message || error),
-          "error",
-          9000
+          "error"
         );
+        window.setTimeout(() => setProfileLoading(false), 2600);
       }
     }
 
@@ -6616,13 +6765,17 @@ INDEX_HTML = """<!doctype html>
 
     function setSpeakerControls(data) {
       const unavailableReason = speakerRuntimeUnavailableReason(data);
+      const runtime = data.speaker_recognition_runtime || {};
       speakerRecognitionEnvEnabled = Boolean(data.selected_speaker_recognition_enabled);
+      speakerRecognitionRuntimeEnabled = Boolean(runtime.enabled);
       speakerRecognitionUnavailableReason = unavailableReason;
       setSpeakerRecognitionEnabled(unavailableReason ? false : speakerRecognitionEnvEnabled);
       speakerBackend.value = data.selected_speaker_backend || "resemblyzer";
       speakerThreshold.value = String(data.selected_speaker_threshold ?? 0.75);
       speakerMargin.value = String(data.selected_speaker_margin ?? 0.10);
       renderSpeakerProfiles(data.speaker_profiles || []);
+      speakerProfileChoices = activeSpeakerProfilesFromConfig();
+      syncComposerSpeakerControl();
       setSpeakerControlsDisabled(Boolean(unavailableReason), unavailableReason);
       syncSpeakerLabels();
     }
@@ -6983,15 +7136,24 @@ INDEX_HTML = """<!doctype html>
       else settingsOpen.focus();
     }
 
-    function setLoadingOverlay(loading, title = "Loading") {
+    function setLoadingOverlay(loading, title = "Loading", detail = "Preparing persisted context summary", mode = "loading") {
       sessionLoading.classList.toggle("open", Boolean(loading));
+      sessionLoading.classList.toggle("done", mode === "done");
+      sessionLoading.classList.toggle("error", mode === "error");
       sessionLoading.setAttribute("aria-hidden", loading ? "false" : "true");
       sessionLoadingTitle.textContent = title;
+      sessionLoadingDetail.textContent = detail;
     }
 
     function setEnvironmentLoading(loading, title = "rafraichissement de l'environnement") {
       environmentLoadingActive = Boolean(loading);
-      setLoadingOverlay(environmentLoadingActive, title);
+      setLoadingOverlay(environmentLoadingActive, title, "Application de la nouvelle configuration");
+    }
+
+    function setProfileLoading(loading, title = "Préparation du profil vocal", detail = speakerEmbeddingPreparationMessage, mode = "loading") {
+      profileLoadingActive = Boolean(loading);
+      if (environmentLoadingActive && !loading) return;
+      setLoadingOverlay(loading, title, detail, mode);
     }
 
     function setSessionLoading(loading, title = "Loading session") {
@@ -6999,7 +7161,7 @@ INDEX_HTML = """<!doctype html>
       for (const button of sessionList.querySelectorAll(".session-main, .session-menu-button, .session-summary-button, .session-menu-action")) {
         button.disabled = Boolean(loading);
       }
-      if (environmentLoadingActive && !loading) return;
+      if ((environmentLoadingActive || profileLoadingActive) && !loading) return;
       setLoadingOverlay(loading, title);
     }
 
@@ -7389,6 +7551,14 @@ INDEX_HTML = """<!doctype html>
         if (!webAudio.stt_enabled && conversationEnabled) {
           setConversationEnabled(false);
         }
+        const runtimeSpeaker = (data.runtime || {}).speaker_recognition || {};
+        if (Object.keys(runtimeSpeaker).length > 0) {
+          speakerRecognitionRuntimeEnabled = Boolean(runtimeSpeaker.enabled);
+          speakerRecognitionUnavailableReason = runtimeSpeaker.requested && !runtimeSpeaker.enabled && runtimeSpeaker.unavailable_reason
+            ? `Speaker recognition unavailable: ${runtimeSpeaker.unavailable_reason}`
+            : "";
+          syncComposerSpeakerControl();
+        }
         updateConversationButton();
         lastServerMessages = data.messages || [];
         const serverBusy = Boolean(data.assistant_busy);
@@ -7490,6 +7660,9 @@ INDEX_HTML = """<!doctype html>
     });
 
     injectCommand.addEventListener("input", autoSizeComposer);
+    composerSpeaker.addEventListener("change", () => {
+      window.localStorage.setItem("lsaComposerSpeaker", composerSpeaker.value || "auto");
+    });
     injectCommand.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey) {
         event.preventDefault();

@@ -794,6 +794,8 @@ For best speaker recognition, upload one clean WAV per profile slot. The web UI 
 
 The assistant never maps a recognized speaker to a mixer bus, channel, light, or scene by itself. It only adds `speaker`, `speaker_confidence`, and `speaker_backend` to the MCP context or injected command payload. MCP servers that understand that context, such as XMSeries-MCP through `osc_get_speaker_context`, decide what the speaker means for their own domain.
 
+When speaker recognition is enabled and available, the web composer shows a browser-local speaker selector next to the microphone controls. `Auto detect` keeps the current behavior, explicit profile choices force browser text and browser STT commands to use that profile, and `Unknown` explicitly sends `speaker: unknown`. This does not affect backend microphone commands.
+
 If one utterance cannot be analyzed cleanly, the assistant keeps speaker recognition enabled and reports `unknown` for that command. It disables speaker recognition for the current session only when the backend itself appears unusable, such as missing Resemblyzer, SciPy, or `platformdirs` dependencies.
 
 The local diagnostic commands `qui suis-je ?`, `détecte ma voix`, `reconnais ma voix`, and similar phrases are handled by the assistant itself before any MCP call. They report the detected speaker profile and confidence for the current utterance, or explain why no profile was recognized.
