@@ -20,7 +20,6 @@ services:
     # group_add:
     #   - audio
     environment:
-      XMS_SPEAKER_MAP: '{"laurent":{"bus":"Laurent","channel":"guit-Laurent"},"thomas":{"channel":"OH"}}'
       ASSISTANT_ENV_FILE: /config/.env.infrafast
       HF_HOME: /data/huggingface
       XDG_CACHE_HOME: /data/cache
