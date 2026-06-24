@@ -13,21 +13,10 @@ fi
 
 machine="$(uname -m 2>/dev/null || printf unknown)"
 system="$(uname -s 2>/dev/null || printf unknown)"
-speaker_mode="${INSTALL_SPEAKER_RECOGNITION:-auto}"
 
 uv pip install -e .
 
-case "$machine" in
-    aarch64|armv7l|armv6l)
-        if [ "$speaker_mode" != "1" ] && [ "$speaker_mode" != "true" ]; then
-            printf '%s\n' "Speaker recognition dependencies skipped on ARM (${machine})."
-            printf '%s\n' "On Raspberry Pi, install CPU Torch first, then run:"
-            printf '%s\n' "  INSTALL_SPEAKER_RECOGNITION=1 ./scripts/install.sh"
-            exit 0
-        fi
-        ;;
-esac
-
+printf '%s\n' "Installing speaker recognition dependencies for ${system}/${machine}."
 uv pip install -e ".[speaker]"
 case "$system" in
     Darwin)

@@ -1,7 +1,5 @@
 FROM python:3.12-slim
 
-ARG INSTALL_SPEAKER_RECOGNITION=0
-
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -41,11 +39,9 @@ RUN test -f assets/web/static/novnc/core/rfb.js \
 RUN python -m pip install --upgrade pip \
     && python -m pip install .
 
-RUN if [ "$INSTALL_SPEAKER_RECOGNITION" = "1" ]; then \
-        python -m pip install --no-cache-dir ".[speaker]" \
-        && python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-        && python -m pip install --no-cache-dir resemblyzer --no-deps; \
-    fi
+RUN python -m pip install --no-cache-dir ".[speaker]" \
+    && python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && python -m pip install --no-cache-dir resemblyzer --no-deps
 
 RUN chmod +x /usr/local/bin/live-stage-assistant-entrypoint \
     && mkdir -p /data/huggingface /data/cache /data/npm-cache /data/notes /data/speaker_profiles

@@ -102,14 +102,14 @@ source .venv/bin/activate
 # On Windows:
 # .venv\Scripts\activate
 
-# Install in development mode, including non-CUDA speaker recognition on desktop/server
+# Install in development mode, including non-CUDA speaker recognition
 ./scripts/install.sh
 
-# Or install only the base package, without speaker-recognition extras
+# For a minimal development install only, without the speaker-recognition stack
 uv pip install .
 ```
 
-On regular desktop/server platforms, `scripts/install.sh` installs the Resemblyzer speaker-recognition backend after first installing a non-CUDA PyTorch wheel, so CUDA/NVIDIA packages are not needed. The base Python install also includes `imageio-ffmpeg`, which provides a packaged ffmpeg fallback for local installs where no system `ffmpeg` binary is on `PATH`; Docker still installs the system ffmpeg package. Linux ARM platforms such as Raspberry Pi are intentionally treated separately to avoid accidentally pulling unsuitable PyTorch/CUDA packages; use the Raspberry Pi service-pack instructions when enabling speaker recognition there.
+`scripts/install.sh` installs the Resemblyzer speaker-recognition backend on supported platforms after first installing a non-CUDA PyTorch wheel, so CUDA/NVIDIA packages are not needed. The base Python install also includes `imageio-ffmpeg`, which provides a packaged ffmpeg fallback for local installs where no system `ffmpeg` binary is on `PATH`; Docker still installs the system ffmpeg package. On Raspberry Pi, use the service-pack instructions so system audio packages are installed before the assistant service is started.
 
 ### Docker / Synology Quick Start
 
@@ -155,7 +155,7 @@ docker compose up --build -d
 docker logs -f live-stage-assistant
 ```
 
-The bundled compose file passes `INSTALL_SPEAKER_RECOGNITION=1` to the Docker build, so the image includes CPU Torch, Resemblyzer, and the optional speaker-recognition dependencies. Speaker profile WAVs and mean embeddings are stored in the mounted `/data/speaker_profiles` directory.
+The bundled Docker image includes CPU Torch, Resemblyzer, and the speaker-recognition dependencies. Speaker profile WAVs and mean embeddings are stored in the mounted `/data/speaker_profiles` directory.
 
 Open the monitor from your browser:
 
@@ -792,7 +792,7 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
 
 Speaker recognition is optional and runs after VAD/STT has accepted a speech segment. Enable it with `SPEAKER_RECOGNITION_ENABLED=true` or from the web config, then add up to five WAV reference profiles. Each profile requires three WAV samples before it can be used. Profile slots use a fixed filename convention under `SPEAKER_PROFILES_DIR`, which defaults to `data/speaker_profiles` locally and `/data/speaker_profiles` in Docker: profile 1 uses `profil1_1.wav`, `profil1_2.wav`, and `profil1_3.wav`; profile 2 uses `profil2_1.wav`, `profil2_2.wav`, and `profil2_3.wav`; and so on. Older single-file names such as `profil1.wav` are no longer used. The first backend is `SPEAKER_BACKEND=resemblyzer`; `speechbrain` is reserved for a later backend and currently returns `unknown`. Backend microphone PCM is wrapped as WAV automatically, and browser audio is decoded with ffmpeg when the browser sends WebM/Opus instead of WAV. The assistant uses the system `ffmpeg` binary when available and falls back to the packaged `imageio-ffmpeg` binary otherwise.
 
-Resemblyzer is installed by `scripts/install.sh` on regular desktop/server platforms after the script first installs a non-CUDA PyTorch wheel. This avoids the CUDA/NVIDIA packages that PyPI's default Torch resolution may otherwise select. Linux ARM platforms such as Raspberry Pi are intentionally excluded from automatic speaker dependency installation; on Raspberry Pi, use the service-pack flow documented in `raspi_service_pack_stdio/README.md`. In Docker, the bundled `docker-compose.yml` already builds with `INSTALL_SPEAKER_RECOGNITION=1`; if you build manually, pass `--build-arg INSTALL_SPEAKER_RECOGNITION=1` to install the non-GPU speaker dependencies, CPU Torch, and Resemblyzer without letting Resemblyzer pull Torch from PyPI.
+Resemblyzer is installed by `scripts/install.sh` and by the Docker image after a non-CUDA PyTorch wheel is installed first. This avoids the CUDA/NVIDIA packages that PyPI's default Torch resolution may otherwise select. On Raspberry Pi, use the service-pack flow documented in `raspi_service_pack_stdio/README.md` so the required system audio packages are installed before the assistant service is started.
 
 For best speaker recognition, provide three WAV samples per profile slot. In the web UI, each sample can come from the existing WAV upload button or from the browser microphone capture button next to it. Browser capture records up to 10 seconds, lets you preview/retry, then uploads a valid WAV to the same `profilX_Y.wav` slot after validation; modern browsers require HTTPS or `localhost` for microphone access. You can mix clean/studio samples and live-condition samples. A good starting strategy is sample 1: clean reference voice, sample 2: clean voice with another phrase, sample 3: live-condition voice from the microphone path used on stage.
 
