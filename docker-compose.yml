@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        INSTALL_SPEAKER_RECOGNITION: "1"
     image: live-stage-assistant:local
     container_name: live-stage-assistant
     restart: unless-stopped

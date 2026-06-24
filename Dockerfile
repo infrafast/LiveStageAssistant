@@ -25,6 +25,7 @@ RUN apt-get update \
         npm \
         portaudio19-dev \
         build-essential \
+    && ffmpeg -version >/dev/null \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./

@@ -519,7 +519,23 @@ def local_tts_playback_available() -> bool:
 
 def ffmpeg_decode_available() -> bool:
     """Return whether MP3 TTS can be decoded for backend-controlled playback."""
-    return shutil.which("ffmpeg") is not None
+    return ffmpeg_executable() is not None
+
+
+def ffmpeg_executable() -> str | None:
+    """Return a usable ffmpeg binary from PATH or the packaged Python fallback."""
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        return ffmpeg_path
+    try:
+        import imageio_ffmpeg
+
+        packaged_path = imageio_ffmpeg.get_ffmpeg_exe()
+        if packaged_path:
+            return str(packaged_path)
+    except Exception:
+        return None
+    return None
 
 
 def _pyaudio_device_is_default(audio: pyaudio.PyAudio, index: int, *, input_device: bool) -> bool:
@@ -912,12 +928,13 @@ def decode_mp3_to_pcm_bytes(
     channels: int = DEFAULT_BACKEND_MP3_CHANNELS,
 ) -> bytes:
     """Decode MP3 bytes to signed 16-bit PCM so PyAudio owns playback/output device selection."""
-    if not ffmpeg_decode_available():
+    ffmpeg_path = ffmpeg_executable()
+    if not ffmpeg_path:
         raise RuntimeError("ffmpeg is not available")
 
     process = subprocess.run(
         [
-            "ffmpeg",
+            ffmpeg_path,
             "-hide_banner",
             "-loglevel",
             "error",
@@ -949,12 +966,13 @@ def decode_audio_file_to_pcm_bytes(
     channels: int = DEFAULT_BACKEND_MP3_CHANNELS,
 ) -> bytes:
     """Decode a local audio file to signed 16-bit PCM for PyAudio playback."""
-    if not ffmpeg_decode_available():
+    ffmpeg_path = ffmpeg_executable()
+    if not ffmpeg_path:
         raise RuntimeError("ffmpeg is not available")
 
     process = subprocess.run(
         [
-            "ffmpeg",
+            ffmpeg_path,
             "-hide_banner",
             "-loglevel",
             "error",
@@ -985,12 +1003,13 @@ def decode_audio_bytes_to_wav_bytes(
     channels: int = 1,
 ) -> bytes:
     """Decode arbitrary compressed audio bytes to a WAV container for speaker embeddings."""
-    if not ffmpeg_decode_available():
+    ffmpeg_path = ffmpeg_executable()
+    if not ffmpeg_path:
         raise RuntimeError("ffmpeg is not available")
 
     process = subprocess.run(
         [
-            "ffmpeg",
+            ffmpeg_path,
             "-hide_banner",
             "-loglevel",
             "error",

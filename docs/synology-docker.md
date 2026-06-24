@@ -124,6 +124,8 @@ docker compose up --build -d
 docker logs -f live-stage-assistant
 ```
 
+The bundled compose file builds with `INSTALL_SPEAKER_RECOGNITION=1`, so the Docker image includes CPU Torch, Resemblyzer, and the optional speaker-recognition dependencies. Speaker profile data is stored in the mounted `/data/speaker_profiles` directory.
+
 Or in Synology Container Manager/Project, create a project from the compose file.
 
 The monitor will be reachable at:
