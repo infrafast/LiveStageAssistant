@@ -103,6 +103,23 @@
     "speaker_profile_pending_detail": "{status} The WAV is saved.",
     "speaker_embedding_not_generated": "Embedding has not been generated yet.",
     "speaker_voiceprint_ready": "voiceprint computed",
-    "speaker_voiceprint_unavailable": "voiceprint unavailable"
+    "speaker_voiceprint_unavailable": "voiceprint unavailable",
+    "speaker_capture_button": "Capture from microphone",
+    "speaker_capture_title": "Microphone sample capture",
+    "speaker_capture_instructions": "Say a phrase of about 10 seconds, for example: this is a real-use voice sample for my speaker profile.",
+    "speaker_capture_requesting": "Requesting microphone access...",
+    "speaker_capture_countdown": "Recording... {seconds}s remaining.",
+    "speaker_capture_stop": "Stop",
+    "speaker_capture_processing": "Preparing preview...",
+    "speaker_capture_preview": "Preview ready ({seconds}s). Listen, then validate or retake.",
+    "speaker_capture_validate": "Validate",
+    "speaker_capture_retry": "Retake",
+    "speaker_capture_error_permission": "Microphone permission was refused.",
+    "speaker_capture_error_https": "Microphone capture requires HTTPS or localhost.",
+    "speaker_capture_error_browser": "Audio capture is not supported by this browser.",
+    "speaker_capture_error_empty": "No audio was captured.",
+    "speaker_capture_error_short": "Sample too short: record at least {seconds} seconds.",
+    "speaker_capture_error_silence": "Sample is too silent.",
+    "speaker_capture_error_generic": "Microphone capture failed: {error}"
   }
 }

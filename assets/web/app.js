@@ -230,6 +230,9 @@
     let recordingMonitorId = null;
     let recordingSpeechDetected = false;
     let recordingStartedAt = 0;
+    const speakerCaptureMaxSeconds = 10;
+    const speakerCaptureMinSeconds = 3;
+    let speakerCapture = null;
     let soundwaveAnimationId = null;
     let soundwaveStartedAt = 0;
     let conversationEnabled = false;
@@ -1293,6 +1296,97 @@
         reader.onerror = reject;
         reader.readAsDataURL(blob);
       });
+    }
+
+    function writeAscii(view, offset, text) {
+      for (let index = 0; index < text.length; index += 1) {
+        view.setUint8(offset + index, text.charCodeAt(index));
+      }
+    }
+
+    function monoSamplesFromAudioBuffer(audioBuffer) {
+      const length = audioBuffer.length;
+      const channels = Math.max(1, audioBuffer.numberOfChannels || 1);
+      const samples = new Float32Array(length);
+      for (let channel = 0; channel < channels; channel += 1) {
+        const channelData = audioBuffer.getChannelData(channel);
+        for (let index = 0; index < length; index += 1) {
+          samples[index] += channelData[index] / channels;
+        }
+      }
+      return samples;
+    }
+
+    function audioStats(samples) {
+      if (!samples || samples.length === 0) return { rms: 0, peak: 0 };
+      let sum = 0;
+      let peak = 0;
+      for (const sample of samples) {
+        const absolute = Math.abs(sample);
+        peak = Math.max(peak, absolute);
+        sum += sample * sample;
+      }
+      return { rms: Math.sqrt(sum / samples.length), peak };
+    }
+
+    function encodePcm16Wav(samples, sampleRate) {
+      const bytesPerSample = 2;
+      const dataLength = samples.length * bytesPerSample;
+      const buffer = new ArrayBuffer(44 + dataLength);
+      const view = new DataView(buffer);
+      writeAscii(view, 0, "RIFF");
+      view.setUint32(4, 36 + dataLength, true);
+      writeAscii(view, 8, "WAVE");
+      writeAscii(view, 12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * bytesPerSample, true);
+      view.setUint16(32, bytesPerSample, true);
+      view.setUint16(34, 16, true);
+      writeAscii(view, 36, "data");
+      view.setUint32(40, dataLength, true);
+      let offset = 44;
+      for (const sample of samples) {
+        const clamped = Math.max(-1, Math.min(1, sample));
+        view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+        offset += bytesPerSample;
+      }
+      return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    async function recordedBlobToValidatedWav(blob) {
+      if (!blob || blob.size === 0) {
+        throw new Error(tr("speaker_capture_error_empty", "No audio was captured."));
+      }
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error(tr("speaker_capture_error_browser", "Audio capture is not supported by this browser."));
+      }
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioContext = new AudioContextClass();
+      try {
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+        if (audioBuffer.duration < speakerCaptureMinSeconds) {
+          throw new Error(trf("speaker_capture_error_short", "Sample too short: record at least {seconds} seconds.", {
+            seconds: speakerCaptureMinSeconds
+          }));
+        }
+        const samples = monoSamplesFromAudioBuffer(audioBuffer);
+        const stats = audioStats(samples);
+        if (stats.rms < 0.008 || stats.peak < 0.03) {
+          throw new Error(tr("speaker_capture_error_silence", "Sample is too silent."));
+        }
+        return {
+          blob: encodePcm16Wav(samples, Math.round(audioBuffer.sampleRate || 48000)),
+          duration: audioBuffer.duration,
+          rms: stats.rms,
+          peak: stats.peak
+        };
+      } finally {
+        audioContext.close().catch(() => {});
+      }
     }
 
     function browserAudioConstraints() {
@@ -2622,7 +2716,7 @@
             }));
         for (let sampleIndex = 1; sampleIndex <= 3; sampleIndex += 1) {
           const sample = samples.find((item) => Number(item.index) === sampleIndex) || { index: sampleIndex };
-          const sampleWrap = document.createElement("label");
+          const sampleWrap = document.createElement("div");
           sampleWrap.className = `speaker-sample${sample.ready ? " ready" : ""}`;
           sampleWrap.title = sample.wav_path || `data/speaker_profiles/profil${index}_${sampleIndex}.wav`;
           const led = document.createElement("span");
@@ -2637,7 +2731,16 @@
           file.addEventListener("change", () => {
             if (file.files && file.files[0]) uploadSpeakerProfile(row, sampleIndex);
           });
-          sampleWrap.append(led, file);
+          const capture = document.createElement("button");
+          capture.type = "button";
+          capture.className = "speaker-capture-button";
+          capture.dataset.role = "capture";
+          capture.dataset.sampleIndex = String(sampleIndex);
+          capture.title = tr("speaker_capture_button", "Capture from microphone");
+          capture.setAttribute("aria-label", tr("speaker_capture_button", "Capture from microphone"));
+          capture.textContent = "🎙️";
+          capture.addEventListener("click", () => startSpeakerSampleCapture(row, sampleIndex));
+          sampleWrap.append(led, file, capture);
           uploadWrap.append(sampleWrap);
         }
 
@@ -2679,24 +2782,240 @@
       });
     }
 
-    async function uploadSpeakerProfile(row, sampleIndex) {
+    function speakerCaptureFilename(row, sampleIndex) {
+      return `profil${Number(row.dataset.index || 0)}_${sampleIndex}.wav`;
+    }
+
+    function createSpeakerCaptureDialog() {
+      const overlay = document.createElement("div");
+      overlay.className = "speaker-capture-overlay";
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("aria-modal", "true");
+
+      const panel = document.createElement("div");
+      panel.className = "speaker-capture-panel";
+
+      const title = document.createElement("div");
+      title.className = "speaker-capture-title";
+      title.textContent = tr("speaker_capture_title", "Microphone sample capture");
+
+      const instructions = document.createElement("p");
+      instructions.className = "speaker-capture-instructions";
+      instructions.textContent = tr(
+        "speaker_capture_instructions",
+        "Say a phrase of about 10 seconds, for example: this is a real-use voice sample for my speaker profile."
+      );
+
+      const status = document.createElement("div");
+      status.className = "speaker-capture-status";
+
+      const audio = document.createElement("audio");
+      audio.className = "speaker-capture-preview";
+      audio.controls = true;
+      audio.hidden = true;
+
+      const actions = document.createElement("div");
+      actions.className = "speaker-capture-actions";
+
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "small-button";
+      stop.textContent = tr("speaker_capture_stop", "Stop");
+      stop.addEventListener("click", () => stopSpeakerSampleCapture());
+
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "small-button";
+      retry.textContent = tr("speaker_capture_retry", "Retake");
+      retry.disabled = true;
+      retry.addEventListener("click", () => {
+        const state = speakerCapture;
+        if (!state) return;
+        const row = state.row;
+        const sampleIndex = state.sampleIndex;
+        closeSpeakerCaptureDialog();
+        startSpeakerSampleCapture(row, sampleIndex);
+      });
+
+      const validate = document.createElement("button");
+      validate.type = "button";
+      validate.className = "small-button";
+      validate.textContent = tr("speaker_capture_validate", "Validate");
+      validate.disabled = true;
+      validate.addEventListener("click", async () => {
+        const state = speakerCapture;
+        if (!state || !state.wavBlob) return;
+        const row = state.row;
+        const sampleIndex = state.sampleIndex;
+        const wavBlob = state.wavBlob;
+        const filename = speakerCaptureFilename(row, sampleIndex);
+        closeSpeakerCaptureDialog();
+        await uploadSpeakerProfileBlob(row, sampleIndex, wavBlob, filename);
+      });
+
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "small-button";
+      cancel.textContent = tr("close", "Close");
+      cancel.addEventListener("click", () => closeSpeakerCaptureDialog());
+
+      actions.append(stop, retry, validate, cancel);
+      panel.append(title, instructions, status, audio, actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      return { overlay, status, audio, stop, retry, validate };
+    }
+
+    function setSpeakerCaptureStatus(text, mode = "") {
+      if (!speakerCapture?.dialog) return;
+      speakerCapture.dialog.status.textContent = text;
+      speakerCapture.dialog.status.dataset.mode = mode;
+    }
+
+    function updateSpeakerCaptureCountdown() {
+      if (!speakerCapture || !speakerCapture.recording) return;
+      const elapsedSeconds = Math.floor((Date.now() - speakerCapture.startedAt) / 1000);
+      const remainingSeconds = Math.max(0, speakerCaptureMaxSeconds - elapsedSeconds);
+      setSpeakerCaptureStatus(
+        trf("speaker_capture_countdown", "Recording... {seconds}s remaining.", { seconds: remainingSeconds }),
+        "recording"
+      );
+    }
+
+    function closeSpeakerCaptureDialog() {
+      if (!speakerCapture) return;
+      if (speakerCapture.timer) window.clearTimeout(speakerCapture.timer);
+      if (speakerCapture.countdownTimer) window.clearInterval(speakerCapture.countdownTimer);
+      if (speakerCapture.recorder && speakerCapture.recorder.state !== "inactive") {
+        speakerCapture.discard = true;
+        speakerCapture.recorder.stop();
+      }
+      if (speakerCapture.stream) {
+        for (const track of speakerCapture.stream.getTracks()) track.stop();
+      }
+      if (speakerCapture.objectUrl) URL.revokeObjectURL(speakerCapture.objectUrl);
+      if (speakerCapture.dialog?.overlay) speakerCapture.dialog.overlay.remove();
+      speakerCapture = null;
+    }
+
+    function stopSpeakerSampleCapture() {
+      if (!speakerCapture || !speakerCapture.recorder || speakerCapture.recorder.state === "inactive") return;
+      if (speakerCapture.timer) window.clearTimeout(speakerCapture.timer);
+      if (speakerCapture.countdownTimer) window.clearInterval(speakerCapture.countdownTimer);
+      speakerCapture.dialog.stop.disabled = true;
+      setSpeakerCaptureStatus(tr("speaker_capture_processing", "Preparing preview..."), "processing");
+      speakerCapture.recorder.stop();
+    }
+
+    async function startSpeakerSampleCapture(row, sampleIndex) {
+      if (speakerCapture?.recording) return;
+      if (!window.isSecureContext) {
+        const status = row.querySelector(".speaker-status");
+        if (status) status.textContent = tr("speaker_capture_error_https", "Microphone capture requires HTTPS or localhost.");
+        setProfileLoading(true, tr("profile_generation_error", "Erreur génération profil"), tr("speaker_capture_error_https", "Microphone capture requires HTTPS or localhost."), "error");
+        window.setTimeout(() => setProfileLoading(false), 2600);
+        return;
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+        const status = row.querySelector(".speaker-status");
+        if (status) status.textContent = tr("speaker_capture_error_browser", "Audio capture is not supported by this browser.");
+        setProfileLoading(true, tr("profile_generation_error", "Erreur génération profil"), tr("speaker_capture_error_browser", "Audio capture is not supported by this browser."), "error");
+        window.setTimeout(() => setProfileLoading(false), 2600);
+        return;
+      }
+
+      const dialog = createSpeakerCaptureDialog();
+      speakerCapture = {
+        row,
+        sampleIndex,
+        dialog,
+        chunks: [],
+        stream: null,
+        recorder: null,
+        timer: null,
+        countdownTimer: null,
+        startedAt: Date.now(),
+        recording: false,
+        discard: false,
+        wavBlob: null,
+        objectUrl: ""
+      };
+      dialog.overlay.classList.add("open");
+      setSpeakerCaptureStatus(tr("speaker_capture_requesting", "Requesting microphone access..."));
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        loadBrowserAudioDevices(false);
+        const recorder = new MediaRecorder(stream);
+        speakerCapture.stream = stream;
+        speakerCapture.recorder = recorder;
+        speakerCapture.startedAt = Date.now();
+        speakerCapture.recording = true;
+        recorder.addEventListener("dataavailable", (event) => {
+          if (event.data && event.data.size > 0 && speakerCapture) speakerCapture.chunks.push(event.data);
+        });
+        recorder.addEventListener("stop", async () => {
+          const state = speakerCapture;
+          if (!state || state.discard) return;
+          state.recording = false;
+          if (state.stream) {
+            for (const track of state.stream.getTracks()) track.stop();
+            state.stream = null;
+          }
+          try {
+            const sourceBlob = new Blob(state.chunks, { type: recorder.mimeType || "audio/webm" });
+            const wav = await recordedBlobToValidatedWav(sourceBlob);
+            if (!speakerCapture) return;
+            state.wavBlob = wav.blob;
+            state.objectUrl = URL.createObjectURL(wav.blob);
+            state.dialog.audio.src = state.objectUrl;
+            state.dialog.audio.hidden = false;
+            state.dialog.retry.disabled = false;
+            state.dialog.validate.disabled = false;
+            setSpeakerCaptureStatus(
+              trf("speaker_capture_preview", "Preview ready ({seconds}s). Listen, then validate or retake.", {
+                seconds: Math.round(wav.duration)
+              }),
+              "ready"
+            );
+          } catch (error) {
+            if (!speakerCapture) return;
+            state.dialog.retry.disabled = false;
+            setSpeakerCaptureStatus(String(error.message || error), "error");
+          }
+        });
+        recorder.start();
+        setSpeakerCaptureStatus(
+          trf("speaker_capture_countdown", "Recording... {seconds}s remaining.", { seconds: speakerCaptureMaxSeconds }),
+          "recording"
+        );
+        speakerCapture.countdownTimer = window.setInterval(updateSpeakerCaptureCountdown, 250);
+        speakerCapture.timer = window.setTimeout(stopSpeakerSampleCapture, speakerCaptureMaxSeconds * 1000);
+      } catch (error) {
+        const message = error && (error.name === "NotAllowedError" || error.name === "SecurityError")
+          ? tr("speaker_capture_error_permission", "Microphone permission was refused.")
+          : trf("speaker_capture_error_generic", "Microphone capture failed: {error}", { error: String(error.message || error) });
+        closeSpeakerCaptureDialog();
+        const status = row.querySelector(".speaker-status");
+        if (status) status.textContent = message;
+        setProfileLoading(true, tr("profile_generation_error", "Erreur génération profil"), message, "error");
+        window.setTimeout(() => setProfileLoading(false), 2600);
+      }
+    }
+
+    async function uploadSpeakerProfileBlob(row, sampleIndex, blob, filename) {
       const nameInput = row.querySelector('[data-role="name"]');
       const pathLabel = row.querySelector('[data-role="path"]');
       const fileInput = row.querySelector(`[data-role="file"][data-sample-index="${sampleIndex}"]`);
       const enabledInput = row.querySelector('[data-role="enabled"]');
       const status = row.querySelector(".speaker-status");
       const profileName = nameInput.value.trim();
-      const file = fileInput.files && fileInput.files[0];
       if (!profileName) {
         status.textContent = tr("speaker_name_required", "name required");
         return;
       }
-      if (!file) {
-        status.textContent = tr("speaker_choose_wav", "choose wav");
-        return;
-      }
-      if (!file.name.toLowerCase().endsWith(".wav")) {
-        status.textContent = tr("speaker_wav_only", "wav only");
+      if (!blob || blob.size === 0) {
+        status.textContent = tr("speaker_capture_error_empty", "No audio was captured.");
         return;
       }
       const willCompleteSamples = [1, 2, 3].every((index) => {
@@ -2714,7 +3033,7 @@
         playWebTts(speakerEmbeddingPreparationMessage);
       }
       try {
-        const dataUrl = await readFileAsDataUrl(file);
+        const dataUrl = await readFileAsDataUrl(blob);
         const response = await fetch("/api/speaker-profile-upload", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2722,7 +3041,7 @@
             profile_name: profileName,
             profile_index: Number(row.dataset.index || 0),
             sample_index: sampleIndex,
-            filename: file.name,
+            filename,
             audio_base64: dataUrl
           })
         });
@@ -2748,7 +3067,7 @@
         speakerProfileChoices = activeSpeakerProfilesFromConfig();
         syncComposerSpeakerControl();
         status.textContent = data.embedding_status || data.status || "ready";
-        fileInput.value = "";
+        if (fileInput) fileInput.value = "";
         const generated = String(data.embedding_status || "").toLowerCase().includes("ready");
         setProfileLoading(
           true,
@@ -2774,6 +3093,21 @@
         );
         window.setTimeout(() => setProfileLoading(false), 2600);
       }
+    }
+
+    async function uploadSpeakerProfile(row, sampleIndex) {
+      const fileInput = row.querySelector(`[data-role="file"][data-sample-index="${sampleIndex}"]`);
+      const status = row.querySelector(".speaker-status");
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        status.textContent = tr("speaker_choose_wav", "choose wav");
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith(".wav")) {
+        status.textContent = tr("speaker_wav_only", "wav only");
+        return;
+      }
+      await uploadSpeakerProfileBlob(row, sampleIndex, file, file.name);
     }
 
     function collectSpeakerProfiles() {

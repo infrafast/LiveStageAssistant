@@ -818,7 +818,7 @@
     }
     .speaker-sample {
       display: grid;
-      grid-template-columns: 14px minmax(120px, 1fr);
+      grid-template-columns: 14px minmax(120px, 1fr) 32px;
       gap: 6px;
       align-items: center;
     }
@@ -836,6 +836,68 @@
       min-width: 0;
       max-width: 100%;
       font-size: 12px;
+    }
+    .speaker-capture-button {
+      width: 32px;
+      height: 30px;
+      min-height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      color: var(--text);
+      line-height: 1;
+    }
+    .speaker-capture-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 28;
+      display: none;
+      place-items: center;
+      padding: 18px;
+      background: rgba(0, 0, 0, 0.34);
+    }
+    .speaker-capture-overlay.open {
+      display: grid;
+    }
+    .speaker-capture-panel {
+      width: min(520px, calc(100vw - 28px));
+      display: grid;
+      gap: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .speaker-capture-title {
+      font-weight: 700;
+    }
+    .speaker-capture-instructions,
+    .speaker-capture-status {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .speaker-capture-status[data-mode="recording"] {
+      color: var(--bad);
+      font-weight: 650;
+    }
+    .speaker-capture-status[data-mode="ready"] {
+      color: var(--ok);
+      font-weight: 650;
+    }
+    .speaker-capture-status[data-mode="error"] {
+      color: var(--bad);
+      font-weight: 650;
+    }
+    .speaker-capture-preview {
+      width: 100%;
+    }
+    .speaker-capture-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
     }
     .speaker-status {
       color: var(--muted);

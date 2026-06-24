@@ -103,6 +103,23 @@
     "speaker_profile_pending_detail": "{status} Le WAV est sauvegardé.",
     "speaker_embedding_not_generated": "Embedding non généré pour l'instant.",
     "speaker_voiceprint_ready": "empreinte vocale calculée",
-    "speaker_voiceprint_unavailable": "empreinte vocale indisponible"
+    "speaker_voiceprint_unavailable": "empreinte vocale indisponible",
+    "speaker_capture_button": "Capturer depuis le micro",
+    "speaker_capture_title": "Capture micro du sample",
+    "speaker_capture_instructions": "Dites une phrase d'environ 10 secondes, par exemple : ceci est un échantillon en condition réelle d'utilisation pour établir mon profil vocal.",
+    "speaker_capture_requesting": "Demande d'accès au microphone...",
+    "speaker_capture_countdown": "Enregistrement... {seconds}s restantes.",
+    "speaker_capture_stop": "Stop",
+    "speaker_capture_processing": "Préparation de l'aperçu...",
+    "speaker_capture_preview": "Aperçu prêt ({seconds}s). Écoute, puis valide ou reprends.",
+    "speaker_capture_validate": "Valider",
+    "speaker_capture_retry": "Reprendre",
+    "speaker_capture_error_permission": "Permission microphone refusée.",
+    "speaker_capture_error_https": "La capture microphone nécessite HTTPS ou localhost.",
+    "speaker_capture_error_browser": "La capture audio n'est pas supportée par ce navigateur.",
+    "speaker_capture_error_empty": "Aucun audio n'a été capturé.",
+    "speaker_capture_error_short": "Sample trop court : enregistre au moins {seconds} secondes.",
+    "speaker_capture_error_silence": "Sample trop silencieux.",
+    "speaker_capture_error_generic": "Échec capture micro : {error}"
   }
 }
