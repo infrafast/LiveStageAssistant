@@ -1828,10 +1828,31 @@ class WebMonitor:
                     try:
                         result = handler(audio_bytes, mime_type, apply_wake_word_gate)
                     except ValueError as e:
-                        self.send_error(400, str(e))
+                        self._send_json_error(
+                            400,
+                            {
+                                "ok": False,
+                                "error": {
+                                    "code": "invalid_audio",
+                                    "message": str(e),
+                                },
+                            },
+                        )
                         return
                     except Exception as e:
-                        self.send_error(500, f"Could not transcribe web audio: {e}")
+                        error_text = str(e)
+                        status = 429 if "insufficient_quota" in error_text or "Error code: 429" in error_text else 500
+                        code = "insufficient_quota" if status == 429 else "transcription_failed"
+                        self._send_json_error(
+                            status,
+                            {
+                                "ok": False,
+                                "error": {
+                                    "code": code,
+                                    "message": f"Could not transcribe web audio: {error_text}",
+                                },
+                            },
+                        )
                         return
                     self._send_json(result)
 

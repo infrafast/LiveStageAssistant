@@ -52,6 +52,8 @@
     "openai_voice": "OpenAI Voice",
     "backend_tts_volume": "Backend TTS volume",
     "voice_test": "Voice test",
+    "voice_input_error_quota": "Voice transcription failed: OpenAI quota exceeded. Check billing/quota or switch to local STT.",
+    "voice_input_error_generic": "Voice input failed: {error}",
     "test": "Test",
     "vad": "Voice Activity Detection (VAD)",
     "speaker_profiles": "Speaker profiles",

@@ -284,6 +284,31 @@
       metaErrorUntil = mode === "error" && holdMs > 0 ? Date.now() + holdMs : 0;
     }
 
+    async function fetchJsonOrThrow(response) {
+      const contentType = response.headers.get("content-type") || "";
+      const body = contentType.includes("application/json")
+        ? await response.json().catch(() => ({}))
+        : { error: { message: await response.text() } };
+      if (response.ok) return body;
+      const error = body && body.error ? body.error : {};
+      const message = error.message || body.message || response.statusText || `HTTP ${response.status}`;
+      const thrown = new Error(message);
+      thrown.code = error.code || "";
+      thrown.status = response.status;
+      throw thrown;
+    }
+
+    function conciseVoiceInputError(error) {
+      const text = String(error && error.message ? error.message : error || "");
+      if ((error && error.status === 429) || (error && error.code === "insufficient_quota") || text.includes("insufficient_quota")) {
+        return tr(
+          "voice_input_error_quota",
+          "Voice transcription failed: OpenAI quota exceeded. Check billing/quota or switch to local STT."
+        );
+      }
+      return trf("voice_input_error_generic", "Voice input failed: {error}", { error: text || "unknown error" });
+    }
+
     let toastTimer = null;
 
     function hideToast() {
@@ -643,8 +668,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ routing })
         });
-        if (!response.ok) throw new Error(await response.text());
-        const data = await response.json();
+        const data = await fetchJsonOrThrow(response);
         if (messageEl) messageEl.textContent = data.message || "Routing saved.";
         setEnvironmentLoading(true);
         mcpServersSignature = "";
@@ -2072,7 +2096,7 @@
           scheduleConversationRestart();
         }
       } catch (error) {
-        metaEl.textContent = `voice input failed: ${error}`;
+        setMeta(conciseVoiceInputError(error), "error", 15000);
       } finally {
         setRecording(false);
       }
