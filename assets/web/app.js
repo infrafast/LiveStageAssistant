@@ -1912,7 +1912,10 @@
         speaker: options.speaker || "unknown",
         speaker_confidence: Number(options.speakerConfidence || 0),
         speaker_backend: options.speakerBackend || "none",
-        speaker_context_explicit: Boolean(options.speakerContextExplicit)
+        speaker_context_explicit: Boolean(options.speakerContextExplicit),
+        speaker_second_confidence: Number(options.speakerSecondConfidence || 0),
+        speaker_reason: options.speakerReason || "",
+        speaker_candidates: Array.isArray(options.speakerCandidates) ? options.speakerCandidates : []
       };
     }
 
@@ -1944,7 +1947,10 @@
             speaker: speakerPayload.speaker,
             speaker_confidence: speakerPayload.speaker_confidence,
             speaker_backend: speakerPayload.speaker_backend,
-            speaker_context_explicit: speakerPayload.speaker_context_explicit
+            speaker_context_explicit: speakerPayload.speaker_context_explicit,
+            speaker_second_confidence: speakerPayload.speaker_second_confidence,
+            speaker_reason: speakerPayload.speaker_reason,
+            speaker_candidates: speakerPayload.speaker_candidates
           })
         });
         if (!response.ok) throw new Error(await response.text());
@@ -2057,7 +2063,10 @@
             speaker: forcedSpeaker ? forcedSpeaker.speaker : (data.speaker || "unknown"),
             speakerConfidence: forcedSpeaker ? forcedSpeaker.speaker_confidence : (data.speaker_confidence || 0),
             speakerBackend: forcedSpeaker ? forcedSpeaker.speaker_backend : (data.speaker_backend || "none"),
-            speakerContextExplicit: forcedSpeaker ? forcedSpeaker.speaker_context_explicit : false
+            speakerContextExplicit: forcedSpeaker ? forcedSpeaker.speaker_context_explicit : false,
+            speakerSecondConfidence: forcedSpeaker ? 0 : (data.speaker_second_confidence || 0),
+            speakerReason: forcedSpeaker ? "injected" : (data.speaker_reason || ""),
+            speakerCandidates: forcedSpeaker ? [] : (data.speaker_candidates || [])
           });
         } else if (options.conversation) {
           scheduleConversationRestart();

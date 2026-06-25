@@ -36,6 +36,7 @@ class SpeakerRecognitionResult:
     backend: str = "none"
     second_confidence: float = 0.0
     reason: str = "disabled"
+    candidates: list[tuple[str, float]] | None = None
 
 
 class SpeakerRecognizerBase(ABC):
@@ -179,7 +180,7 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
             return None
 
     def _load_profile_embeddings(self) -> list[tuple[SpeakerProfile, np.ndarray]]:
-        if self._profile_embeddings is not None:
+        if self._profile_embeddings:
             return self._profile_embeddings
 
         embeddings: list[tuple[SpeakerProfile, np.ndarray]] = []
@@ -222,6 +223,7 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
         )
         best_profile, best_score = scored[0]
         second_score = scored[1][1] if len(scored) > 1 else 0.0
+        candidates = [(profile.name, score) for profile, score in scored]
         if best_score >= self.threshold and best_score - second_score >= self.margin:
             return SpeakerRecognitionResult(
                 speaker=best_profile.name,
@@ -229,6 +231,7 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
                 second_confidence=second_score,
                 backend=self.backend_name,
                 reason="matched",
+                candidates=candidates,
             )
         return SpeakerRecognitionResult(
             speaker=UNKNOWN_SPEAKER,
@@ -236,6 +239,7 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
             second_confidence=second_score,
             backend=self.backend_name,
             reason="below_threshold_or_margin",
+            candidates=candidates,
         )
 
 

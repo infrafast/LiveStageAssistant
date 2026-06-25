@@ -505,6 +505,7 @@ class WebMonitor:
         self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._speaker_embedding_notice_handler: Callable[[str], None] | None = None
+        self._speaker_profile_update_handler: Callable[[dict[str, Any]], None] | None = None
         self._mcp_routing_save_handler: Callable[[dict[str, str]], dict[str, Any]] | None = None
         self._mcp_server_options_save_handler: Callable[[dict[str, dict[str, Any]]], dict[str, Any]] | None = None
         self._session_context_list_handler: Callable[[], dict[str, Any]] | None = None
@@ -638,6 +639,11 @@ class WebMonitor:
         """Register callback used to announce speaker embedding preparation."""
         with self._lock:
             self._speaker_embedding_notice_handler = handler
+
+    def set_speaker_profile_update_handler(self, handler: Callable[[dict[str, Any]], None]) -> None:
+        """Register callback invoked after speaker profile samples change."""
+        with self._lock:
+            self._speaker_profile_update_handler = handler
 
     def set_mcp_routing_save_handler(self, handler: Callable[[dict[str, str]], dict[str, Any]]) -> None:
         """Register callback used by the web UI to persist MCP routing words."""
@@ -1383,22 +1389,31 @@ class WebMonitor:
                     else:
                         embedding_ready = False
 
-                    self._send_json(
-                        {
-                            "ok": True,
-                            "profile_name": profile_name,
-                            "slug": slug,
-                            "profile_index": profile_index,
-                            "sample_index": sample_index,
-                            "wav_path": target.as_posix(),
-                            "samples": sample_statuses,
-                            "complete": samples_complete,
-                            "embedding_path": embedding_path.as_posix(),
-                            "embedding_ready": bool(embedding_ready),
-                            "status": "ready" if samples_complete else "incomplete",
-                            "embedding_status": embedding_status,
-                        }
-                    )
+                    result = {
+                        "ok": True,
+                        "profile_name": profile_name,
+                        "slug": slug,
+                        "profile_index": profile_index,
+                        "sample_index": sample_index,
+                        "wav_path": target.as_posix(),
+                        "samples": sample_statuses,
+                        "complete": samples_complete,
+                        "embedding_path": embedding_path.as_posix(),
+                        "embedding_ready": bool(embedding_ready),
+                        "status": "ready" if samples_complete else "incomplete",
+                        "embedding_status": embedding_status,
+                    }
+
+                    if samples_complete:
+                        with monitor._lock:
+                            update_handler = monitor._speaker_profile_update_handler
+                        if update_handler:
+                            try:
+                                update_handler(result)
+                            except Exception as e:
+                                LOGGER.warning("Speaker profile update handler failed: %s", e)
+
+                    self._send_json(result)
 
                 def _handle_llm_options(self, query: str) -> None:
                     handler = monitor._llm_options_handler
@@ -1759,6 +1774,14 @@ class WebMonitor:
                     except (TypeError, ValueError):
                         speaker_confidence = 0.0
                     speaker_backend = str(payload.get("speaker_backend") or "none").strip() or "none"
+                    try:
+                        speaker_second_confidence = float(payload.get("speaker_second_confidence") or 0.0)
+                    except (TypeError, ValueError):
+                        speaker_second_confidence = 0.0
+                    speaker_reason = str(payload.get("speaker_reason") or "").strip()
+                    speaker_candidates = payload.get("speaker_candidates") or []
+                    if not isinstance(speaker_candidates, list):
+                        speaker_candidates = []
                     if not command:
                         self.send_error(400, "Command is required")
                         return
@@ -1768,6 +1791,9 @@ class WebMonitor:
                         speaker=speaker,
                         speaker_confidence=speaker_confidence,
                         speaker_backend=speaker_backend,
+                        speaker_second_confidence=speaker_second_confidence,
+                        speaker_reason=speaker_reason,
+                        speaker_candidates=speaker_candidates,
                     )
                     self._send_json({"accepted": True})
 
@@ -2021,6 +2047,9 @@ class WebMonitor:
         speaker: str = "unknown",
         speaker_confidence: float = 0.0,
         speaker_backend: str = "none",
+        speaker_second_confidence: float = 0.0,
+        speaker_reason: str = "",
+        speaker_candidates: list[dict[str, Any]] | None = None,
     ) -> None:
         cleaned_command = command.strip()
         if not cleaned_command:
@@ -2033,6 +2062,9 @@ class WebMonitor:
                     "speaker": speaker or "unknown",
                     "speaker_confidence": float(speaker_confidence or 0.0),
                     "speaker_backend": speaker_backend or "none",
+                    "speaker_second_confidence": float(speaker_second_confidence or 0.0),
+                    "speaker_reason": speaker_reason or "",
+                    "speaker_candidates": speaker_candidates or [],
                 }
             )
             self._snapshot["updated_at"] = time.time()

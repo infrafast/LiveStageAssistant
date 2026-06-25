@@ -149,6 +149,10 @@ def speaker_reason_user_message(reason: str | None) -> str:
     return SPEAKER_REASON_USER_MESSAGES.get(normalized, "l'analyse vocale n'a pas permis de conclure")
 
 
+def speaker_confidence_percent(confidence: float | None) -> int:
+    return round(max(0.0, min(1.0, float(confidence or 0.0))) * 100)
+
+
 DEFAULT_VOICE_CANCEL_WORDS = (
     "stop",
     "stoppe",
@@ -1848,6 +1852,8 @@ class VoiceAssistant:
 
     def start_thinking_sound(self) -> None:
         """Loop the configured thinking sound until stop_thinking_sound is called."""
+        if self.tts_provider == "none":
+            return
         if not self.thinking_sound_path:
             if not self.thinking_sound_warning_shown:
                 print(
@@ -3173,9 +3179,14 @@ class VoiceAssistant:
                 f"({result.confidence:.2f}, backend={result.backend})"
             )
         elif self.speaker_recognition_enabled:
+            candidates = ", ".join(
+                f"{name}={score:.2f}" for name, score in (result.candidates or [])[:5]
+            )
+            candidate_detail = f", candidates={candidates}" if candidates else ""
             print(
                 f"Speaker unknown "
-                f"({result.confidence:.2f}, second={result.second_confidence:.2f}, reason={result.reason})"
+                f"({result.confidence:.2f}, second={result.second_confidence:.2f}, "
+                f"reason={result.reason}{candidate_detail})"
             )
         return result
 
@@ -3244,12 +3255,35 @@ class VoiceAssistant:
                 confidence = float(injected.get("speaker_confidence") or 0.0)
             except (TypeError, ValueError):
                 confidence = 0.0
+            try:
+                second_confidence = float(injected.get("speaker_second_confidence") or 0.0)
+            except (TypeError, ValueError):
+                second_confidence = 0.0
+            raw_candidates = injected.get("speaker_candidates") or []
+            candidates: list[tuple[str, float]] = []
+            if isinstance(raw_candidates, list):
+                for item in raw_candidates:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or "").strip()
+                    if not name:
+                        continue
+                    try:
+                        score = float(item.get("confidence") or 0.0)
+                    except (TypeError, ValueError):
+                        score = 0.0
+                    candidates.append((name, score))
             explicit_speaker_context = bool(injected.get("speaker_context_explicit"))
+            reason = str(injected.get("speaker_reason") or "").strip()
+            if not reason:
+                reason = "injected" if explicit_speaker_context else "injected_auto"
             return text, SpeakerRecognitionResult(
                 speaker=str(injected.get("speaker") or UNKNOWN_SPEAKER).strip() or UNKNOWN_SPEAKER,
                 confidence=confidence,
                 backend=str(injected.get("speaker_backend") or "none").strip() or "none",
-                reason="injected" if explicit_speaker_context else "injected_auto",
+                second_confidence=second_confidence,
+                reason=reason,
+                candidates=candidates or None,
             )
         text = str(injected or "").strip()
         return (text or None), SpeakerRecognitionResult(reason="text")
@@ -3408,6 +3442,12 @@ class VoiceAssistant:
             "speaker": speaker_result.speaker,
             "speaker_confidence": speaker_result.confidence,
             "speaker_backend": speaker_result.backend,
+            "speaker_second_confidence": speaker_result.second_confidence,
+            "speaker_reason": speaker_result.reason,
+            "speaker_candidates": [
+                {"name": name, "confidence": score}
+                for name, score in (speaker_result.candidates or [])
+            ],
         }
         if not text:
             return {"text": "", "accepted": False, "command_text": "", "message": "No speech detected.", **speaker_payload}
@@ -4109,8 +4149,31 @@ class VoiceAssistant:
         if not speaker_result or speaker_result.backend == "none":
             return "Je n'ai pas reçu d'échantillon vocal à analyser pour cette commande."
 
-        confidence = max(0.0, min(1.0, float(speaker_result.confidence or 0.0)))
-        percent = round(confidence * 100)
+        if speaker_result.reason == "below_threshold_or_margin":
+            candidates = list(speaker_result.candidates or [])
+            if candidates:
+                best_name, best_score = candidates[0]
+                ambiguous_candidates = [
+                    (name, score)
+                    for name, score in candidates[1:]
+                    if float(best_score or 0.0) - float(score or 0.0) < self.speaker_margin
+                ]
+                if ambiguous_candidates:
+                    close_profiles = ", ".join(
+                        f"le profil de {name} à {speaker_confidence_percent(score)} pour cent"
+                        for name, score in ambiguous_candidates
+                    )
+                    if len(ambiguous_candidates) == 1:
+                        close_sentence = f"mais {close_profiles} est proche."
+                    else:
+                        close_sentence = f"mais les profils suivants sont proches: {close_profiles}."
+                    return (
+                        f"Profil probable de {best_name} à {speaker_confidence_percent(best_score)} pour cent, "
+                        f"{close_sentence} "
+                        "L'écart est trop faible pour confirmer avec certitude qui parle."
+                    )
+
+        percent = speaker_confidence_percent(speaker_result.confidence)
         reason = speaker_reason_user_message(speaker_result.reason)
         return (
             "Je n'ai pas reconnu de profil vocal avec assez de certitude. "
@@ -5470,12 +5533,10 @@ async def main():
             enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
             if not name and not enabled:
                 continue
-            existing_paths = [Path(path) for path in wav_paths if Path(path).exists() and Path(path).is_file()]
-            paths = existing_paths if len(existing_paths) == 3 else []
             profiles.append(
                 SpeakerProfile(
                     name=name or f"speaker_{index}",
-                    wav_paths=paths,
+                    wav_paths=[Path(path) for path in wav_paths],
                     enabled=enabled,
                     slug=safe_speaker_profile_slug(name or f"speaker_{index}"),
                     embedding_path=Path(speaker_profile_embedding_path_from_values(values, index)),
@@ -6171,6 +6232,15 @@ async def main():
             print(f"Web monitor disabled: could not bind {web_host}:{web_port}: {e}")
 
     if web_monitor:
+        def request_speaker_profile_reload(_result: dict[str, Any]) -> None:
+            stt_language = normalize_locale(str(profile_values.get("STT_LANGUAGE") or "fr"))
+            web_monitor.set_environment_loading(
+                True,
+                i18n_text(load_locale(stt_language), "web.environment_refresh", "rafraichissement de l'environnement"),
+            )
+            reload_event.set()
+
+        web_monitor.set_speaker_profile_update_handler(request_speaker_profile_reload)
         web_monitor.set_env_profile_handlers(
             list_handler=lambda: list_available_env_files(get_active_env_file(), auto_env_mode),
             switch_handler=switch_active_env_file,
