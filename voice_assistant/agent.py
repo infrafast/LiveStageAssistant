@@ -5518,11 +5518,6 @@ async def main():
         profile_root = Path(str(profile_root_value).strip())
         return [(profile_root / f"profil{index}_{sample_index}.wav").as_posix() for sample_index in range(1, 4)]
 
-    def speaker_profile_embedding_path_from_values(values: dict, index: int) -> str:
-        profile_root_value = values.get("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR
-        profile_root = Path(str(profile_root_value).strip())
-        return (profile_root / f"profil{index}.npy").as_posix()
-
     def speaker_profiles_from_values(values: dict, max_profiles: int = 5) -> list[SpeakerProfile]:
         profiles: list[SpeakerProfile] = []
         max_profiles = max(0, min(5, int(max_profiles or 5)))
@@ -5539,7 +5534,6 @@ async def main():
                     wav_paths=[Path(path) for path in wav_paths],
                     enabled=enabled,
                     slug=safe_speaker_profile_slug(name or f"speaker_{index}"),
-                    embedding_path=Path(speaker_profile_embedding_path_from_values(values, index)),
                 )
             )
         return profiles
@@ -5553,15 +5547,25 @@ async def main():
             wav_paths = speaker_profile_wav_paths_from_values(values, index)
             samples = []
             ready_paths = []
+            ready_embedding_paths = []
             for sample_index, wav_path in enumerate(wav_paths, start=1):
                 path = Path(wav_path)
+                sample_embedding_path = path.with_suffix(".npy")
                 sample_status = "missing"
+                sample_embedding_ready = False
                 if path.exists() and path.is_file():
                     try:
                         with wave.open(str(path), "rb") as reader:
                             sample_status = "ready" if reader.getnframes() > 0 else "error"
                         if sample_status == "ready":
                             ready_paths.append(path)
+                            sample_embedding_ready = (
+                                sample_embedding_path.exists()
+                                and sample_embedding_path.is_file()
+                                and sample_embedding_path.stat().st_mtime >= path.stat().st_mtime
+                            )
+                            if sample_embedding_ready:
+                                ready_embedding_paths.append(sample_embedding_path)
                     except Exception:
                         sample_status = "error"
                 samples.append(
@@ -5570,22 +5574,14 @@ async def main():
                         "wav_path": wav_path,
                         "filename": path.name,
                         "ready": sample_status == "ready",
+                        "embedding_path": sample_embedding_path.as_posix(),
+                        "embedding_ready": sample_embedding_ready,
                         "status": sample_status,
                     }
                 )
-            embedding_path = Path(speaker_profile_embedding_path_from_values(values, index))
-            embedding_ready = False
-            if len(ready_paths) < 3:
-                status = f"{len(ready_paths)}/3 samples"
-            else:
-                try:
-                    if embedding_path.exists() and all(embedding_path.stat().st_mtime >= path.stat().st_mtime for path in ready_paths):
-                        embedding_ready = True
-                        status = "ready cached"
-                    else:
-                        status = "ready, embedding pending"
-                except Exception:
-                    status = "error"
+            embedding_count = len(ready_embedding_paths)
+            embedding_ready = embedding_count > 0
+            status = f"{embedding_count}/3 embeddings"
             statuses.append(
                 {
                     "index": index,
@@ -5594,9 +5590,12 @@ async def main():
                     "wav_paths": wav_paths,
                     "samples": samples,
                     "complete": len(ready_paths) == 3,
+                    "usable": embedding_ready,
+                    "embedding_count": embedding_count,
+                    "embedding_total": len(wav_paths),
                     "status": status,
                     "embedding_ready": embedding_ready,
-                    "embedding_path": embedding_path.as_posix() if embedding_path else "",
+                    "embedding_path": ready_embedding_paths[0].as_posix() if ready_embedding_paths else "",
                     "slug": safe_speaker_profile_slug(name or f"speaker_{index}"),
                 }
             )

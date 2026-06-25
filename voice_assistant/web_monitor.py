@@ -30,7 +30,8 @@ try:
     from .i18n import available_locales, load_locale, normalize_locale
     from .speaker_recognition import (
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
-        compute_resemblyzer_mean_embedding_file,
+        SPEAKER_EMBEDDING_READY_MESSAGE,
+        compute_resemblyzer_embedding_file,
         validate_wav_bytes,
     )
 except ImportError:  # pragma: no cover - direct script fallback
@@ -38,7 +39,8 @@ except ImportError:  # pragma: no cover - direct script fallback
         from i18n import available_locales, load_locale, normalize_locale
         from speaker_recognition import (
             SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
-            compute_resemblyzer_mean_embedding_file,
+            SPEAKER_EMBEDDING_READY_MESSAGE,
+            compute_resemblyzer_embedding_file,
             validate_wav_bytes,
         )
     except ImportError:  # pragma: no cover - optional helper unavailable
@@ -48,7 +50,8 @@ except ImportError:  # pragma: no cover - direct script fallback
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE = (
             "Je prépare l'empreinte vocale du profil. Cela peut prendre un moment la première fois."
         )
-        compute_resemblyzer_mean_embedding_file = None
+        SPEAKER_EMBEDDING_READY_MESSAGE = "Empreinte vocale calculée."
+        compute_resemblyzer_embedding_file = None
         validate_wav_bytes = None
 
 
@@ -1360,34 +1363,47 @@ class WebMonitor:
                     except OSError as e:
                         self.send_error(500, f"Could not save speaker profile WAV: {e}")
                         return
-                    sample_statuses = [
-                        {
-                            "index": slot_index,
-                            "wav_path": sample_path.as_posix(),
-                            "filename": sample_path.name,
-                            "ready": sample_path.exists() and sample_path.is_file(),
-                        }
-                        for slot_index, sample_path in enumerate(sample_paths, start=1)
-                    ]
-                    samples_complete = all(item["ready"] for item in sample_statuses)
-                    embedding_status = "waiting for 3 samples"
-                    embedding_path = profile_root / f"profil{profile_index}.npy"
+                    embedding_status = "embedding pending"
+                    embedding_path = target.with_suffix(".npy")
                     embedding_ready = False
-                    if samples_complete and compute_resemblyzer_mean_embedding_file is not None:
+                    if compute_resemblyzer_embedding_file is not None:
                         try:
                             with monitor._lock:
                                 notice_handler = monitor._speaker_embedding_notice_handler
                             if notice_handler:
                                 notice_handler(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
-                            embedding_path = compute_resemblyzer_mean_embedding_file(sample_paths, embedding_path)
-                            embedding_status = "mean embedding ready"
+                            embedding_path = compute_resemblyzer_embedding_file(target, embedding_path)
+                            embedding_status = "sample embedding ready"
                             embedding_ready = True
+                            if notice_handler:
+                                notice_handler(SPEAKER_EMBEDDING_READY_MESSAGE)
                         except Exception as e:
                             embedding_status = f"embedding pending: {e}"
-                    elif samples_complete:
-                        embedding_status = "embedding unavailable"
                     else:
-                        embedding_ready = False
+                        embedding_status = "embedding unavailable"
+                    sample_statuses = []
+                    for slot_index, sample_path in enumerate(sample_paths, start=1):
+                        sample_embedding_path = sample_path.with_suffix(".npy")
+                        sample_ready = sample_path.exists() and sample_path.is_file()
+                        sample_embedding_ready = (
+                            sample_ready
+                            and sample_embedding_path.exists()
+                            and sample_embedding_path.is_file()
+                            and sample_embedding_path.stat().st_mtime >= sample_path.stat().st_mtime
+                        )
+                        sample_statuses.append(
+                            {
+                                "index": slot_index,
+                                "wav_path": sample_path.as_posix(),
+                                "filename": sample_path.name,
+                                "ready": sample_ready,
+                                "embedding_path": sample_embedding_path.as_posix(),
+                                "embedding_ready": sample_embedding_ready,
+                            }
+                        )
+                    samples_complete = all(item["ready"] for item in sample_statuses)
+                    embedding_count = len([item for item in sample_statuses if item["embedding_ready"]])
+                    profile_usable = embedding_count > 0
 
                     result = {
                         "ok": True,
@@ -1398,13 +1414,16 @@ class WebMonitor:
                         "wav_path": target.as_posix(),
                         "samples": sample_statuses,
                         "complete": samples_complete,
+                        "usable": profile_usable,
+                        "embedding_count": embedding_count,
+                        "embedding_total": len(sample_statuses),
                         "embedding_path": embedding_path.as_posix(),
                         "embedding_ready": bool(embedding_ready),
-                        "status": "ready" if samples_complete else "incomplete",
+                        "status": f"{embedding_count}/{len(sample_statuses)} embeddings ready",
                         "embedding_status": embedding_status,
                     }
 
-                    if samples_complete:
+                    if profile_usable:
                         with monitor._lock:
                             update_handler = monitor._speaker_profile_update_handler
                         if update_handler:

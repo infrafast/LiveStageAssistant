@@ -18,6 +18,7 @@ SPEAKER_EMBEDDING_SUFFIX = ".npy"
 SPEAKER_EMBEDDING_PREPARATION_MESSAGE = (
     "Je prépare l'empreinte vocale du profil. Cela peut prendre un moment la première fois."
 )
+SPEAKER_EMBEDDING_READY_MESSAGE = "Empreinte vocale calculée."
 
 
 @dataclass
@@ -26,7 +27,6 @@ class SpeakerProfile:
     wav_paths: list[Path]
     enabled: bool = True
     slug: str | None = None
-    embedding_path: Path | None = None
 
 
 @dataclass
@@ -65,7 +65,7 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
     def __init__(self, profiles: list[SpeakerProfile], threshold: float = 0.75, margin: float = 0.10) -> None:
         super().__init__(profiles, threshold=threshold, margin=margin)
         self._encoder: Any | None = None
-        self._profile_embeddings: list[tuple[SpeakerProfile, np.ndarray]] | None = None
+        self._profile_embeddings: list[tuple[SpeakerProfile, list[np.ndarray]]] | None = None
 
     def _load_resemblyzer(self) -> tuple[Any, Any]:
         try:
@@ -108,13 +108,6 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
     def _embedding_cache_path(self, wav_path: Path) -> Path:
         return wav_path.with_suffix(SPEAKER_EMBEDDING_SUFFIX)
 
-    def _normalized_embedding_mean(self, embeddings: list[np.ndarray]) -> np.ndarray:
-        mean_embedding = np.mean([embedding.astype(np.float32) for embedding in embeddings], axis=0)
-        norm = float(np.linalg.norm(mean_embedding))
-        if norm > 0:
-            mean_embedding = mean_embedding / norm
-        return mean_embedding.astype(np.float32)
-
     def _load_cached_embedding(self, wav_path: Path) -> np.ndarray | None:
         cache_path = self._embedding_cache_path(wav_path)
         if not cache_path.exists() or not cache_path.is_file():
@@ -132,8 +125,6 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
     def pending_embedding_paths(self) -> list[Path]:
         pending: list[Path] = []
         for profile in self.profiles:
-            if self._load_cached_profile_embedding(profile) is not None:
-                continue
             for wav_path in profile.wav_paths:
                 if wav_path.exists() and wav_path.is_file() and self._load_cached_embedding(wav_path) is None:
                     pending.append(wav_path)
@@ -150,59 +141,18 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
             pass
         return embedding
 
-    def _profile_embedding_cache_path(self, profile: SpeakerProfile) -> Path | None:
-        if profile.embedding_path:
-            return profile.embedding_path
-        first_path = next((path for path in profile.wav_paths if path), None)
-        if first_path is None:
-            return None
-        match = re.match(r"^(profil\d+)_\d+$", first_path.stem)
-        if match:
-            return first_path.with_name(f"{match.group(1)}{SPEAKER_EMBEDDING_SUFFIX}")
-        return first_path.with_suffix(SPEAKER_EMBEDDING_SUFFIX)
-
-    def _load_cached_profile_embedding(self, profile: SpeakerProfile) -> np.ndarray | None:
-        cache_path = self._profile_embedding_cache_path(profile)
-        if cache_path is None or not cache_path.exists() or not cache_path.is_file():
-            return None
-        existing_paths = [path for path in profile.wav_paths if path.exists() and path.is_file()]
-        if len(existing_paths) != len(profile.wav_paths):
-            return None
-        try:
-            cache_mtime = cache_path.stat().st_mtime
-            if any(cache_mtime < wav_path.stat().st_mtime for wav_path in existing_paths):
-                return None
-            embedding = np.load(cache_path)
-            if embedding.ndim != 1:
-                return None
-            return embedding.astype(np.float32)
-        except Exception:
-            return None
-
-    def _load_profile_embeddings(self) -> list[tuple[SpeakerProfile, np.ndarray]]:
+    def _load_profile_embeddings(self) -> list[tuple[SpeakerProfile, list[np.ndarray]]]:
         if self._profile_embeddings:
             return self._profile_embeddings
 
-        embeddings: list[tuple[SpeakerProfile, np.ndarray]] = []
+        embeddings: list[tuple[SpeakerProfile, list[np.ndarray]]] = []
         for profile in self.profiles:
-            cached_profile_embedding = self._load_cached_profile_embedding(profile)
-            if cached_profile_embedding is not None:
-                embeddings.append((profile, cached_profile_embedding))
-                continue
             profile_vectors = []
             for wav_path in profile.wav_paths:
                 if wav_path.exists() and wav_path.is_file():
                     profile_vectors.append(self._embedding_for_profile_path(wav_path))
-            if len(profile_vectors) == len(profile.wav_paths):
-                embedding = self._normalized_embedding_mean(profile_vectors)
-                cache_path = self._profile_embedding_cache_path(profile)
-                if cache_path is not None:
-                    try:
-                        cache_path.parent.mkdir(parents=True, exist_ok=True)
-                        np.save(cache_path, embedding)
-                    except OSError:
-                        pass
-                embeddings.append((profile, embedding))
+            if profile_vectors:
+                embeddings.append((profile, profile_vectors))
         self._profile_embeddings = embeddings
         return embeddings
 
@@ -217,10 +167,16 @@ class ResemblyzerSpeakerRecognizer(SpeakerRecognizerBase):
             embedding = self._embedding_for_path(Path(wav_file.name))
 
         scored = sorted(
-            ((profile, float(np.inner(embedding, profile_embedding))) for profile, profile_embedding in profiles),
+            (
+                (profile, max(float(np.inner(embedding, profile_embedding)) for profile_embedding in profile_embeddings))
+                for profile, profile_embeddings in profiles
+                if profile_embeddings
+            ),
             key=lambda item: item[1],
             reverse=True,
         )
+        if not scored:
+            return SpeakerRecognitionResult(backend=self.backend_name, reason="no_profiles")
         best_profile, best_score = scored[0]
         second_score = scored[1][1] if len(scored) > 1 else 0.0
         candidates = [(profile.name, score) for profile, score in scored]
@@ -281,23 +237,6 @@ def compute_resemblyzer_embedding_file(wav_path: str | Path, embedding_path: str
     embedding_path = Path(embedding_path)
     recognizer = ResemblyzerSpeakerRecognizer([])
     embedding = recognizer._embedding_for_path(wav_path)
-    embedding_path.parent.mkdir(parents=True, exist_ok=True)
-    np.save(embedding_path, embedding)
-    return embedding_path
-
-
-def compute_resemblyzer_mean_embedding_file(
-    wav_paths: list[str | Path],
-    embedding_path: str | Path,
-) -> Path:
-    """Compute and persist a normalized mean Resemblyzer embedding for a profile."""
-    cleaned_paths = [Path(path) for path in wav_paths if Path(path).exists() and Path(path).is_file()]
-    if len(cleaned_paths) != len(wav_paths):
-        raise ValueError("all speaker profile samples must exist before computing the mean embedding")
-    recognizer = ResemblyzerSpeakerRecognizer([])
-    embeddings = [recognizer._embedding_for_path(path) for path in cleaned_paths]
-    embedding = recognizer._normalized_embedding_mean(embeddings)
-    embedding_path = Path(embedding_path)
     embedding_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(embedding_path, embedding)
     return embedding_path

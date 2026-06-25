@@ -2760,7 +2760,9 @@
           const sample = samples.find((item) => Number(item.index) === sampleIndex) || { index: sampleIndex };
           const sampleWrap = document.createElement("div");
           sampleWrap.className = `speaker-sample${sample.ready ? " ready" : ""}`;
-          sampleWrap.title = sample.wav_path || `data/speaker_profiles/profil${index}_${sampleIndex}.wav`;
+          sampleWrap.title = sample.embedding_ready && sample.embedding_path
+            ? sample.embedding_path
+            : (sample.wav_path || `data/speaker_profiles/profil${index}_${sampleIndex}.wav`);
           const led = document.createElement("span");
           led.className = "speaker-sample-led";
           led.setAttribute("aria-hidden", "true");
@@ -2800,7 +2802,7 @@
 
         const status = document.createElement("span");
         status.className = "speaker-status";
-        status.textContent = profile.status || tr("speaker_samples_missing", "0/3 samples");
+        status.textContent = profile.status || tr("speaker_samples_missing", "0/3 embeddings");
 
         const path = document.createElement("span");
         path.className = "speaker-path";
@@ -3060,18 +3062,9 @@
         status.textContent = tr("speaker_capture_error_empty", "No audio was captured.");
         return;
       }
-      const willCompleteSamples = [1, 2, 3].every((index) => {
-        if (index === sampleIndex) return true;
-        const input = row.querySelector(`[data-role="file"][data-sample-index="${index}"]`);
-        return Boolean(input?.closest(".speaker-sample")?.classList.contains("ready"));
-      });
-      status.textContent = willCompleteSamples
-        ? tr("speaker_embedding_progress", "embedding...")
-        : tr("speaker_uploading_sample", "uploading sample...");
-      if (willCompleteSamples) {
-        setProfileLoading(true, tr("preparing_voice_profile", "Préparation du profil vocal"), speakerEmbeddingPreparationMessage);
-      }
-      if (willCompleteSamples && webAudio.tts_enabled && webAudio.tts_output === "browser") {
+      status.textContent = tr("speaker_embedding_progress", "embedding...");
+      setProfileLoading(true, tr("preparing_voice_profile", "Préparation du profil vocal"), speakerEmbeddingPreparationMessage);
+      if (webAudio.tts_enabled && webAudio.tts_output === "browser") {
         playWebTts(speakerEmbeddingPreparationMessage);
       }
       try {
@@ -3102,28 +3095,37 @@
           const sampleWrap = input ? input.closest(".speaker-sample") : null;
           if (sampleWrap) {
             sampleWrap.classList.toggle("ready", Boolean(sample.ready));
-            sampleWrap.title = sample.wav_path || sample.filename || "";
+            sampleWrap.title = sample.embedding_ready && sample.embedding_path
+              ? sample.embedding_path
+              : (sample.wav_path || sample.filename || "");
           }
         }
         enabledInput.checked = true;
         speakerProfileChoices = activeSpeakerProfilesFromConfig();
         syncComposerSpeakerControl();
-        status.textContent = data.embedding_status || data.status || "ready";
+        status.textContent = data.status || data.embedding_status || "ready";
         if (fileInput) fileInput.value = "";
         const generated = String(data.embedding_status || "").toLowerCase().includes("ready");
+        const completionTitle = generated
+          ? tr("speaker_profile_done", "Empreinte vocale calculée")
+          : tr("speaker_profile_file_saved", "Fichier profil sauvegardé");
+        const completionDetail = generated
+          ? trf("speaker_profile_ready_detail", "Profil {index} utilisable: {path}", {
+              index: row.dataset.index || "",
+              path: data.embedding_path || ""
+            })
+          : trf("speaker_profile_pending_detail", "{status} Le WAV est sauvegardé.", {
+              status: data.embedding_status || tr("speaker_embedding_not_generated", "Embedding non généré pour l'instant.")
+            });
         setProfileLoading(
           true,
-          generated ? tr("speaker_profile_done", "Génération du profil faite") : tr("speaker_profile_file_saved", "Fichier profil sauvegardé"),
-          generated
-            ? trf("speaker_profile_ready_detail", "Profil {index} prêt: {path}", {
-                index: row.dataset.index || "",
-                path: data.embedding_path || ""
-              })
-            : trf("speaker_profile_pending_detail", "{status} Le WAV est sauvegardé.", {
-                status: data.embedding_status || tr("speaker_embedding_not_generated", "Embedding non généré pour l'instant.")
-              }),
+          completionTitle,
+          completionDetail,
           "done"
         );
+        if (generated && webAudio.tts_enabled && webAudio.tts_output === "browser") {
+          playWebTts(completionTitle);
+        }
         window.setTimeout(() => setProfileLoading(false), 1400);
       } catch (error) {
         status.textContent = tr("speaker_upload_failed", "upload failed");
