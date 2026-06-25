@@ -2629,6 +2629,15 @@
       return commandAckSound.getAttribute("aria-checked") === "true";
     }
 
+    function envFlag(value, fallback = false) {
+      if (typeof value === "boolean") return value;
+      if (value === null || value === undefined) return fallback;
+      const normalized = String(value).trim().toLowerCase();
+      if (["1", "true", "yes", "on"].includes(normalized)) return true;
+      if (["0", "false", "no", "off"].includes(normalized)) return false;
+      return fallback;
+    }
+
     function syncVadLabels() {
       vadSpeechThresholdLabel.textContent = Number(vadSpeechThreshold.value || 0.5).toFixed(2);
       vadNegativeThresholdLabel.textContent = Number(vadNegativeThreshold.value || 0.35).toFixed(2);
@@ -3861,6 +3870,11 @@
       try {
         const response = await fetch("/api/snapshot", { cache: "no-store" });
         const data = await response.json();
+        const snapshotEnv = (data.config && data.config.env) || {};
+        if (Object.prototype.hasOwnProperty.call(snapshotEnv, "SPEAKER_RECOGNITION_ENABLED")) {
+          speakerRecognitionEnvEnabled = envFlag(snapshotEnv.SPEAKER_RECOGNITION_ENABLED, speakerRecognitionEnvEnabled);
+          syncComposerSpeakerControl();
+        }
         const previousBusy = composerLocked;
         const snapshotEnvFile = data.env_file || "";
         const snapshotEnvChanged = Boolean(currentSnapshotEnvFile) && snapshotEnvFile && snapshotEnvFile !== currentSnapshotEnvFile;
@@ -4410,6 +4424,7 @@
         cloudApiLoaded = false;
         setEnvironmentLoading(true);
         markConfigClean();
+        llmControlsInitialized = false;
         if ((data.stt_language || sttLanguageValue) !== i18nPayload.locale) {
           window.setTimeout(() => window.location.reload(), 250);
           return;
