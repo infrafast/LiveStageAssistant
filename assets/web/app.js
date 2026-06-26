@@ -2003,7 +2003,7 @@
       const cleanedCommand = command.trim();
       if (!cleanedCommand) return;
       const shouldInterrupt = Boolean(options.interrupt) && interruptConversationEnabled && (composerLocked || webTtsPlaying);
-      if (composerLocked && !shouldInterrupt) return;
+      if (composerLocked && !shouldInterrupt && !options.allowWhenLocked) return;
       if (shouldInterrupt) {
         await requestSilentCancel();
       }
@@ -2163,6 +2163,7 @@
           }
           const forcedSpeaker = forcedComposerSpeakerPayload();
           await submitCommand(text, {
+            allowWhenLocked: Boolean(options.fileUpload),
             interrupt: Boolean(options.conversation),
             speaker: forcedSpeaker ? forcedSpeaker.speaker : (data.speaker || "unknown"),
             speakerConfidence: forcedSpeaker ? forcedSpeaker.speaker_confidence : (data.speaker_confidence || 0),
