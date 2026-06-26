@@ -2685,10 +2685,22 @@ class VoiceAssistant:
         print(message)
 
         self.stop_startup_loader_sound()
-        if self.tts_provider != "none":
-            await asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message)))
         if self.web_monitor:
             self.web_monitor.set_environment_loading(False)
+        if self.tts_provider != "none":
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message))),
+                    timeout=8.0,
+                )
+            except asyncio.TimeoutError:
+                self.stop_thinking_sound()
+                self.stop_startup_loader_sound()
+                print("Startup ready TTS timed out; continuing with web interface available.")
+            except Exception as e:
+                self.stop_thinking_sound()
+                self.stop_startup_loader_sound()
+                print(f"Startup ready TTS failed; continuing with web interface available: {e}")
 
     async def initialize_mcp(self):
         """Initialize MCP client and agent with proper error handling."""
@@ -3611,6 +3623,10 @@ class VoiceAssistant:
                 except Exception as e:
                     if local_tts_playback_available():
                         print(f"OpenAI TTS failed: {e}")
+                        if self.audio_output_device_index is not None:
+                            self.stop_thinking_sound()
+                            print("Skipping local pyttsx3 fallback because a selected backend output failed.")
+                            return False
                         print("Falling back to local pyttsx3 TTS...")
                     else:
                         self.stop_thinking_sound()
@@ -3639,6 +3655,10 @@ class VoiceAssistant:
                 except Exception as e:
                     if local_tts_playback_available():
                         print(f"ElevenLabs TTS failed: {e}")
+                        if self.audio_output_device_index is not None:
+                            self.stop_thinking_sound()
+                            print("Skipping local pyttsx3 fallback because a selected backend output failed.")
+                            return False
                         print("Falling back to local pyttsx3 TTS...")
                     else:
                         self.stop_thinking_sound()
