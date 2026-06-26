@@ -1370,8 +1370,6 @@ class WebMonitor:
                         try:
                             with monitor._lock:
                                 notice_handler = monitor._speaker_embedding_notice_handler
-                            if notice_handler:
-                                notice_handler(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
                             embedding_path = compute_resemblyzer_embedding_file(target, embedding_path)
                             embedding_status = "sample embedding ready"
                             embedding_ready = True

@@ -3080,6 +3080,13 @@
         return;
       }
       status.textContent = tr("speaker_embedding_progress", "embedding...");
+      const sampleWrap = fileInput ? fileInput.closest(".speaker-sample") : null;
+      applySpeakerSampleState(sampleWrap, {
+        index: sampleIndex,
+        ready: true,
+        embedding_ready: false,
+        filename
+      });
       setProfileLoading(true, tr("preparing_voice_profile", "Préparation du profil vocal"), speakerEmbeddingPreparationMessage);
       if (webAudio.tts_enabled && webAudio.tts_output === "browser") {
         playWebTts(speakerEmbeddingPreparationMessage);
@@ -3113,8 +3120,7 @@
         }
         for (const sample of data.samples || []) {
           const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);
-          const sampleWrap = input ? input.closest(".speaker-sample") : null;
-          applySpeakerSampleState(sampleWrap, sample);
+          applySpeakerSampleState(input ? input.closest(".speaker-sample") : null, sample);
         }
         enabledInput.checked = true;
         speakerProfileChoices = activeSpeakerProfilesFromConfig();
