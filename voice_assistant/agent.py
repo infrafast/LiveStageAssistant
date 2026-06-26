@@ -6307,11 +6307,11 @@ async def main():
         web_monitor=web_monitor,
         interval=AUTO_CHECK_INTERVAL,
     )
-    auto_monitor.announce_initial_status()
     auto_monitor.start()
 
     try:
         announce_reload_complete = False
+        announce_initial_network_status = True
         while True:
             detected_env_file = auto_monitor.detected_env_file
             with env_file_lock:
@@ -6322,6 +6322,10 @@ async def main():
 
             reload_event.clear()
             assistant = build_assistant_from_env(detected_env_file, reload_event=reload_event, web_monitor=web_monitor)
+            if announce_initial_network_status:
+                assistant.start_startup_loader_sound()
+                auto_monitor.announce_initial_status()
+                announce_initial_network_status = False
             reload_complete_message = None
             if announce_reload_complete:
                 print("Auto environment reload complete.")
