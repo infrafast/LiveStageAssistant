@@ -2087,6 +2087,7 @@
       localNoticeMessages = [];
       fileUploadPending = true;
       renderMessages(lastServerMessages, true);
+      if (webAudio.tts_enabled && webAudio.tts_output === "browser") startThinkingAudio();
       try {
         if (fileLooksLikeText(file)) {
           if (file.size > composerTextUploadMaxBytes) {
@@ -2123,6 +2124,7 @@
         setMeta(`file upload failed: ${error.message || error}`, "error", 7000);
       } finally {
         fileUploadPending = false;
+        if (!composerLocked && !hasPendingCommandMessages() && webAudio.tts_output === "browser") stopThinkingAudio();
         renderMessages(lastServerMessages, composerLocked || hasPendingCommandMessages());
       }
     }

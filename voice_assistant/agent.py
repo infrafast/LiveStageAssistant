@@ -3498,6 +3498,9 @@ class VoiceAssistant:
         model: str = "whisper-1",
         apply_wake_word_gate: bool | str = False,
     ) -> dict[str, Any]:
+        should_manage_backend_thinking = not self.web_tts_enabled
+        if should_manage_backend_thinking:
+            self.start_thinking_sound()
         wake_word_mode = (
             apply_wake_word_gate.strip().lower()
             if isinstance(apply_wake_word_gate, str)
@@ -3505,51 +3508,55 @@ class VoiceAssistant:
         )
         if wake_word_mode not in {"require", "strip_if_present", "ignore"}:
             wake_word_mode = "ignore"
-        text = self.web_audio_to_text_openai(audio_data, mime_type, model=model) or ""
-        speaker_audio = self.speaker_audio_from_web_bytes(audio_data, mime_type)
-        speaker_result = self.recognize_speaker(speaker_audio, already_wav=True)
-        speaker_payload = {
-            "speaker": speaker_result.speaker,
-            "speaker_confidence": speaker_result.confidence,
-            "speaker_backend": speaker_result.backend,
-            "speaker_second_confidence": speaker_result.second_confidence,
-            "speaker_reason": speaker_result.reason,
-            "speaker_candidates": [
-                {"name": name, "confidence": score}
-                for name, score in (speaker_result.candidates or [])
-            ],
-        }
-        if not text:
-            return {"text": "", "accepted": False, "command_text": "", "message": "No speech detected.", **speaker_payload}
+        try:
+            text = self.web_audio_to_text_openai(audio_data, mime_type, model=model) or ""
+            speaker_audio = self.speaker_audio_from_web_bytes(audio_data, mime_type)
+            speaker_result = self.recognize_speaker(speaker_audio, already_wav=True)
+            speaker_payload = {
+                "speaker": speaker_result.speaker,
+                "speaker_confidence": speaker_result.confidence,
+                "speaker_backend": speaker_result.backend,
+                "speaker_second_confidence": speaker_result.second_confidence,
+                "speaker_reason": speaker_result.reason,
+                "speaker_candidates": [
+                    {"name": name, "confidence": score}
+                    for name, score in (speaker_result.candidates or [])
+                ],
+            }
+            if not text:
+                return {"text": "", "accepted": False, "command_text": "", "message": "No speech detected.", **speaker_payload}
 
-        if wake_word_mode in {"require", "strip_if_present"} and self.wake_words:
-            should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
-            if wake_word_mode == "strip_if_present" and not should_process:
+            if wake_word_mode in {"require", "strip_if_present"} and self.wake_words:
+                should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
+                if wake_word_mode == "strip_if_present" and not should_process:
+                    return {
+                        "text": text,
+                        "accepted": True,
+                        "command_text": text,
+                        "matched_wake_word": "",
+                        **speaker_payload,
+                    }
+                if not should_process:
+                    return {
+                        "text": text,
+                        "accepted": False,
+                        "command_text": "",
+                        "matched_wake_word": "",
+                        "message": "Wake word not detected.",
+                        **speaker_payload,
+                    }
                 return {
                     "text": text,
                     "accepted": True,
-                    "command_text": text,
-                    "matched_wake_word": "",
+                    "command_text": command_text,
+                    "matched_wake_word": matched_wake_word or "",
                     **speaker_payload,
                 }
-            if not should_process:
-                return {
-                    "text": text,
-                    "accepted": False,
-                    "command_text": "",
-                    "matched_wake_word": "",
-                    "message": "Wake word not detected.",
-                    **speaker_payload,
-                }
-            return {
-                "text": text,
-                "accepted": True,
-                "command_text": command_text,
-                "matched_wake_word": matched_wake_word or "",
-                **speaker_payload,
-            }
 
-        return {"text": text, "accepted": True, "command_text": text, "matched_wake_word": "", **speaker_payload}
+            return {"text": text, "accepted": True, "command_text": text, "matched_wake_word": "", **speaker_payload}
+        finally:
+            if should_manage_backend_thinking:
+                self.stop_thinking_sound()
 
     def audio_to_text_local_whisper(self, audio_data: bytes) -> str | None:
         """Convert audio to text using faster-whisper locally."""
