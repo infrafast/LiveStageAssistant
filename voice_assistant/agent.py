@@ -1414,7 +1414,6 @@ class AutoNetworkMonitor:
         if self.web_monitor:
             self.web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
             self.web_monitor.update(internet=online, env_file=detected_env, mode="auto")
-            self.web_monitor.append_dialogue("assistant", status_text, speak=True)
         speak_auto_network_status(status_text, detected_env, self.dotenv_values_func)
 
     @property
