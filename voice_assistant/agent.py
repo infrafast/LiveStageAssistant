@@ -3506,7 +3506,7 @@ class VoiceAssistant:
             if isinstance(apply_wake_word_gate, str)
             else ("require" if apply_wake_word_gate else "ignore")
         )
-        if wake_word_mode not in {"require", "strip_if_present", "ignore"}:
+        if wake_word_mode not in {"require", "ignore"}:
             wake_word_mode = "ignore"
         try:
             text = self.web_audio_to_text_openai(audio_data, mime_type, model=model) or ""
@@ -3526,16 +3526,8 @@ class VoiceAssistant:
             if not text:
                 return {"text": "", "accepted": False, "command_text": "", "message": "No speech detected.", **speaker_payload}
 
-            if wake_word_mode in {"require", "strip_if_present"} and self.wake_words:
+            if wake_word_mode == "require" and self.wake_words:
                 should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
-                if wake_word_mode == "strip_if_present" and not should_process:
-                    return {
-                        "text": text,
-                        "accepted": True,
-                        "command_text": text,
-                        "matched_wake_word": "",
-                        **speaker_payload,
-                    }
                 if not should_process:
                     return {
                         "text": text,

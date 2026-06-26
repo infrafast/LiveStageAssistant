@@ -1880,7 +1880,7 @@ class WebMonitor:
                         return
 
                     wake_word_mode = str(payload.get("wake_word_mode") or "").strip().lower()
-                    if wake_word_mode not in {"require", "strip_if_present", "ignore"}:
+                    if wake_word_mode not in {"require", "ignore"}:
                         wake_word_mode = "require" if bool(payload.get("apply_wake_word")) else "ignore"
 
                     try:

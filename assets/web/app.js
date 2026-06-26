@@ -2114,7 +2114,7 @@
             setMeta(tr("audio_file_stt_unavailable", "Transcription fichier audio indisponible avec la configuration actuelle"), "error", 5000);
             return;
           }
-          await handleRecordedAudio(file, { applyWakeWord: false, fileUpload: true });
+          await handleRecordedAudio(file, { applyWakeWord: true, fileUpload: true });
           return;
         }
         showLocalAssistantMessage("Je ne peux pas utiliser ce type de fichier ici. Utilise un fichier WAV ou un fichier texte.");
@@ -2142,7 +2142,7 @@
             audio_base64: audioBase64,
             mime_type: blob.type || "audio/webm",
             apply_wake_word: Boolean(options.applyWakeWord),
-            wake_word_mode: options.fileUpload ? "strip_if_present" : (options.applyWakeWord ? "require" : "ignore")
+            wake_word_mode: options.applyWakeWord ? "require" : "ignore"
           })
         });
         if (!response.ok) throw new Error(await response.text());
