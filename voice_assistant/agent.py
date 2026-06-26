@@ -54,10 +54,14 @@ try:
     from .speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
+        SPEAKER_EMBEDDING_READY_MESSAGE,
         UNKNOWN_SPEAKER,
         SpeakerProfile,
         SpeakerRecognitionResult,
         build_speaker_recognizer,
+        compute_missing_resemblyzer_embeddings,
+        conventional_speaker_sample_paths,
+        resemblyzer_embedding_is_current,
         safe_speaker_profile_slug,
         validate_wav_bytes,
     )
@@ -69,10 +73,14 @@ except ImportError:
     from speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
+        SPEAKER_EMBEDDING_READY_MESSAGE,
         UNKNOWN_SPEAKER,
         SpeakerProfile,
         SpeakerRecognitionResult,
         build_speaker_recognizer,
+        compute_missing_resemblyzer_embeddings,
+        conventional_speaker_sample_paths,
+        resemblyzer_embedding_is_current,
         safe_speaker_profile_slug,
         validate_wav_bytes,
     )
@@ -3117,7 +3125,7 @@ class VoiceAssistant:
             self.last_speaker_result = result
             return result
         try:
-            self.announce_pending_speaker_embeddings()
+            self.prepare_missing_speaker_embeddings()
             recognition_audio = audio_data
             if not already_wav:
                 wav_buffer = io.BytesIO()
@@ -3175,13 +3183,85 @@ class VoiceAssistant:
         )
         return any(marker in error_text for marker in runtime_markers)
 
-    def announce_pending_speaker_embeddings(self) -> None:
-        if not self.speaker_recognizer:
+    def _current_speaker_profile_statuses(self) -> list[dict[str, Any]]:
+        max_profiles = max(0, min(5, int(os.getenv("SPEAKER_PROFILES_MAX", "5") or "5")))
+        profile_root = Path(os.getenv("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR)
+        statuses: list[dict[str, Any]] = []
+        for index in range(1, max_profiles + 1):
+            name = (os.getenv(f"SPEAKER_PROFILE_{index}_NAME") or "").strip()
+            enabled_value = (os.getenv(f"SPEAKER_PROFILE_{index}_ENABLED") or "").strip().lower()
+            enabled = enabled_value in {"1", "true", "yes", "y", "on"}
+            samples = []
+            ready_paths = []
+            ready_embedding_paths = []
+            for sample_index in range(1, 4):
+                path = profile_root / f"profil{index}_{sample_index}.wav"
+                sample_embedding_path = path.with_suffix(".npy")
+                sample_status = "missing"
+                sample_embedding_ready = False
+                if path.exists() and path.is_file():
+                    try:
+                        with wave.open(str(path), "rb") as reader:
+                            sample_status = "ready" if reader.getnframes() > 0 else "error"
+                        if sample_status == "ready":
+                            ready_paths.append(path)
+                            sample_embedding_ready = (
+                                sample_embedding_path.exists()
+                                and sample_embedding_path.is_file()
+                                and sample_embedding_path.stat().st_mtime >= path.stat().st_mtime
+                            )
+                            if sample_embedding_ready:
+                                ready_embedding_paths.append(sample_embedding_path)
+                    except Exception:
+                        sample_status = "error"
+                samples.append(
+                    {
+                        "index": sample_index,
+                        "wav_path": path.as_posix(),
+                        "filename": path.name,
+                        "ready": sample_status == "ready",
+                        "embedding_path": sample_embedding_path.as_posix(),
+                        "embedding_ready": sample_embedding_ready,
+                        "status": sample_status,
+                    }
+                )
+            embedding_count = len(ready_embedding_paths)
+            statuses.append(
+                {
+                    "index": index,
+                    "name": name,
+                    "enabled": enabled,
+                    "wav_paths": [(profile_root / f"profil{index}_{sample_index}.wav").as_posix() for sample_index in range(1, 4)],
+                    "samples": samples,
+                    "complete": len(ready_paths) == 3,
+                    "usable": embedding_count > 0,
+                    "embedding_count": embedding_count,
+                    "embedding_total": 3,
+                    "status": f"{embedding_count}/3 embeddings",
+                    "embedding_ready": embedding_count > 0,
+                    "embedding_path": ready_embedding_paths[0].as_posix() if ready_embedding_paths else "",
+                    "slug": safe_speaker_profile_slug(name or f"speaker_{index}"),
+                }
+            )
+        return statuses
+
+    def _publish_speaker_profile_statuses(self) -> None:
+        if not self.web_monitor:
             return
         try:
-            pending_paths = self.speaker_recognizer.pending_embedding_paths()
-        except Exception:
+            self.web_monitor.update(runtime={"speaker_profiles": self._current_speaker_profile_statuses()})
+        except Exception as e:
+            print(f"Could not update speaker profile statuses: {e}")
+
+    def prepare_missing_speaker_embeddings(self) -> None:
+        if not self.speaker_recognizer or self.speaker_backend != "resemblyzer":
             return
+        profile_root = Path(os.getenv("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR)
+        wav_paths = conventional_speaker_sample_paths(profile_root, max_profiles=5, samples_per_profile=3)
+        pending_paths = [
+            path for path in wav_paths
+            if path.exists() and path.is_file() and not resemblyzer_embedding_is_current(path)
+        ]
         if not pending_paths:
             return
         notice_key = "|".join(sorted(str(path) for path in pending_paths))
@@ -3189,10 +3269,18 @@ class VoiceAssistant:
             return
         self.speaker_embedding_notice_keys.add(notice_key)
         print(f"Speaker profile embedding preparation needed: {', '.join(str(path) for path in pending_paths)}")
-        if self.web_monitor:
-            self.web_monitor.append_dialogue("assistant", SPEAKER_EMBEDDING_PREPARATION_MESSAGE, speak=True)
         self.speak_speaker_embedding_notice_async(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
         self.start_thinking_sound()
+        try:
+            result = compute_missing_resemblyzer_embeddings(wav_paths)
+            if result.computed_count:
+                setattr(self.speaker_recognizer, "_profile_embeddings", None)
+                self.speak_speaker_embedding_notice_async(SPEAKER_EMBEDDING_READY_MESSAGE)
+            if result.failed_count:
+                failed = "; ".join(f"{path.name}: {reason}" for path, reason in result.failed)
+                print(f"Speaker profile embedding preparation failed for {failed}")
+        finally:
+            self._publish_speaker_profile_statuses()
 
     def speak_speaker_embedding_notice_async(self, message: str) -> None:
         if self.tts_provider == "none":

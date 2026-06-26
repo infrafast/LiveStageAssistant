@@ -31,7 +31,9 @@ try:
     from .speaker_recognition import (
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
         SPEAKER_EMBEDDING_READY_MESSAGE,
-        compute_resemblyzer_embedding_file,
+        compute_missing_resemblyzer_embeddings,
+        conventional_speaker_sample_paths,
+        resemblyzer_embedding_is_current,
         validate_wav_bytes,
     )
 except ImportError:  # pragma: no cover - direct script fallback
@@ -40,7 +42,9 @@ except ImportError:  # pragma: no cover - direct script fallback
         from speaker_recognition import (
             SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
             SPEAKER_EMBEDDING_READY_MESSAGE,
-            compute_resemblyzer_embedding_file,
+            compute_missing_resemblyzer_embeddings,
+            conventional_speaker_sample_paths,
+            resemblyzer_embedding_is_current,
             validate_wav_bytes,
         )
     except ImportError:  # pragma: no cover - optional helper unavailable
@@ -51,7 +55,9 @@ except ImportError:  # pragma: no cover - direct script fallback
             "Je prépare l'empreinte vocale du profil. Cela peut prendre un moment la première fois."
         )
         SPEAKER_EMBEDDING_READY_MESSAGE = "Empreinte vocale calculée."
-        compute_resemblyzer_embedding_file = None
+        compute_missing_resemblyzer_embeddings = None
+        conventional_speaker_sample_paths = None
+        resemblyzer_embedding_is_current = None
         validate_wav_bytes = None
 
 
@@ -1366,37 +1372,29 @@ class WebMonitor:
                     embedding_status = "embedding pending"
                     embedding_path = target.with_suffix(".npy")
                     embedding_ready = False
-                    if compute_resemblyzer_embedding_file is not None:
-                        pending_embedding_paths = []
-                        for batch_profile_index in range(1, 6):
-                            for batch_sample_index in range(1, 4):
-                                batch_wav_path = profile_root / f"profil{batch_profile_index}_{batch_sample_index}.wav"
-                                if not batch_wav_path.exists() or not batch_wav_path.is_file():
-                                    continue
-                                batch_embedding_path = batch_wav_path.with_suffix(".npy")
-                                try:
-                                    batch_embedding_ready = (
-                                        batch_embedding_path.exists()
-                                        and batch_embedding_path.is_file()
-                                        and batch_embedding_path.stat().st_mtime >= batch_wav_path.stat().st_mtime
-                                    )
-                                except OSError:
-                                    batch_embedding_ready = False
-                                if not batch_embedding_ready:
-                                    pending_embedding_paths.append((batch_wav_path, batch_embedding_path))
+                    if (
+                        compute_missing_resemblyzer_embeddings is not None
+                        and conventional_speaker_sample_paths is not None
+                        and resemblyzer_embedding_is_current is not None
+                    ):
+                        batch_wav_paths = conventional_speaker_sample_paths(profile_root, max_profiles=5, samples_per_profile=3)
+                        pending_wav_paths = [
+                            wav_path for wav_path in batch_wav_paths
+                            if wav_path.exists()
+                            and wav_path.is_file()
+                            and not resemblyzer_embedding_is_current(wav_path)
+                        ]
                         try:
                             with monitor._lock:
                                 notice_handler = monitor._speaker_embedding_notice_handler
-                            if notice_handler and pending_embedding_paths:
+                            if notice_handler and pending_wav_paths:
                                 notice_handler(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
-                            computed_count = 0
-                            failed_embeddings = []
-                            for pending_wav_path, pending_embedding_path in pending_embedding_paths:
-                                try:
-                                    compute_resemblyzer_embedding_file(pending_wav_path, pending_embedding_path)
-                                    computed_count += 1
-                                except Exception as compute_error:
-                                    failed_embeddings.append(f"{pending_wav_path.name}: {compute_error}")
+                            batch_result = compute_missing_resemblyzer_embeddings(batch_wav_paths)
+                            computed_count = batch_result.computed_count
+                            failed_embeddings = [
+                                f"{failed_path.name}: {failed_reason}"
+                                for failed_path, failed_reason in batch_result.failed
+                            ]
                             embedding_ready = (
                                 embedding_path.exists()
                                 and embedding_path.is_file()

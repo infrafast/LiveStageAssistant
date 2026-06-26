@@ -22,6 +22,20 @@ SPEAKER_EMBEDDING_READY_MESSAGE = "Empreinte vocale calculée."
 
 
 @dataclass
+class SpeakerEmbeddingBatchResult:
+    computed: list[Path]
+    failed: list[tuple[Path, str]]
+
+    @property
+    def computed_count(self) -> int:
+        return len(self.computed)
+
+    @property
+    def failed_count(self) -> int:
+        return len(self.failed)
+
+
+@dataclass
 class SpeakerProfile:
     name: str
     wav_paths: list[Path]
@@ -240,6 +254,55 @@ def compute_resemblyzer_embedding_file(wav_path: str | Path, embedding_path: str
     embedding_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(embedding_path, embedding)
     return embedding_path
+
+
+def resemblyzer_embedding_is_current(wav_path: str | Path, embedding_path: str | Path | None = None) -> bool:
+    wav_path = Path(wav_path)
+    if embedding_path is None:
+        embedding_path = wav_path.with_suffix(SPEAKER_EMBEDDING_SUFFIX)
+    embedding_path = Path(embedding_path)
+    try:
+        return (
+            wav_path.exists()
+            and wav_path.is_file()
+            and embedding_path.exists()
+            and embedding_path.is_file()
+            and embedding_path.stat().st_mtime >= wav_path.stat().st_mtime
+        )
+    except OSError:
+        return False
+
+
+def conventional_speaker_sample_paths(profile_root: str | Path, *, max_profiles: int = 5, samples_per_profile: int = 3) -> list[Path]:
+    root = Path(profile_root)
+    max_profiles = max(0, int(max_profiles or 0))
+    samples_per_profile = max(0, int(samples_per_profile or 0))
+    return [
+        root / f"profil{profile_index}_{sample_index}.wav"
+        for profile_index in range(1, max_profiles + 1)
+        for sample_index in range(1, samples_per_profile + 1)
+    ]
+
+
+def compute_missing_resemblyzer_embeddings(wav_paths: list[str | Path]) -> SpeakerEmbeddingBatchResult:
+    computed: list[Path] = []
+    failed: list[tuple[Path, str]] = []
+    seen: set[Path] = set()
+    for raw_wav_path in wav_paths:
+        wav_path = Path(raw_wav_path)
+        if wav_path in seen:
+            continue
+        seen.add(wav_path)
+        if not wav_path.exists() or not wav_path.is_file():
+            continue
+        embedding_path = wav_path.with_suffix(SPEAKER_EMBEDDING_SUFFIX)
+        if resemblyzer_embedding_is_current(wav_path, embedding_path):
+            continue
+        try:
+            computed.append(compute_resemblyzer_embedding_file(wav_path, embedding_path))
+        except Exception as exc:
+            failed.append((wav_path, str(exc)))
+    return SpeakerEmbeddingBatchResult(computed=computed, failed=failed)
 
 
 def build_speaker_recognizer(

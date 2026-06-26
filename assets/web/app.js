@@ -2858,6 +2858,30 @@
       }
     }
 
+    function applySpeakerProfileStatuses(profiles) {
+      if (!Array.isArray(profiles)) return;
+      for (const profile of profiles) {
+        const row = speakerProfileGrid.querySelector(`.speaker-profile-row[data-index="${profile.index}"]`);
+        if (!row) continue;
+        const status = row.querySelector(".speaker-status");
+        if (status) status.textContent = profile.status || status.textContent;
+        const path = row.querySelector('[data-role="path"]');
+        if (path) {
+          const hasSample = Array.isArray(profile.samples) && profile.samples.some((sample) => sample.ready);
+          path.textContent = profile.embedding_ready
+            ? tr("speaker_voiceprint_ready", "empreinte vocale calculée")
+            : hasSample
+            ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
+            : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
+          path.title = profile.embedding_ready && profile.embedding_path ? profile.embedding_path : "";
+        }
+        for (const sample of profile.samples || []) {
+          const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);
+          applySpeakerSampleState(input ? input.closest(".speaker-sample") : null, sample);
+        }
+      }
+    }
+
     function readFileAsDataUrl(file) {
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -4020,6 +4044,7 @@
             : "";
           syncComposerSpeakerControl();
         }
+        applySpeakerProfileStatuses((data.runtime || {}).speaker_profiles || []);
         updateConversationButton();
         lastServerMessages = data.messages || [];
         const serverBusy = Boolean(data.assistant_busy);
