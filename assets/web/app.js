@@ -207,6 +207,7 @@
     let metaErrorUntil = 0;
     let lastServerMessages = [];
     let pendingMessages = [];
+    let fileUploadPending = false;
     let composerLocked = false;
     let cancelRequestInFlight = false;
     let interruptConversationEnabled = false;
@@ -858,6 +859,21 @@
       return `<div class="message-row ${role}${pending}${contextIncluded}">
         <div class="bubble">${escapeHtml(message.text)}</div>
       </div>`;
+    }
+
+    function showLocalAssistantMessage(text) {
+      const cleaned = String(text || "").trim();
+      if (!cleaned) return;
+      pendingMessages = pendingMessages.filter((message) => !message.local_file_notice);
+      pendingMessages.push({
+        id: `local-file-${Date.now()}`,
+        role: "assistant",
+        text: cleaned,
+        pending: false,
+        local_file_notice: true,
+        sentAt: Date.now()
+      });
+      renderMessages(lastServerMessages, false);
     }
 
     function canHoverSessionSummary() {
@@ -2064,32 +2080,47 @@
 
     async function handleComposerFile(file) {
       if (!file) return;
-      if (fileLooksLikeText(file)) {
-        if (file.size > composerTextUploadMaxBytes) {
-          setMeta("text file too large: max 64 KB", "error", 5000);
+      fileUploadPending = true;
+      renderMessages(lastServerMessages, true);
+      try {
+        if (fileLooksLikeText(file)) {
+          if (file.size > composerTextUploadMaxBytes) {
+            showLocalAssistantMessage("Ce fichier texte est trop lourd pour être chargé ici.");
+            setMeta("text file too large: max 64 KB", "error", 5000);
+            return;
+          }
+          const text = await file.text();
+          injectCommand.value = text.trim();
+          autoSizeComposer();
+          injectCommand.focus({ preventScroll: true });
+          setMeta(`loaded text file: ${file.name}`);
           return;
         }
-        const text = await file.text();
-        injectCommand.value = text.trim();
-        autoSizeComposer();
-        injectCommand.focus({ preventScroll: true });
-        setMeta(`loaded text file: ${file.name}`);
-        return;
+
+        if (fileLooksLikeWav(file)) {
+          if (file.size > composerAudioUploadMaxBytes) {
+            showLocalAssistantMessage("Ce fichier audio est trop lourd pour être transcrit ici.");
+            setMeta("WAV file too large: max 20 MB", "error", 5000);
+            return;
+          }
+          if (!webAudio.audio_file_stt_enabled) {
+            showLocalAssistantMessage("Je ne peux pas transcrire ce fichier audio avec la configuration actuelle.");
+            setMeta(tr("audio_file_stt_unavailable", "Transcription fichier audio indisponible avec la configuration actuelle"), "error", 5000);
+            return;
+          }
+          const applyWakeWord = Boolean((wakeWord.value || "").trim());
+          await handleRecordedAudio(file, { applyWakeWord, fileUpload: true });
+          return;
+        }
+        showLocalAssistantMessage("Je ne peux pas utiliser ce type de fichier ici. Utilise un fichier WAV ou un fichier texte.");
+        setMeta("unsupported file type: use WAV audio or TXT text", "error", 5000);
+      } catch (error) {
+        showLocalAssistantMessage("Je n'ai pas pu lire ce fichier.");
+        setMeta(`file upload failed: ${error.message || error}`, "error", 7000);
+      } finally {
+        fileUploadPending = false;
+        renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
       }
-      if (fileLooksLikeWav(file)) {
-        if (file.size > composerAudioUploadMaxBytes) {
-          setMeta("WAV file too large: max 20 MB", "error", 5000);
-          return;
-        }
-        if (!webAudio.audio_file_stt_enabled) {
-          setMeta(tr("audio_file_stt_unavailable", "Transcription fichier audio indisponible avec la configuration actuelle"), "error", 5000);
-          return;
-        }
-        const applyWakeWord = Boolean((wakeWord.value || "").trim());
-        await handleRecordedAudio(file, { applyWakeWord });
-        return;
-      }
-      setMeta("unsupported file type: use WAV audio or TXT text", "error", 5000);
     }
 
     async function handleRecordedAudio(blob, options = {}) {
@@ -2110,6 +2141,11 @@
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         if (data.accepted === false) {
+          if (options.fileUpload) {
+            showLocalAssistantMessage(data.message === "Wake word not detected."
+              ? "Je n'ai pas détecté le mot de réveil dans ce fichier audio."
+              : "Je n'ai pas détecté de commande exploitable dans ce fichier audio.");
+          }
           metaEl.textContent = data.message || "voice ignored";
           if (options.conversation) scheduleConversationRestart();
           return;
@@ -2133,6 +2169,9 @@
           scheduleConversationRestart();
         }
       } catch (error) {
+        if (options.fileUpload) {
+          showLocalAssistantMessage("Je n'ai pas pu transcrire ce fichier audio.");
+        }
         setMeta(conciseVoiceInputError(error), "error", 15000);
       } finally {
         setRecording(false);
@@ -4048,7 +4087,7 @@
         updateConversationButton();
         lastServerMessages = data.messages || [];
         const serverBusy = Boolean(data.assistant_busy);
-        const showThinking = serverBusy || pendingMessages.length > 0;
+        const showThinking = serverBusy || pendingMessages.length > 0 || fileUploadPending;
         const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
         const latestAssistantMessageId = latestAssistantMessage ? latestAssistantMessage.id : null;
         const isNewAssistantMessage = Boolean(
