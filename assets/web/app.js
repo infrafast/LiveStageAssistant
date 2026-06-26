@@ -2152,8 +2152,10 @@
         }
         const text = String(data.command_text || data.text || "").trim();
         if (text) {
-          if (!options.conversation) injectCommand.value = text;
-          autoSizeComposer();
+          if (!options.conversation && !options.fileUpload) {
+            injectCommand.value = text;
+            autoSizeComposer();
+          }
           const forcedSpeaker = forcedComposerSpeakerPayload();
           await submitCommand(text, {
             interrupt: Boolean(options.conversation),
