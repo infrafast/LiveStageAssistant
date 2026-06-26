@@ -1367,13 +1367,52 @@ class WebMonitor:
                     embedding_path = target.with_suffix(".npy")
                     embedding_ready = False
                     if compute_resemblyzer_embedding_file is not None:
+                        pending_embedding_paths = []
+                        for batch_profile_index in range(1, 6):
+                            for batch_sample_index in range(1, 4):
+                                batch_wav_path = profile_root / f"profil{batch_profile_index}_{batch_sample_index}.wav"
+                                if not batch_wav_path.exists() or not batch_wav_path.is_file():
+                                    continue
+                                batch_embedding_path = batch_wav_path.with_suffix(".npy")
+                                try:
+                                    batch_embedding_ready = (
+                                        batch_embedding_path.exists()
+                                        and batch_embedding_path.is_file()
+                                        and batch_embedding_path.stat().st_mtime >= batch_wav_path.stat().st_mtime
+                                    )
+                                except OSError:
+                                    batch_embedding_ready = False
+                                if not batch_embedding_ready:
+                                    pending_embedding_paths.append((batch_wav_path, batch_embedding_path))
                         try:
                             with monitor._lock:
                                 notice_handler = monitor._speaker_embedding_notice_handler
-                            embedding_path = compute_resemblyzer_embedding_file(target, embedding_path)
-                            embedding_status = "sample embedding ready"
-                            embedding_ready = True
-                            if notice_handler:
+                            if notice_handler and pending_embedding_paths:
+                                notice_handler(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
+                            computed_count = 0
+                            failed_embeddings = []
+                            for pending_wav_path, pending_embedding_path in pending_embedding_paths:
+                                try:
+                                    compute_resemblyzer_embedding_file(pending_wav_path, pending_embedding_path)
+                                    computed_count += 1
+                                except Exception as compute_error:
+                                    failed_embeddings.append(f"{pending_wav_path.name}: {compute_error}")
+                            embedding_ready = (
+                                embedding_path.exists()
+                                and embedding_path.is_file()
+                                and embedding_path.stat().st_mtime >= target.stat().st_mtime
+                            )
+                            if embedding_ready:
+                                embedding_status = (
+                                    f"{computed_count} sample embedding(s) ready"
+                                    if computed_count != 1
+                                    else "sample embedding ready"
+                                )
+                            elif failed_embeddings:
+                                embedding_status = f"embedding pending: {'; '.join(failed_embeddings)}"
+                            else:
+                                embedding_status = "embedding pending"
+                            if notice_handler and computed_count:
                                 notice_handler(SPEAKER_EMBEDDING_READY_MESSAGE)
                         except Exception as e:
                             embedding_status = f"embedding pending: {e}"
