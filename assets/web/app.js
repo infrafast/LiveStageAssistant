@@ -2808,8 +2808,11 @@
         path.className = "speaker-path";
         path.dataset.role = "path";
         path.title = profile.embedding_ready && profile.embedding_path ? profile.embedding_path : "";
+        const hasSample = Array.isArray(profile.samples) && profile.samples.some((sample) => sample.ready);
         path.textContent = profile.embedding_ready
           ? tr("speaker_voiceprint_ready", "empreinte vocale calculée")
+          : hasSample
+          ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
           : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
 
         row.append(name, uploadWrap, enabledLabel, status, path);
@@ -3085,8 +3088,12 @@
           throw new Error(data.error?.message || data.message || response.statusText || "Upload failed");
         }
         if (pathLabel) {
+          const hasSample = Boolean(data.samples_available)
+            || (Array.isArray(data.samples) && data.samples.some((sample) => sample.ready));
           pathLabel.textContent = data.embedding_ready
             ? tr("speaker_voiceprint_ready", "empreinte vocale calculée")
+            : hasSample
+            ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
             : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
           pathLabel.title = data.embedding_ready && data.embedding_path ? data.embedding_path : "";
         }

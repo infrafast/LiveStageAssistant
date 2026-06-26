@@ -105,6 +105,7 @@
     "speaker_profile_pending_detail": "{status} Le WAV est sauvegardé.",
     "speaker_embedding_not_generated": "Embedding non généré pour l'instant.",
     "speaker_voiceprint_ready": "empreinte vocale calculée",
+    "speaker_voiceprint_pending": "empreinte vocale à calculer",
     "speaker_voiceprint_unavailable": "empreinte vocale indisponible",
     "speaker_capture_button": "Capturer depuis le micro",
     "speaker_capture_title": "Capture micro du sample",

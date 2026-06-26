@@ -1402,6 +1402,7 @@ class WebMonitor:
                             }
                         )
                     samples_complete = all(item["ready"] for item in sample_statuses)
+                    samples_available = any(item["ready"] for item in sample_statuses)
                     embedding_count = len([item for item in sample_statuses if item["embedding_ready"]])
                     profile_usable = embedding_count > 0
 
@@ -1414,6 +1415,7 @@ class WebMonitor:
                         "wav_path": target.as_posix(),
                         "samples": sample_statuses,
                         "complete": samples_complete,
+                        "samples_available": samples_available,
                         "usable": profile_usable,
                         "embedding_count": embedding_count,
                         "embedding_total": len(sample_statuses),
@@ -1423,7 +1425,7 @@ class WebMonitor:
                         "embedding_status": embedding_status,
                     }
 
-                    if profile_usable:
+                    if samples_available:
                         with monitor._lock:
                             update_handler = monitor._speaker_profile_update_handler
                         if update_handler:

@@ -120,7 +120,7 @@ SPEAKER_REASON_USER_MESSAGES = {
     "text": "la commande a été saisie sans audio à analyser",
     "injected": "le profil vocal a été choisi manuellement dans l'interface",
     "injected_auto": "aucun profil vocal n'a été confirmé automatiquement pour cette commande",
-    "no_profiles": "aucun profil vocal complet n'est disponible",
+    "no_profiles": "aucune empreinte vocale de profil n'est disponible",
     "below_threshold_or_margin": "le score est trop faible",
     "backend_not_implemented": "le moteur configuré ne peut pas analyser la voix",
     "disabled": "la reconnaissance de locuteur est désactivée",
