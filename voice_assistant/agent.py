@@ -5726,12 +5726,14 @@ async def main():
             (web_tts_provider == "openai" and bool(openai_api_key))
             or (web_tts_provider == "elevenlabs" and bool(elevenlabs_api_key))
         )
+        audio_file_stt_enabled = web_stt_provider == "openai" and bool(openai_api_key)
         web_audio_state = {
             "enabled": web_audio_enabled,
             "stt_input": stt_input,
             "tts_output": active_tts_output,
             "backend_stt_enabled": backend_stt_enabled,
             "stt_enabled": web_audio_enabled and browser_stt_enabled and web_stt_provider == "openai" and bool(openai_api_key),
+            "audio_file_stt_enabled": audio_file_stt_enabled,
             "tts_enabled": (
                 web_audio_enabled
                 and web_tts_provider in {"openai", "elevenlabs"}
@@ -5993,7 +5995,7 @@ async def main():
                         model=web_stt_model,
                         apply_wake_word_gate=apply_wake_word_gate,
                     )
-                    if web_audio_state["stt_enabled"]
+                    if web_audio_state["audio_file_stt_enabled"]
                     else None
                 ),
                 tts_handler=web_tts_handler,

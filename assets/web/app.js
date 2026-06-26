@@ -218,7 +218,7 @@
     let sessionSummaryHoverId = "";
     let sessionSummaryCache = new Map();
     let lastPointer = { x: -1, y: -1 };
-    let webAudio = { enabled: false, stt_enabled: false, tts_enabled: false, tts_output: "silent" };
+    let webAudio = { enabled: false, stt_enabled: false, audio_file_stt_enabled: false, tts_enabled: false, tts_output: "silent" };
     let mediaRecorder = null;
     let mediaStream = null;
     let recordedChunks = [];
@@ -1123,18 +1123,39 @@
       webMic.disabled = (composerLocked && !interruptConversationEnabled) || !webAudio.stt_enabled || isRecording || conversationEnabled;
       composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
       injectCommand.placeholder = composerLocked ? "Assistant is thinking..." : "Message";
+      updateConversationButton();
       if (wasLocked && !composerLocked && !settingsOverlay.classList.contains("open")) {
         window.setTimeout(() => injectCommand.focus({ preventScroll: true }), 0);
       }
       syncComposerSpeakerControl();
     }
 
+    function browserSttDisabledReason(kind = "conversation") {
+      if (webAudio.stt_enabled) return "";
+      const sttInput = String(webAudio.stt_input || "").toLowerCase();
+      const isVoiceInput = kind === "voice";
+      if (!["browser", "both"].includes(sttInput)) {
+        return isVoiceInput
+          ? tr("voice_input_disabled_stt_input", "Micro navigateur indisponible : Entrée STT est réglée sur Backend ou Silent. Choisis Browser ou Both.")
+          : tr("conversation_disabled_stt_input", "Mode conversation indisponible : Entrée STT est réglée sur Backend ou Silent. Choisis Browser ou Both.");
+      }
+      if (browserAudioCapabilities.input === false) {
+        return isVoiceInput
+          ? tr("voice_input_disabled_browser_audio", "Micro navigateur indisponible : le navigateur ne peut pas accéder au micro.")
+          : tr("conversation_disabled_browser_audio", "Mode conversation indisponible : le navigateur ne peut pas accéder au micro.");
+      }
+      return isVoiceInput
+        ? tr("voice_input_disabled_openai", "Micro navigateur indisponible : configure une clé OpenAI pour le STT navigateur.")
+        : tr("conversation_disabled_openai", "Mode conversation indisponible : configure une clé OpenAI pour le STT navigateur.");
+    }
+
     function setRecording(recording) {
       isRecording = Boolean(recording);
       webMic.classList.toggle("recording", isRecording);
       webMic.innerHTML = isRecording ? "&#9632;" : "🎙️";
-      webMic.title = isRecording ? "Stop recording" : "Voice input";
-      webMic.setAttribute("aria-label", isRecording ? "Stop recording" : "Voice input");
+      const disabledReason = browserSttDisabledReason("voice");
+      webMic.title = disabledReason || (isRecording ? "Stop recording" : "Voice input");
+      webMic.setAttribute("aria-label", webMic.title);
       webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
       composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
       injectCommand.placeholder = isRecording ? "Recording..." : (composerLocked ? "Assistant is thinking..." : "Message");
@@ -1142,10 +1163,13 @@
 
     function updateConversationButton() {
       webConversation.classList.toggle("active", conversationEnabled);
-      webConversation.title = conversationEnabled ? "Stop conversation mode" : "Conversation mode";
+      const disabledReason = browserSttDisabledReason("conversation");
+      webConversation.title = disabledReason || (conversationEnabled ? "Stop conversation mode" : "Conversation mode");
       webConversation.setAttribute("aria-label", conversationEnabled ? "Stop conversation mode" : "Conversation mode");
       webConversation.disabled = !webAudio.stt_enabled;
       webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      webMic.title = browserSttDisabledReason("voice") || (isRecording ? "Stop recording" : "Voice input");
+      webMic.setAttribute("aria-label", webMic.title);
       composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
     }
 
@@ -2057,8 +2081,8 @@
           setMeta("WAV file too large: max 20 MB", "error", 5000);
           return;
         }
-        if (!webAudio.stt_enabled) {
-          setMeta("audio file STT unavailable in current web audio configuration", "error", 5000);
+        if (!webAudio.audio_file_stt_enabled) {
+          setMeta(tr("audio_file_stt_unavailable", "Transcription fichier audio indisponible avec la configuration actuelle"), "error", 5000);
           return;
         }
         const applyWakeWord = Boolean((wakeWord.value || "").trim());
@@ -3981,7 +4005,7 @@
         const shouldStick = logsEl.scrollTop + logsEl.clientHeight >= logsEl.scrollHeight - 8;
         logsEl.value = data.logs || "";
         if (shouldStick) logsEl.scrollTop = logsEl.scrollHeight;
-        webAudio = data.web_audio || { enabled: false, stt_enabled: false, tts_enabled: false, tts_output: "silent" };
+        webAudio = data.web_audio || { enabled: false, stt_enabled: false, audio_file_stt_enabled: false, tts_enabled: false, tts_output: "silent" };
         interruptConversationEnabled = Boolean(webAudio.interrupt_conversation_enabled);
         thinkingAudioUrl = data.thinking_sound_url || "";
         commandAckSoundUrl = data.command_ack_sound_url || "/assets/ring.wav";
