@@ -2670,36 +2670,7 @@ class VoiceAssistant:
 
     def _startup_ready_message(self, loaded_servers: list[str]) -> str:
         locale = load_locale(self.stt_language)
-        parts = [i18n_text(locale, "startup.ready", "Assistant vocal prêt.")]
-        if loaded_servers:
-            server_text = ", ".join(loaded_servers)
-            parts.append(
-                i18n_text(locale, "startup.mcp_loaded", "Serveurs MCP chargés : {servers}.").format(
-                    servers=server_text
-                )
-            )
-        else:
-            parts.append(i18n_text(locale, "startup.mcp_none", "Aucun serveur MCP chargé."))
-
-        if self.web_monitor and self.web_monitor.listen_address:
-            _host, port = self.web_monitor.listen_address
-            parts.append(
-                i18n_text(locale, "startup.web_available", "Interface web disponible sur le port {port}.").format(
-                    port=port
-                )
-            )
-
-        if self.wake_words:
-            wake_word_text = ", ".join(self.wake_words)
-            parts.append(
-                i18n_text(
-                    locale,
-                    "startup.wake_words",
-                    "Mots de réveil actifs : {wake_words}. Prêt à exécuter des commandes.",
-                ).format(wake_words=wake_word_text)
-            )
-
-        return " ".join(parts)
+        return i18n_text(locale, "startup.ready", "Assistant vocal prêt à exécuter des commandes.")
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
         """Announce that the assistant is ready, using the configured speech side."""

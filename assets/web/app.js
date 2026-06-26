@@ -1877,6 +1877,19 @@
         .map((profile) => ({ name: profile.name }));
     }
 
+    function applySpeakerSampleState(sampleWrap, sample) {
+      if (!sampleWrap) return;
+      const sampleReady = Boolean(sample && sample.ready);
+      const embeddingReady = Boolean(sample && sample.embedding_ready);
+      sampleWrap.classList.toggle("ready", embeddingReady);
+      sampleWrap.classList.toggle("pending", sampleReady && !embeddingReady);
+      sampleWrap.title = embeddingReady && sample.embedding_path
+        ? sample.embedding_path
+        : sampleReady
+        ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
+        : (sample?.wav_path || sample?.filename || "");
+    }
+
     function composerSpeakerDisabledReason() {
       if (!speakerRecognitionEnvEnabled) return "Speaker recognition is disabled in the active config.";
       if (!speakerRecognitionRuntimeEnabled) return speakerRecognitionUnavailableReason || "Speaker recognition backend is unavailable.";
@@ -2759,10 +2772,11 @@
         for (let sampleIndex = 1; sampleIndex <= 3; sampleIndex += 1) {
           const sample = samples.find((item) => Number(item.index) === sampleIndex) || { index: sampleIndex };
           const sampleWrap = document.createElement("div");
-          sampleWrap.className = `speaker-sample${sample.ready ? " ready" : ""}`;
-          sampleWrap.title = sample.embedding_ready && sample.embedding_path
-            ? sample.embedding_path
-            : (sample.wav_path || `data/speaker_profiles/profil${index}_${sampleIndex}.wav`);
+          sampleWrap.className = "speaker-sample";
+          applySpeakerSampleState(sampleWrap, {
+            ...sample,
+            wav_path: sample.wav_path || `data/speaker_profiles/profil${index}_${sampleIndex}.wav`
+          });
           const led = document.createElement("span");
           led.className = "speaker-sample-led";
           led.setAttribute("aria-hidden", "true");
@@ -3100,12 +3114,7 @@
         for (const sample of data.samples || []) {
           const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);
           const sampleWrap = input ? input.closest(".speaker-sample") : null;
-          if (sampleWrap) {
-            sampleWrap.classList.toggle("ready", Boolean(sample.ready));
-            sampleWrap.title = sample.embedding_ready && sample.embedding_path
-              ? sample.embedding_path
-              : (sample.wav_path || sample.filename || "");
-          }
+          applySpeakerSampleState(sampleWrap, sample);
         }
         enabledInput.checked = true;
         speakerProfileChoices = activeSpeakerProfilesFromConfig();

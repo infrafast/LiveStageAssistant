@@ -1,7 +1,7 @@
 {
   "language_name": "English",
   "startup": {
-    "ready": "Voice assistant ready.",
+    "ready": "Voice assistant ready to run commands.",
     "mcp_loaded": "MCP servers loaded: {servers}.",
     "mcp_none": "No MCP server loaded.",
     "web_available": "Web interface available on port {port}.",

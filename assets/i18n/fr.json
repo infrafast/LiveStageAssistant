@@ -1,7 +1,7 @@
 {
   "language_name": "Français",
   "startup": {
-    "ready": "Assistant vocal prêt.",
+    "ready": "Assistant vocal prêt à exécuter des commandes.",
     "mcp_loaded": "Serveurs MCP chargés : {servers}.",
     "mcp_none": "Aucun serveur MCP chargé.",
     "web_available": "Interface web disponible sur le port {port}.",

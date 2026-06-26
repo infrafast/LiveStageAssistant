@@ -693,7 +693,7 @@ The network status announcement uses the newly selected profile. Backend TTS use
 
 After the announcement, the current voice loop is interrupted if needed, the active assistant instance is cleaned up, and a fresh instance is started from the newly detected env file. This reloads the TTS, STT, LLM, MCP configuration, and MCP-provided assistant prompt from the selected profile. Any command currently being recorded or processed may be cancelled during the switch, which keeps the implementation simple and avoids mixing services from two profiles. Once the new assistant is ready, it announces that the environment was updated and the in-flight request was cancelled using the TTS from the new profile.
 
-At startup, once MCP initialization is complete, the assistant announces that it is ready, names the MCP servers that actually opened sessions, and mentions the web interface port when the monitor is enabled.
+At startup, once MCP initialization is complete, the assistant announces a short ready message. MCP server and web monitor details remain available in the console logs and web state.
 
 If you run `python voice_assistant/agent.py` without `--env-file`, the assistant loads `.env` when present. If `.env` does not exist, internal defaults are used: OpenAI with `gpt-4o-mini` for the LLM, OpenAI Whisper for STT, ElevenLabs as the legacy backend TTS default, `CLOUD_TTS_PROVIDER=openai` for the TTS dropdown, `thinking.wav` for the processing sound, and `mcp_servers.json` when no explicit MCP config is provided. In that default mode, `OPENAI_API_KEY` is required because both the LLM and STT providers use OpenAI.
 
