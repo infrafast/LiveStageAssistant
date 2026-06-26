@@ -876,6 +876,39 @@
       renderMessages(lastServerMessages, false);
     }
 
+    function hasPendingCommandMessages() {
+      return pendingMessages.some((message) => message.pending);
+    }
+
+    function normalizeWakeText(text) {
+      return String(text || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim();
+    }
+
+    function stripConfiguredWakeWord(text) {
+      const original = String(text || "").trim();
+      if (!original) return "";
+      const words = String(wakeWord.value || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (!words.length) return original;
+      const normalizedOriginal = normalizeWakeText(original);
+      for (const word of words) {
+        const normalizedWord = normalizeWakeText(word);
+        if (!normalizedWord) continue;
+        if (normalizedOriginal === normalizedWord) return "";
+        const normalizedPrefixMatch = normalizedOriginal.match(new RegExp(`^${normalizedWord}[\\s,;:!?-]+`));
+        if (normalizedPrefixMatch) {
+          return original.slice(normalizedPrefixMatch[0].length).trim();
+        }
+      }
+      return original;
+    }
+
     function canHoverSessionSummary() {
       return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
     }
@@ -2108,8 +2141,7 @@
             setMeta(tr("audio_file_stt_unavailable", "Transcription fichier audio indisponible avec la configuration actuelle"), "error", 5000);
             return;
           }
-          const applyWakeWord = Boolean((wakeWord.value || "").trim());
-          await handleRecordedAudio(file, { applyWakeWord, fileUpload: true });
+          await handleRecordedAudio(file, { applyWakeWord: false, fileUpload: true });
           return;
         }
         showLocalAssistantMessage("Je ne peux pas utiliser ce type de fichier ici. Utilise un fichier WAV ou un fichier texte.");
@@ -2119,7 +2151,7 @@
         setMeta(`file upload failed: ${error.message || error}`, "error", 7000);
       } finally {
         fileUploadPending = false;
-        renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
+        renderMessages(lastServerMessages, composerLocked || hasPendingCommandMessages());
       }
     }
 
@@ -2150,7 +2182,9 @@
           if (options.conversation) scheduleConversationRestart();
           return;
         }
-        const text = String(data.command_text || data.text || "").trim();
+        const text = options.fileUpload
+          ? stripConfiguredWakeWord(data.command_text || data.text || "")
+          : String(data.command_text || data.text || "").trim();
         if (text) {
           if (!options.conversation && !options.fileUpload) {
             injectCommand.value = text;
@@ -2167,8 +2201,11 @@
             speakerReason: forcedSpeaker ? "injected" : (data.speaker_reason || ""),
             speakerCandidates: forcedSpeaker ? [] : (data.speaker_candidates || [])
           });
-        } else if (options.conversation) {
-          scheduleConversationRestart();
+        } else {
+          if (options.fileUpload) {
+            showLocalAssistantMessage("Je n'ai pas détecté de commande exploitable dans ce fichier audio.");
+          }
+          if (options.conversation) scheduleConversationRestart();
         }
       } catch (error) {
         if (options.fileUpload) {
@@ -4089,7 +4126,7 @@
         updateConversationButton();
         lastServerMessages = data.messages || [];
         const serverBusy = Boolean(data.assistant_busy);
-        const showThinking = serverBusy || pendingMessages.length > 0 || fileUploadPending;
+        const showThinking = serverBusy || hasPendingCommandMessages() || fileUploadPending;
         const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
         const latestAssistantMessageId = latestAssistantMessage ? latestAssistantMessage.id : null;
         const isNewAssistantMessage = Boolean(
@@ -4443,7 +4480,7 @@
     browserAudioRefresh.addEventListener("click", () => loadBrowserAudioDevices(true));
     sessionContextSize.addEventListener("input", () => {
       syncSessionContextSizeLabel();
-      renderMessages(lastServerMessages, composerLocked || pendingMessages.length > 0);
+      renderMessages(lastServerMessages, composerLocked || hasPendingCommandMessages());
     });
     mcpAgentMaxSteps.addEventListener("input", syncMcpAgentMaxStepsLabel);
     for (const input of mcpToolRoutingInputs) {
