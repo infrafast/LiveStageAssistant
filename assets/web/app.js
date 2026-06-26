@@ -206,7 +206,8 @@
     let currentSnapshotEnvFile = "";
     let metaErrorUntil = 0;
     let lastServerMessages = [];
-    let pendingMessages = [];
+    let pendingCommandMessages = [];
+    let localNoticeMessages = [];
     let fileUploadPending = false;
     let composerLocked = false;
     let cancelRequestInFlight = false;
@@ -864,49 +865,18 @@
     function showLocalAssistantMessage(text) {
       const cleaned = String(text || "").trim();
       if (!cleaned) return;
-      pendingMessages = pendingMessages.filter((message) => !message.local_file_notice);
-      pendingMessages.push({
+      localNoticeMessages = [{
         id: `local-file-${Date.now()}`,
         role: "assistant",
         text: cleaned,
         pending: false,
-        local_file_notice: true,
         sentAt: Date.now()
-      });
+      }];
       renderMessages(lastServerMessages, false);
     }
 
     function hasPendingCommandMessages() {
-      return pendingMessages.some((message) => message.pending);
-    }
-
-    function normalizeWakeText(text) {
-      return String(text || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .trim();
-    }
-
-    function stripConfiguredWakeWord(text) {
-      const original = String(text || "").trim();
-      if (!original) return "";
-      const words = String(wakeWord.value || "")
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean);
-      if (!words.length) return original;
-      const normalizedOriginal = normalizeWakeText(original);
-      for (const word of words) {
-        const normalizedWord = normalizeWakeText(word);
-        if (!normalizedWord) continue;
-        if (normalizedOriginal === normalizedWord) return "";
-        const normalizedPrefixMatch = normalizedOriginal.match(new RegExp(`^${normalizedWord}[\\s,;:!?-]+`));
-        if (normalizedPrefixMatch) {
-          return original.slice(normalizedPrefixMatch[0].length).trim();
-        }
-      }
-      return original;
+      return pendingCommandMessages.some((message) => message.pending);
     }
 
     function canHoverSessionSummary() {
@@ -2038,7 +2008,8 @@
         await requestSilentCancel();
       }
 
-      pendingMessages.push({
+      localNoticeMessages = [];
+      pendingCommandMessages.push({
         id: `pending-${Date.now()}`,
         role: "user",
         text: cleanedCommand,
@@ -2068,7 +2039,7 @@
         autoSizeComposer();
         await refresh();
       } catch (error) {
-        pendingMessages = pendingMessages.filter((message) => message.text !== cleanedCommand);
+        pendingCommandMessages = pendingCommandMessages.filter((message) => message.text !== cleanedCommand);
         setComposerLocked(false);
         renderMessages(lastServerMessages, false);
         metaEl.textContent = `inject failed: ${error}`;
@@ -2113,6 +2084,7 @@
 
     async function handleComposerFile(file) {
       if (!file) return;
+      localNoticeMessages = [];
       fileUploadPending = true;
       renderMessages(lastServerMessages, true);
       try {
@@ -2167,7 +2139,8 @@
           body: JSON.stringify({
             audio_base64: audioBase64,
             mime_type: blob.type || "audio/webm",
-            apply_wake_word: Boolean(options.applyWakeWord)
+            apply_wake_word: Boolean(options.applyWakeWord),
+            wake_word_mode: options.fileUpload ? "strip_if_present" : (options.applyWakeWord ? "require" : "ignore")
           })
         });
         if (!response.ok) throw new Error(await response.text());
@@ -2182,9 +2155,7 @@
           if (options.conversation) scheduleConversationRestart();
           return;
         }
-        const text = options.fileUpload
-          ? stripConfiguredWakeWord(data.command_text || data.text || "")
-          : String(data.command_text || data.text || "").trim();
+        const text = String(data.command_text || data.text || "").trim();
         if (text) {
           if (!options.conversation && !options.fileUpload) {
             injectCommand.value = text;
@@ -2556,14 +2527,14 @@
 
     function renderMessages(serverMessages, showThinking = false) {
       const knownUserMessages = (serverMessages || []).filter((message) => message.role === "user");
-      pendingMessages = pendingMessages.filter((pending) => {
+      pendingCommandMessages = pendingCommandMessages.filter((pending) => {
         return !knownUserMessages.some((message) => {
           const serverTime = Number(message.created_at || 0) * 1000;
           return message.text === pending.text && serverTime >= pending.sentAt - 1000;
         });
       });
 
-      const rows = [...withContextPreview(serverMessages || []), ...pendingMessages];
+      const rows = [...withContextPreview(serverMessages || []), ...pendingCommandMessages, ...localNoticeMessages];
       const shouldStick = chatPanel.scrollTop + chatPanel.clientHeight >= chatPanel.scrollHeight - 24;
       if (rows.length === 0) {
         messagesEl.innerHTML = `<div class="empty-state">Live Stage Assistant</div>`;
@@ -3751,7 +3722,8 @@
           body: JSON.stringify({ id: sessionId })
         });
         if (!response.ok) throw new Error(await response.text());
-        pendingMessages = [];
+        pendingCommandMessages = [];
+        localNoticeMessages = [];
         await refresh();
       } catch (error) {
         metaEl.textContent = `session delete failed: ${error}`;
@@ -3773,7 +3745,8 @@
           body: JSON.stringify({ id: sessionId })
         });
         if (!response.ok) throw new Error(await response.text());
-        pendingMessages = [];
+        pendingCommandMessages = [];
+        localNoticeMessages = [];
         await refresh();
       } catch (error) {
         metaEl.textContent = `session clear failed: ${error}`;
@@ -4303,7 +4276,8 @@
           body: JSON.stringify({})
         });
         if (!response.ok) throw new Error(await response.text());
-        pendingMessages = [];
+        pendingCommandMessages = [];
+        localNoticeMessages = [];
         await refresh();
       } catch (error) {
         metaEl.textContent = `new session failed: ${error}`;
@@ -4388,7 +4362,8 @@
           body: JSON.stringify({ id: sessionId })
         });
         if (!response.ok) throw new Error(await response.text());
-        pendingMessages = [];
+        pendingCommandMessages = [];
+        localNoticeMessages = [];
         await refresh();
       } catch (error) {
         metaEl.textContent = `session switch failed: ${error}`;

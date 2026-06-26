@@ -3264,10 +3264,9 @@ class VoiceAssistant:
         ]
         if not pending_paths:
             return
-        notice_key = "|".join(sorted(str(path) for path in pending_paths))
-        if notice_key in self.speaker_embedding_notice_keys:
+        pending_key = "|".join(sorted(str(path) for path in pending_paths))
+        if pending_key in self.speaker_embedding_notice_keys:
             return
-        self.speaker_embedding_notice_keys.add(notice_key)
         print(f"Speaker profile embedding preparation needed: {', '.join(str(path) for path in pending_paths)}")
         self.speak_speaker_embedding_notice_async(SPEAKER_EMBEDDING_PREPARATION_MESSAGE)
         self.start_thinking_sound()
@@ -3279,6 +3278,12 @@ class VoiceAssistant:
             if result.failed_count:
                 failed = "; ".join(f"{path.name}: {reason}" for path, reason in result.failed)
                 print(f"Speaker profile embedding preparation failed for {failed}")
+            remaining_paths = [
+                path for path in pending_paths
+                if path.exists() and path.is_file() and not resemblyzer_embedding_is_current(path)
+            ]
+            if not remaining_paths:
+                self.speaker_embedding_notice_keys.add(pending_key)
         finally:
             self._publish_speaker_profile_statuses()
 
@@ -3491,8 +3496,15 @@ class VoiceAssistant:
         audio_data: bytes,
         mime_type: str,
         model: str = "whisper-1",
-        apply_wake_word_gate: bool = False,
+        apply_wake_word_gate: bool | str = False,
     ) -> dict[str, Any]:
+        wake_word_mode = (
+            apply_wake_word_gate.strip().lower()
+            if isinstance(apply_wake_word_gate, str)
+            else ("require" if apply_wake_word_gate else "ignore")
+        )
+        if wake_word_mode not in {"require", "strip_if_present", "ignore"}:
+            wake_word_mode = "ignore"
         text = self.web_audio_to_text_openai(audio_data, mime_type, model=model) or ""
         speaker_audio = self.speaker_audio_from_web_bytes(audio_data, mime_type)
         speaker_result = self.recognize_speaker(speaker_audio, already_wav=True)
@@ -3510,8 +3522,16 @@ class VoiceAssistant:
         if not text:
             return {"text": "", "accepted": False, "command_text": "", "message": "No speech detected.", **speaker_payload}
 
-        if apply_wake_word_gate and self.wake_words:
+        if wake_word_mode in {"require", "strip_if_present"} and self.wake_words:
             should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
+            if wake_word_mode == "strip_if_present" and not should_process:
+                return {
+                    "text": text,
+                    "accepted": True,
+                    "command_text": text,
+                    "matched_wake_word": "",
+                    **speaker_payload,
+                }
             if not should_process:
                 return {
                     "text": text,

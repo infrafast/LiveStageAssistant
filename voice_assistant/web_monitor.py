@@ -688,7 +688,7 @@ class WebMonitor:
     def set_web_audio_handlers(
         self,
         *,
-        transcribe_handler: Callable[[bytes, str, bool], dict[str, Any]] | None = None,
+        transcribe_handler: Callable[[bytes, str, bool | str], dict[str, Any]] | None = None,
         tts_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None,
     ) -> None:
         """Register callbacks used by the web UI for optional browser audio."""
@@ -1879,10 +1879,12 @@ class WebMonitor:
                         self.send_error(400, "audio_base64 is invalid")
                         return
 
-                    apply_wake_word_gate = bool(payload.get("apply_wake_word"))
+                    wake_word_mode = str(payload.get("wake_word_mode") or "").strip().lower()
+                    if wake_word_mode not in {"require", "strip_if_present", "ignore"}:
+                        wake_word_mode = "require" if bool(payload.get("apply_wake_word")) else "ignore"
 
                     try:
-                        result = handler(audio_bytes, mime_type, apply_wake_word_gate)
+                        result = handler(audio_bytes, mime_type, wake_word_mode)
                     except ValueError as e:
                         self._send_json_error(
                             400,
