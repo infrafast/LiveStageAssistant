@@ -36,6 +36,8 @@ sudo apt install portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 l
 
 Backend TTS volume, backend microphone monitoring volume, and pan are software controls applied before PyAudio writes to the selected output device. In the web Config -> Audio In/Out section, `BACKEND_AUDIO_OUTPUT_PAN=0.00` keeps backend audio centered; `-1.00` sends it left and `1.00` sends it right. `BACKEND_AUDIO_MONITOR_MODE=off` keeps the current behavior, `passthrough` forwards backend microphone chunks to backend output while capture is running, and `rejected` replays only wake-word-rejected phrases. `BACKEND_AUDIO_MONITOR_VOLUME=1.00` controls that microphone monitoring path separately from TTS gain.
 
+Backend microphone monitoring is **experimental** and has not yet been validated on Raspberry Pi hardware. Leave it on `off` for normal operation. When testing, use headphones and a low monitoring volume first; ALSA/PipeWire device contention, feedback, latency, and channel/rate compatibility may require platform-specific adjustments.
+
 On Raspberry Pi with PipeWire, USB audio devices may be busy when opened directly through ALSA `hw:` or `plughw:`. Prefer selecting the `pipewire` backend output in the web UI, then set the USB sink as PipeWire's default output:
 
 ```bash

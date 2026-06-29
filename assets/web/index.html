@@ -368,7 +368,10 @@
                 <select id="backend-audio-output"></select>
               </div>
               <div class="field" id="backend-audio-monitor-mode-field" title="BACKEND_AUDIO_MONITOR_MODE">
-                <label>Monitoring micro backend</label>
+                <label>
+                  <span data-i18n="backend_audio_monitor">Monitoring micro backend</span>
+                  <span class="inline-badge" data-i18n="experimental" data-i18n-title="backend_audio_monitor_experimental_detail">Expérimental</span>
+                </label>
                 <div class="segmented" id="backend-audio-monitor-mode" role="radiogroup" aria-label="Backend audio monitor mode">
                   <label><input type="radio" name="backend-audio-monitor-mode" value="rejected">Rejected</label>
                   <label><input type="radio" name="backend-audio-monitor-mode" value="passthrough">Pass through</label>
