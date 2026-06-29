@@ -254,10 +254,8 @@
     let conversationRestartTimer = null;
     let conversationDiscard = false;
     let conversationStopStreamAfterSegment = false;
-    let lastSpokenAssistantMessageId = null;
     let messagesHydrated = false;
-    const seenAssistantMessageIds = new Set();
-    let assistantInstanceId = "";
+    let lastObservedAssistantMessageKey = "";
     let webTtsPlaying = false;
     let webTtsAudioContext = null;
     let webTtsUnlocked = false;
@@ -869,6 +867,11 @@
       return `<div class="message-row ${role}${pending}${contextIncluded}">
         <div class="bubble">${escapeHtml(message.text)}</div>
       </div>`;
+    }
+
+    function assistantMessageKey(message) {
+      if (!message) return "";
+      return `${String(message.id ?? "")}:${String(message.created_at ?? "")}`;
     }
 
     function showLocalAssistantMessage(text) {
@@ -1690,7 +1693,6 @@
       if (!webTtsUnlocked || !pendingWebTtsMessage) return;
       const message = pendingWebTtsMessage;
       pendingWebTtsMessage = null;
-      lastSpokenAssistantMessageId = message.id;
       playBrowserCommandAckSound();
       playWebTts(message.text || "");
     }
@@ -4209,17 +4211,6 @@
         logsEl.value = data.logs || "";
         if (shouldStick) logsEl.scrollTop = logsEl.scrollHeight;
         webAudio = data.web_audio || { enabled: false, stt_enabled: false, audio_file_stt_enabled: false, tts_enabled: false, tts_output: "silent" };
-        const nextAssistantInstanceId = String(webAudio.assistant_instance_id || "");
-        if (assistantInstanceId && nextAssistantInstanceId && nextAssistantInstanceId !== assistantInstanceId) {
-          stopWebTts();
-          stopThinkingAudio();
-          pendingWebTtsMessage = null;
-          lastSpokenAssistantMessageId = null;
-          seenAssistantMessageIds.clear();
-          messagesHydrated = false;
-          pendingCommandMessages = [];
-        }
-        if (nextAssistantInstanceId) assistantInstanceId = nextAssistantInstanceId;
         interruptConversationEnabled = Boolean(webAudio.interrupt_conversation_enabled);
         thinkingAudioUrl = data.thinking_sound_url || "";
         commandAckSoundUrl = data.command_ack_sound_url || "/assets/ring.wav";
@@ -4243,12 +4234,11 @@
           audioTranscriptionPending && audioTranscriptionMayPlayThinking
         );
         const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
-        const latestAssistantMessageId = latestAssistantMessage ? latestAssistantMessage.id : null;
+        const latestAssistantMessageKey = assistantMessageKey(latestAssistantMessage);
         const isNewAssistantMessage = Boolean(
           messagesHydrated &&
-          latestAssistantMessageId !== null &&
-          latestAssistantMessageId !== undefined &&
-          !seenAssistantMessageIds.has(latestAssistantMessageId)
+          latestAssistantMessageKey &&
+          latestAssistantMessageKey !== lastObservedAssistantMessageKey
         );
         const latestAssistantMessageAgeMs = latestAssistantMessage && latestAssistantMessage.created_at
           ? Date.now() - Number(latestAssistantMessage.created_at) * 1000
@@ -4259,18 +4249,13 @@
         const willSpeakLatestAssistant = Boolean(
           shouldSpeakLatestAssistant &&
           webAudio.tts_enabled &&
-          latestAssistantMessage &&
-          latestAssistantMessage.id !== lastSpokenAssistantMessageId
+          latestAssistantMessage
         );
         if (webAudio.tts_enabled && webAudio.tts_output === "browser" && (playThinking || willSpeakLatestAssistant)) startThinkingAudio();
         else stopThinkingAudio();
         setComposerLocked(showThinking);
         renderMessages(lastServerMessages, showThinking);
-        for (const message of lastServerMessages) {
-          if (message.role === "assistant" && message.id !== null && message.id !== undefined) {
-            seenAssistantMessageIds.add(message.id);
-          }
-        }
+        lastObservedAssistantMessageKey = latestAssistantMessageKey;
         messagesHydrated = true;
         if (
           willSpeakLatestAssistant
@@ -4278,7 +4263,6 @@
           if (!webTtsUnlocked) {
             deferWebTtsUntilUserGesture(latestAssistantMessage);
           } else {
-            lastSpokenAssistantMessageId = latestAssistantMessage.id;
             if (!(latestAssistantMessage.speak === true && showThinking)) {
               playBrowserCommandAckSound();
             }
