@@ -511,7 +511,7 @@ class WebMonitor:
         self._env_profile_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
         self._remote_screen_save_handler: Callable[[str, bool], dict[str, Any]] | None = None
-        self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
+        self._backend_audio_diagnostic_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._backend_audio_sample_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._speaker_embedding_notice_handler: Callable[[str], None] | None = None
@@ -632,10 +632,10 @@ class WebMonitor:
         with self._lock:
             self._remote_screen_save_handler = save_handler
 
-    def set_backend_audio_level_handler(self, handler: Callable[[str], dict[str, Any]]) -> None:
-        """Register callback used by the web UI to test backend microphone level."""
+    def set_backend_audio_diagnostic_handler(self, handler: Callable[[str], dict[str, Any]]) -> None:
+        """Register callback used by the web UI to diagnose a backend microphone."""
         with self._lock:
-            self._backend_audio_level_handler = handler
+            self._backend_audio_diagnostic_handler = handler
 
     def set_backend_tts_test_handler(
         self,
@@ -853,8 +853,8 @@ class WebMonitor:
                     if self.path == "/api/web-tts":
                         self._handle_web_tts()
                         return
-                    if self.path == "/api/backend-audio-level":
-                        self._handle_backend_audio_level()
+                    if self.path == "/api/backend-audio-diagnostic":
+                        self._handle_backend_audio_diagnostic()
                         return
                     if self.path == "/api/backend-tts-test":
                         self._handle_backend_tts_test()
@@ -1970,10 +1970,10 @@ class WebMonitor:
                         return
                     self._send_json(result)
 
-                def _handle_backend_audio_level(self) -> None:
-                    handler = monitor._backend_audio_level_handler
+                def _handle_backend_audio_diagnostic(self) -> None:
+                    handler = monitor._backend_audio_diagnostic_handler
                     if handler is None:
-                        self.send_error(503, "Backend audio level test is not available")
+                        self.send_error(503, "Backend microphone diagnostic is not available")
                         return
 
                     payload = self._read_json_body()
@@ -1986,7 +1986,7 @@ class WebMonitor:
                         self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
                         return
                     except Exception as e:
-                        self._send_json_error(500, {"ok": False, "error": {"message": f"Could not test backend audio input: {e}"}})
+                        self._send_json_error(500, {"ok": False, "error": {"message": f"Could not diagnose backend audio input: {e}"}})
                         return
                     self._send_json(result)
 

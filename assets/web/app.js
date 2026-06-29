@@ -139,7 +139,6 @@
     const backendAudioInputField = document.querySelector("#backend-audio-input-field");
     const backendAudioInput = document.querySelector("#backend-audio-input");
     const backendAudioTest = document.querySelector("#backend-audio-test");
-    const backendAudioMeter = document.querySelector("#backend-audio-meter .vu-fill");
     const backendAudioOutputField = document.querySelector("#backend-audio-output-field");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
     const backendAudioMonitorModeField = document.querySelector("#backend-audio-monitor-mode-field");
@@ -268,8 +267,7 @@
     let browserAudioTestContext = null;
     let browserAudioTestAnalyser = null;
     let browserAudioTestAnimationId = null;
-    let backendAudioTestTimer = null;
-    let backendAudioTestRequestActive = false;
+    let backendAudioDiagnostic = null;
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
     let mcpServersSignature = "";
@@ -1506,7 +1504,7 @@
 
     async function startBrowserAudioTest() {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-      stopBackendAudioTest();
+      closeBackendAudioDiagnostic();
       try {
         browserAudioTestStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
         browserAudioTestContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -1542,48 +1540,190 @@
       else startBrowserAudioTest();
     }
 
-    function stopBackendAudioTest() {
-      window.clearInterval(backendAudioTestTimer);
-      backendAudioTestTimer = null;
-      backendAudioTestRequestActive = false;
-      backendAudioTest.textContent = "Test";
-      setVuMeter(backendAudioMeter, 0);
+    function backendDiagnosticIssueText(issue) {
+      const messages = {
+        good: tr("backend_audio_diagnostic_good", "Speech was detected at a suitable level."),
+        no_signal: tr("backend_audio_diagnostic_no_signal", "No usable audio signal was received from the microphone."),
+        no_speech: tr("backend_audio_diagnostic_no_speech", "Audio was received, but the configured voice detector did not identify enough speech."),
+        very_low: tr("backend_audio_diagnostic_very_low", "The voice level is much too low for reliable processing."),
+        low: tr("backend_audio_diagnostic_low", "The voice level is low and may reduce recognition quality."),
+        high: tr("backend_audio_diagnostic_high", "The voice level is too high and leaves little headroom."),
+        clipping: tr("backend_audio_diagnostic_clipping", "Some peaks are close to saturation."),
+        severe_clipping: tr("backend_audio_diagnostic_severe_clipping", "The signal is heavily saturated and distorted."),
+        noisy: tr("backend_audio_diagnostic_noisy", "The voice is too close to the background-noise level.")
+      };
+      return messages[issue] || issue;
     }
 
-    async function pollBackendAudioLevel() {
-      if (backendAudioTestRequestActive) return;
-      backendAudioTestRequestActive = true;
+    function createBackendAudioDiagnosticDialog() {
+      const overlay = document.createElement("div");
+      overlay.className = "speaker-capture-overlay open";
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("aria-modal", "true");
+
+      const panel = document.createElement("div");
+      panel.className = "speaker-capture-panel backend-audio-diagnostic-panel";
+      const title = document.createElement("div");
+      title.className = "speaker-capture-title";
+      title.textContent = tr("backend_audio_diagnostic_title", "Backend microphone diagnostic");
+      const instructions = document.createElement("p");
+      instructions.className = "speaker-capture-instructions";
+      instructions.textContent = tr(
+        "backend_audio_diagnostic_instructions",
+        "Stay silent for one second, then say: This is a microphone test for the voice assistant."
+      );
+      const status = document.createElement("div");
+      status.className = "speaker-capture-status";
+      status.dataset.mode = "recording";
+      const report = document.createElement("div");
+      report.className = "backend-audio-diagnostic-report";
+      report.hidden = true;
+      const audio = document.createElement("audio");
+      audio.className = "speaker-capture-preview";
+      audio.controls = true;
+      audio.hidden = true;
+      const actions = document.createElement("div");
+      actions.className = "speaker-capture-actions";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "small-button";
+      retry.textContent = tr("retry", "Retry");
+      retry.hidden = true;
+      retry.addEventListener("click", () => {
+        closeBackendAudioDiagnostic();
+        startBackendAudioDiagnostic();
+      });
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "small-button";
+      close.textContent = tr("close", "Close");
+      close.addEventListener("click", closeBackendAudioDiagnostic);
+      actions.append(retry, close);
+      panel.append(title, instructions, status, report, audio, actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      return { overlay, status, report, audio, retry };
+    }
+
+    function closeBackendAudioDiagnostic() {
+      if (!backendAudioDiagnostic) return;
+      backendAudioDiagnostic.closed = true;
+      if (backendAudioDiagnostic.countdownTimer) window.clearInterval(backendAudioDiagnostic.countdownTimer);
+      if (backendAudioDiagnostic.dialog?.overlay) backendAudioDiagnostic.dialog.overlay.remove();
+      if (!backendAudioDiagnostic.running) backendAudioDiagnostic = null;
+    }
+
+    function renderBackendAudioDiagnostic(dialog, data) {
+      const verdict = ["green", "orange", "red"].includes(data.verdict) ? data.verdict : "red";
+      const verdictLabels = {
+        green: tr("backend_audio_diagnostic_result_green", "Microphone level suitable"),
+        orange: tr("backend_audio_diagnostic_result_orange", "Microphone usable, adjustment recommended"),
+        red: tr("backend_audio_diagnostic_result_red", "Microphone input unsuitable")
+      };
+      dialog.status.textContent = verdictLabels[verdict];
+      dialog.status.dataset.mode = verdict;
+      dialog.report.dataset.verdict = verdict;
+      dialog.report.replaceChildren();
+
+      const issueList = document.createElement("ul");
+      issueList.className = "backend-audio-diagnostic-issues";
+      for (const issue of data.issues || []) {
+        const item = document.createElement("li");
+        item.textContent = backendDiagnosticIssueText(issue);
+        issueList.appendChild(item);
+      }
+
+      const metrics = data.metrics || {};
+      const metricLines = [
+        trf("backend_audio_diagnostic_device", "Device: {value}", { value: data.device || "-" }),
+        trf("backend_audio_diagnostic_speech_duration", "Speech detected: {value} s", { value: metrics.speech_duration_seconds ?? 0 }),
+        trf("backend_audio_diagnostic_continuous_speech", "Longest continuous speech: {value} s", { value: metrics.continuous_speech_duration_seconds ?? 0 }),
+        trf("backend_audio_diagnostic_voice_level", "Voice level: {value} dBFS", { value: metrics.speech_rms_dbfs ?? "-" }),
+        trf("backend_audio_diagnostic_peak", "Peak: {value} dBFS", { value: metrics.peak_dbfs ?? "-" }),
+        trf("backend_audio_diagnostic_noise", "Background noise: {value} dBFS", { value: metrics.noise_rms_dbfs ?? "-" }),
+        trf("backend_audio_diagnostic_snr", "Signal-to-noise ratio: {value} dB", { value: metrics.snr_db ?? "-" }),
+        trf("backend_audio_diagnostic_clipping_metric", "Clipped samples: {value}%", { value: metrics.clipping_percent ?? 0 }),
+        trf("backend_audio_diagnostic_vad", "Maximum voice probability: {value}", { value: metrics.vad_probability ?? 0 })
+      ];
+      const metricGrid = document.createElement("div");
+      metricGrid.className = "backend-audio-diagnostic-metrics";
+      for (const line of metricLines) {
+        const item = document.createElement("span");
+        item.textContent = line;
+        metricGrid.appendChild(item);
+      }
+      dialog.report.append(issueList, metricGrid);
+      dialog.report.hidden = false;
+      if (data.audio_data_url) {
+        dialog.audio.src = data.audio_data_url;
+        dialog.audio.hidden = false;
+      }
+      dialog.retry.hidden = false;
+    }
+
+    async function startBackendAudioDiagnostic() {
+      if (backendAudioDiagnostic?.running) return;
+      stopBrowserAudioTest();
+      const dialog = createBackendAudioDiagnosticDialog();
+      const state = {
+        dialog,
+        running: true,
+        closed: false,
+        startedAt: Date.now(),
+        countdownTimer: null
+      };
+      backendAudioDiagnostic = state;
+      backendAudioTest.disabled = true;
+      const updateCountdown = () => {
+        const elapsed = Math.floor((Date.now() - state.startedAt) / 1000);
+        const remaining = Math.max(0, 7 - elapsed);
+        dialog.status.textContent = trf(
+          "backend_audio_diagnostic_recording",
+          "Backend recording in progress... {seconds}s remaining.",
+          { seconds: remaining }
+        );
+      };
+      updateCountdown();
+      state.countdownTimer = window.setInterval(updateCountdown, 250);
       try {
-        const response = await fetch("/api/backend-audio-level", {
+        const response = await fetch("/api/backend-audio-diagnostic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ device: backendAudioInput.value || "" })
         });
         const text = await response.text();
-        const data = text ? JSON.parse(text) : {};
-        if (!response.ok || data.ok === false) {
-          const message = data.error && data.error.message ? data.error.message : data.detail || text;
-          throw new Error(message || "backend audio level unavailable");
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (_error) {
+          throw new Error(text || tr("backend_audio_diagnostic_error", "Backend microphone diagnostic failed."));
         }
-        setVuMeter(backendAudioMeter, Math.max(Number(data.level || 0), Number(data.peak || 0) * 0.7));
+        if (!response.ok || data.ok === false) {
+          const message = data.error?.message || data.detail || text;
+          throw new Error(message || tr("backend_audio_diagnostic_error", "Backend microphone diagnostic failed."));
+        }
+        if (!state.closed) renderBackendAudioDiagnostic(dialog, data);
       } catch (error) {
-        stopBackendAudioTest();
-        metaEl.textContent = `backend audio test unavailable: ${error}`;
+        if (!state.closed) {
+          dialog.status.textContent = trf(
+            "backend_audio_diagnostic_error_detail",
+            "Backend microphone diagnostic failed: {error}",
+            { error: String(error.message || error) }
+          );
+          dialog.status.dataset.mode = "error";
+          dialog.retry.hidden = false;
+        }
       } finally {
-        backendAudioTestRequestActive = false;
+        if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+        state.countdownTimer = null;
+        state.running = false;
+        syncAudioDeviceVisibility();
+        if (state.closed && backendAudioDiagnostic === state) backendAudioDiagnostic = null;
       }
     }
 
-    function startBackendAudioTest() {
-      stopBrowserAudioTest();
-      backendAudioTest.textContent = "Stop";
-      pollBackendAudioLevel();
-      backendAudioTestTimer = window.setInterval(pollBackendAudioLevel, 450);
-    }
-
     function toggleBackendAudioTest() {
-      if (backendAudioTestTimer) stopBackendAudioTest();
-      else startBackendAudioTest();
+      startBackendAudioDiagnostic();
     }
 
     async function loadBrowserAudioDevices(requestPermission = false) {
@@ -2762,7 +2902,7 @@
       envProfile.disabled = true;
       llmSave.disabled = true;
       stopBrowserAudioTest();
-      stopBackendAudioTest();
+      closeBackendAudioDiagnostic();
       setEnvironmentLoading(true);
       disconnectVnc("reconnexion VNC...");
       llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
@@ -3479,9 +3619,11 @@
       backendAudioOutputField.classList.toggle("hidden", !backendOutputNeeded);
       backendAudioOutputPanField.classList.toggle("hidden", !backendOutputNeeded);
       if (browserAudioInputField.classList.contains("hidden") && browserAudioTestStream) stopBrowserAudioTest();
-      if (backendAudioInputField.classList.contains("hidden") && backendAudioTestTimer) stopBackendAudioTest();
+      if (backendAudioInputField.classList.contains("hidden")) closeBackendAudioDiagnostic();
       browserAudioTest.disabled = browserAudioInputField.classList.contains("hidden") || !browserAudioCapabilities.input;
-      backendAudioTest.disabled = backendAudioInputField.classList.contains("hidden") || !backendAudioCapabilities.input;
+      backendAudioTest.disabled = backendAudioInputField.classList.contains("hidden")
+        || !backendAudioCapabilities.input
+        || Boolean(backendAudioDiagnostic?.running);
 	      backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled
         ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif"
@@ -4574,7 +4716,7 @@
       }
     });
     browserAudioTest.addEventListener("click", toggleBrowserAudioTest);
-    backendAudioInput.addEventListener("change", stopBackendAudioTest);
+    backendAudioInput.addEventListener("change", closeBackendAudioDiagnostic);
     backendAudioTest.addEventListener("click", toggleBackendAudioTest);
     browserAudioOutput.addEventListener("change", async () => {
       selectedBrowserAudioOutput = browserAudioOutput.value;

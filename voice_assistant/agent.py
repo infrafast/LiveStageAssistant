@@ -744,102 +744,6 @@ def pcm_to_vad_16k_mono(audio_data: bytes, *, source_rate: int, channels: int) -
     return clipped.tobytes()
 
 
-def backend_audio_input_level(selected_device: str | None = None) -> dict[str, Any]:
-    """Return a short RMS/peak level sample for a backend PyAudio input device."""
-    audio = None
-    stream = None
-    try:
-        with suppress_native_stderr():
-            audio = pyaudio.PyAudio()
-        input_device_index, status, detail = resolve_pyaudio_device_index(
-            audio,
-            selected_device,
-            input_device=True,
-        )
-        if status in {"invalid", "unavailable"}:
-            return {"ok": False, "level": 0.0, "peak": 0.0, "status": status, "detail": detail}
-
-        frames_per_buffer = 512
-        try:
-            device_info = (
-                audio.get_device_info_by_index(input_device_index)
-                if input_device_index is not None
-                else audio.get_default_input_device_info()
-            )
-            default_rate = int(float(device_info.get("defaultSampleRate") or 16000))
-            max_channels = max(1, int(device_info.get("maxInputChannels", 1) or 1))
-        except Exception:
-            default_rate = 16000
-            max_channels = 1
-
-        channel_candidates = [1]
-        if max_channels >= 2:
-            channel_candidates.append(2)
-        last_error: Exception | None = None
-        opened_channels = 1
-        opened_rate = default_rate
-        for channels in channel_candidates:
-            for sample_rate in pyaudio_candidate_rates(default_rate):
-                try:
-                    with suppress_native_stderr():
-                        stream = audio.open(
-                            format=pyaudio.paInt16,
-                            channels=channels,
-                            rate=sample_rate,
-                            input=True,
-                            input_device_index=input_device_index,
-                            frames_per_buffer=frames_per_buffer,
-                        )
-                    opened_channels = channels
-                    opened_rate = sample_rate
-                    last_error = None
-                    break
-                except Exception as e:
-                    last_error = e
-                    stream = None
-            if stream is not None:
-                break
-
-        if stream is None:
-            detail_suffix = f"{detail}; tried rates {', '.join(str(rate) for rate in pyaudio_candidate_rates(default_rate))}"
-            if last_error is not None:
-                detail_suffix = f"{detail_suffix}; {concise_pyaudio_error(last_error)}"
-            return {"ok": False, "level": 0.0, "peak": 0.0, "status": "unavailable", "detail": detail_suffix}
-
-        chunks = []
-        for _ in range(4):
-            chunks.append(stream.read(frames_per_buffer, exception_on_overflow=False))
-
-        pcm = b"".join(chunks)
-        sample_count = len(pcm) // 2
-        if sample_count <= 0:
-            return {"ok": True, "level": 0.0, "peak": 0.0, "status": status, "detail": detail}
-        samples = struct.unpack(f"<{sample_count}h", pcm[: sample_count * 2])
-        peak = max(abs(sample) for sample in samples) / 32768.0
-        rms = math.sqrt(sum(sample * sample for sample in samples) / sample_count) / 32768.0
-        return {
-            "ok": True,
-            "level": max(0.0, min(1.0, rms * 3.0)),
-            "peak": max(0.0, min(1.0, peak)),
-            "status": status,
-            "detail": f"{detail}; opened {opened_channels}ch/{opened_rate}Hz",
-        }
-    except Exception as e:
-        return {"ok": False, "level": 0.0, "peak": 0.0, "status": "error", "detail": concise_pyaudio_error(e)}
-    finally:
-        if stream is not None:
-            try:
-                stream.stop_stream()
-                stream.close()
-            except Exception:
-                pass
-        if audio is not None:
-            try:
-                audio.terminate()
-            except Exception:
-                pass
-
-
 def backend_audio_service_state(
     input_status: str,
     input_detail: str,
@@ -1650,6 +1554,9 @@ class VoiceAssistant:
             min(2.0, float(backend_audio_monitor_volume if backend_audio_monitor_volume is not None else 1.0)),
         )
         self.backend_audio_monitor_warning_shown = False
+        self.backend_audio_capture_lock = threading.Lock()
+        self.backend_audio_diagnostic_lock = threading.Lock()
+        self.backend_audio_diagnostic_requested = threading.Event()
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
@@ -2803,14 +2710,17 @@ class VoiceAssistant:
 
     def record_audio(self) -> bytes | None:
         """Record audio from microphone."""
-        if not self.microphone_available:
+        if not self.microphone_available or self.backend_audio_diagnostic_requested.is_set():
             return None
 
         print("\nListening... (speak now)")
 
         stream = None
         monitor_stream = None
+        self.backend_audio_capture_lock.acquire()
         try:
+            if self.backend_audio_diagnostic_requested.is_set():
+                return None
             with suppress_native_stderr():
                 stream = self.audio.open(
                     format=self.audio_format,
@@ -2840,6 +2750,9 @@ class VoiceAssistant:
             has_speech = False
 
             while True:
+                if self.backend_audio_diagnostic_requested.is_set():
+                    print("Backend microphone diagnostic requested. Pausing normal capture.")
+                    return None
                 if self.web_monitor:
                     injected_command = self.web_monitor.pop_injected_command()
                     if injected_command:
@@ -2916,6 +2829,208 @@ class VoiceAssistant:
         finally:
             self._close_audio_stream(monitor_stream)
             self._close_audio_stream(stream)
+            self.backend_audio_capture_lock.release()
+
+    def diagnose_backend_audio_input(
+        self,
+        selected_device: str | None = None,
+        *,
+        duration_seconds: float = 7.0,
+    ) -> dict[str, Any]:
+        """Capture and assess a backend microphone with the same format and VAD as STT."""
+        if not self.backend_audio_diagnostic_lock.acquire(blocking=False):
+            raise RuntimeError("a backend microphone diagnostic is already running")
+
+        audio = None
+        stream = None
+        capture_acquired = False
+        self.backend_audio_diagnostic_requested.set()
+        try:
+            capture_acquired = self.backend_audio_capture_lock.acquire(timeout=3.0)
+            if not capture_acquired:
+                raise RuntimeError("the backend microphone is busy")
+
+            with suppress_native_stderr():
+                audio = pyaudio.PyAudio()
+            input_device_index, status, detail = resolve_pyaudio_device_index(
+                audio,
+                selected_device,
+                input_device=True,
+            )
+            if status in {"invalid", "unavailable"}:
+                raise ValueError(detail)
+
+            input_format = resolve_backend_input_format(audio, input_device_index, pyaudio.paInt16)
+            if not input_format["ok"]:
+                raise RuntimeError(f"{detail}; {input_format['detail']}")
+            channels = int(input_format["channels"])
+            rate = int(input_format["rate"])
+            chunk = int(input_format["chunk"])
+            with suppress_native_stderr():
+                stream = audio.open(
+                    format=pyaudio.paInt16,
+                    channels=channels,
+                    rate=rate,
+                    input=True,
+                    input_device_index=input_device_index,
+                    frames_per_buffer=chunk,
+                )
+
+            duration_seconds = max(3.0, min(12.0, float(duration_seconds)))
+            chunk_count = max(1, math.ceil(duration_seconds * rate / chunk))
+            frames: list[bytes] = []
+            speech_square_sum = 0.0
+            speech_sample_count = 0
+            noise_square_sum = 0.0
+            noise_sample_count = 0
+            speech_window_count = 0
+            current_speech_window_count = 0
+            longest_speech_window_count = 0
+            max_vad_probability = 0.0
+            clipping_count = 0
+            total_sample_count = 0
+            peak = 0.0
+            self.vad.reset()
+
+            for _ in range(chunk_count):
+                data = stream.read(chunk, exception_on_overflow=False)
+                frames.append(data)
+                raw = np.frombuffer(data, dtype=np.int16)
+                if raw.size == 0:
+                    continue
+                usable = raw[: raw.size - (raw.size % channels)] if channels > 1 else raw
+                if usable.size == 0:
+                    continue
+                mono = (
+                    usable.reshape(-1, channels).mean(axis=1).astype(np.float32)
+                    if channels > 1
+                    else usable.astype(np.float32)
+                ) / 32768.0
+                square_sum = float(np.dot(mono, mono))
+                chunk_peak = float(np.max(np.abs(mono)))
+                peak = max(peak, chunk_peak)
+                clipping_count += int(np.count_nonzero(np.abs(usable) >= 32700))
+                total_sample_count += int(usable.size)
+
+                vad_data = pcm_to_vad_16k_mono(data, source_rate=rate, channels=channels)
+                probabilities = self.vad.process_pcm(vad_data)
+                if probabilities:
+                    max_vad_probability = max(max_vad_probability, max(probabilities))
+                speech_windows = 0
+                for probability in probabilities:
+                    if probability >= self.vad.threshold:
+                        speech_windows += 1
+                        current_speech_window_count += 1
+                        longest_speech_window_count = max(
+                            longest_speech_window_count,
+                            current_speech_window_count,
+                        )
+                    else:
+                        current_speech_window_count = 0
+                speech_window_count += speech_windows
+                if speech_windows:
+                    speech_square_sum += square_sum
+                    speech_sample_count += int(mono.size)
+                else:
+                    noise_square_sum += square_sum
+                    noise_sample_count += int(mono.size)
+
+            pcm = b"".join(frames)
+            if not pcm or total_sample_count <= 0:
+                raise RuntimeError("the backend microphone returned no audio data")
+
+            def rms(square_sum: float, sample_count: int) -> float:
+                return math.sqrt(square_sum / sample_count) if sample_count > 0 else 0.0
+
+            def dbfs(value: float) -> float:
+                return 20.0 * math.log10(max(value, 1e-9))
+
+            speech_rms = rms(speech_square_sum, speech_sample_count)
+            noise_rms = rms(noise_square_sum, noise_sample_count)
+            overall_samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+            overall_rms = float(np.sqrt(np.mean(np.square(overall_samples)))) if overall_samples.size else 0.0
+            speech_duration_ms = speech_window_count * self.vad.chunk_ms
+            continuous_speech_duration_ms = longest_speech_window_count * self.vad.chunk_ms
+            speech_dbfs = dbfs(speech_rms)
+            noise_dbfs = dbfs(noise_rms)
+            snr_db = speech_dbfs - noise_dbfs if speech_sample_count and noise_sample_count else None
+            clipping_ratio = clipping_count / total_sample_count if total_sample_count else 0.0
+            minimum_speech_ms = max(120.0, float(self.vad.min_speech_ms))
+
+            issues: list[str] = []
+            verdict = "green"
+            if overall_rms < 0.001 or peak < 0.005:
+                issues.append("no_signal")
+                verdict = "red"
+            elif continuous_speech_duration_ms < minimum_speech_ms:
+                issues.append("no_speech")
+                verdict = "red"
+            else:
+                if speech_dbfs < -40.0:
+                    issues.append("very_low")
+                    verdict = "red"
+                elif speech_dbfs < -30.0:
+                    issues.append("low")
+                    verdict = "orange"
+                if speech_dbfs > -9.0:
+                    issues.append("high")
+                    verdict = "orange"
+                if clipping_ratio >= 0.01:
+                    issues.append("severe_clipping")
+                    verdict = "red"
+                elif clipping_ratio >= 0.0005 or peak >= 0.995:
+                    issues.append("clipping")
+                    if verdict == "green":
+                        verdict = "orange"
+                if snr_db is not None and snr_db < 8.0:
+                    issues.append("noisy")
+                    if verdict == "green":
+                        verdict = "orange"
+            if not issues:
+                issues.append("good")
+
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, "wb") as wav_file:
+                wav_file.setnchannels(channels)
+                wav_file.setsampwidth(audio.get_sample_size(pyaudio.paInt16))
+                wav_file.setframerate(rate)
+                wav_file.writeframes(pcm)
+
+            return {
+                "ok": True,
+                "verdict": verdict,
+                "issues": issues,
+                "device": detail,
+                "format": f"{channels}ch/{rate}Hz",
+                "duration_seconds": round(len(pcm) / (rate * channels * 2), 1),
+                "metrics": {
+                    "speech_duration_seconds": round(speech_duration_ms / 1000.0, 1),
+                    "continuous_speech_duration_seconds": round(continuous_speech_duration_ms / 1000.0, 1),
+                    "speech_rms_dbfs": round(speech_dbfs, 1) if speech_sample_count else None,
+                    "noise_rms_dbfs": round(noise_dbfs, 1) if noise_sample_count else None,
+                    "snr_db": round(snr_db, 1) if snr_db is not None else None,
+                    "peak_dbfs": round(dbfs(peak), 1),
+                    "clipping_percent": round(clipping_ratio * 100.0, 2),
+                    "vad_probability": round(max_vad_probability, 2),
+                },
+                "audio_data_url": f"data:audio/wav;base64,{base64.b64encode(wav_buffer.getvalue()).decode('ascii')}",
+            }
+        except ValueError:
+            raise
+        except Exception as e:
+            raise RuntimeError(concise_pyaudio_error(e)) from e
+        finally:
+            if stream is not None:
+                self._close_audio_stream(stream)
+            if audio is not None:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+            if capture_acquired:
+                self.backend_audio_capture_lock.release()
+            self.backend_audio_diagnostic_requested.clear()
+            self.backend_audio_diagnostic_lock.release()
 
     def _open_backend_audio_monitor_stream(self):
         """Open a backend output stream for microphone monitoring."""
@@ -3035,11 +3150,14 @@ class VoiceAssistant:
 
     def record_voice_cancel_audio(self, stop_event: threading.Event) -> bytes | None:
         """Capture a short audio window while the assistant is thinking."""
-        if not self.microphone_available:
+        if not self.microphone_available or self.backend_audio_diagnostic_requested.is_set():
             return None
 
         stream = None
+        self.backend_audio_capture_lock.acquire()
         try:
+            if self.backend_audio_diagnostic_requested.is_set():
+                return None
             with suppress_native_stderr():
                 stream = self.audio.open(
                     format=self.audio_format,
@@ -3056,7 +3174,11 @@ class VoiceAssistant:
             max_frames = max(1, int(self.rate / self.chunk * 1.4))
             has_speech = False
 
-            while len(frames) < max_frames and not stop_event.is_set():
+            while (
+                len(frames) < max_frames
+                and not stop_event.is_set()
+                and not self.backend_audio_diagnostic_requested.is_set()
+            ):
                 data = stream.read(self.chunk, exception_on_overflow=False)
                 frames.append(data)
                 vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
@@ -3086,6 +3208,7 @@ class VoiceAssistant:
                     stream.close()
                 except Exception:
                     pass
+            self.backend_audio_capture_lock.release()
 
     def is_voice_cancel_phrase(self, text: str) -> bool:
         normalized = text.strip().lower()
@@ -4452,6 +4575,9 @@ class VoiceAssistant:
                         text_from_fallback = True
                         audio_data = None
                     else:
+                        if self.backend_audio_diagnostic_requested.is_set():
+                            await asyncio.sleep(0.05)
+                            continue
                         audio_data = self.record_audio()
 
                     if self.reload_event and self.reload_event.is_set():
@@ -6239,7 +6365,7 @@ async def main():
                 ),
                 tts_handler=web_tts_handler,
             )
-            web_monitor.set_backend_audio_level_handler(backend_audio_input_level)
+            web_monitor.set_backend_audio_diagnostic_handler(assistant.diagnose_backend_audio_input)
             web_monitor.set_backend_tts_test_handler(backend_tts_test_handler)
             web_monitor.set_backend_audio_sample_handler(backend_audio_sample_handler)
             web_monitor.set_cancel_handler(assistant.stop_tts)
