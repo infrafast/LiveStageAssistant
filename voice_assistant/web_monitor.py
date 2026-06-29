@@ -513,6 +513,7 @@ class WebMonitor:
         self._remote_screen_save_handler: Callable[[str, bool], dict[str, Any]] | None = None
         self._backend_audio_level_handler: Callable[[str], dict[str, Any]] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
+        self._backend_audio_sample_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._speaker_embedding_notice_handler: Callable[[str], None] | None = None
         self._speaker_profile_update_handler: Callable[[dict[str, Any]], None] | None = None
         self._mcp_routing_save_handler: Callable[[dict[str, str]], dict[str, Any]] | None = None
@@ -643,6 +644,14 @@ class WebMonitor:
         """Register callback used by the web UI to test backend TTS output."""
         with self._lock:
             self._backend_tts_test_handler = handler
+
+    def set_backend_audio_sample_handler(
+        self,
+        handler: Callable[[str, dict[str, Any] | None], dict[str, Any]],
+    ) -> None:
+        """Register callback used by the web UI to preview WAV assets on backend output."""
+        with self._lock:
+            self._backend_audio_sample_handler = handler
 
     def set_speaker_embedding_notice_handler(self, handler: Callable[[str], None]) -> None:
         """Register callback used to announce speaker embedding preparation."""
@@ -849,6 +858,9 @@ class WebMonitor:
                         return
                     if self.path == "/api/backend-tts-test":
                         self._handle_backend_tts_test()
+                        return
+                    if self.path == "/api/backend-audio-sample":
+                        self._handle_backend_audio_sample()
                         return
                     if self.path == "/api/speaker-profile-upload":
                         self._handle_speaker_profile_upload()
@@ -1522,6 +1534,7 @@ class WebMonitor:
                     backend_audio_monitor_mode = str(payload.get("backend_audio_monitor_mode") or "off").strip().lower()
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
+                    startup_loader_sound_file = str(payload.get("startup_loader_sound_file") or "").strip()
                     command_ack_sound_enabled = bool(payload.get("command_ack_sound_enabled"))
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
                     try:
@@ -1576,6 +1589,7 @@ class WebMonitor:
                             backend_audio_output_device,
                             voice_id,
                             thinking_sound_file,
+                            startup_loader_sound_file,
                             command_ack_sound_enabled,
                             openai_tts_voice,
                             openai_tts_speed,
@@ -2005,6 +2019,37 @@ class WebMonitor:
                         return
                     except Exception as e:
                         self._send_json_error(500, {"ok": False, "error": {"message": f"Could not test backend TTS: {e}"}})
+                        return
+                    self._send_json(result)
+
+                def _handle_backend_audio_sample(self) -> None:
+                    handler = monitor._backend_audio_sample_handler
+                    if handler is None:
+                        self.send_error(503, "Backend audio sample preview is not available")
+                        return
+
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    filename = str(payload.get("filename") or "").strip()
+                    if not filename:
+                        self.send_error(400, "filename is required")
+                        return
+                    options = {
+                        "volume": payload.get("volume"),
+                        "pan": payload.get("pan"),
+                        "output_device": str(payload.get("output_device") or "").strip(),
+                    }
+                    try:
+                        result = handler(filename, options)
+                    except ValueError as e:
+                        self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        return
+                    except Exception as e:
+                        self._send_json_error(
+                            500,
+                            {"ok": False, "error": {"message": f"Could not play backend audio sample: {e}"}},
+                        )
                         return
                     self._send_json(result)
 

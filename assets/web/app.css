@@ -1020,6 +1020,24 @@
       gap: 6px;
       align-items: stretch;
     }
+    .audio-sample-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 38px;
+      gap: 6px;
+      align-items: stretch;
+    }
+    .audio-sound-stack {
+      min-width: 0;
+      display: grid;
+      gap: 12px;
+    }
+    .audio-preview-button {
+      width: 38px;
+      min-width: 38px;
+      padding: 0;
+      font-size: 14px;
+      line-height: 1;
+    }
     .vu-meter {
       width: 12px;
       height: 38px;

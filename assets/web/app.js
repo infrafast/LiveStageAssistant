@@ -151,7 +151,12 @@
     const backendAudioOutputPan = document.querySelector("#backend-audio-output-pan");
     const backendAudioOutputPanLabel = document.querySelector("#backend-audio-output-pan-label");
     const sttLanguage = document.querySelector("#stt-language");
+    const thinkingSoundField = document.querySelector("#thinking-sound-field");
     const thinkingSound = document.querySelector("#thinking-sound");
+    const thinkingSoundPlay = document.querySelector("#thinking-sound-play");
+    const startupLoaderSoundField = document.querySelector("#startup-loader-sound-field");
+    const startupLoaderSound = document.querySelector("#startup-loader-sound");
+    const startupLoaderSoundPlay = document.querySelector("#startup-loader-sound-play");
     const commandAckSoundField = document.querySelector("#command-ack-sound-field");
     const commandAckSound = document.querySelector("#command-ack-sound");
     const llmSave = document.querySelector("#llm-save");
@@ -276,6 +281,7 @@
     let thinkingAudioUrl = "";
     let commandAckSoundUrl = "/assets/ring.wav";
     let thinkingAudioPlaying = false;
+    let currentAudioSample = null;
     let audioTranscriptionPending = false;
     let audioTranscriptionMayPlayThinking = false;
     let lastBrowserCommandAckAt = 0;
@@ -2515,6 +2521,84 @@
       thinkingAudioPlaying = false;
     }
 
+    function stopCurrentAudioSample() {
+      if (!currentAudioSample) return;
+      currentAudioSample.pause();
+      currentAudioSample.currentTime = 0;
+      currentAudioSample = null;
+    }
+
+    function syncAudioSampleControls() {
+      const output = selectedTtsOutput();
+      const backendOutputUnavailable = output === "backend" && !backendAudioCapabilities.output;
+      const silentReason = tr("audio_sample_silent", "Audio preview is unavailable when TTS Output is Silent.");
+      const backendOnlyReason = tr(
+        "startup_loader_backend_only",
+        "The startup loader sound is available only when TTS Output is Backend."
+      );
+      const backendUnavailableReason = tr("backend_audio_output_unavailable", "No backend audio output is available.");
+
+      thinkingSoundPlay.disabled = !thinkingSound.value || output === "silent" || backendOutputUnavailable;
+      thinkingSoundField.title = output === "silent"
+        ? silentReason
+        : (backendOutputUnavailable ? backendUnavailableReason : "THINKING_SOUND_FILE");
+      thinkingSoundPlay.title = thinkingSoundField.title;
+
+      const loaderBackendEnabled = output === "backend";
+      startupLoaderSound.disabled = !loaderBackendEnabled;
+      startupLoaderSoundPlay.disabled = !loaderBackendEnabled || !startupLoaderSound.value || backendOutputUnavailable;
+      startupLoaderSoundField.title = !loaderBackendEnabled
+        ? backendOnlyReason
+        : (backendOutputUnavailable ? backendUnavailableReason : "STARTUP_LOADER_SOUND_FILE");
+      startupLoaderSound.title = startupLoaderSoundField.title;
+      startupLoaderSoundPlay.title = startupLoaderSoundField.title;
+    }
+
+    async function playAudioSample(select, button, backendOnly = false) {
+      const filename = String(select.value || "").trim();
+      const output = selectedTtsOutput();
+      if (!filename || output === "silent" || (backendOnly && output !== "backend")) return;
+
+      stopCurrentAudioSample();
+      button.disabled = true;
+      llmMessage.textContent = tr("audio_sample_playing", "Playing audio sample...");
+      try {
+        if (output === "browser") {
+          await unlockWebTtsAudio();
+          const audio = new Audio(`/assets/${filename}`);
+          currentAudioSample = audio;
+          audio.volume = Math.max(0, Math.min(1, Number(webTtsVolume.value || 1)));
+          await applyBrowserAudioOutput(audio);
+          await new Promise((resolve, reject) => {
+            audio.addEventListener("ended", resolve, { once: true });
+            audio.addEventListener("error", reject, { once: true });
+            audio.play().catch(reject);
+          });
+          currentAudioSample = null;
+        } else {
+          const response = await fetch("/api/backend-audio-sample", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename,
+              output_device: backendAudioOutput.value || "",
+              volume: Number(backendTtsVolume.value || 1),
+              pan: Number(backendAudioOutputPan.value || 0)
+            })
+          });
+          await fetchJsonOrThrow(response);
+        }
+        llmMessage.textContent = tr("audio_sample_played", "Audio sample played.");
+      } catch (error) {
+        stopCurrentAudioSample();
+        llmMessage.textContent = trf("audio_sample_failed", "Audio playback failed: {error}", {
+          error: String(error.message || error)
+        });
+      } finally {
+        syncAudioSampleControls();
+      }
+    }
+
     async function cancelCommand(force = false) {
       stopWebTts();
       if ((!force && !composerLocked) || cancelRequestInFlight) return;
@@ -2590,6 +2674,7 @@
         backend_audio_monitor_volume: Number(backendAudioMonitorVolume.value || 1),
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
+        startup_loader_sound_file: startupLoaderSound.value || "",
         command_ack_sound_enabled: commandAckSound.getAttribute("aria-checked") === "true",
         openai_tts_voice: openaiTtsVoice.value || "",
         openai_tts_speed: Number(openaiTtsSpeed.value || 1),
@@ -3394,7 +3479,7 @@
       if (backendAudioInputField.classList.contains("hidden") && backendAudioTestTimer) stopBackendAudioTest();
       browserAudioTest.disabled = browserAudioInputField.classList.contains("hidden") || !browserAudioCapabilities.input;
       backendAudioTest.disabled = backendAudioInputField.classList.contains("hidden") || !backendAudioCapabilities.input;
-      backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
+	      backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled
         ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif"
         : "BACKEND_AUDIO_OUTPUT_PAN";
@@ -3585,6 +3670,7 @@
       backendTtsVolumeField.title = backendTtsVolume.disabled ? "BACKEND_TTS_VOLUME - actif seulement avec TTS Output Backend" : "BACKEND_TTS_VOLUME";
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif" : "BACKEND_AUDIO_OUTPUT_PAN";
       ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
+      syncAudioSampleControls();
       syncAudioDeviceVisibility();
 	    }
 
@@ -3978,6 +4064,32 @@
             thinkingSound.appendChild(option(`${selectedThinkingSound} (${tr("current", "current")})`, selectedThinkingSound, false, true));
           }
         }
+
+        startupLoaderSound.replaceChildren();
+        const selectedStartupLoaderSound = data.selected_startup_loader_sound_file || "";
+        startupLoaderSound.appendChild(option(
+          tr("startup_loader_sound_disabled", "No startup loader sound"),
+          "",
+          false,
+          !selectedStartupLoaderSound
+        ));
+        for (const sound of sounds) {
+          startupLoaderSound.appendChild(option(
+            sound.label || sound.id,
+            sound.id,
+            false,
+            sound.id === selectedStartupLoaderSound
+          ));
+        }
+        if (selectedStartupLoaderSound && !sounds.some((sound) => sound.id === selectedStartupLoaderSound)) {
+          startupLoaderSound.appendChild(option(
+            `${selectedStartupLoaderSound} (${tr("current", "current")})`,
+            selectedStartupLoaderSound,
+            false,
+            true
+          ));
+        }
+        syncAudioSampleControls();
 
         llmMessage.textContent = data.message || "";
         if (shouldMarkClean) {
@@ -4445,6 +4557,14 @@
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", syncTtsProviderControls);
     }
+    thinkingSound.addEventListener("change", syncAudioSampleControls);
+    startupLoaderSound.addEventListener("change", syncAudioSampleControls);
+    thinkingSoundPlay.addEventListener("click", () => playAudioSample(thinkingSound, thinkingSoundPlay));
+    startupLoaderSoundPlay.addEventListener("click", () => playAudioSample(
+      startupLoaderSound,
+      startupLoaderSoundPlay,
+      true
+    ));
     for (const input of sttInputInputs) {
       input.addEventListener("change", syncSttInputControls);
     }
@@ -4522,6 +4642,7 @@
       const backendAudioMonitorVolumeValue = Number(backendAudioMonitorVolume.value || 1);
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
+      const startupLoaderSoundFile = startupLoaderSound.value;
       const commandAckSoundEnabledValue = commandAckSoundEnabled();
       const openAiTtsVoiceValue = openaiTtsVoice.value;
       const openAiTtsSpeedValue = Number(openaiTtsSpeed.value || 1);
@@ -4568,6 +4689,7 @@
             system_prompt: systemPromptValue,
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
+            startup_loader_sound_file: startupLoaderSoundFile,
             command_ack_sound_enabled: commandAckSoundEnabledValue,
             openai_tts_voice: openAiTtsVoiceValue,
             openai_tts_speed: openAiTtsSpeedValue,

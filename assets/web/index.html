@@ -421,19 +421,33 @@
         </section>
         <section>
           <details>
-            <summary data-i18n="language_other">Langue et divers</summary>
+            <summary data-i18n="user_interface">Interface utilisateur</summary>
             <div class="config-controls">
-              <div class="field">
-                <label for="stt-language" title="STT_LANGUAGE" data-i18n="stt_language">Langue STT</label>
-                <select id="stt-language"></select>
+              <div class="audio-sound-stack">
+                <div class="field" id="command-ack-sound-field" title="COMMAND_ACK_SOUND_ENABLED">
+                  <label for="command-ack-sound">Ding!</label>
+                  <button class="small-button" id="command-ack-sound" type="button" role="switch" aria-checked="false">Off</button>
+                </div>
+                <div class="field">
+                  <label for="stt-language" title="STT_LANGUAGE" data-i18n="stt_language">Langue</label>
+                  <select id="stt-language"></select>
+                </div>
               </div>
-              <div class="field">
-                <label for="thinking-sound" data-i18n="thinking_sound">Thinking Sound</label>
-                <select id="thinking-sound"></select>
-              </div>
-              <div class="field" id="command-ack-sound-field" title="COMMAND_ACK_SOUND_ENABLED">
-                <label for="command-ack-sound">Ding!</label>
-                <button class="small-button" id="command-ack-sound" type="button" role="switch" aria-checked="false">Off</button>
+              <div class="audio-sound-stack">
+                <div class="field" id="thinking-sound-field">
+                  <label for="thinking-sound" data-i18n="thinking_sound">Thinking Sound</label>
+                  <div class="audio-sample-row">
+                    <select id="thinking-sound"></select>
+                    <button class="small-button audio-preview-button" id="thinking-sound-play" type="button" title="Play sample" aria-label="Play thinking sound sample" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_thinking_sample">&#9654;</button>
+                  </div>
+                </div>
+                <div class="field" id="startup-loader-sound-field">
+                  <label for="startup-loader-sound" data-i18n="startup_loader_sound">Startup loader sound</label>
+                  <div class="audio-sample-row">
+                    <select id="startup-loader-sound"></select>
+                    <button class="small-button audio-preview-button" id="startup-loader-sound-play" type="button" title="Play sample" aria-label="Play startup loader sample" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_startup_loader_sample">&#9654;</button>
+                  </div>
+                </div>
               </div>
             </div>
           </details>
