@@ -37,12 +37,12 @@ class FakeAudio:
 
 
 class FakeVad:
-    threshold = 0.5
     min_speech_ms = 120
     chunk_ms = 32.0
 
-    def __init__(self, speech: bool):
+    def __init__(self, speech: bool, *, threshold: float = 0.5):
         self.speech = speech
+        self.threshold = threshold
 
     def reset(self) -> None:
         pass
@@ -51,12 +51,18 @@ class FakeVad:
         return [0.9, 0.9] if self.speech else [0.0, 0.0]
 
 
-def build_assistant(frame: bytes, *, speech: bool, monkeypatch) -> agent.VoiceAssistant:
+def build_assistant(
+    frame: bytes,
+    *,
+    speech: bool,
+    monkeypatch,
+    configured_threshold: float = 0.5,
+) -> agent.VoiceAssistant:
     assistant = agent.VoiceAssistant.__new__(agent.VoiceAssistant)
     assistant.backend_audio_capture_lock = threading.Lock()
     assistant.backend_audio_diagnostic_lock = threading.Lock()
     assistant.backend_audio_diagnostic_requested = threading.Event()
-    assistant.vad = FakeVad(speech)
+    assistant.vad = FakeVad(speech, threshold=configured_threshold)
     monkeypatch.setattr(agent.pyaudio, "PyAudio", lambda: FakeAudio(frame))
     monkeypatch.setattr(
         agent,
@@ -95,6 +101,7 @@ def test_backend_audio_diagnostic_accepts_clear_speech(monkeypatch) -> None:
 
     assert result["verdict"] == "green"
     assert result["issues"] == ["good"]
+    assert result["configured_vad"]["accepted"] is True
     assert result["metrics"]["speech_duration_seconds"] > 0
     assert result["audio_data_url"].startswith("data:audio/wav;base64,UklGR")
 
@@ -107,3 +114,19 @@ def test_backend_audio_diagnostic_reports_severe_clipping(monkeypatch) -> None:
 
     assert result["verdict"] == "red"
     assert "severe_clipping" in result["issues"]
+
+
+def test_strict_configured_vad_does_not_change_hardware_verdict(monkeypatch) -> None:
+    samples = (np.sin(np.linspace(0, np.pi * 16, 1024)) * 4000).astype(np.int16)
+    assistant = build_assistant(
+        samples.tobytes(),
+        speech=True,
+        monkeypatch=monkeypatch,
+        configured_threshold=0.95,
+    )
+
+    result = assistant.diagnose_backend_audio_input("0", duration_seconds=3)
+
+    assert result["verdict"] == "green"
+    assert result["issues"] == ["good"]
+    assert result["configured_vad"]["accepted"] is False

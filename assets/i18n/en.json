@@ -154,9 +154,10 @@
     "backend_audio_diagnostic_result_green": "Microphone level suitable",
     "backend_audio_diagnostic_result_orange": "Microphone usable, adjustment recommended",
     "backend_audio_diagnostic_result_red": "Microphone input unsuitable",
+    "backend_audio_diagnostic_hardware": "Hardware diagnostic",
     "backend_audio_diagnostic_good": "Speech was detected at a suitable level for processing.",
     "backend_audio_diagnostic_no_signal": "No usable audio signal was received from the microphone.",
-    "backend_audio_diagnostic_no_speech": "Audio was received, but the configured voice detector did not identify enough speech.",
+    "backend_audio_diagnostic_no_speech": "Audio was received, but the reference voice detector did not identify enough speech.",
     "backend_audio_diagnostic_very_low": "The voice level is much too low for reliable processing.",
     "backend_audio_diagnostic_low": "The voice level is low and may reduce recognition quality.",
     "backend_audio_diagnostic_high": "The voice level is too high and leaves little headroom.",
@@ -172,6 +173,11 @@
     "backend_audio_diagnostic_snr": "Signal-to-noise ratio: {value} dB",
     "backend_audio_diagnostic_clipping_metric": "Clipped samples: {value}%",
     "backend_audio_diagnostic_vad": "Maximum voice probability: {value}",
+    "backend_audio_diagnostic_configured_vad": "Configured VAD",
+    "backend_audio_diagnostic_vad_unavailable": "Not evaluated because no usable microphone signal was available.",
+    "backend_audio_diagnostic_vad_accepted": "The active VAD settings accept the voice in this recording.",
+    "backend_audio_diagnostic_vad_rejected": "The microphone signal was analyzed, but the active VAD settings would reject this voice.",
+    "backend_audio_diagnostic_vad_parameters": "Active threshold: {threshold}; minimum continuous speech: {duration} ms; detected: {detected}s.",
     "backend_audio_diagnostic_error": "Backend microphone diagnostic failed.",
     "backend_audio_diagnostic_error_detail": "Backend microphone diagnostic failed: {error}"
   }

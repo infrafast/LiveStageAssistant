@@ -97,6 +97,8 @@ DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
 DEFAULT_SILERO_VAD_MODEL = Path("assets/web/static/vendor/silero-vad/silero_vad_v6.onnx")
+BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD = 0.5
+BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS = 120.0
 OPENAI_MAX_TOOLS_PER_REQUEST = 128
 DEFAULT_MCP_PROMPT_NAME = "agent_prompt"
 DEFAULT_MCP_PROMPT_RESOURCE_URI = "agent://prompt/system"
@@ -2883,9 +2885,12 @@ class VoiceAssistant:
             speech_sample_count = 0
             noise_square_sum = 0.0
             noise_sample_count = 0
-            speech_window_count = 0
-            current_speech_window_count = 0
-            longest_speech_window_count = 0
+            reference_speech_window_count = 0
+            current_reference_speech_window_count = 0
+            longest_reference_speech_window_count = 0
+            configured_speech_window_count = 0
+            current_configured_speech_window_count = 0
+            longest_configured_speech_window_count = 0
             max_vad_probability = 0.0
             clipping_count = 0
             total_sample_count = 0
@@ -2916,19 +2921,28 @@ class VoiceAssistant:
                 probabilities = self.vad.process_pcm(vad_data)
                 if probabilities:
                     max_vad_probability = max(max_vad_probability, max(probabilities))
-                speech_windows = 0
+                reference_speech_windows = 0
                 for probability in probabilities:
-                    if probability >= self.vad.threshold:
-                        speech_windows += 1
-                        current_speech_window_count += 1
-                        longest_speech_window_count = max(
-                            longest_speech_window_count,
-                            current_speech_window_count,
+                    if probability >= BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD:
+                        reference_speech_windows += 1
+                        current_reference_speech_window_count += 1
+                        longest_reference_speech_window_count = max(
+                            longest_reference_speech_window_count,
+                            current_reference_speech_window_count,
                         )
                     else:
-                        current_speech_window_count = 0
-                speech_window_count += speech_windows
-                if speech_windows:
+                        current_reference_speech_window_count = 0
+                    if probability >= self.vad.threshold:
+                        configured_speech_window_count += 1
+                        current_configured_speech_window_count += 1
+                        longest_configured_speech_window_count = max(
+                            longest_configured_speech_window_count,
+                            current_configured_speech_window_count,
+                        )
+                    else:
+                        current_configured_speech_window_count = 0
+                reference_speech_window_count += reference_speech_windows
+                if reference_speech_windows:
                     speech_square_sum += square_sum
                     speech_sample_count += int(mono.size)
                 else:
@@ -2949,20 +2963,24 @@ class VoiceAssistant:
             noise_rms = rms(noise_square_sum, noise_sample_count)
             overall_samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
             overall_rms = float(np.sqrt(np.mean(np.square(overall_samples)))) if overall_samples.size else 0.0
-            speech_duration_ms = speech_window_count * self.vad.chunk_ms
-            continuous_speech_duration_ms = longest_speech_window_count * self.vad.chunk_ms
+            speech_duration_ms = reference_speech_window_count * self.vad.chunk_ms
+            continuous_speech_duration_ms = longest_reference_speech_window_count * self.vad.chunk_ms
+            configured_speech_duration_ms = configured_speech_window_count * self.vad.chunk_ms
+            configured_continuous_speech_duration_ms = (
+                longest_configured_speech_window_count * self.vad.chunk_ms
+            )
             speech_dbfs = dbfs(speech_rms)
             noise_dbfs = dbfs(noise_rms)
             snr_db = speech_dbfs - noise_dbfs if speech_sample_count and noise_sample_count else None
             clipping_ratio = clipping_count / total_sample_count if total_sample_count else 0.0
-            minimum_speech_ms = max(120.0, float(self.vad.min_speech_ms))
+            configured_minimum_speech_ms = max(0.0, float(self.vad.min_speech_ms))
 
             issues: list[str] = []
             verdict = "green"
             if overall_rms < 0.001 or peak < 0.005:
                 issues.append("no_signal")
                 verdict = "red"
-            elif continuous_speech_duration_ms < minimum_speech_ms:
+            elif continuous_speech_duration_ms < BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS:
                 issues.append("no_speech")
                 verdict = "red"
             else:
@@ -2989,6 +3007,13 @@ class VoiceAssistant:
             if not issues:
                 issues.append("good")
 
+            configured_vad_evaluable = overall_rms >= 0.001 and peak >= 0.005
+            configured_vad_accepted = (
+                configured_vad_evaluable
+                and configured_speech_window_count > 0
+                and configured_continuous_speech_duration_ms >= configured_minimum_speech_ms
+            )
+
             wav_buffer = io.BytesIO()
             with wave.open(wav_buffer, "wb") as wav_file:
                 wav_file.setnchannels(channels)
@@ -3000,6 +3025,21 @@ class VoiceAssistant:
                 "ok": True,
                 "verdict": verdict,
                 "issues": issues,
+                "reference_vad": {
+                    "threshold": BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD,
+                    "min_speech_ms": int(BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS),
+                },
+                "configured_vad": {
+                    "evaluable": configured_vad_evaluable,
+                    "accepted": configured_vad_accepted,
+                    "threshold": round(float(self.vad.threshold), 2),
+                    "min_speech_ms": int(configured_minimum_speech_ms),
+                    "speech_duration_seconds": round(configured_speech_duration_ms / 1000.0, 1),
+                    "continuous_speech_duration_seconds": round(
+                        configured_continuous_speech_duration_ms / 1000.0,
+                        1,
+                    ),
+                },
                 "device": detail,
                 "format": f"{channels}ch/{rate}Hz",
                 "duration_seconds": round(len(pcm) / (rate * channels * 2), 1),

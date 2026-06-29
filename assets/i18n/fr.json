@@ -154,9 +154,10 @@
     "backend_audio_diagnostic_result_green": "Niveau du microphone adapté",
     "backend_audio_diagnostic_result_orange": "Microphone exploitable, réglage recommandé",
     "backend_audio_diagnostic_result_red": "Entrée microphone inexploitable",
+    "backend_audio_diagnostic_hardware": "Diagnostic matériel",
     "backend_audio_diagnostic_good": "La parole a été détectée avec un niveau adapté au traitement.",
     "backend_audio_diagnostic_no_signal": "Aucun signal audio exploitable n’a été reçu depuis le microphone.",
-    "backend_audio_diagnostic_no_speech": "Un signal audio a été reçu, mais le détecteur vocal configuré n’a pas identifié suffisamment de parole.",
+    "backend_audio_diagnostic_no_speech": "Un signal audio a été reçu, mais le détecteur vocal de référence n’a pas identifié suffisamment de parole.",
     "backend_audio_diagnostic_very_low": "Le niveau de la voix est beaucoup trop faible pour un traitement fiable.",
     "backend_audio_diagnostic_low": "Le niveau de la voix est faible et peut réduire la qualité de reconnaissance.",
     "backend_audio_diagnostic_high": "Le niveau de la voix est trop élevé et laisse peu de marge.",
@@ -172,6 +173,11 @@
     "backend_audio_diagnostic_snr": "Rapport signal/bruit : {value} dB",
     "backend_audio_diagnostic_clipping_metric": "Échantillons saturés : {value}%",
     "backend_audio_diagnostic_vad": "Probabilité vocale maximale : {value}",
+    "backend_audio_diagnostic_configured_vad": "VAD configuré",
+    "backend_audio_diagnostic_vad_unavailable": "Non évalué, car aucun signal microphone exploitable n’était disponible.",
+    "backend_audio_diagnostic_vad_accepted": "Les réglages VAD actifs acceptent la voix de cet enregistrement.",
+    "backend_audio_diagnostic_vad_rejected": "Le signal microphone a été analysé, mais les réglages VAD actifs rejetteraient cette voix.",
+    "backend_audio_diagnostic_vad_parameters": "Seuil actif : {threshold} ; parole continue minimale : {duration} ms ; détectée : {detected} s.",
     "backend_audio_diagnostic_error": "Échec du diagnostic du microphone backend.",
     "backend_audio_diagnostic_error_detail": "Échec du diagnostic du microphone backend : {error}"
   }

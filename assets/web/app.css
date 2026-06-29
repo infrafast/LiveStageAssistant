@@ -941,11 +941,30 @@
     .backend-audio-diagnostic-report[data-verdict="red"] {
       border-left-color: var(--bad);
     }
+    .backend-audio-diagnostic-hardware-title {
+      color: var(--text);
+    }
     .backend-audio-diagnostic-issues {
       display: grid;
       gap: 5px;
       margin: 0;
       padding-left: 18px;
+    }
+    .backend-audio-diagnostic-vad {
+      display: grid;
+      gap: 4px;
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+    }
+    .backend-audio-diagnostic-vad[data-status="accepted"] strong {
+      color: var(--ok);
+    }
+    .backend-audio-diagnostic-vad[data-status="rejected"] strong {
+      color: #b45309;
+    }
+    .backend-audio-diagnostic-vad[data-status="unavailable"] strong,
+    .backend-audio-diagnostic-vad small {
+      color: var(--muted);
     }
     .backend-audio-diagnostic-metrics {
       display: grid;

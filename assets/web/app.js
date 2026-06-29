@@ -1544,7 +1544,7 @@
       const messages = {
         good: tr("backend_audio_diagnostic_good", "Speech was detected at a suitable level."),
         no_signal: tr("backend_audio_diagnostic_no_signal", "No usable audio signal was received from the microphone."),
-        no_speech: tr("backend_audio_diagnostic_no_speech", "Audio was received, but the configured voice detector did not identify enough speech."),
+        no_speech: tr("backend_audio_diagnostic_no_speech", "Audio was received, but the reference voice detector did not identify enough speech."),
         very_low: tr("backend_audio_diagnostic_very_low", "The voice level is much too low for reliable processing."),
         low: tr("backend_audio_diagnostic_low", "The voice level is low and may reduce recognition quality."),
         high: tr("backend_audio_diagnostic_high", "The voice level is too high and leaves little headroom."),
@@ -1625,6 +1625,9 @@
       dialog.report.dataset.verdict = verdict;
       dialog.report.replaceChildren();
 
+      const hardwareTitle = document.createElement("strong");
+      hardwareTitle.className = "backend-audio-diagnostic-hardware-title";
+      hardwareTitle.textContent = tr("backend_audio_diagnostic_hardware", "Hardware diagnostic");
       const issueList = document.createElement("ul");
       issueList.className = "backend-audio-diagnostic-issues";
       for (const issue of data.issues || []) {
@@ -1632,6 +1635,43 @@
         item.textContent = backendDiagnosticIssueText(issue);
         issueList.appendChild(item);
       }
+
+      const configuredVad = data.configured_vad || {};
+      const vadReport = document.createElement("div");
+      vadReport.className = "backend-audio-diagnostic-vad";
+      const vadTitle = document.createElement("strong");
+      vadTitle.textContent = tr("backend_audio_diagnostic_configured_vad", "Configured VAD");
+      const vadStatus = document.createElement("span");
+      if (!configuredVad.evaluable) {
+        vadReport.dataset.status = "unavailable";
+        vadStatus.textContent = tr(
+          "backend_audio_diagnostic_vad_unavailable",
+          "Not evaluated because no usable microphone signal was available."
+        );
+      } else if (configuredVad.accepted) {
+        vadReport.dataset.status = "accepted";
+        vadStatus.textContent = tr(
+          "backend_audio_diagnostic_vad_accepted",
+          "The active VAD settings accept the voice in this recording."
+        );
+      } else {
+        vadReport.dataset.status = "rejected";
+        vadStatus.textContent = tr(
+          "backend_audio_diagnostic_vad_rejected",
+          "The microphone signal was analyzed, but the active VAD settings would reject this voice."
+        );
+      }
+      const vadParameters = document.createElement("small");
+      vadParameters.textContent = trf(
+        "backend_audio_diagnostic_vad_parameters",
+        "Active threshold: {threshold}; minimum continuous speech: {duration} ms; detected: {detected} s.",
+        {
+          threshold: configuredVad.threshold ?? "-",
+          duration: configuredVad.min_speech_ms ?? "-",
+          detected: configuredVad.continuous_speech_duration_seconds ?? 0
+        }
+      );
+      vadReport.append(vadTitle, vadStatus, vadParameters);
 
       const metrics = data.metrics || {};
       const metricLines = [
@@ -1652,7 +1692,7 @@
         item.textContent = line;
         metricGrid.appendChild(item);
       }
-      dialog.report.append(issueList, metricGrid);
+      dialog.report.append(hardwareTitle, issueList, vadReport, metricGrid);
       dialog.report.hidden = false;
       if (data.audio_data_url) {
         dialog.audio.src = data.audio_data_url;
