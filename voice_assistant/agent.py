@@ -1749,8 +1749,12 @@ class VoiceAssistant:
             self.elevenlabs_client = ElevenLabs(api_key=elevenlabs_api_key)
 
         # Short audio feedback while the agent is processing the user's command.
-        self.thinking_sound_file = thinking_sound_file or "thinking.wav"
-        self.thinking_sound_path = self._resolve_asset_path(self.thinking_sound_file)
+        self.thinking_sound_file = (thinking_sound_file or "").strip()
+        self.thinking_sound_path = (
+            self._resolve_asset_path(self.thinking_sound_file)
+            if self.thinking_sound_file
+            else None
+        )
         self.thinking_sound_warning_shown = False
         self.thinking_sound_lock = threading.Lock()
         self.thinking_sound_stop_event = threading.Event()
@@ -1860,6 +1864,8 @@ class VoiceAssistant:
     def start_thinking_sound(self) -> None:
         """Loop the configured thinking sound until stop_thinking_sound is called."""
         if self.tts_provider == "none":
+            return
+        if not self.thinking_sound_file:
             return
         if not self.thinking_sound_path:
             if not self.thinking_sound_warning_shown:
@@ -3510,9 +3516,6 @@ class VoiceAssistant:
         model: str = "whisper-1",
         apply_wake_word_gate: bool | str = False,
     ) -> dict[str, Any]:
-        should_manage_backend_thinking = not self.web_tts_enabled
-        if should_manage_backend_thinking:
-            self.start_thinking_sound()
         wake_word_mode = (
             apply_wake_word_gate.strip().lower()
             if isinstance(apply_wake_word_gate, str)
@@ -3520,6 +3523,10 @@ class VoiceAssistant:
         )
         if wake_word_mode not in {"require", "ignore"}:
             wake_word_mode = "ignore"
+        wake_word_gate_active = wake_word_mode == "require" and bool(self.wake_words)
+        should_manage_backend_thinking = not self.web_tts_enabled and not wake_word_gate_active
+        if should_manage_backend_thinking:
+            self.start_thinking_sound()
         try:
             text = self.web_audio_to_text_openai(audio_data, mime_type, model=model) or ""
             speaker_audio = self.speaker_audio_from_web_bytes(audio_data, mime_type)
@@ -4408,7 +4415,8 @@ class VoiceAssistant:
                     elif not audio_data:
                         continue
                     else:
-                        self.start_thinking_sound()
+                        if not self.wake_words:
+                            self.start_thinking_sound()
                         # Convert to text
                         text = self.audio_to_text(audio_data)
                         speaker_result = self.recognize_speaker(audio_data)
@@ -4430,10 +4438,12 @@ class VoiceAssistant:
                             print(f"Wake word detected: {matched_wake_word}")
                             if command_text != text:
                                 print(f"Command after wake word: {command_text}")
+                            self.start_thinking_sound()
                         text = command_text
 
                 if self._should_skip_duplicate_command(text):
                     print(f"Duplicate command ignored: {text}")
+                    self.stop_thinking_sound()
                     continue
 
                 # Process command
@@ -5141,7 +5151,10 @@ async def main():
         current_mcp_tool_routing_enabled = env_bool_from_values(values, "MCP_TOOL_ROUTING_ENABLED", False)
         current_interrupt_conversation_enabled = env_bool_from_values(values, "INTERRUPT_CONVERSATION_ENABLED", False)
         current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
-        current_thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
+        raw_thinking_sound_file = values.get("THINKING_SOUND_FILE")
+        current_thinking_sound_file = (
+            "thinking.wav" if raw_thinking_sound_file is None else str(raw_thinking_sound_file).strip()
+        )
         current_command_ack_sound_enabled = env_bool_from_values(values, "COMMAND_ACK_SOUND_ENABLED", False)
         current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
         current_openai_tts_speed = env_float_from_values(values, "WEB_TTS_SPEED", 1.0)
@@ -5447,9 +5460,8 @@ async def main():
             raise ValueError(f"voice '{voice_id}' is not listed in ELEVENLABS_VOICE_OPTIONS")
 
         thinking_sound_options = list_thinking_sound_options()
-        if not thinking_sound_file:
-            thinking_sound_file = (values.get("THINKING_SOUND_FILE") or "thinking.wav").strip()
-        if thinking_sound_options and thinking_sound_file not in {item["id"] for item in thinking_sound_options}:
+        thinking_sound_file = thinking_sound_file.strip()
+        if thinking_sound_file and thinking_sound_options and thinking_sound_file not in {item["id"] for item in thinking_sound_options}:
             raise ValueError(f"thinking sound '{thinking_sound_file}' is not a WAV file in assets/")
 
         if not openai_tts_voice:
@@ -5872,6 +5884,7 @@ async def main():
             "cloud_tts_provider": cloud_tts_provider,
             "tts_speed": web_tts_speed,
             "tts_volume": web_tts_volume,
+            "wake_word_enabled": bool(wake_words),
             "vad_model_url": "/assets/web/static/vendor/silero-vad/silero_vad_v6.onnx",
             "vad_ort_url": "/assets/web/static/vendor/onnxruntime-web/ort.wasm.min.mjs",
             "vad_ort_wasm_path": "/assets/web/static/vendor/onnxruntime-web/",

@@ -276,6 +276,8 @@
     let thinkingAudioUrl = "";
     let commandAckSoundUrl = "/assets/ring.wav";
     let thinkingAudioPlaying = false;
+    let audioTranscriptionPending = false;
+    let audioTranscriptionMayPlayThinking = false;
     let lastBrowserCommandAckAt = 0;
     let ortModulePromise = null;
     let sileroSessionPromise = null;
@@ -2087,7 +2089,6 @@
       localNoticeMessages = [];
       fileUploadPending = true;
       renderMessages(lastServerMessages, true);
-      if (webAudio.tts_enabled && webAudio.tts_output === "browser") startThinkingAudio();
       try {
         if (fileLooksLikeText(file)) {
           if (file.size > composerTextUploadMaxBytes) {
@@ -2133,6 +2134,11 @@
       if (!blob || blob.size === 0) return;
       webMic.disabled = true;
       injectCommand.placeholder = "Transcribing...";
+      audioTranscriptionPending = true;
+      audioTranscriptionMayPlayThinking = !(options.applyWakeWord && webAudio.wake_word_enabled);
+      if (audioTranscriptionMayPlayThinking && webAudio.tts_enabled && webAudio.tts_output === "browser") {
+        startThinkingAudio();
+      }
       try {
         const audioBase64 = await blobToBase64(blob);
         const response = await fetch("/api/web-transcribe", {
@@ -2187,6 +2193,9 @@
         }
         setMeta(conciseVoiceInputError(error), "error", 15000);
       } finally {
+        audioTranscriptionPending = false;
+        audioTranscriptionMayPlayThinking = false;
+        if (!composerLocked && !hasPendingCommandMessages()) stopThinkingAudio();
         setRecording(false);
       }
     }
@@ -3956,8 +3965,11 @@
         thinkingSound.replaceChildren();
         const selectedThinkingSound = data.selected_thinking_sound_file || "";
         const sounds = data.thinking_sounds || [];
+        thinkingSound.appendChild(option(tr("thinking_sound_disabled", "No thinking sound"), "", false, !selectedThinkingSound));
         if (sounds.length === 0) {
-          thinkingSound.appendChild(option("No WAV available", "", true, true));
+          if (selectedThinkingSound) {
+            thinkingSound.appendChild(option(`${selectedThinkingSound} (${tr("current", "current")})`, selectedThinkingSound, false, true));
+          }
         } else {
           for (const sound of sounds) {
             thinkingSound.appendChild(option(sound.label || sound.id, sound.id, false, sound.id === selectedThinkingSound));
@@ -4103,6 +4115,9 @@
         lastServerMessages = data.messages || [];
         const serverBusy = Boolean(data.assistant_busy);
         const showThinking = serverBusy || hasPendingCommandMessages() || fileUploadPending;
+        const playThinking = serverBusy || hasPendingCommandMessages() || (
+          audioTranscriptionPending && audioTranscriptionMayPlayThinking
+        );
         const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
         const latestAssistantMessageId = latestAssistantMessage ? latestAssistantMessage.id : null;
         const isNewAssistantMessage = Boolean(
@@ -4123,7 +4138,7 @@
           latestAssistantMessage &&
           latestAssistantMessage.id !== lastSpokenAssistantMessageId
         );
-        if (webAudio.tts_enabled && webAudio.tts_output === "browser" && (showThinking || willSpeakLatestAssistant)) startThinkingAudio();
+        if (webAudio.tts_enabled && webAudio.tts_output === "browser" && (playThinking || willSpeakLatestAssistant)) startThinkingAudio();
         else stopThinkingAudio();
         setComposerLocked(showThinking);
         renderMessages(lastServerMessages, showThinking);

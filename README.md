@@ -265,7 +265,7 @@ VAD_SPEECH_PAD_MS=100                            # Backend pre-roll kept before 
 VAD_MAX_SPEECH_SECONDS=8                         # Hard cap for one detected utterance
 INTERRUPT_CONVERSATION_ENABLED=false            # Let new text/STT commands cancel current processing/TTS first
 VOICE_CANCEL_DURING_THINKING=false             # Optional spoken stop/annule cancel listener while processing
-THINKING_SOUND_FILE=thinking.wav                # WAV loop while the LLM/MCP agent processes the command
+THINKING_SOUND_FILE=thinking.wav                # WAV loop during accepted STT/LLM/MCP processing; empty disables it
 STARTUP_LOADER_SOUND_ENABLED=false             # Loop STARTUP_LOADER_SOUND_FILE on backend output until startup ready
 STARTUP_LOADER_SOUND_FILE=loader.wav           # WAV loop for backend startup loading feedback
 COMMAND_ACK_SOUND_ENABLED=false                # Play assets/ring.wav when the response is ready and TTS is about to start
@@ -319,6 +319,8 @@ Web chat sessions are persisted as `.context.json` files under `SESSION_CONTEXT_
 ### Wake Word
 
 `WAKE_WORD` is optional. When it is empty, the assistant processes every successful transcription. When it is set, spoken transcriptions are processed only if the wake word appears at the start of the phrase or very close to it.
+
+The thinking sound follows the same gate. Without a configured wake word, it may start while an audio sample is being transcribed. With a configured wake word, transcription stays silent and the thinking sound starts only after the wake word has been detected and the command has been accepted. Ambient speech rejected by the wake-word gate therefore produces no thinking sound. This applies to the backend microphone, browser conversation audio, and WAV files injected through the chat composer. Set `THINKING_SOUND_FILE=` or select **No thinking sound** in the web configuration to disable it entirely.
 
 For example, with `WAKE_WORD="régie,console"`, all of these are accepted and the command text after the wake word is sent to the agent:
 

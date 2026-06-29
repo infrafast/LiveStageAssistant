@@ -76,6 +76,7 @@
     "language_other": "Langue et divers",
     "stt_language": "Langue STT",
     "thinking_sound": "Son de réflexion",
+    "thinking_sound_disabled": "Aucun son de réflexion",
     "prompt": "Prompt",
     "final_prompt": "Prompt final",
     "env_file": "Fichier env",
