@@ -5931,6 +5931,7 @@ async def main():
         )
         audio_file_stt_enabled = web_stt_provider == "openai" and bool(openai_api_key)
         web_audio_state = {
+            "assistant_instance_id": str(time.time_ns()),
             "enabled": web_audio_enabled,
             "stt_input": stt_input,
             "tts_output": active_tts_output,
