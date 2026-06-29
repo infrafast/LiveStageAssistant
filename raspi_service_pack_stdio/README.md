@@ -38,6 +38,8 @@ Backend TTS volume, backend microphone monitoring volume, and pan are software c
 
 The backend input **Test** button performs a bounded seven-second diagnostic on the Raspberry Pi instead of repeatedly opening the ALSA device for a live meter. It temporarily pauses normal STT listening and uses the configured input format. The hardware verdict uses fixed reference VAD values (`0.50`, `120 ms`) with level, noise, speech-detection, and clipping measurements; a separate status indicates whether the active `.env` VAD settings would accept the same recording. The WAV preview is held only in the HTTP response and is not written to the Raspberry Pi filesystem.
 
+At startup, `Startup timing:` log lines measure Silero/ONNX loading, Resemblyzer validation, PyAudio creation, device lookup, input-format probing, and total assistant construction. Use the largest duration to distinguish a slow ML import from an ALSA/device delay.
+
 Backend microphone monitoring is **experimental** and has not yet been validated on Raspberry Pi hardware. Leave it on `off` for normal operation. When testing, use headphones and a low monitoring volume first; ALSA/PipeWire device contention, feedback, latency, and channel/rate compatibility may require platform-specific adjustments.
 
 On Raspberry Pi with PipeWire, USB audio devices may be busy when opened directly through ALSA `hw:` or `plughw:`. Prefer selecting the `pipewire` backend output in the web UI, then set the USB sink as PipeWire's default output:

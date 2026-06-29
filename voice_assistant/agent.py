@@ -1533,11 +1533,14 @@ class VoiceAssistant:
             reload_event: Optional event used by auto mode to interrupt and reload the assistant
             web_monitor: Optional read-only web monitor for runtime state
         """
+        assistant_init_started_at = time.perf_counter()
+
         # Audio configuration
         self.audio_format = pyaudio.paInt16
         self.channels = 1
         self.rate = 16000
         self.chunk = 1024
+        stage_started_at = time.perf_counter()
         self.vad = SileroVadGate(
             vad_model_path,
             threshold=vad_speech_threshold,
@@ -1546,6 +1549,10 @@ class VoiceAssistant:
             min_silence_ms=vad_min_silence_ms,
             speech_pad_ms=vad_speech_pad_ms,
             max_speech_seconds=vad_max_speech_seconds,
+        )
+        print(
+            f"Startup timing: Silero VAD initialized in {time.perf_counter() - stage_started_at:.3f}s",
+            flush=True,
         )
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
@@ -1574,6 +1581,8 @@ class VoiceAssistant:
         self.speaker_recognition_unavailable_reason = ""
         self.speaker_embedding_notice_keys: set[str] = set()
         self.last_speaker_result = SpeakerRecognitionResult()
+        stage_started_at = time.perf_counter()
+        speaker_validation_status = "disabled"
         if self.speaker_recognition_enabled:
             try:
                 self.speaker_recognizer = build_speaker_recognizer(
@@ -1585,15 +1594,28 @@ class VoiceAssistant:
                 )
                 if self.speaker_recognizer:
                     self.speaker_recognizer.validate_runtime()
+                speaker_validation_status = "ready"
             except Exception as e:
                 print(f"Speaker recognition unavailable: {e}")
                 self.speaker_recognition_enabled = False
                 self.speaker_recognizer = None
                 self.speaker_recognition_unavailable_reason = str(e)
+                speaker_validation_status = "unavailable"
+        print(
+            "Startup timing: speaker recognition validation "
+            f"{speaker_validation_status} in {time.perf_counter() - stage_started_at:.3f}s",
+            flush=True,
+        )
 
         # Initialize audio components
+        stage_started_at = time.perf_counter()
         with suppress_native_stderr():
             self.audio = pyaudio.PyAudio()
+        print(
+            f"Startup timing: PyAudio initialized in {time.perf_counter() - stage_started_at:.3f}s",
+            flush=True,
+        )
+        stage_started_at = time.perf_counter()
         (
             self.audio_input_device_index,
             self.audio_input_device_status,
@@ -1612,6 +1634,13 @@ class VoiceAssistant:
             backend_audio_output_device,
             input_device=False,
         )
+        print(
+            "Startup timing: backend audio devices resolved "
+            f"in {time.perf_counter() - stage_started_at:.3f}s",
+            flush=True,
+        )
+        stage_started_at = time.perf_counter()
+        input_format_status = "skipped"
         if self.audio_input_device_status not in {"invalid", "unavailable"}:
             input_format = resolve_backend_input_format(
                 self.audio,
@@ -1619,13 +1648,20 @@ class VoiceAssistant:
                 self.audio_format,
             )
             if input_format["ok"]:
+                input_format_status = "ready"
                 self.channels = int(input_format["channels"])
                 self.rate = int(input_format["rate"])
                 self.chunk = int(input_format["chunk"])
                 self.audio_input_device_detail = f"{self.audio_input_device_detail}; {input_format['detail']}"
             else:
+                input_format_status = "unavailable"
                 self.audio_input_device_status = "unavailable"
                 self.audio_input_device_detail = f"{self.audio_input_device_detail}; {input_format['detail']}"
+        print(
+            "Startup timing: backend audio input format "
+            f"{input_format_status} in {time.perf_counter() - stage_started_at:.3f}s",
+            flush=True,
+        )
         if self.audio_input_device_status == "invalid":
             print(f"Backend audio input fallback: {self.audio_input_device_detail}")
         if self.audio_output_device_status == "invalid":
@@ -1746,6 +1782,10 @@ class VoiceAssistant:
         os.makedirs(self.notes_dir, exist_ok=True)
 
         self._log_configured_mcp_prompt_sources()
+        print(
+            f"Startup timing: VoiceAssistant constructed in {time.perf_counter() - assistant_init_started_at:.3f}s",
+            flush=True,
+        )
 
     def _resolve_asset_path(self, value: str) -> Path | None:
         """Resolve a configured asset path, falling back to ./assets for bare filenames."""
