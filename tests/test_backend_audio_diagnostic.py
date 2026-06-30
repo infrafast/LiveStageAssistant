@@ -1,4 +1,7 @@
 import threading
+import base64
+import io
+import wave
 
 import numpy as np
 
@@ -62,6 +65,7 @@ def build_assistant(
     assistant.backend_audio_capture_lock = threading.Lock()
     assistant.backend_audio_diagnostic_lock = threading.Lock()
     assistant.backend_audio_diagnostic_requested = threading.Event()
+    assistant.backend_speaker_capture_stop_event = threading.Event()
     assistant.vad = FakeVad(speech, threshold=configured_threshold)
     monkeypatch.setattr(agent.pyaudio, "PyAudio", lambda: FakeAudio(frame))
     monkeypatch.setattr(
@@ -98,6 +102,21 @@ def test_backend_audio_diagnostic_reports_silence(monkeypatch) -> None:
 
     assert result["verdict"] == "red"
     assert result["issues"] == ["no_signal"]
+
+
+def test_backend_speaker_capture_returns_wav(monkeypatch) -> None:
+    samples = (np.sin(np.linspace(0, np.pi * 16, 1024)) * 4000).astype(np.int16)
+    assistant = build_assistant(samples.tobytes(), speech=True, monkeypatch=monkeypatch)
+
+    result = assistant.capture_backend_speaker_sample("0", duration_seconds=3)
+
+    wav_bytes = base64.b64decode(result["audio_base64"])
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        assert wav_file.getnchannels() == 1
+        assert wav_file.getframerate() == 16000
+        assert wav_file.getnframes() > 0
+    assert result["ok"] is True
+    assert result["duration_seconds"] >= 3.0
 
 
 def test_backend_audio_diagnostic_accepts_clear_speech(monkeypatch) -> None:

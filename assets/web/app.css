@@ -891,6 +891,13 @@
     .speaker-capture-title {
       font-weight: 700;
     }
+    .speaker-capture-source {
+      display: grid;
+      gap: 6px;
+    }
+    .speaker-capture-source[hidden] {
+      display: none;
+    }
     .speaker-capture-instructions,
     .speaker-capture-status {
       margin: 0;
