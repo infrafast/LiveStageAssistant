@@ -7,6 +7,10 @@
     "web_available": "Web interface available on port {port}.",
     "wake_words": "Active wake words: {wake_words}. Ready to run commands."
   },
+  "network": {
+    "online": "Assistant connected to the internet",
+    "offline": "Assistant is running locally"
+  },
   "web": {
     "meta_connecting": "connecting...",
     "settings": "Settings",

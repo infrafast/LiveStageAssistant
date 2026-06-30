@@ -7,6 +7,10 @@
     "web_available": "Interface web disponible sur le port {port}.",
     "wake_words": "Mots de réveil actifs : {wake_words}. Prêt à exécuter des commandes."
   },
+  "network": {
+    "online": "Assistant connecté à internet",
+    "offline": "Assistant fonctionne localement"
+  },
   "web": {
     "meta_connecting": "connexion...",
     "settings": "Réglages",

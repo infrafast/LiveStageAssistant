@@ -698,8 +698,8 @@ python voice_assistant/agent.py --help
 
 With `--env-file auto`, the assistant checks internet connectivity at startup. It loads `.env.online` when internet is reachable, otherwise `.env.offline`. By default these files are read from the current working directory; set `ASSISTANT_AUTO_ENV_DIR` to point auto mode at another profile directory, as the Raspberry Pi service pack does with `/etc/livestageassistant`. It then monitors connectivity every 10 seconds and switches the running assistant profile when the connection state changes:
 
-- `Internet est en ligne` is announced when the online profile is selected
-- `Connexion internet coupée` is announced when the offline profile is selected
+- `Assistant connecté à internet` is announced when the online profile is selected
+- `Assistant fonctionne localement` is announced when the offline profile is selected
 
 The network status announcement uses the newly selected profile. Backend TTS uses the selected backend provider. Browser TTS profiles are also handled server-side for this status announcement when `TTS_PROVIDER=none` and `WEB_TTS_PROVIDER=openai|elevenlabs`; the web monitor also marks the status message for browser playback when the UI is open. If the selected cloud provider cannot be used, backend announcements may fall back to pyttsx3.
 

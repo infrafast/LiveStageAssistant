@@ -1324,11 +1324,20 @@ class AutoNetworkMonitor:
                 self.reload_event.set()
 
     def _announce(self, online: bool) -> None:
-        status_text = "Internet est en ligne" if online else "Connexion internet coupée"
         detected_env = AUTO_ENV_ONLINE if online else AUTO_ENV_OFFLINE
+        values = self.dotenv_values_func(detected_env)
+        locale = load_locale(normalize_locale(str(values.get("STT_LANGUAGE") or "fr")))
+        status_text = i18n_text(
+            locale,
+            "network.online" if online else "network.offline",
+            "Assistant connecté à internet" if online else "Assistant fonctionne localement",
+        )
         print(f"Auto network status changed: {status_text}. Detected profile: {detected_env}")
         if self.web_monitor:
-            self.web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
+            self.web_monitor.set_environment_loading(
+                True,
+                i18n_text(locale, "web.environment_refresh", "rafraichissement de l'environnement"),
+            )
             self.web_monitor.update(internet=online, env_file=detected_env, mode="auto")
         speak_auto_network_status(status_text, detected_env, self.dotenv_values_func)
 
