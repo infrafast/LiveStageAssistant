@@ -362,6 +362,14 @@
                   <button class="small-button" id="backend-audio-test" type="button" data-i18n="test">Test</button>
                 </div>
               </div>
+              <div class="field" id="backend-audio-input-gain-field" title="BACKEND_AUDIO_INPUT_GAIN">
+                <label for="backend-audio-input-gain">
+                  <span data-i18n="backend_audio_input_gain">Gain entrée backend</span>
+                  <span id="backend-audio-input-gain-label">1.00× (0 dB)</span>
+                </label>
+                <input id="backend-audio-input-gain" type="range" min="0.5" max="2" step="0.05" value="1">
+                <span class="detail" data-i18n="backend_audio_input_gain_detail">Gain logiciel appliqué dès la capture, avant VAD, STT et profil vocal.</span>
+              </div>
               <div class="field" id="backend-audio-output-field">
                 <label for="backend-audio-output">Backend Audio Output</label>
                 <select id="backend-audio-output"></select>

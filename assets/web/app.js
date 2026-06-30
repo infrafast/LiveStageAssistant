@@ -139,6 +139,9 @@
     const backendAudioInputField = document.querySelector("#backend-audio-input-field");
     const backendAudioInput = document.querySelector("#backend-audio-input");
     const backendAudioTest = document.querySelector("#backend-audio-test");
+    const backendAudioInputGainField = document.querySelector("#backend-audio-input-gain-field");
+    const backendAudioInputGain = document.querySelector("#backend-audio-input-gain");
+    const backendAudioInputGainLabel = document.querySelector("#backend-audio-input-gain-label");
     const backendAudioOutputField = document.querySelector("#backend-audio-output-field");
     const backendAudioOutput = document.querySelector("#backend-audio-output");
     const backendAudioMonitorModeField = document.querySelector("#backend-audio-monitor-mode-field");
@@ -1679,6 +1682,7 @@
       const metrics = data.metrics || {};
       const metricLines = [
         trf("backend_audio_diagnostic_device", "Device: {value}", { value: data.device || "-" }),
+        trf("backend_audio_diagnostic_input_gain", "Applied input gain: {value}×", { value: Number(data.input_gain ?? 1).toFixed(2) }),
         trf("backend_audio_diagnostic_speech_duration", "Speech detected: {value} s", { value: metrics.speech_duration_seconds ?? 0 }),
         trf("backend_audio_diagnostic_continuous_speech", "Longest continuous speech: {value} s", { value: metrics.continuous_speech_duration_seconds ?? 0 }),
         trf("backend_audio_diagnostic_voice_level", "Voice level: {value} dBFS", { value: metrics.speech_rms_dbfs ?? "-" }),
@@ -1732,7 +1736,10 @@
         const response = await fetch("/api/backend-audio-diagnostic", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ device: backendAudioInput.value || "" })
+          body: JSON.stringify({
+            device: backendAudioInput.value || "",
+            input_gain: Number(backendAudioInputGain.value || 1)
+          })
         });
         const text = await response.text();
         let data = {};
@@ -2898,6 +2905,7 @@
         tts_output: selectedTtsOutput(),
         stt_input: selectedSttInput(),
         backend_audio_input_device: backendAudioInput.value || "",
+        backend_audio_input_gain: Number(backendAudioInputGain.value || 1),
         backend_audio_output_device: backendAudioOutput.value || "",
         backend_audio_output_pan: Number(backendAudioOutputPan.value || 0),
         backend_audio_monitor_mode: selectedBackendAudioMonitorMode(),
@@ -3254,6 +3262,13 @@
         row.append(nameWrap, uploadWrap, enabledLabel, status, path);
         speakerProfileGrid.appendChild(row);
       }
+    }
+
+    function syncBackendAudioInputGainLabel() {
+      const gain = Number(backendAudioInputGain.value || 1);
+      const decibels = 20 * Math.log10(Math.max(gain, 0.001));
+      const dbLabel = Math.abs(decibels) < 0.05 ? "0 dB" : `${decibels > 0 ? "+" : ""}${decibels.toFixed(1)} dB`;
+      backendAudioInputGainLabel.textContent = `${gain.toFixed(2)}× (${dbLabel})`;
     }
 
     async function playSpeakerProfileSample(row, sampleIndex, button) {
@@ -3931,6 +3946,7 @@
       const backendOutputNeeded = output === "backend" || selectedBackendAudioMonitorMode() !== "off";
       browserAudioInputField.classList.toggle("hidden", !["both", "browser"].includes(sttInput));
       backendAudioInputField.classList.toggle("hidden", !["both", "backend"].includes(sttInput));
+      backendAudioInputGainField.classList.toggle("hidden", !["both", "backend"].includes(sttInput));
       browserAudioOutputField.classList.toggle("hidden", output !== "browser");
       backendAudioOutputField.classList.toggle("hidden", !backendOutputNeeded);
       backendAudioOutputPanField.classList.toggle("hidden", !backendOutputNeeded);
@@ -4474,11 +4490,13 @@
 	        backendTtsVolume.value = String(data.selected_backend_tts_volume ?? 1.0);
 	        setSelectedBackendAudioMonitorMode(data.selected_backend_audio_monitor_mode || "off");
 	        backendAudioMonitorVolume.value = String(data.selected_backend_audio_monitor_volume ?? 1.0);
+	        backendAudioInputGain.value = String(data.selected_backend_audio_input_gain ?? 1.0);
 	        backendAudioOutputPan.value = String(data.selected_backend_audio_output_pan ?? 0.0);
 	        setCommandAckSoundEnabled(Boolean(data.selected_command_ack_sound_enabled));
 	        syncOpenAiSpeedLabel();
         syncTtsVolumeLabels();
         syncBackendAudioMonitorVolumeLabel();
+        syncBackendAudioInputGainLabel();
         syncBackendAudioOutputPanLabel();
         setVadControls(data);
         setSpeakerControls(data);
@@ -5100,6 +5118,7 @@
       const sttInputValue = selectedSttInput();
       const sttLanguageValue = sttLanguage.value || i18nPayload.locale || "fr";
       const backendAudioInputDevice = backendAudioInput.value;
+      const backendAudioInputGainValue = Number(backendAudioInputGain.value || 1);
       const backendAudioOutputDevice = backendAudioOutput.value;
       const backendAudioOutputPanValue = Number(backendAudioOutputPan.value || 0);
       const backendAudioMonitorModeValue = selectedBackendAudioMonitorMode();
@@ -5144,6 +5163,7 @@
             stt_input: sttInputValue,
             stt_language: sttLanguageValue,
             backend_audio_input_device: backendAudioInputDevice,
+            backend_audio_input_gain: backendAudioInputGainValue,
             backend_audio_output_device: backendAudioOutputDevice,
             backend_audio_output_pan: backendAudioOutputPanValue,
             backend_audio_monitor_mode: backendAudioMonitorModeValue,
@@ -5196,6 +5216,7 @@
     webTtsVolume.addEventListener("input", syncTtsVolumeLabels);
     backendTtsVolume.addEventListener("input", syncTtsVolumeLabels);
     backendAudioMonitorVolume.addEventListener("input", syncBackendAudioMonitorVolumeLabel);
+    backendAudioInputGain.addEventListener("input", syncBackendAudioInputGainLabel);
     for (const input of backendAudioMonitorModeInputs) {
       input.addEventListener("change", () => {
         syncBackendAudioMonitorControls();

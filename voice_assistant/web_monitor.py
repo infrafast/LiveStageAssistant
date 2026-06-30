@@ -473,45 +473,12 @@ class WebMonitor:
         self._stderr_original: TextIO | None = None
         self._logging_handler_streams: list[tuple[logging.StreamHandler, TextIO]] = []
         self._llm_options_handler: Callable[[str | None], dict[str, Any]] | None = None
-        self._llm_config_save_handler: Callable[
-            [
-                str,
-                str,
-                str,
-                str,
-                str,
-                str,
-                str,
-                str,
-                str,
-                int,
-                int,
-                bool,
-                bool,
-                str,
-                str,
-                str,
-                str,
-                bool,
-                str,
-                float,
-                float,
-                float,
-                float,
-                str,
-                float,
-                int,
-                int,
-                int,
-                float,
-            ],
-            dict[str, Any],
-        ] | None = None
+        self._llm_config_save_handler: Callable[..., dict[str, Any]] | None = None
         self._cloud_api_status_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_handler: Callable[[], dict[str, Any]] | None = None
         self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
         self._remote_screen_save_handler: Callable[[str, bool], dict[str, Any]] | None = None
-        self._backend_audio_diagnostic_handler: Callable[[str], dict[str, Any]] | None = None
+        self._backend_audio_diagnostic_handler: Callable[[str, float], dict[str, Any]] | None = None
         self._backend_speaker_capture_handler: Callable[[str, float], dict[str, Any]] | None = None
         self._backend_speaker_capture_stop_handler: Callable[[], None] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
@@ -635,7 +602,10 @@ class WebMonitor:
         with self._lock:
             self._remote_screen_save_handler = save_handler
 
-    def set_backend_audio_diagnostic_handler(self, handler: Callable[[str], dict[str, Any]]) -> None:
+    def set_backend_audio_diagnostic_handler(
+        self,
+        handler: Callable[[str, float], dict[str, Any]],
+    ) -> None:
         """Register callback used by the web UI to diagnose a backend microphone."""
         with self._lock:
             self._backend_audio_diagnostic_handler = handler
@@ -1676,8 +1646,9 @@ class WebMonitor:
                         backend_tts_volume = float(payload.get("backend_tts_volume") if payload.get("backend_tts_volume") is not None else 1.0)
                         backend_audio_output_pan = float(payload.get("backend_audio_output_pan") if payload.get("backend_audio_output_pan") is not None else 0.0)
                         backend_audio_monitor_volume = float(payload.get("backend_audio_monitor_volume") if payload.get("backend_audio_monitor_volume") is not None else 1.0)
+                        backend_audio_input_gain = float(payload.get("backend_audio_input_gain") if payload.get("backend_audio_input_gain") is not None else 1.0)
                     except (TypeError, ValueError):
-                        self.send_error(400, "TTS volume, audio monitor volume, and audio pan must be numbers")
+                        self.send_error(400, "TTS volume, audio input gain, audio monitor volume, and audio pan must be numbers")
                         return
                     try:
                         vad_speech_threshold = float(payload.get("vad_speech_threshold") or 0.5)
@@ -1715,6 +1686,7 @@ class WebMonitor:
                             mcp_tool_routing_enabled,
                             interrupt_conversation_enabled,
                             backend_audio_input_device,
+                            backend_audio_input_gain,
                             backend_audio_output_device,
                             voice_id,
                             thinking_sound_file,
@@ -2110,7 +2082,8 @@ class WebMonitor:
                         return
                     device = str(payload.get("device") or "").strip()
                     try:
-                        result = handler(device)
+                        input_gain = float(payload.get("input_gain") if payload.get("input_gain") is not None else 1.0)
+                        result = handler(device, input_gain)
                     except ValueError as e:
                         self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
                         return

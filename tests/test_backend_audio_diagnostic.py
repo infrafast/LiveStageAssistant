@@ -66,6 +66,7 @@ def build_assistant(
     assistant.backend_audio_diagnostic_lock = threading.Lock()
     assistant.backend_audio_diagnostic_requested = threading.Event()
     assistant.backend_speaker_capture_stop_event = threading.Event()
+    assistant.backend_audio_input_gain = 1.0
     assistant.vad = FakeVad(speech, threshold=configured_threshold)
     monkeypatch.setattr(agent.pyaudio, "PyAudio", lambda: FakeAudio(frame))
     monkeypatch.setattr(
@@ -130,6 +131,32 @@ def test_backend_audio_diagnostic_accepts_clear_speech(monkeypatch) -> None:
     assert result["configured_vad"]["accepted"] is True
     assert result["metrics"]["speech_duration_seconds"] > 0
     assert result["audio_data_url"].startswith("data:audio/wav;base64,UklGR")
+
+
+def test_backend_audio_diagnostic_applies_requested_input_gain(monkeypatch) -> None:
+    assistant = build_assistant(speech_frame(700, peak=700), speech=True, monkeypatch=monkeypatch)
+
+    result = assistant.diagnose_backend_audio_input("0", duration_seconds=3, input_gain=2.0)
+
+    assert result["input_gain"] == 2.0
+    assert result["metrics"]["speech_rms_dbfs"] == -30.4
+    wav_bytes = base64.b64decode(result["audio_data_url"].split(",", 1)[1])
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        gained_samples = np.frombuffer(wav_file.readframes(wav_file.getnframes()), dtype=np.int16)
+    assert np.max(np.abs(gained_samples)) == 1400
+
+
+def test_backend_speaker_capture_uses_saved_input_gain(monkeypatch) -> None:
+    samples = np.full(1024, 1000, dtype=np.int16)
+    assistant = build_assistant(samples.tobytes(), speech=True, monkeypatch=monkeypatch)
+    assistant.backend_audio_input_gain = 1.5
+
+    result = assistant.capture_backend_speaker_sample("0", duration_seconds=3)
+
+    wav_bytes = base64.b64decode(result["audio_base64"])
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+        gained_samples = np.frombuffer(wav_file.readframes(1024), dtype=np.int16)
+    assert np.all(gained_samples == 1500)
 
 
 def test_backend_audio_diagnostic_accepts_audible_minus_36_dbfs(monkeypatch) -> None:

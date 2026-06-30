@@ -1017,6 +1017,16 @@ def apply_pcm_volume(pcm_bytes: bytes, volume: float) -> bytes:
     return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
 
 
+def apply_backend_input_gain(pcm_bytes: bytes, gain: float) -> bytes:
+    """Apply saturating software gain immediately after backend PCM capture."""
+    input_gain = max(0.5, min(2.0, float(gain if gain is not None else 1.0)))
+    if input_gain == 1.0 or not pcm_bytes:
+        return pcm_bytes
+    samples = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+    samples *= input_gain
+    return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
+
+
 def play_pcm_bytes(
     audio: pyaudio.PyAudio,
     pcm_bytes: bytes,
@@ -1444,6 +1454,7 @@ class VoiceAssistant:
         startup_loader_sound_file: str = "loader.wav",
         command_ack_sound_enabled: bool = False,
         backend_audio_input_device: str | None = None,
+        backend_audio_input_gain: float = 1.0,
         backend_audio_output_device: str | None = None,
         vad_model_path: str | Path = DEFAULT_SILERO_VAD_MODEL,
         vad_speech_threshold: float = 0.5,
@@ -1503,6 +1514,7 @@ class VoiceAssistant:
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
             command_ack_sound_enabled: Play a short backend chime when a command is accepted
             backend_audio_input_device: Optional PyAudio input device index from BACKEND_AUDIO_INPUT_DEVICE
+            backend_audio_input_gain: Software gain applied to backend microphone PCM, 0.5 to 2.0
             backend_audio_output_device: Optional PyAudio output device index from BACKEND_AUDIO_OUTPUT_DEVICE
             vad_model_path: Local Silero VAD ONNX model path
             vad_speech_threshold: Silero probability threshold that starts speech
@@ -1568,6 +1580,10 @@ class VoiceAssistant:
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.tts_provider = tts_provider.lower()
         self.backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
+        self.backend_audio_input_gain = max(
+            0.5,
+            min(2.0, float(backend_audio_input_gain if backend_audio_input_gain is not None else 1.0)),
+        )
         self.backend_audio_output_pan = normalize_audio_pan(backend_audio_output_pan)
         self.backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(backend_audio_monitor_mode)
         self.backend_audio_monitor_volume = max(
@@ -2827,7 +2843,10 @@ class VoiceAssistant:
                     print("Auto environment reload requested while recording.")
                     break
 
-                data = stream.read(self.chunk, exception_on_overflow=False)
+                data = apply_backend_input_gain(
+                    stream.read(self.chunk, exception_on_overflow=False),
+                    self.backend_audio_input_gain,
+                )
                 if monitor_stream:
                     try:
                         monitor_stream.write(self._prepare_backend_monitor_chunk(data))
@@ -2899,6 +2918,7 @@ class VoiceAssistant:
         selected_device: str | None = None,
         *,
         duration_seconds: float = 7.0,
+        input_gain: float | None = None,
     ) -> dict[str, Any]:
         """Capture and assess a backend microphone with the same format and VAD as STT."""
         if not self.backend_audio_diagnostic_lock.acquire(blocking=False):
@@ -2940,6 +2960,10 @@ class VoiceAssistant:
                 )
 
             duration_seconds = max(3.0, min(12.0, float(duration_seconds)))
+            diagnostic_input_gain = max(
+                0.5,
+                min(2.0, float(self.backend_audio_input_gain if input_gain is None else input_gain)),
+            )
             chunk_count = max(1, math.ceil(duration_seconds * rate / chunk))
             frames: list[bytes] = []
             speech_square_sum = 0.0
@@ -2959,7 +2983,10 @@ class VoiceAssistant:
             self.vad.reset()
 
             for _ in range(chunk_count):
-                data = stream.read(chunk, exception_on_overflow=False)
+                data = apply_backend_input_gain(
+                    stream.read(chunk, exception_on_overflow=False),
+                    diagnostic_input_gain,
+                )
                 frames.append(data)
                 raw = np.frombuffer(data, dtype=np.int16)
                 if raw.size == 0:
@@ -3105,6 +3132,7 @@ class VoiceAssistant:
                     ),
                 },
                 "device": detail,
+                "input_gain": round(diagnostic_input_gain, 2),
                 "format": f"{channels}ch/{rate}Hz",
                 "duration_seconds": round(len(pcm) / (rate * channels * 2), 1),
                 "metrics": {
@@ -3188,7 +3216,12 @@ class VoiceAssistant:
             for _ in range(chunk_count):
                 if self.backend_speaker_capture_stop_event.is_set():
                     break
-                frames.append(stream.read(chunk, exception_on_overflow=False))
+                frames.append(
+                    apply_backend_input_gain(
+                        stream.read(chunk, exception_on_overflow=False),
+                        self.backend_audio_input_gain,
+                    )
+                )
 
             pcm = b"".join(frames)
             if not pcm:
@@ -3204,6 +3237,7 @@ class VoiceAssistant:
             return {
                 "ok": True,
                 "device": detail,
+                "input_gain": round(self.backend_audio_input_gain, 2),
                 "format": f"{channels}ch/{rate}Hz",
                 "duration_seconds": round(len(pcm) / (rate * channels * 2), 1),
                 "audio_base64": base64.b64encode(wav_buffer.getvalue()).decode("ascii"),
@@ -3376,7 +3410,10 @@ class VoiceAssistant:
                 and not stop_event.is_set()
                 and not self.backend_audio_diagnostic_requested.is_set()
             ):
-                data = stream.read(self.chunk, exception_on_overflow=False)
+                data = apply_backend_input_gain(
+                    stream.read(self.chunk, exception_on_overflow=False),
+                    self.backend_audio_input_gain,
+                )
                 frames.append(data)
                 vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
                 probabilities = self.vad.process_pcm(vad_data)
@@ -5632,6 +5669,10 @@ async def main():
         current_backend_audio_output_pan = normalize_audio_pan(env_float_from_values(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
         current_backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(values.get("BACKEND_AUDIO_MONITOR_MODE"))
         current_backend_audio_monitor_volume = env_float_from_values(values, "BACKEND_AUDIO_MONITOR_VOLUME", 1.0)
+        current_backend_audio_input_gain = max(
+            0.5,
+            min(2.0, env_float_from_values(values, "BACKEND_AUDIO_INPUT_GAIN", 1.0)),
+        )
         current_vad_speech_threshold = env_float_from_values(values, "VAD_SPEECH_THRESHOLD", 0.5)
         current_vad_negative_threshold = env_float_from_values(values, "VAD_NEGATIVE_THRESHOLD", 0.35)
         current_vad_min_speech_ms = env_int_from_values(values, "VAD_MIN_SPEECH_MS", 120)
@@ -5713,6 +5754,7 @@ async def main():
             "selected_backend_audio_output_pan": current_backend_audio_output_pan,
             "selected_backend_audio_monitor_mode": current_backend_audio_monitor_mode,
             "selected_backend_audio_monitor_volume": current_backend_audio_monitor_volume,
+            "selected_backend_audio_input_gain": current_backend_audio_input_gain,
             "selected_vad_speech_threshold": current_vad_speech_threshold,
             "selected_vad_negative_threshold": current_vad_negative_threshold,
             "selected_vad_min_speech_ms": current_vad_min_speech_ms,
@@ -5756,6 +5798,7 @@ async def main():
         mcp_tool_routing_enabled: bool,
         interrupt_conversation_enabled: bool,
         backend_audio_input_device: str,
+        backend_audio_input_gain: float,
         backend_audio_output_device: str,
         voice_id: str,
         thinking_sound_file: str,
@@ -5798,6 +5841,10 @@ async def main():
         mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
         interrupt_conversation_enabled = bool(interrupt_conversation_enabled)
         backend_audio_input_device = str(backend_audio_input_device or "").strip()
+        backend_audio_input_gain = max(
+            0.5,
+            min(2.0, float(backend_audio_input_gain if backend_audio_input_gain is not None else 1.0)),
+        )
         backend_audio_output_device = str(backend_audio_output_device or "").strip()
         voice_id = voice_id.strip()
         thinking_sound_file = thinking_sound_file.strip()
@@ -6010,6 +6057,7 @@ async def main():
                 "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",
                 "INTERRUPT_CONVERSATION_ENABLED": "true" if interrupt_conversation_enabled else "false",
                 "BACKEND_AUDIO_INPUT_DEVICE": backend_audio_input_device,
+                "BACKEND_AUDIO_INPUT_GAIN": f"{backend_audio_input_gain:.2f}",
                 "BACKEND_AUDIO_OUTPUT_DEVICE": backend_audio_output_device,
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
@@ -6070,6 +6118,7 @@ async def main():
             "session_context_size": session_context_size,
             "mcp_agent_max_steps": mcp_agent_max_steps,
             "backend_audio_input_device": backend_audio_input_device,
+            "backend_audio_input_gain": backend_audio_input_gain,
             "backend_audio_output_device": backend_audio_output_device,
             "voice_id": voice_id,
             "thinking_sound_file": thinking_sound_file,
@@ -6225,6 +6274,7 @@ async def main():
         startup_loader_sound_file = os.getenv("STARTUP_LOADER_SOUND_FILE", "loader.wav")
         command_ack_sound_enabled = env_bool("COMMAND_ACK_SOUND_ENABLED", False)
         backend_audio_input_device = os.getenv("BACKEND_AUDIO_INPUT_DEVICE", "").strip()
+        backend_audio_input_gain = max(0.5, min(2.0, env_float("BACKEND_AUDIO_INPUT_GAIN", 1.0)))
         backend_audio_output_device = os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE", "").strip()
         vad_model_path = os.getenv("VAD_MODEL_PATH", str(DEFAULT_SILERO_VAD_MODEL)).strip() or str(DEFAULT_SILERO_VAD_MODEL)
         vad_speech_threshold = env_float("VAD_SPEECH_THRESHOLD", 0.5)
@@ -6310,6 +6360,7 @@ async def main():
         print(f"Using thinking sound file: {thinking_sound_file}")
         print(f"Using command ack sound: {'enabled' if command_ack_sound_enabled else 'disabled'}")
         print(f"Using backend audio input: {backend_audio_input_device or 'default'}")
+        print(f"Using backend audio input gain: {backend_audio_input_gain:.2f}x")
         print(f"Using backend audio output: {backend_audio_output_device or 'default'}")
         print(f"Using backend audio output pan: {backend_audio_output_pan:+.2f}")
         print(f"Using backend audio monitor: {backend_audio_monitor_mode}, volume {backend_audio_monitor_volume:.2f}")
@@ -6446,6 +6497,7 @@ async def main():
             startup_loader_sound_file=startup_loader_sound_file,
             command_ack_sound_enabled=command_ack_sound_enabled,
             backend_audio_input_device=backend_audio_input_device,
+            backend_audio_input_gain=backend_audio_input_gain,
             backend_audio_output_device=backend_audio_output_device,
             vad_model_path=vad_model_path,
             vad_speech_threshold=vad_speech_threshold,
@@ -6668,7 +6720,12 @@ async def main():
                 ),
                 tts_handler=web_tts_handler,
             )
-            web_monitor.set_backend_audio_diagnostic_handler(assistant.diagnose_backend_audio_input)
+            web_monitor.set_backend_audio_diagnostic_handler(
+                lambda device, input_gain, active_assistant=assistant: active_assistant.diagnose_backend_audio_input(
+                    device,
+                    input_gain=input_gain,
+                )
+            )
             web_monitor.set_backend_speaker_capture_handlers(
                 capture_handler=lambda device, duration, active_assistant=assistant: active_assistant.capture_backend_speaker_sample(
                     device,
@@ -6907,7 +6964,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_output_device, voice_id, thinking_sound_file, startup_loader_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, startup_loader_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -6924,6 +6981,7 @@ async def main():
                 mcp_tool_routing_enabled,
                 interrupt_conversation_enabled,
                 backend_audio_input_device,
+                backend_audio_input_gain,
                 backend_audio_output_device,
                 voice_id,
                 thinking_sound_file,
