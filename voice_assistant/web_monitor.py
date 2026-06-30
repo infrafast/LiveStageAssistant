@@ -512,6 +512,8 @@ class WebMonitor:
         self._env_profile_switch_handler: Callable[[str], dict[str, Any]] | None = None
         self._remote_screen_save_handler: Callable[[str, bool], dict[str, Any]] | None = None
         self._backend_audio_diagnostic_handler: Callable[[str], dict[str, Any]] | None = None
+        self._backend_speaker_capture_handler: Callable[[str, float], dict[str, Any]] | None = None
+        self._backend_speaker_capture_stop_handler: Callable[[], None] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._backend_audio_sample_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._speaker_embedding_notice_handler: Callable[[str], None] | None = None
@@ -636,6 +638,17 @@ class WebMonitor:
         """Register callback used by the web UI to diagnose a backend microphone."""
         with self._lock:
             self._backend_audio_diagnostic_handler = handler
+
+    def set_backend_speaker_capture_handlers(
+        self,
+        *,
+        capture_handler: Callable[[str, float], dict[str, Any]],
+        stop_handler: Callable[[], None],
+    ) -> None:
+        """Register callbacks used to capture and stop backend speaker-profile samples."""
+        with self._lock:
+            self._backend_speaker_capture_handler = capture_handler
+            self._backend_speaker_capture_stop_handler = stop_handler
 
     def set_backend_tts_test_handler(
         self,
@@ -855,6 +868,12 @@ class WebMonitor:
                         return
                     if self.path == "/api/backend-audio-diagnostic":
                         self._handle_backend_audio_diagnostic()
+                        return
+                    if self.path == "/api/backend-speaker-capture":
+                        self._handle_backend_speaker_capture()
+                        return
+                    if self.path == "/api/backend-speaker-capture/stop":
+                        self._handle_backend_speaker_capture_stop()
                         return
                     if self.path == "/api/backend-tts-test":
                         self._handle_backend_tts_test()
@@ -1989,6 +2008,42 @@ class WebMonitor:
                         self._send_json_error(500, {"ok": False, "error": {"message": f"Could not diagnose backend audio input: {e}"}})
                         return
                     self._send_json(result)
+
+                def _handle_backend_speaker_capture(self) -> None:
+                    handler = monitor._backend_speaker_capture_handler
+                    if handler is None:
+                        self.send_error(503, "Backend speaker capture is not available")
+                        return
+
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    device = str(payload.get("device") or "").strip()
+                    try:
+                        duration_seconds = float(payload.get("duration_seconds") or 10.0)
+                    except (TypeError, ValueError):
+                        self.send_error(400, "duration_seconds must be numeric")
+                        return
+                    try:
+                        result = handler(device, duration_seconds)
+                    except ValueError as e:
+                        self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        return
+                    except Exception as e:
+                        self._send_json_error(
+                            500,
+                            {"ok": False, "error": {"message": f"Could not capture backend speaker sample: {e}"}},
+                        )
+                        return
+                    self._send_json(result)
+
+                def _handle_backend_speaker_capture_stop(self) -> None:
+                    handler = monitor._backend_speaker_capture_stop_handler
+                    if handler is None:
+                        self.send_error(503, "Backend speaker capture is not available")
+                        return
+                    handler()
+                    self._send_json({"ok": True})
 
                 def _handle_backend_tts_test(self) -> None:
                     handler = monitor._backend_tts_test_handler

@@ -3262,7 +3262,28 @@
       return `profil${Number(row.dataset.index || 0)}_${sampleIndex}.wav`;
     }
 
-    function createSpeakerCaptureDialog() {
+    function speakerCaptureSourcesForSttInput() {
+      const sttInput = selectedSttInput();
+      const sources = [];
+      if (["browser", "both"].includes(sttInput) && browserAudioCapabilities.input) sources.push("browser");
+      if (["backend", "both"].includes(sttInput) && backendAudioCapabilities.input) sources.push("backend");
+      return sources;
+    }
+
+    function syncSpeakerCaptureButtons() {
+      const sources = speakerCaptureSourcesForSttInput();
+      const unavailable = Boolean(speakerRecognitionUnavailableReason) || sources.length === 0;
+      const reason = speakerRecognitionUnavailableReason || tr(
+        "speaker_capture_source_unavailable",
+        "No microphone is available for the selected STT Input."
+      );
+      for (const button of speakerProfileGrid.querySelectorAll('[data-role="capture"]')) {
+        button.disabled = unavailable;
+        button.title = unavailable ? reason : tr("speaker_capture_button", "Capture from microphone");
+      }
+    }
+
+    function createSpeakerCaptureDialog(sources) {
       const overlay = document.createElement("div");
       overlay.className = "speaker-capture-overlay";
       overlay.setAttribute("role", "dialog");
@@ -3285,6 +3306,24 @@
       const status = document.createElement("div");
       status.className = "speaker-capture-status";
 
+      const sourceField = document.createElement("label");
+      sourceField.className = "field speaker-capture-source";
+      const sourceLabel = document.createElement("span");
+      sourceLabel.textContent = tr("speaker_capture_source", "Capture source");
+      const sourceSelect = document.createElement("select");
+      for (const source of sources) {
+        sourceSelect.appendChild(option(
+          source === "backend"
+            ? tr("speaker_capture_source_backend", "Backend microphone")
+            : tr("speaker_capture_source_browser", "Browser microphone"),
+          source,
+          false,
+          source === "backend"
+        ));
+      }
+      sourceField.append(sourceLabel, sourceSelect);
+      sourceField.hidden = sources.length < 2;
+
       const audio = document.createElement("audio");
       audio.className = "speaker-capture-preview";
       audio.controls = true;
@@ -3293,10 +3332,18 @@
       const actions = document.createElement("div");
       actions.className = "speaker-capture-actions";
 
+      const start = document.createElement("button");
+      start.type = "button";
+      start.className = "small-button";
+      start.textContent = tr("speaker_capture_start", "Start");
+      start.hidden = sources.length < 2;
+      start.addEventListener("click", () => beginSpeakerSampleCapture());
+
       const stop = document.createElement("button");
       stop.type = "button";
       stop.className = "small-button";
       stop.textContent = tr("speaker_capture_stop", "Stop");
+      stop.disabled = true;
       stop.addEventListener("click", () => stopSpeakerSampleCapture());
 
       const retry = document.createElement("button");
@@ -3335,11 +3382,11 @@
       cancel.textContent = tr("close", "Close");
       cancel.addEventListener("click", () => closeSpeakerCaptureDialog());
 
-      actions.append(stop, retry, validate, cancel);
-      panel.append(title, instructions, status, audio, actions);
+      actions.append(start, stop, retry, validate, cancel);
+      panel.append(title, sourceField, instructions, status, audio, actions);
       overlay.appendChild(panel);
       document.body.appendChild(overlay);
-      return { overlay, status, audio, stop, retry, validate };
+      return { overlay, status, audio, sourceField, sourceSelect, start, stop, retry, validate };
     }
 
     function setSpeakerCaptureStatus(text, mode = "") {
@@ -3360,11 +3407,16 @@
 
     function closeSpeakerCaptureDialog() {
       if (!speakerCapture) return;
+      const state = speakerCapture;
       if (speakerCapture.timer) window.clearTimeout(speakerCapture.timer);
       if (speakerCapture.countdownTimer) window.clearInterval(speakerCapture.countdownTimer);
       if (speakerCapture.recorder && speakerCapture.recorder.state !== "inactive") {
         speakerCapture.discard = true;
         speakerCapture.recorder.stop();
+      }
+      if (state.source === "backend" && state.recording) {
+        state.discard = true;
+        fetch("/api/backend-speaker-capture/stop", { method: "POST" }).catch(() => {});
       }
       if (speakerCapture.stream) {
         for (const track of speakerCapture.stream.getTracks()) track.stop();
@@ -3375,35 +3427,153 @@
     }
 
     function stopSpeakerSampleCapture() {
-      if (!speakerCapture || !speakerCapture.recorder || speakerCapture.recorder.state === "inactive") return;
+      if (!speakerCapture || !speakerCapture.recording) return;
       if (speakerCapture.timer) window.clearTimeout(speakerCapture.timer);
       if (speakerCapture.countdownTimer) window.clearInterval(speakerCapture.countdownTimer);
       speakerCapture.dialog.stop.disabled = true;
       setSpeakerCaptureStatus(tr("speaker_capture_processing", "Preparing preview..."), "processing");
-      speakerCapture.recorder.stop();
+      if (speakerCapture.source === "backend") {
+        fetch("/api/backend-speaker-capture/stop", { method: "POST" }).catch(() => {});
+      } else if (speakerCapture.recorder && speakerCapture.recorder.state !== "inactive") {
+        speakerCapture.recorder.stop();
+      }
     }
 
-    async function startSpeakerSampleCapture(row, sampleIndex) {
-      if (speakerCapture?.recording) return;
+    function base64AudioBlob(value, type = "audio/wav") {
+      const binary = window.atob(String(value || ""));
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      return new Blob([bytes], { type });
+    }
+
+    async function prepareSpeakerCapturePreview(state, sourceBlob) {
+      const wav = await recordedBlobToValidatedWav(sourceBlob);
+      if (speakerCapture !== state || state.discard) return;
+      state.wavBlob = wav.blob;
+      state.objectUrl = URL.createObjectURL(wav.blob);
+      state.dialog.audio.src = state.objectUrl;
+      state.dialog.audio.hidden = false;
+      state.dialog.retry.disabled = false;
+      state.dialog.validate.disabled = false;
+      state.dialog.stop.disabled = true;
+      setSpeakerCaptureStatus(
+        trf("speaker_capture_preview", "Preview ready ({seconds}s). Listen, then validate or retake.", {
+          seconds: Math.round(wav.duration)
+        }),
+        "ready"
+      );
+    }
+
+    function startSpeakerCaptureTimers(state) {
+      state.startedAt = Date.now();
+      state.recording = true;
+      state.dialog.stop.disabled = false;
+      setSpeakerCaptureStatus(
+        trf("speaker_capture_countdown", "Recording... {seconds}s remaining.", { seconds: speakerCaptureMaxSeconds }),
+        "recording"
+      );
+      state.countdownTimer = window.setInterval(updateSpeakerCaptureCountdown, 250);
+      state.timer = window.setTimeout(stopSpeakerSampleCapture, speakerCaptureMaxSeconds * 1000);
+    }
+
+    async function beginBrowserSpeakerSampleCapture(state) {
       if (!window.isSecureContext) {
-        const status = row.querySelector(".speaker-status");
-        if (status) status.textContent = tr("speaker_capture_error_https", "Microphone capture requires HTTPS or localhost.");
-        setProfileLoading(true, tr("profile_generation_error", "Erreur génération profil"), tr("speaker_capture_error_https", "Microphone capture requires HTTPS or localhost."), "error");
-        window.setTimeout(() => setProfileLoading(false), 2600);
-        return;
+        throw new Error(tr("speaker_capture_error_https", "Microphone capture requires HTTPS or localhost."));
       }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+        throw new Error(tr("speaker_capture_error_browser", "Audio capture is not supported by this browser."));
+      }
+      setSpeakerCaptureStatus(tr("speaker_capture_requesting", "Requesting microphone access..."));
+      const stream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+      loadBrowserAudioDevices(false);
+      const recorder = new MediaRecorder(stream);
+      state.stream = stream;
+      state.recorder = recorder;
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data && event.data.size > 0 && speakerCapture === state) state.chunks.push(event.data);
+      });
+      recorder.addEventListener("stop", async () => {
+        state.recording = false;
+        if (state.stream) {
+          for (const track of state.stream.getTracks()) track.stop();
+          state.stream = null;
+        }
+        if (speakerCapture !== state || state.discard) return;
+        try {
+          await prepareSpeakerCapturePreview(
+            state,
+            new Blob(state.chunks, { type: recorder.mimeType || "audio/webm" })
+          );
+        } catch (error) {
+          if (speakerCapture !== state) return;
+          state.dialog.retry.disabled = false;
+          setSpeakerCaptureStatus(String(error.message || error), "error");
+        }
+      });
+      recorder.start();
+      startSpeakerCaptureTimers(state);
+    }
+
+    async function beginBackendSpeakerSampleCapture(state) {
+      startSpeakerCaptureTimers(state);
+      const response = await fetch("/api/backend-speaker-capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device: backendAudioInput.value || "",
+          duration_seconds: speakerCaptureMaxSeconds
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      state.recording = false;
+      if (state.timer) window.clearTimeout(state.timer);
+      if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+      if (speakerCapture !== state || state.discard) return;
+      if (!response.ok || !data.ok || !data.audio_base64) {
+        throw new Error(data.error?.message || data.message || response.statusText || "Backend capture failed");
+      }
+      await prepareSpeakerCapturePreview(state, base64AudioBlob(data.audio_base64));
+    }
+
+    async function beginSpeakerSampleCapture() {
+      const state = speakerCapture;
+      if (!state || state.recording) return;
+      state.source = state.dialog.sourceSelect.value || state.sources[0] || "";
+      if (!state.source) return;
+      state.dialog.sourceSelect.disabled = true;
+      state.dialog.start.disabled = true;
+      try {
+        if (state.source === "backend") await beginBackendSpeakerSampleCapture(state);
+        else await beginBrowserSpeakerSampleCapture(state);
+      } catch (error) {
+        if (speakerCapture !== state) return;
+        state.recording = false;
+        state.dialog.stop.disabled = true;
+        state.dialog.retry.disabled = false;
+        const message = error && (error.name === "NotAllowedError" || error.name === "SecurityError")
+          ? tr("speaker_capture_error_permission", "Microphone permission was refused.")
+          : trf("speaker_capture_error_generic", "Microphone capture failed: {error}", { error: String(error.message || error) });
+        const status = state.row.querySelector(".speaker-status");
+        if (status) status.textContent = message;
+        setSpeakerCaptureStatus(message, "error");
+      }
+    }
+
+    function startSpeakerSampleCapture(row, sampleIndex) {
+      if (speakerCapture?.recording) return;
+      const sources = speakerCaptureSourcesForSttInput();
+      if (!sources.length) {
         const status = row.querySelector(".speaker-status");
-        if (status) status.textContent = tr("speaker_capture_error_browser", "Audio capture is not supported by this browser.");
-        setProfileLoading(true, tr("profile_generation_error", "Erreur génération profil"), tr("speaker_capture_error_browser", "Audio capture is not supported by this browser."), "error");
-        window.setTimeout(() => setProfileLoading(false), 2600);
+        if (status) status.textContent = tr("speaker_capture_source_unavailable", "No microphone is available for the selected STT Input.");
         return;
       }
 
-      const dialog = createSpeakerCaptureDialog();
+      const dialog = createSpeakerCaptureDialog(sources);
       speakerCapture = {
         row,
         sampleIndex,
+        sources,
+        source: sources.length === 1 ? sources[0] : "",
         dialog,
         chunks: [],
         stream: null,
@@ -3417,65 +3587,11 @@
         objectUrl: ""
       };
       dialog.overlay.classList.add("open");
-      setSpeakerCaptureStatus(tr("speaker_capture_requesting", "Requesting microphone access..."));
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
-        loadBrowserAudioDevices(false);
-        const recorder = new MediaRecorder(stream);
-        speakerCapture.stream = stream;
-        speakerCapture.recorder = recorder;
-        speakerCapture.startedAt = Date.now();
-        speakerCapture.recording = true;
-        recorder.addEventListener("dataavailable", (event) => {
-          if (event.data && event.data.size > 0 && speakerCapture) speakerCapture.chunks.push(event.data);
-        });
-        recorder.addEventListener("stop", async () => {
-          const state = speakerCapture;
-          if (!state || state.discard) return;
-          state.recording = false;
-          if (state.stream) {
-            for (const track of state.stream.getTracks()) track.stop();
-            state.stream = null;
-          }
-          try {
-            const sourceBlob = new Blob(state.chunks, { type: recorder.mimeType || "audio/webm" });
-            const wav = await recordedBlobToValidatedWav(sourceBlob);
-            if (!speakerCapture) return;
-            state.wavBlob = wav.blob;
-            state.objectUrl = URL.createObjectURL(wav.blob);
-            state.dialog.audio.src = state.objectUrl;
-            state.dialog.audio.hidden = false;
-            state.dialog.retry.disabled = false;
-            state.dialog.validate.disabled = false;
-            setSpeakerCaptureStatus(
-              trf("speaker_capture_preview", "Preview ready ({seconds}s). Listen, then validate or retake.", {
-                seconds: Math.round(wav.duration)
-              }),
-              "ready"
-            );
-          } catch (error) {
-            if (!speakerCapture) return;
-            state.dialog.retry.disabled = false;
-            setSpeakerCaptureStatus(String(error.message || error), "error");
-          }
-        });
-        recorder.start();
-        setSpeakerCaptureStatus(
-          trf("speaker_capture_countdown", "Recording... {seconds}s remaining.", { seconds: speakerCaptureMaxSeconds }),
-          "recording"
-        );
-        speakerCapture.countdownTimer = window.setInterval(updateSpeakerCaptureCountdown, 250);
-        speakerCapture.timer = window.setTimeout(stopSpeakerSampleCapture, speakerCaptureMaxSeconds * 1000);
-      } catch (error) {
-        const message = error && (error.name === "NotAllowedError" || error.name === "SecurityError")
-          ? tr("speaker_capture_error_permission", "Microphone permission was refused.")
-          : trf("speaker_capture_error_generic", "Microphone capture failed: {error}", { error: String(error.message || error) });
-        closeSpeakerCaptureDialog();
-        const status = row.querySelector(".speaker-status");
-        if (status) status.textContent = message;
-        setProfileLoading(true, tr("profile_generation_error", "Erreur génération profil"), message, "error");
-        window.setTimeout(() => setProfileLoading(false), 2600);
+      if (sources.length > 1) {
+        setSpeakerCaptureStatus(tr("speaker_capture_choose_source", "Choose the microphone, then start capture."));
+      } else {
+        dialog.sourceSelect.value = sources[0];
+        beginSpeakerSampleCapture();
       }
     }
 
@@ -3613,6 +3729,7 @@
       speakerProfileChoices = activeSpeakerProfilesFromConfig();
       syncComposerSpeakerControl();
       setSpeakerControlsDisabled(Boolean(unavailableReason), unavailableReason);
+      syncSpeakerCaptureButtons();
       syncSpeakerLabels();
     }
 
@@ -3706,6 +3823,7 @@
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled
         ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif"
         : "BACKEND_AUDIO_OUTPUT_PAN";
+      syncSpeakerCaptureButtons();
     }
 
     function backendAudioMonitorModeAvailable(value) {

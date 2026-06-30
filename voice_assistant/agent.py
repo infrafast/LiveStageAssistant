@@ -1569,6 +1569,7 @@ class VoiceAssistant:
         self.backend_audio_capture_lock = threading.Lock()
         self.backend_audio_diagnostic_lock = threading.Lock()
         self.backend_audio_diagnostic_requested = threading.Event()
+        self.backend_speaker_capture_stop_event = threading.Event()
         self.wake_words = wake_words or []
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
@@ -3125,6 +3126,99 @@ class VoiceAssistant:
                 self.backend_audio_capture_lock.release()
             self.backend_audio_diagnostic_requested.clear()
             self.backend_audio_diagnostic_lock.release()
+
+    def capture_backend_speaker_sample(
+        self,
+        selected_device: str | None = None,
+        *,
+        duration_seconds: float = 10.0,
+    ) -> dict[str, Any]:
+        """Capture a bounded WAV sample from the backend microphone for a speaker profile."""
+        if not self.backend_audio_diagnostic_lock.acquire(blocking=False):
+            raise RuntimeError("a backend microphone capture is already running")
+
+        audio = None
+        stream = None
+        capture_acquired = False
+        self.backend_speaker_capture_stop_event.clear()
+        self.backend_audio_diagnostic_requested.set()
+        try:
+            capture_acquired = self.backend_audio_capture_lock.acquire(timeout=3.0)
+            if not capture_acquired:
+                raise RuntimeError("the backend microphone is busy")
+
+            with suppress_native_stderr():
+                audio = pyaudio.PyAudio()
+            input_device_index, status, detail = resolve_pyaudio_device_index(
+                audio,
+                selected_device,
+                input_device=True,
+            )
+            if status in {"invalid", "unavailable"}:
+                raise ValueError(detail)
+
+            input_format = resolve_backend_input_format(audio, input_device_index, pyaudio.paInt16)
+            if not input_format["ok"]:
+                raise RuntimeError(f"{detail}; {input_format['detail']}")
+            channels = int(input_format["channels"])
+            rate = int(input_format["rate"])
+            chunk = int(input_format["chunk"])
+            with suppress_native_stderr():
+                stream = audio.open(
+                    format=pyaudio.paInt16,
+                    channels=channels,
+                    rate=rate,
+                    input=True,
+                    input_device_index=input_device_index,
+                    frames_per_buffer=chunk,
+                )
+
+            duration_seconds = max(3.0, min(10.0, float(duration_seconds)))
+            chunk_count = max(1, math.ceil(duration_seconds * rate / chunk))
+            frames: list[bytes] = []
+            for _ in range(chunk_count):
+                if self.backend_speaker_capture_stop_event.is_set():
+                    break
+                frames.append(stream.read(chunk, exception_on_overflow=False))
+
+            pcm = b"".join(frames)
+            if not pcm:
+                raise ValueError("no backend microphone audio was captured")
+
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, "wb") as wav_file:
+                wav_file.setnchannels(channels)
+                wav_file.setsampwidth(audio.get_sample_size(pyaudio.paInt16))
+                wav_file.setframerate(rate)
+                wav_file.writeframes(pcm)
+
+            return {
+                "ok": True,
+                "device": detail,
+                "format": f"{channels}ch/{rate}Hz",
+                "duration_seconds": round(len(pcm) / (rate * channels * 2), 1),
+                "audio_base64": base64.b64encode(wav_buffer.getvalue()).decode("ascii"),
+            }
+        except ValueError:
+            raise
+        except Exception as e:
+            raise RuntimeError(concise_pyaudio_error(e)) from e
+        finally:
+            if stream is not None:
+                self._close_audio_stream(stream)
+            if audio is not None:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+            if capture_acquired:
+                self.backend_audio_capture_lock.release()
+            self.backend_audio_diagnostic_requested.clear()
+            self.backend_audio_diagnostic_lock.release()
+
+    def stop_backend_speaker_capture(self) -> None:
+        """Request an active backend speaker-profile capture to stop."""
+        self.backend_speaker_capture_stop_event.set()
 
     def _open_backend_audio_monitor_stream(self):
         """Open a backend output stream for microphone monitoring."""
@@ -4940,6 +5034,10 @@ class VoiceAssistant:
                 self.stop_backend_audio_sample()
             except Exception:
                 pass
+            try:
+                self.stop_backend_speaker_capture()
+            except Exception:
+                pass
             if reload_requested:
                 RELOAD_AUDIO_GUARD.append(self.audio)
                 print("Backend audio termination deferred for reload.")
@@ -6514,6 +6612,13 @@ async def main():
                 tts_handler=web_tts_handler,
             )
             web_monitor.set_backend_audio_diagnostic_handler(assistant.diagnose_backend_audio_input)
+            web_monitor.set_backend_speaker_capture_handlers(
+                capture_handler=lambda device, duration, active_assistant=assistant: active_assistant.capture_backend_speaker_sample(
+                    device,
+                    duration_seconds=duration,
+                ),
+                stop_handler=assistant.stop_backend_speaker_capture,
+            )
             web_monitor.set_backend_tts_test_handler(backend_tts_test_handler)
             web_monitor.set_backend_audio_sample_handler(backend_audio_sample_handler)
             web_monitor.set_cancel_handler(assistant.stop_tts)
