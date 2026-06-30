@@ -227,7 +227,7 @@ TTS_OUTPUT_OPTIONS = [
     {"id": "backend", "label": "Backend"},
     {"id": "silent", "label": "Silent"},
 ]
-DEFAULT_BACKEND_MP3_SAMPLE_RATE = 24000
+DEFAULT_BACKEND_MP3_SAMPLE_RATE = 44100
 DEFAULT_BACKEND_MP3_CHANNELS = 1
 COMMAND_ACK_SOUND_CANDIDATES = ("ring.wav", "bell.wav")
 
