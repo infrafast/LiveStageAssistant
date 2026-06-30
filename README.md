@@ -370,6 +370,7 @@ The monitor exposes these HTTP endpoints:
 - `POST /api/backend-tts-test`: plays the config page's voice test phrase through the selected backend audio output. The voice test button follows `TTS Output`: browser output previews through `/api/web-tts`, backend output previews through this endpoint, and silent output does not play.
 - `POST /api/mcp-routing`: persists Config -> MCP Servers routing words into the active `MCP_CONFIG` JSON and requests an assistant reload.
 - `POST /api/backend-audio-diagnostic`: temporarily pauses normal backend STT capture, records a bounded microphone test, and returns VAD/level/noise/clipping measurements plus an in-memory WAV preview.
+- `POST /api/backend-speaker-capture` and `POST /api/backend-speaker-capture/stop`: capture and manually stop a bounded backend-microphone WAV for the speaker-profile preview/upload flow.
 - `GET /api/llm-options` and `POST /api/llm-config`: back the provider/model/voice/thinking-sound/startup-loader controls in the config tab.
 - `POST /api/backend-audio-sample`: previews one validated top-level `assets/*.wav` file through the currently selected backend output, volume, and pan.
 - `GET /api/session-context`, `POST /api/session-context/new`, `POST /api/session-context/select`, `POST /api/session-context/rename`, `POST /api/session-context/clear`, `POST /api/session-context/save`, and `POST /api/session-context/delete`: list, create, switch, rename, clear visible conversation, force-save context summary, and delete persisted chat sessions.

@@ -1434,7 +1434,7 @@
       return new Blob([buffer], { type: "audio/wav" });
     }
 
-    async function recordedBlobToValidatedWav(blob) {
+    async function recordedBlobToValidatedWav(blob, thresholds = {}) {
       if (!blob || blob.size === 0) {
         throw new Error(tr("speaker_capture_error_empty", "No audio was captured."));
       }
@@ -1453,7 +1453,9 @@
         }
         const samples = monoSamplesFromAudioBuffer(audioBuffer);
         const stats = audioStats(samples);
-        if (stats.rms < 0.008 || stats.peak < 0.03) {
+        const minimumRms = Number(thresholds.minimumRms ?? 0.008);
+        const minimumPeak = Number(thresholds.minimumPeak ?? 0.03);
+        if (stats.rms < minimumRms || stats.peak < minimumPeak) {
           throw new Error(tr("speaker_capture_error_silence", "Sample is too silent."));
         }
         return {
@@ -3447,7 +3449,12 @@
     }
 
     async function prepareSpeakerCapturePreview(state, sourceBlob) {
-      const wav = await recordedBlobToValidatedWav(sourceBlob);
+      // Backend capture matches the hardware diagnostic's no-signal gate;
+      // browser capture keeps its stricter local microphone quality gate.
+      const thresholds = state.source === "backend"
+        ? { minimumRms: 0.001, minimumPeak: 0.005 }
+        : { minimumRms: 0.008, minimumPeak: 0.03 };
+      const wav = await recordedBlobToValidatedWav(sourceBlob, thresholds);
       if (speakerCapture !== state || state.discard) return;
       state.wavBlob = wav.blob;
       state.objectUrl = URL.createObjectURL(wav.blob);
@@ -3548,6 +3555,8 @@
       } catch (error) {
         if (speakerCapture !== state) return;
         state.recording = false;
+        if (state.timer) window.clearTimeout(state.timer);
+        if (state.countdownTimer) window.clearInterval(state.countdownTimer);
         state.dialog.stop.disabled = true;
         state.dialog.retry.disabled = false;
         const message = error && (error.name === "NotAllowedError" || error.name === "SecurityError")
@@ -3560,7 +3569,7 @@
     }
 
     function startSpeakerSampleCapture(row, sampleIndex) {
-      if (speakerCapture?.recording) return;
+      if (speakerCapture) return;
       const sources = speakerCaptureSourcesForSttInput();
       if (!sources.length) {
         const status = row.querySelector(".speaker-status");
