@@ -817,6 +817,34 @@
     .speaker-profile-row input[type="text"] {
       width: 100%;
     }
+    .speaker-profile-name {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 32px;
+      gap: 6px;
+      align-items: center;
+    }
+    .speaker-profile-delete,
+    .speaker-sample-play {
+      width: 32px;
+      height: 30px;
+      min-height: 30px;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      color: var(--text);
+      line-height: 1;
+    }
+    .speaker-profile-delete {
+      color: var(--bad);
+    }
+    .speaker-profile-delete:hover:not(:disabled) {
+      border-color: var(--bad);
+    }
+    .speaker-sample-play.playing {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
     .speaker-upload {
       display: grid;
       gap: 6px;
@@ -824,7 +852,7 @@
     }
     .speaker-sample {
       display: grid;
-      grid-template-columns: 14px minmax(120px, 1fr) 32px;
+      grid-template-columns: 14px minmax(120px, 1fr) 32px 32px;
       gap: 6px;
       align-items: center;
     }

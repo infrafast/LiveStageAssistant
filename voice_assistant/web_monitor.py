@@ -516,6 +516,7 @@ class WebMonitor:
         self._backend_speaker_capture_stop_handler: Callable[[], None] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._backend_audio_sample_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
+        self._speaker_profile_sample_handler: Callable[[str, int, int], dict[str, Any]] | None = None
         self._speaker_embedding_notice_handler: Callable[[str], None] | None = None
         self._speaker_profile_update_handler: Callable[[dict[str, Any]], None] | None = None
         self._mcp_routing_save_handler: Callable[[dict[str, str]], dict[str, Any]] | None = None
@@ -665,6 +666,14 @@ class WebMonitor:
         """Register callback used by the web UI to preview WAV assets on backend output."""
         with self._lock:
             self._backend_audio_sample_handler = handler
+
+    def set_speaker_profile_sample_handler(
+        self,
+        handler: Callable[[str, int, int], dict[str, Any]],
+    ) -> None:
+        """Register backend playback control for saved speaker-profile samples."""
+        with self._lock:
+            self._speaker_profile_sample_handler = handler
 
     def set_speaker_embedding_notice_handler(self, handler: Callable[[str], None]) -> None:
         """Register callback used to announce speaker embedding preparation."""
@@ -883,6 +892,12 @@ class WebMonitor:
                         return
                     if self.path == "/api/speaker-profile-upload":
                         self._handle_speaker_profile_upload()
+                        return
+                    if self.path == "/api/speaker-profile-sample":
+                        self._handle_speaker_profile_sample()
+                        return
+                    if self.path == "/api/speaker-profile-delete":
+                        self._handle_speaker_profile_delete()
                         return
                     if self.path == "/api/mcp-routing":
                         self._handle_mcp_routing_save()
@@ -1336,6 +1351,101 @@ class WebMonitor:
                 def _safe_speaker_profile_slug(self, name: str) -> str:
                     normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", name.strip().lower()).strip("._-")
                     return normalized[:64] or "speaker"
+
+                def _speaker_profile_indices(self, payload: dict[str, Any]) -> tuple[int, int]:
+                    try:
+                        profile_index = int(payload.get("profile_index") or 0)
+                        sample_index = int(payload.get("sample_index") or 0)
+                    except (TypeError, ValueError):
+                        raise ValueError("Speaker profile and sample indices must be integers") from None
+                    if profile_index < 1 or profile_index > 5:
+                        raise ValueError("Speaker profile index must be between 1 and 5")
+                    if sample_index < 1 or sample_index > 3:
+                        raise ValueError("Speaker profile sample index must be between 1 and 3")
+                    return profile_index, sample_index
+
+                def _handle_speaker_profile_sample(self) -> None:
+                    handler = monitor._speaker_profile_sample_handler
+                    if handler is None:
+                        self.send_error(503, "Speaker profile sample playback is not available")
+                        return
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    action = str(payload.get("action") or "play").strip().lower()
+                    try:
+                        profile_index, sample_index = self._speaker_profile_indices(payload)
+                        result = handler(action, profile_index, sample_index)
+                    except ValueError as e:
+                        self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        return
+                    except Exception as e:
+                        self._send_json_error(
+                            500,
+                            {"ok": False, "error": {"message": f"Could not play speaker sample: {e}"}},
+                        )
+                        return
+                    self._send_json(result)
+
+                def _handle_speaker_profile_delete(self) -> None:
+                    payload = self._read_json_body()
+                    if payload is None:
+                        return
+                    try:
+                        profile_index = int(payload.get("profile_index") or 0)
+                    except (TypeError, ValueError):
+                        profile_index = 0
+                    if profile_index < 1 or profile_index > 5:
+                        self.send_error(400, "Speaker profile index must be between 1 and 5")
+                        return
+
+                    playback_handler = monitor._speaker_profile_sample_handler
+                    if playback_handler is not None:
+                        try:
+                            playback_handler("stop", profile_index, 1)
+                        except Exception:
+                            pass
+
+                    profile_root = Path(os.getenv("SPEAKER_PROFILES_DIR", "data/speaker_profiles"))
+                    deleted = []
+                    try:
+                        for sample_index in range(1, 4):
+                            wav_path = profile_root / f"profil{profile_index}_{sample_index}.wav"
+                            for artifact_path in (wav_path, wav_path.with_suffix(".npy")):
+                                if artifact_path.exists() and artifact_path.is_file():
+                                    artifact_path.unlink()
+                                    deleted.append(artifact_path.as_posix())
+                    except OSError as e:
+                        self._send_json_error(
+                            500,
+                            {"ok": False, "error": {"message": f"Could not delete speaker profile: {e}"}},
+                        )
+                        return
+
+                    result = {
+                        "ok": True,
+                        "profile_index": profile_index,
+                        "deleted": deleted,
+                        "samples": [
+                            {
+                                "index": sample_index,
+                                "wav_path": (profile_root / f"profil{profile_index}_{sample_index}.wav").as_posix(),
+                                "filename": f"profil{profile_index}_{sample_index}.wav",
+                                "ready": False,
+                                "embedding_ready": False,
+                            }
+                            for sample_index in range(1, 4)
+                        ],
+                        "status": "0/3 embeddings",
+                    }
+                    with monitor._lock:
+                        update_handler = monitor._speaker_profile_update_handler
+                    if update_handler:
+                        try:
+                            update_handler(result)
+                        except Exception as e:
+                            LOGGER.warning("Speaker profile update handler failed after deletion: %s", e)
+                    self._send_json(result)
 
                 def _handle_speaker_profile_upload(self) -> None:
                     payload = self._read_json_body(max_bytes=12 * 1024 * 1024)

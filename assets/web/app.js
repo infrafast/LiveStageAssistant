@@ -2125,6 +2125,13 @@
         : sampleReady
         ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
         : (sample?.wav_path || sample?.filename || "");
+      const playButton = sampleWrap.querySelector('[data-role="play-sample"]');
+      if (playButton) {
+        playButton.disabled = !sampleReady;
+        playButton.title = sampleReady
+          ? tr("speaker_sample_play", "Lire ce sample")
+          : tr("speaker_sample_play_unavailable", "Aucun WAV disponible pour ce sample");
+      }
     }
 
     function composerSpeakerDisabledReason() {
@@ -3119,7 +3126,9 @@
         speakerBackend,
         speakerThreshold,
         speakerMargin,
-        ...speakerProfileGrid.querySelectorAll("input, button")
+        ...speakerProfileGrid.querySelectorAll(
+          'input, button:not([data-role="delete-profile"]):not([data-role="play-sample"])'
+        )
       ];
       for (const control of controls) {
         control.disabled = Boolean(disabled);
@@ -3143,6 +3152,8 @@
         row.className = "speaker-profile-row";
         row.dataset.index = String(index);
 
+        const nameWrap = document.createElement("div");
+        nameWrap.className = "speaker-profile-name";
         const name = document.createElement("input");
         name.type = "text";
         name.placeholder = `speaker ${index}`;
@@ -3152,6 +3163,15 @@
           speakerProfileChoices = activeSpeakerProfilesFromConfig();
           syncComposerSpeakerControl();
         });
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "speaker-profile-delete";
+        deleteButton.dataset.role = "delete-profile";
+        deleteButton.textContent = "\u{1F5D1}";
+        deleteButton.title = tr("speaker_profile_delete", "Supprimer le profil vocal");
+        deleteButton.setAttribute("aria-label", tr("speaker_profile_delete", "Supprimer le profil vocal"));
+        deleteButton.addEventListener("click", () => deleteSpeakerProfile(row));
+        nameWrap.append(name, deleteButton);
 
         const uploadWrap = document.createElement("div");
         uploadWrap.className = "speaker-upload";
@@ -3191,7 +3211,16 @@
           capture.setAttribute("aria-label", tr("speaker_capture_button", "Capture from microphone"));
           capture.textContent = "🎙️";
           capture.addEventListener("click", () => startSpeakerSampleCapture(row, sampleIndex));
-          sampleWrap.append(led, file, capture);
+          const play = document.createElement("button");
+          play.type = "button";
+          play.className = "speaker-sample-play";
+          play.dataset.role = "play-sample";
+          play.dataset.sampleIndex = String(sampleIndex);
+          play.textContent = "\u25B6";
+          play.setAttribute("aria-label", tr("speaker_sample_play", "Lire ce sample"));
+          play.addEventListener("click", () => playSpeakerProfileSample(row, sampleIndex, play));
+          sampleWrap.append(led, file, capture, play);
+          applySpeakerSampleState(sampleWrap, sample);
           uploadWrap.append(sampleWrap);
         }
 
@@ -3222,8 +3251,91 @@
           ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
           : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
 
-        row.append(name, uploadWrap, enabledLabel, status, path);
+        row.append(nameWrap, uploadWrap, enabledLabel, status, path);
         speakerProfileGrid.appendChild(row);
+      }
+    }
+
+    async function playSpeakerProfileSample(row, sampleIndex, button) {
+      if (!row || !button || button.disabled) return;
+      button.disabled = true;
+      button.classList.add("playing");
+      try {
+        const response = await fetch("/api/speaker-profile-sample", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "play",
+            profile_index: Number(row.dataset.index || 0),
+            sample_index: sampleIndex
+          })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error?.message || data.message || response.statusText);
+        }
+      } catch (error) {
+        const status = row.querySelector(".speaker-status");
+        if (status) {
+          status.textContent = trf("speaker_sample_play_failed", "Lecture impossible : {error}", {
+            error: String(error.message || error)
+          });
+        }
+      } finally {
+        button.classList.remove("playing");
+        const sampleWrap = button.closest(".speaker-sample");
+        button.disabled = !sampleWrap?.classList.contains("ready") && !sampleWrap?.classList.contains("pending");
+      }
+    }
+
+    async function deleteSpeakerProfile(row) {
+      if (!row) return;
+      const profileIndex = Number(row.dataset.index || 0);
+      const profileName = row.querySelector('[data-role="name"]')?.value.trim() || `speaker_${profileIndex}`;
+      const confirmed = window.confirm(trf(
+        "speaker_profile_delete_confirm",
+        "Supprimer tous les WAV et toutes les empreintes du profil {name} ?",
+        { name: profileName }
+      ));
+      if (!confirmed) return;
+
+      const deleteButton = row.querySelector('[data-role="delete-profile"]');
+      const status = row.querySelector(".speaker-status");
+      if (deleteButton) deleteButton.disabled = true;
+      if (status) status.textContent = tr("speaker_profile_deleting", "suppression...");
+      try {
+        const response = await fetch("/api/speaker-profile-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profile_index: profileIndex })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error?.message || data.message || response.statusText);
+        }
+        for (const sample of data.samples || []) {
+          const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);
+          if (input) input.value = "";
+          applySpeakerSampleState(input ? input.closest(".speaker-sample") : null, sample);
+        }
+        const path = row.querySelector('[data-role="path"]');
+        if (path) {
+          path.textContent = tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
+          path.title = "";
+        }
+        const enabled = row.querySelector('[data-role="enabled"]');
+        if (enabled) enabled.checked = false;
+        speakerProfileChoices = activeSpeakerProfilesFromConfig();
+        syncComposerSpeakerControl();
+        if (status) status.textContent = tr("speaker_profile_deleted", "Profil vocal supprimé");
+      } catch (error) {
+        if (status) {
+          status.textContent = trf("speaker_profile_delete_failed", "Suppression impossible : {error}", {
+            error: String(error.message || error)
+          });
+        }
+      } finally {
+        if (deleteButton) deleteButton.disabled = false;
       }
     }
 

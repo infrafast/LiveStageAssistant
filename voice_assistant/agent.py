@@ -4180,6 +4180,54 @@ class VoiceAssistant:
         if thread and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=0.5)
 
+    def control_speaker_profile_sample(
+        self,
+        action: str,
+        profile_index: int,
+        sample_index: int,
+    ) -> dict[str, Any]:
+        """Play one saved speaker sample through the configured backend output."""
+        normalized_action = str(action or "play").strip().lower()
+        if normalized_action == "stop":
+            self.stop_backend_audio_sample()
+            return {"ok": True, "action": "stop"}
+        if normalized_action != "play":
+            raise ValueError("unsupported speaker profile sample action")
+        if profile_index < 1 or profile_index > 5 or sample_index < 1 or sample_index > 3:
+            raise ValueError("invalid speaker profile sample")
+
+        profile_root = Path(os.getenv("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR).resolve()
+        sample_path = (profile_root / f"profil{profile_index}_{sample_index}.wav").resolve()
+        if sample_path.parent != profile_root or not sample_path.is_file():
+            raise ValueError("speaker profile WAV is not available")
+        try:
+            with wave.open(str(sample_path), "rb") as reader:
+                if reader.getnframes() <= 0:
+                    raise ValueError("speaker profile WAV is empty")
+        except (wave.Error, EOFError) as e:
+            raise ValueError(f"invalid speaker profile WAV: {e}") from e
+
+        self.stop_backend_audio_sample()
+        stop_event = threading.Event()
+
+        def _play() -> None:
+            try:
+                self.play_wav_file(sample_path, stop_event=stop_event)
+            except Exception as e:
+                print(f"Could not play speaker profile sample '{sample_path.name}': {concise_pyaudio_error(e)}")
+
+        thread = threading.Thread(target=_play, name="speaker-profile-sample-preview", daemon=True)
+        with self.backend_audio_sample_lock:
+            self.backend_audio_sample_stop_event = stop_event
+            self.backend_audio_sample_thread = thread
+        thread.start()
+        return {
+            "ok": True,
+            "action": "play",
+            "profile_index": profile_index,
+            "sample_index": sample_index,
+        }
+
     def test_backend_text_to_speech(
         self,
         text: str,
@@ -6630,6 +6678,7 @@ async def main():
             )
             web_monitor.set_backend_tts_test_handler(backend_tts_test_handler)
             web_monitor.set_backend_audio_sample_handler(backend_audio_sample_handler)
+            web_monitor.set_speaker_profile_sample_handler(assistant.control_speaker_profile_sample)
             web_monitor.set_cancel_handler(assistant.stop_tts)
 
         return assistant
