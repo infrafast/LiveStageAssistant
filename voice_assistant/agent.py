@@ -1557,6 +1557,7 @@ class VoiceAssistant:
             flush=True,
         )
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
+        self.tts_provider = tts_provider.lower()
         self.backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
         self.backend_audio_output_pan = normalize_audio_pan(backend_audio_output_pan)
         self.backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(backend_audio_monitor_mode)
@@ -1583,31 +1584,6 @@ class VoiceAssistant:
         self.speaker_recognition_unavailable_reason = ""
         self.speaker_embedding_notice_keys: set[str] = set()
         self.last_speaker_result = SpeakerRecognitionResult()
-        stage_started_at = time.perf_counter()
-        speaker_validation_status = "disabled"
-        if self.speaker_recognition_enabled:
-            try:
-                self.speaker_recognizer = build_speaker_recognizer(
-                    enabled=True,
-                    backend=self.speaker_backend,
-                    threshold=self.speaker_threshold,
-                    margin=self.speaker_margin,
-                    profiles=self.speaker_profiles,
-                )
-                if self.speaker_recognizer:
-                    self.speaker_recognizer.validate_runtime()
-                speaker_validation_status = "ready"
-            except Exception as e:
-                print(f"Speaker recognition unavailable: {e}")
-                self.speaker_recognition_enabled = False
-                self.speaker_recognizer = None
-                self.speaker_recognition_unavailable_reason = str(e)
-                speaker_validation_status = "unavailable"
-        print(
-            "Startup timing: speaker recognition validation "
-            f"{speaker_validation_status} in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
 
         # Initialize audio components
         stage_started_at = time.perf_counter()
@@ -1671,10 +1647,46 @@ class VoiceAssistant:
         print(f"Resolved backend audio input: {self.audio_input_device_detail}")
         print(f"Resolved backend audio output: {self.audio_output_device_detail}")
 
+        # Start the configured loader as soon as backend output is ready so the
+        # comparatively slow speaker-recognition validation has audible feedback.
+        self.startup_loader_sound_enabled = bool(startup_loader_sound_enabled)
+        self.startup_loader_sound_file = startup_loader_sound_file or "loader.wav"
+        self.startup_loader_sound_path = self._resolve_asset_path(self.startup_loader_sound_file)
+        self.startup_loader_sound_warning_shown = False
+        self.startup_loader_sound_lock = threading.Lock()
+        self.startup_loader_sound_stop_event = threading.Event()
+        self.startup_loader_sound_thread: threading.Thread | None = None
+        self.start_startup_loader_sound()
+
+        stage_started_at = time.perf_counter()
+        speaker_validation_status = "disabled"
+        if self.speaker_recognition_enabled:
+            try:
+                self.speaker_recognizer = build_speaker_recognizer(
+                    enabled=True,
+                    backend=self.speaker_backend,
+                    threshold=self.speaker_threshold,
+                    margin=self.speaker_margin,
+                    profiles=self.speaker_profiles,
+                )
+                if self.speaker_recognizer:
+                    self.speaker_recognizer.validate_runtime()
+                speaker_validation_status = "ready"
+            except Exception as e:
+                print(f"Speaker recognition unavailable: {e}")
+                self.speaker_recognition_enabled = False
+                self.speaker_recognizer = None
+                self.speaker_recognition_unavailable_reason = str(e)
+                speaker_validation_status = "unavailable"
+        print(
+            "Startup timing: speaker recognition validation "
+            f"{speaker_validation_status} in {time.perf_counter() - stage_started_at:.3f}s",
+            flush=True,
+        )
+
         # Speech-to-text configuration
         self.openai_api_key = openai_api_key
         self.stt_provider = stt_provider.lower()
-        self.tts_provider = tts_provider.lower()
         self.web_tts_enabled = bool(web_tts_enabled)
         self.local_whisper_model_name = local_whisper_model
         self.stt_language = stt_language or None
@@ -1706,13 +1718,6 @@ class VoiceAssistant:
         self.thinking_sound_lock = threading.Lock()
         self.thinking_sound_stop_event = threading.Event()
         self.thinking_sound_thread: threading.Thread | None = None
-        self.startup_loader_sound_enabled = bool(startup_loader_sound_enabled)
-        self.startup_loader_sound_file = startup_loader_sound_file or "loader.wav"
-        self.startup_loader_sound_path = self._resolve_asset_path(self.startup_loader_sound_file)
-        self.startup_loader_sound_warning_shown = False
-        self.startup_loader_sound_lock = threading.Lock()
-        self.startup_loader_sound_stop_event = threading.Event()
-        self.startup_loader_sound_thread: threading.Thread | None = None
         self.command_ack_sound_enabled = bool(command_ack_sound_enabled)
         self.command_ack_sound_path = self._resolve_command_ack_sound_path()
         self.command_ack_sound_warning_shown = False
@@ -1875,6 +1880,7 @@ class VoiceAssistant:
                 daemon=True,
             )
             self.startup_loader_sound_thread.start()
+            print(f"Startup loader sound started: {self.startup_loader_sound_path}", flush=True)
 
     def stop_startup_loader_sound(self) -> None:
         """Stop the startup loader sound if it is currently playing."""
