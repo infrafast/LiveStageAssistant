@@ -90,6 +90,7 @@
     "play_startup_loader_sample": "Lire un échantillon du son de chargement",
     "audio_sample_playing": "Lecture de l’échantillon audio...",
     "audio_sample_played": "Échantillon audio lu.",
+    "audio_sample_stopped": "Lecture de l’échantillon audio arrêtée.",
     "audio_sample_failed": "Échec de la lecture audio : {error}",
     "prompt": "Prompt",
     "final_prompt": "Prompt final",

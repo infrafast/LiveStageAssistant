@@ -99,6 +99,8 @@ DEFAULT_MCP_AGENT_MAX_STEPS = 20
 DEFAULT_SILERO_VAD_MODEL = Path("assets/web/static/vendor/silero-vad/silero_vad_v6.onnx")
 BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD = 0.5
 BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS = 120.0
+BACKEND_AUDIO_DIAGNOSTIC_MIN_GOOD_SPEECH_DBFS = -40.0
+BACKEND_AUDIO_DIAGNOSTIC_MIN_USABLE_SPEECH_DBFS = -56.0
 OPENAI_MAX_TOOLS_PER_REQUEST = 128
 DEFAULT_MCP_PROMPT_NAME = "agent_prompt"
 DEFAULT_MCP_PROMPT_RESOURCE_URI = "agent://prompt/system"
@@ -1714,6 +1716,9 @@ class VoiceAssistant:
         self.command_ack_sound_enabled = bool(command_ack_sound_enabled)
         self.command_ack_sound_path = self._resolve_command_ack_sound_path()
         self.command_ack_sound_warning_shown = False
+        self.backend_audio_sample_lock = threading.Lock()
+        self.backend_audio_sample_stop_event: threading.Event | None = None
+        self.backend_audio_sample_thread: threading.Thread | None = None
 
         # MCP configuration
         self.mcp_config = mcp_config
@@ -3015,6 +3020,9 @@ class VoiceAssistant:
             clipping_ratio = clipping_count / total_sample_count if total_sample_count else 0.0
             configured_minimum_speech_ms = max(0.0, float(self.vad.min_speech_ms))
 
+            # Classify the same one-decimal value shown by the UI so a displayed
+            # boundary value (for example -56.0 dBFS) has a predictable verdict.
+            diagnostic_speech_dbfs = round(speech_dbfs, 1)
             issues: list[str] = []
             verdict = "green"
             if overall_rms < 0.001 or peak < 0.005:
@@ -3024,10 +3032,10 @@ class VoiceAssistant:
                 issues.append("no_speech")
                 verdict = "red"
             else:
-                if speech_dbfs < -40.0:
+                if diagnostic_speech_dbfs < BACKEND_AUDIO_DIAGNOSTIC_MIN_USABLE_SPEECH_DBFS:
                     issues.append("very_low")
                     verdict = "red"
-                elif speech_dbfs < -30.0:
+                elif diagnostic_speech_dbfs < BACKEND_AUDIO_DIAGNOSTIC_MIN_GOOD_SPEECH_DBFS:
                     issues.append("low")
                     verdict = "orange"
                 if speech_dbfs > -9.0:
@@ -3982,8 +3990,10 @@ class VoiceAssistant:
         volume: float | None = None,
         pan: float | None = None,
         output_device: str | None = None,
+        stop_event: threading.Event | None = None,
+        loop: bool = False,
     ) -> None:
-        """Play one top-level assets WAV through the selected backend output."""
+        """Play a top-level assets WAV through the selected backend output."""
         clean_filename = Path(filename or "").name
         if not clean_filename or clean_filename != filename or Path(clean_filename).suffix.lower() != ".wav":
             raise ValueError("audio sample must be a WAV file from assets/")
@@ -4004,25 +4014,62 @@ class VoiceAssistant:
 
         sample_volume = max(0.0, min(2.0, float(volume if volume is not None else self.backend_tts_volume)))
         sample_pan = normalize_audio_pan(pan if pan is not None else self.backend_audio_output_pan)
-        try:
-            play_wav_file_backend(
-                self.audio,
-                sample_path,
-                output_device_index=output_device_index,
-                volume=sample_volume,
-                pan=sample_pan,
-            )
-        except (wave.Error, EOFError, RuntimeError):
-            pcm_bytes = decode_audio_file_to_pcm_bytes(sample_path)
-            play_pcm_bytes(
-                self.audio,
-                pcm_bytes,
-                sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
-                channels=DEFAULT_BACKEND_MP3_CHANNELS,
-                output_device_index=output_device_index,
-                volume=sample_volume,
-                pan=sample_pan,
-            )
+        while stop_event is None or not stop_event.is_set():
+            try:
+                play_wav_file_backend(
+                    self.audio,
+                    sample_path,
+                    output_device_index=output_device_index,
+                    stop_event=stop_event,
+                    volume=sample_volume,
+                    pan=sample_pan,
+                )
+            except (wave.Error, EOFError, RuntimeError):
+                pcm_bytes = decode_audio_file_to_pcm_bytes(sample_path)
+                play_pcm_bytes(
+                    self.audio,
+                    pcm_bytes,
+                    sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+                    channels=DEFAULT_BACKEND_MP3_CHANNELS,
+                    output_device_index=output_device_index,
+                    stop_event=stop_event,
+                    volume=sample_volume,
+                    pan=sample_pan,
+                )
+            if not loop:
+                break
+
+    def start_backend_audio_sample(self, filename: str, **options: Any) -> None:
+        """Start a looping backend sample preview, replacing any previous preview."""
+        self.stop_backend_audio_sample()
+        validation_event = threading.Event()
+        validation_event.set()
+        self.test_backend_audio_sample(filename, stop_event=validation_event, loop=True, **options)
+        stop_event = threading.Event()
+
+        def _play() -> None:
+            try:
+                self.test_backend_audio_sample(filename, stop_event=stop_event, loop=True, **options)
+            except Exception as e:
+                print(f"Could not play backend audio sample '{filename}': {concise_pyaudio_error(e)}")
+
+        thread = threading.Thread(target=_play, name="backend-audio-sample-preview", daemon=True)
+        with self.backend_audio_sample_lock:
+            self.backend_audio_sample_stop_event = stop_event
+            self.backend_audio_sample_thread = thread
+        thread.start()
+
+    def stop_backend_audio_sample(self) -> None:
+        """Stop the looping backend sample preview, if any."""
+        with self.backend_audio_sample_lock:
+            stop_event = self.backend_audio_sample_stop_event
+            thread = self.backend_audio_sample_thread
+            self.backend_audio_sample_stop_event = None
+            self.backend_audio_sample_thread = None
+        if stop_event:
+            stop_event.set()
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=0.5)
 
     def test_backend_text_to_speech(
         self,
@@ -4881,6 +4928,10 @@ class VoiceAssistant:
                 pass
             try:
                 self.stop_thinking_sound()
+            except Exception:
+                pass
+            try:
+                self.stop_backend_audio_sample()
             except Exception:
                 pass
             if reload_requested:
@@ -6403,8 +6454,19 @@ async def main():
                 active_assistant: VoiceAssistant = assistant,
             ) -> dict[str, Any]:
                 requested = options or {}
+                action = str(requested.get("action") or "play").strip().lower()
+                if action == "stop":
+                    active_assistant.stop_backend_audio_sample()
+                    return {"ok": True}
+                if action not in {"play", "start"}:
+                    raise ValueError("unsupported backend audio sample action")
                 try:
-                    active_assistant.test_backend_audio_sample(
+                    play_sample = (
+                        active_assistant.start_backend_audio_sample
+                        if action == "start"
+                        else active_assistant.test_backend_audio_sample
+                    )
+                    play_sample(
                         filename,
                         volume=max(
                             0.0,

@@ -279,6 +279,7 @@
     let commandAckSoundUrl = "/assets/ring.wav";
     let thinkingAudioPlaying = false;
     let currentAudioSample = null;
+    let audioSampleRequestId = 0;
     let audioTranscriptionPending = false;
     let audioTranscriptionMayPlayThinking = false;
     let lastBrowserCommandAckAt = 0;
@@ -2704,11 +2705,39 @@
       thinkingAudioPlaying = false;
     }
 
+    function setAudioSampleButtonPlaying(button, playing) {
+      if (!button) return;
+      button.classList.toggle("enabled", playing);
+      button.setAttribute("aria-pressed", playing ? "true" : "false");
+      button.innerHTML = playing ? "&#9632;" : "&#9654;";
+      if (playing) {
+        button.title = tr("stop", "Stop");
+        button.setAttribute("aria-label", tr("stop", "Stop"));
+      } else {
+        button.title = tr(button.dataset.i18nTitle, "Play sample");
+        button.setAttribute("aria-label", tr(button.dataset.i18nAriaLabel, "Play sample"));
+      }
+    }
+
     function stopCurrentAudioSample() {
-      if (!currentAudioSample) return;
-      currentAudioSample.pause();
-      currentAudioSample.currentTime = 0;
+      audioSampleRequestId += 1;
+      const sample = currentAudioSample;
+      if (!sample) return;
       currentAudioSample = null;
+      setAudioSampleButtonPlaying(sample.button, false);
+      if (sample.audio) {
+        sample.audio.pause();
+        sample.audio.currentTime = 0;
+      }
+      if (sample.output === "backend") {
+        const stopBackendSample = () => fetch("/api/backend-audio-sample", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "stop", filename: sample.filename })
+          }).catch(() => {});
+        if (sample.backendStart) sample.backendStart.then(stopBackendSample, stopBackendSample);
+        else stopBackendSample();
+      }
     }
 
     function syncAudioSampleControls() {
@@ -2737,47 +2766,56 @@
       startupLoaderSoundPlay.title = startupLoaderSoundField.title;
     }
 
-    async function playAudioSample(select, button, backendOnly = false) {
+    async function toggleAudioSample(select, button, backendOnly = false) {
       const filename = String(select.value || "").trim();
       const output = selectedTtsOutput();
       if (!filename || output === "silent" || (backendOnly && output !== "backend")) return;
 
+      if (currentAudioSample && currentAudioSample.button === button) {
+        stopCurrentAudioSample();
+        llmMessage.textContent = tr("audio_sample_stopped", "Audio sample stopped.");
+        syncAudioSampleControls();
+        return;
+      }
+
       stopCurrentAudioSample();
-      button.disabled = true;
+      const requestId = audioSampleRequestId;
+      const sample = { button, filename, output, audio: null, backendStart: null };
+      currentAudioSample = sample;
+      setAudioSampleButtonPlaying(button, true);
       llmMessage.textContent = tr("audio_sample_playing", "Playing audio sample...");
       try {
         if (output === "browser") {
           await unlockWebTtsAudio();
           const audio = new Audio(`/assets/${filename}`);
-          currentAudioSample = audio;
+          if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
+          sample.audio = audio;
+          audio.loop = true;
           audio.volume = Math.max(0, Math.min(1, Number(webTtsVolume.value || 1)));
           await applyBrowserAudioOutput(audio);
-          await new Promise((resolve, reject) => {
-            audio.addEventListener("ended", resolve, { once: true });
-            audio.addEventListener("error", reject, { once: true });
-            audio.play().catch(reject);
-          });
-          currentAudioSample = null;
+          if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
+          await audio.play();
         } else {
-          const response = await fetch("/api/backend-audio-sample", {
+          sample.backendStart = fetch("/api/backend-audio-sample", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+              action: "start",
               filename,
               output_device: backendAudioOutput.value || "",
               volume: Number(backendTtsVolume.value || 1),
               pan: Number(backendAudioOutputPan.value || 0)
             })
           });
+          const response = await sample.backendStart;
           await fetchJsonOrThrow(response);
         }
-        llmMessage.textContent = tr("audio_sample_played", "Audio sample played.");
       } catch (error) {
-        stopCurrentAudioSample();
+        if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
+        if (currentAudioSample === sample) stopCurrentAudioSample();
         llmMessage.textContent = trf("audio_sample_failed", "Audio playback failed: {error}", {
           error: String(error.message || error)
         });
-      } finally {
         syncAudioSampleControls();
       }
     }
@@ -4733,12 +4771,21 @@
     elevenlabsVoice.addEventListener("change", syncTtsProviderControls);
     openaiTtsVoice.addEventListener("change", syncTtsProviderControls);
     for (const input of ttsOutputInputs) {
-      input.addEventListener("change", syncTtsProviderControls);
+      input.addEventListener("change", () => {
+        stopCurrentAudioSample();
+        syncTtsProviderControls();
+      });
     }
-    thinkingSound.addEventListener("change", syncAudioSampleControls);
-    startupLoaderSound.addEventListener("change", syncAudioSampleControls);
-    thinkingSoundPlay.addEventListener("click", () => playAudioSample(thinkingSound, thinkingSoundPlay));
-    startupLoaderSoundPlay.addEventListener("click", () => playAudioSample(
+    thinkingSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncAudioSampleControls();
+    });
+    startupLoaderSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncAudioSampleControls();
+    });
+    thinkingSoundPlay.addEventListener("click", () => toggleAudioSample(thinkingSound, thinkingSoundPlay));
+    startupLoaderSoundPlay.addEventListener("click", () => toggleAudioSample(
       startupLoaderSound,
       startupLoaderSoundPlay,
       true

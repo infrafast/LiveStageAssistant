@@ -83,6 +83,13 @@ def build_assistant(
     return assistant
 
 
+def speech_frame(amplitude: int, *, peak: int = 721) -> bytes:
+    """Build speech with a controlled RMS and a realistic stronger transient peak."""
+    samples = (np.sin(np.linspace(0, np.pi * 16, 1024)) * amplitude).astype(np.int16)
+    samples[0] = peak
+    return samples.tobytes()
+
+
 def test_backend_audio_diagnostic_reports_silence(monkeypatch) -> None:
     frame = np.zeros(1024, dtype=np.int16).tobytes()
     assistant = build_assistant(frame, speech=False, monkeypatch=monkeypatch)
@@ -104,6 +111,38 @@ def test_backend_audio_diagnostic_accepts_clear_speech(monkeypatch) -> None:
     assert result["configured_vad"]["accepted"] is True
     assert result["metrics"]["speech_duration_seconds"] > 0
     assert result["audio_data_url"].startswith("data:audio/wav;base64,UklGR")
+
+
+def test_backend_audio_diagnostic_accepts_audible_minus_36_dbfs(monkeypatch) -> None:
+    assistant = build_assistant(speech_frame(700), speech=True, monkeypatch=monkeypatch)
+
+    result = assistant.diagnose_backend_audio_input("0", duration_seconds=3)
+
+    assert result["metrics"]["speech_rms_dbfs"] == -36.4
+    assert result["metrics"]["peak_dbfs"] == -33.1
+    assert result["verdict"] == "green"
+    assert result["issues"] == ["good"]
+
+
+def test_backend_audio_diagnostic_marks_minus_56_dbfs_orange(monkeypatch) -> None:
+    assistant = build_assistant(speech_frame(67), speech=True, monkeypatch=monkeypatch)
+
+    result = assistant.diagnose_backend_audio_input("0", duration_seconds=3)
+
+    assert result["metrics"]["speech_rms_dbfs"] == -56.0
+    assert result["metrics"]["peak_dbfs"] == -33.1
+    assert result["verdict"] == "orange"
+    assert result["issues"] == ["low"]
+
+
+def test_backend_audio_diagnostic_marks_below_minus_56_dbfs_red(monkeypatch) -> None:
+    assistant = build_assistant(speech_frame(65), speech=True, monkeypatch=monkeypatch)
+
+    result = assistant.diagnose_backend_audio_input("0", duration_seconds=3)
+
+    assert result["metrics"]["speech_rms_dbfs"] == -56.2
+    assert result["verdict"] == "red"
+    assert result["issues"] == ["very_low"]
 
 
 def test_backend_audio_diagnostic_reports_severe_clipping(monkeypatch) -> None:

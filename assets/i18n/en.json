@@ -90,6 +90,7 @@
     "play_startup_loader_sample": "Play startup loader sample",
     "audio_sample_playing": "Playing audio sample...",
     "audio_sample_played": "Audio sample played.",
+    "audio_sample_stopped": "Audio sample stopped.",
     "audio_sample_failed": "Audio playback failed: {error}",
     "prompt": "Prompt",
     "final_prompt": "Final Prompt",

@@ -2036,6 +2036,7 @@ class WebMonitor:
                         self.send_error(400, "filename is required")
                         return
                     options = {
+                        "action": str(payload.get("action") or "play").strip().lower(),
                         "volume": payload.get("volume"),
                         "pan": payload.get("pan"),
                         "output_device": str(payload.get("output_device") or "").strip(),
