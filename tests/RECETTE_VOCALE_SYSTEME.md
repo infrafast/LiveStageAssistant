@@ -77,10 +77,10 @@ Ces commandes concernent le bus Claude lui-même, pas l’envoi d’un channel v
 - [X] « Monte un peu le retour Claude. »
 - [X] « Baisse le bus Claude de 3 dB. »
 - [X] « Mets le bus Claude à moins 6 dB. »
-- [ ] « Coupe le retour Claude. »
-- [ ] « Rallume le retour Claude. »
-- [ ] « Fais descendre progressivement le bus Claude à moins 20 dB en 8 secondes. »
-- [ ] « Fais remonter progressivement le bus Claude à moins 6 dB en 8 secondes. »
+- [X] « Coupe le retour Claude. »
+- [X] « Rallume le retour Claude. »
+- [X] « Fais descendre progressivement le bus Claude à moins 20 dB en 8 secondes. »
+- [/] « Fais remonter progressivement le bus Claude à moins 6 dB en 8 secondes. »
 
 Notes :
 
@@ -92,21 +92,21 @@ Ces commandes concernent le fader principal du channel, donc son niveau vers la 
 
 ### Résolution exacte et structurée
 
-- [ ] « Quel est le niveau de la tranche guitar-clode ? »
-- [ ] « Monte la guitare de Claude. »
-- [ ] « Baisse guitar-clode de 3 dB. »
-- [ ] « Mets guitar-clode sur moins 8 dB. »
-- [ ] « Monte guitar-clode à moins 6 dB. »
+- [X] « Quel est le niveau de la tranche guitar-clode ? »
+- [X] « Monte la guitare de Claude. »
+- [X] « Baisse guitar-clode de 3 dB. »
+- [X] « Mets guitar-clode sur moins 8 dB. »
+- [X] « Monte guitar-clode à moins 6 dB. »
 
 ### Mute et unmute
 
-- [ ] « Coupe guitar-clode. »
-- [ ] « Réactive la guitare de Claude. »
+- [X] « Coupe guitar-clode. »
+- [X] « Réactive la guitare de Claude. »
 
 ### Automations
 
-- [ ] « Fais un fade-out de guitar-clode en 5 secondes. »
-- [ ] « Fais un fade-in de la guitare de Claude jusqu’à moins 6 dB en 5 secondes. »
+- [X] « Fais un fade-out de guitar-clode en 5 secondes. »
+- [X] « Fais un fade-in de la guitare de Claude jusqu’à moins 6 dB en 5 secondes. »
 
 Notes :
 
@@ -118,8 +118,8 @@ Ces commandes doivent modifier uniquement l’envoi du channel vers le retour Cl
 
 ### Lecture et changements immédiats
 
-- [ ] « Quel est le niveau de guitar-clode sur le retour Claude ? »
-- [ ] « Monte la guitare de Claude sur Claude. »
+- [X] « Quel est le niveau de guitar-clode sur le retour Claude ? »
+- [X] « Monte la guitare de Claude sur Claude. »
 - [ ] « Baisse de 3 dB guitar-clode sur le bus Claude. »
 - [ ] « Mets guitar-clode sur Claude à moins 5 dB. »
 - [ ] « Monte le volume guitar-clode sur Claude. »
