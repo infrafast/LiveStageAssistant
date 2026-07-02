@@ -42,6 +42,8 @@ At startup, `Startup timing:` log lines measure Silero/ONNX loading, Resemblyzer
 
 Backend microphone monitoring is **experimental** and has not yet been validated on Raspberry Pi hardware. Leave it on `off` for normal operation. When testing, use headphones and a low monitoring volume first; ALSA/PipeWire device contention, feedback, latency, and channel/rate compatibility may require platform-specific adjustments.
 
+Backend and browser transcription are bounded by `STT_TIMEOUT_SECONDS` (25 seconds in the bundled profiles). Optional Resemblyzer analysis is bounded separately by `SPEAKER_RECOGNITION_TIMEOUT_SECONDS` (10 seconds). If the journal stops after `Processing...`, the next diagnostic lines identify whether STT or speaker recognition started, finished, or timed out; a timeout returns control to listening instead of leaving the service loop blocked.
+
 On Raspberry Pi with PipeWire, USB audio devices may be busy when opened directly through ALSA `hw:` or `plughw:`. Prefer selecting the `pipewire` backend output in the web UI, then set the USB sink as PipeWire's default output:
 
 ```bash

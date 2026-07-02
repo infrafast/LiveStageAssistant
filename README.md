@@ -247,6 +247,7 @@ STT_PROVIDER=openai-whisper                     # openai-whisper | local-whisper
 LOCAL_WHISPER_MODEL=base                        # faster-whisper model size or local model path
 STT_LANGUAGE=fr                                 # required locale/STT language; options come from assets/i18n/<locale>.json
 STT_PROMPT="Commandes courtes en français..."   # Optional context prompt for Whisper
+STT_TIMEOUT_SECONDS=25                          # Hard limit for one STT operation before returning to listening
 
 # Text-to-speech settings
 CLOUD_TTS_PROVIDER=openai                       # TTS dropdown: none | openai | elevenlabs
@@ -417,6 +418,8 @@ Browser audio input/output device choices are local to each browser and are save
 The conversation button next to the microphone enables continuous browser listening. In this mode the push-to-talk button is disabled, the browser detects speech/silence locally, sends each detected utterance to the backend, and then restarts listening after the assistant is done. If `WAKE_WORD` is configured, conversation-mode transcriptions must pass the same wake-word gate before being injected. Manual push-to-talk remains direct command input and does not require the wake word.
 
 Backend microphone STT and browser microphone STT now use the same bundled Silero VAD ONNX model offline. Backend microphone input uses `STT_PROVIDER`, `LOCAL_WHISPER_MODEL`, `STT_LANGUAGE`, and `STT_PROMPT` for transcription selection and Whisper biasing; browser microphone input uses `WEB_STT_PROVIDER` and `WEB_STT_MODEL`. `STT_LANGUAGE` is also the web GUI locale and is selected from Settings -> Config -> **User interface**. Available choices are discovered from `assets/i18n/<locale>.json`; the repository ships `fr` and `en`, and changing the language saves the active `.env` file and reloads the assistant. Before either path sends audio to STT, Silero estimates speech probability. `VAD_SPEECH_THRESHOLD` starts speech, `VAD_NEGATIVE_THRESHOLD` allows accepted speech to end, `VAD_MIN_SPEECH_MS` rejects tiny noises, `VAD_MIN_SILENCE_MS` controls end-of-phrase timing, `VAD_SPEECH_PAD_MS` keeps backend pre-roll before detected speech, and `VAD_MAX_SPEECH_SECONDS` caps one utterance. Raise thresholds or minimum speech values to reject breaths/noise; lower them if short spoken commands are missed.
+
+`STT_TIMEOUT_SECONDS` bounds both backend and browser transcription. Runtime logs bracket transcription with `STT started` / `STT finished`; when the deadline is exceeded, the assistant discards that utterance and returns to listening instead of remaining frozen after `Processing...`. The OpenAI audio client uses the same request timeout with automatic retries disabled. A timed-out worker is isolated as a daemon; while it is still running, another STT attempt fails fast instead of creating unbounded stuck workers.
 
 The Settings -> Config -> STT/TTS section exposes these controls in a nested **Voice Activity Detection (VAD)** collapsible. Hover each slider label to see the exact `.env` variable it writes. The same VAD collapsible includes three Silero presets for quick isolated words, breath filtering, and slow soft speech; applying one fills the sliders and still requires Save to persist it.
 
@@ -805,6 +808,8 @@ The `TTS` dropdown in the web config saves `CLOUD_TTS_PROVIDER`, and the `TTS Ou
 
 Speaker recognition is optional and runs after VAD/STT has accepted a speech segment. Enable it with `SPEAKER_RECOGNITION_ENABLED=true` or from the web config, then add up to five WAV reference profiles. Each profile has three optional WAV sample slots and becomes usable as soon as one slot has a computed embedding. Profile slots use a fixed filename convention under `SPEAKER_PROFILES_DIR`, which defaults to `data/speaker_profiles` locally and `/data/speaker_profiles` in Docker: profile 1 uses `profil1_1.wav`, `profil1_2.wav`, and `profil1_3.wav`; profile 2 uses `profil2_1.wav`, `profil2_2.wav`, and `profil2_3.wav`; and so on. Older single-file names such as `profil1.wav` are no longer used. The first backend is `SPEAKER_BACKEND=resemblyzer`; `speechbrain` is reserved for a later backend and currently returns `unknown`. Backend microphone PCM is wrapped as WAV automatically, and browser audio is decoded with ffmpeg when the browser sends WebM/Opus instead of WAV. The assistant uses the system `ffmpeg` binary when available and falls back to the packaged `imageio-ffmpeg` binary otherwise.
 
+`SPEAKER_RECOGNITION_TIMEOUT_SECONDS` bounds each speaker analysis. If it expires, the accepted transcription continues with speaker `unknown`, speaker recognition is disabled for the remainder of that assistant session, and runtime state reports the timeout. This prevents optional voice identification from blocking command handling.
+
 Resemblyzer is installed by `scripts/install.sh` and by the Docker image after a non-CUDA PyTorch wheel is installed first. This avoids the CUDA/NVIDIA packages that PyPI's default Torch resolution may otherwise select. On Raspberry Pi, use the service-pack flow documented in `raspi_service_pack_stdio/README.md` so the required system audio packages are installed before the assistant service is started.
 
 For best speaker recognition, provide up to three WAV samples per profile. In the web UI, each sample can come from the existing WAV upload button or from the microphone capture button next to it. The capture source follows `STT Input`: Browser uses the selected browser microphone, Backend uses the selected PyAudio input, Both asks which microphone to use in the capture dialog, and Silent disables capture while leaving WAV upload available. Both capture paths record up to 10 seconds and reuse the same Stop, preview, retry, and validation flow. Browser capture requires HTTPS or `localhost`; backend capture temporarily pauses normal backend listening and does not require browser microphone permission. You can mix clean/studio samples and live-condition samples. A good starting strategy is sample 1: clean reference voice, sample 2: clean voice with another phrase, sample 3: live-condition voice from the microphone path used on stage.
@@ -839,6 +844,7 @@ SPEAKER_RECOGNITION_ENABLED=false
 SPEAKER_BACKEND=resemblyzer
 SPEAKER_THRESHOLD=0.75
 SPEAKER_MARGIN=0.10
+SPEAKER_RECOGNITION_TIMEOUT_SECONDS=10          # Fall back to unknown if one voice analysis stalls
 SPEAKER_PROFILE_1_NAME=
 SPEAKER_PROFILE_1_ENABLED=false
 ```

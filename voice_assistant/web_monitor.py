@@ -2012,6 +2012,18 @@ class WebMonitor:
                             },
                         )
                         return
+                    except TimeoutError as e:
+                        self._send_json_error(
+                            504,
+                            {
+                                "ok": False,
+                                "error": {
+                                    "code": "transcription_timeout",
+                                    "message": str(e),
+                                },
+                            },
+                        )
+                        return
                     except Exception as e:
                         error_text = str(e)
                         status = 429 if "insufficient_quota" in error_text or "Error code: 429" in error_text else 500

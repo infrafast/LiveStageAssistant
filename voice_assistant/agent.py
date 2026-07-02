@@ -50,6 +50,7 @@ try:
     from .i18n import available_locales, i18n_text, load_locale, normalize_locale
     from .web_monitor import WebMonitor, build_service_state
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
+    from .stage_timeout import TimedStageRunner
     from .wake_word import apply_wake_word, parse_wake_words
     from .speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
@@ -69,6 +70,7 @@ except ImportError:
     from i18n import available_locales, i18n_text, load_locale, normalize_locale
     from web_monitor import WebMonitor, build_service_state
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
+    from stage_timeout import TimedStageRunner
     from wake_word import apply_wake_word, parse_wake_words
     from speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
@@ -96,6 +98,8 @@ DEFAULT_OPENAI_TTS_VOICE = "alloy"
 DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
+DEFAULT_STT_TIMEOUT_SECONDS = 25.0
+DEFAULT_SPEAKER_RECOGNITION_TIMEOUT_SECONDS = 10.0
 DEFAULT_SILERO_VAD_MODEL = Path("assets/web/static/vendor/silero-vad/silero_vad_v6.onnx")
 BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD = 0.5
 BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS = 120.0
@@ -136,6 +140,7 @@ SPEAKER_REASON_USER_MESSAGES = {
     "below_threshold_or_margin": "le score est trop faible",
     "backend_not_implemented": "le moteur configuré ne peut pas analyser la voix",
     "disabled": "la reconnaissance de locuteur est désactivée",
+    "timeout": "l'analyse vocale a dépassé le délai maximal",
     "matched": "profil vocal reconnu",
 }
 RELOAD_AUDIO_GUARD: list[Any] = []
@@ -1446,6 +1451,7 @@ class VoiceAssistant:
         local_whisper_model: str = "base",
         stt_language: str | None = None,
         stt_prompt: str | None = None,
+        stt_timeout_seconds: float = DEFAULT_STT_TIMEOUT_SECONDS,
         tts_provider: str = "elevenlabs",
         web_tts_enabled: bool = False,
         elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
@@ -1490,6 +1496,7 @@ class VoiceAssistant:
         speaker_backend: str = "resemblyzer",
         speaker_threshold: float = 0.75,
         speaker_margin: float = 0.10,
+        speaker_recognition_timeout_seconds: float = DEFAULT_SPEAKER_RECOGNITION_TIMEOUT_SECONDS,
         speaker_profiles: list[SpeakerProfile] | None = None,
         notes_dir: str | None = None,
         system_prompt: str | None = None,
@@ -1508,6 +1515,7 @@ class VoiceAssistant:
             local_whisper_model: Local faster-whisper model size or path
             stt_language: Required transcription language/locale code such as fr or en
             stt_prompt: Optional STT context prompt to bias short command transcription
+            stt_timeout_seconds: Maximum seconds allowed for one STT operation
             tts_provider: Text-to-speech provider (elevenlabs, pyttsx3, or none)
             web_tts_enabled: Whether browser TTS is the active speech output
             elevenlabs_voice_id: ElevenLabs voice ID (default: Rachel)
@@ -1550,6 +1558,7 @@ class VoiceAssistant:
             speaker_backend: Speaker recognition backend, currently resemblyzer
             speaker_threshold: Minimum best score needed to accept a speaker
             speaker_margin: Minimum score gap between best and second-best speakers
+            speaker_recognition_timeout_seconds: Maximum seconds allowed for speaker recognition
             speaker_profiles: Known speaker reference WAV profiles
             notes_dir: Directory for storing notes (default: temp dir)
             system_prompt: Optional custom system prompt for the assistant
@@ -1713,15 +1722,30 @@ class VoiceAssistant:
         # Speech-to-text configuration
         self.openai_api_key = openai_api_key
         self.stt_provider = stt_provider.lower()
+        self.stt_timeout_seconds = max(1.0, float(stt_timeout_seconds or DEFAULT_STT_TIMEOUT_SECONDS))
+        self.speaker_recognition_timeout_seconds = max(
+            1.0,
+            float(speaker_recognition_timeout_seconds or DEFAULT_SPEAKER_RECOGNITION_TIMEOUT_SECONDS),
+        )
+        self._timed_stage_runner = TimedStageRunner()
         self.web_tts_enabled = bool(web_tts_enabled)
         self.local_whisper_model_name = local_whisper_model
         self.stt_language = stt_language or None
         base_stt_prompt = stt_prompt or DEFAULT_STT_PROMPT
         self.stt_prompt = base_stt_prompt
         self.openai_client = None
+        self.openai_stt_client = None
         self.local_whisper_model = None
+        if self.stt_provider == "openai-whisper":
+            self.openai_stt_client = openai.OpenAI(
+                api_key=openai_api_key,
+                timeout=self.stt_timeout_seconds,
+                max_retries=0,
+            )
         if self.stt_provider == "openai-whisper" or self.tts_provider == "openai":
-            self.openai_client = openai.OpenAI(api_key=openai_api_key)
+            self.openai_client = openai.OpenAI(
+                api_key=openai_api_key,
+            )
 
         self.model = model
         self.llm_provider = llm_provider.lower()
@@ -3484,7 +3508,7 @@ class VoiceAssistant:
                 await asyncio.sleep(0.05)
                 continue
 
-            text = await asyncio.to_thread(self.audio_to_text, audio_data)
+            text = await asyncio.to_thread(self.audio_to_text_with_timeout, audio_data)
             if not text:
                 continue
             print(f"Voice cancel listener heard: {text}")
@@ -3492,6 +3516,78 @@ class VoiceAssistant:
                 return True
 
         return False
+
+    def _run_timed_stage(self, stage: str, timeout_seconds: float, operation) -> Any:
+        """Run a blocking stage in a bounded daemon worker."""
+        return self._timed_stage_runner.run(stage, timeout_seconds, operation)
+
+    def audio_to_text_with_timeout(self, audio_data: bytes) -> str | None:
+        """Transcribe one utterance without allowing STT to freeze the main loop."""
+        started_at = time.perf_counter()
+        print(f"STT started (timeout {self.stt_timeout_seconds:.1f}s).", flush=True)
+        try:
+            text = self._run_timed_stage(
+                "stt",
+                self.stt_timeout_seconds,
+                lambda: self.audio_to_text(audio_data),
+            )
+        except TimeoutError as error:
+            print(f"STT timed out: {error}. Returning to listening.", flush=True)
+            return None
+        except Exception as error:
+            print(f"STT failed: {error}. Returning to listening.", flush=True)
+            return None
+        print(f"STT finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
+        return text
+
+    def recognize_speaker_with_timeout(
+        self,
+        audio_data: bytes | None,
+        *,
+        already_wav: bool = False,
+    ) -> SpeakerRecognitionResult:
+        """Recognize a speaker with a bounded wait and safe unknown fallback."""
+        if not self.speaker_recognition_enabled or not self.speaker_recognizer or not audio_data:
+            return self.recognize_speaker(audio_data, already_wav=already_wav)
+
+        started_at = time.perf_counter()
+        print(
+            f"Speaker recognition started (timeout {self.speaker_recognition_timeout_seconds:.1f}s).",
+            flush=True,
+        )
+        try:
+            result = self._run_timed_stage(
+                "speaker-recognition",
+                self.speaker_recognition_timeout_seconds,
+                lambda: self.recognize_speaker(audio_data, already_wav=already_wav),
+            )
+        except TimeoutError as error:
+            print(
+                f"Speaker recognition timed out: {error}. Continuing with unknown speaker and disabling "
+                "speaker recognition for this session.",
+                flush=True,
+            )
+            self.speaker_recognition_enabled = False
+            self.speaker_recognition_unavailable_reason = str(error)
+            result = SpeakerRecognitionResult(
+                speaker=UNKNOWN_SPEAKER,
+                backend=self.speaker_backend,
+                reason="timeout",
+            )
+            self.last_speaker_result = result
+            if self.web_monitor:
+                self.web_monitor.update(runtime={"speaker_recognition": self.speaker_recognition_runtime_state()})
+            return result
+        except Exception as error:
+            print(f"Speaker recognition failed outside its worker: {error}. Continuing with unknown speaker.", flush=True)
+            return SpeakerRecognitionResult(
+                speaker=UNKNOWN_SPEAKER,
+                backend=self.speaker_backend,
+                reason=f"error: {error}",
+            )
+
+        print(f"Speaker recognition finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
+        return result
 
     def recognize_speaker(self, audio_data: bytes | None, *, already_wav: bool = False) -> SpeakerRecognitionResult:
         """Return a speaker recognition result without applying any business rule."""
@@ -3744,7 +3840,7 @@ class VoiceAssistant:
                 await asyncio.sleep(0.05)
                 continue
 
-            text = await asyncio.to_thread(self.audio_to_text, audio_data)
+            text = await asyncio.to_thread(self.audio_to_text_with_timeout, audio_data)
             if not text:
                 continue
             print(f"Voice interrupt listener heard: {text}")
@@ -3800,7 +3896,7 @@ class VoiceAssistant:
 
     def audio_to_text_openai_whisper(self, audio_data: bytes) -> str | None:
         """Convert audio to text using OpenAI Whisper API."""
-        if not self.openai_client:
+        if not self.openai_stt_client:
             print("OpenAI Whisper is selected, but no OpenAI client is configured.")
             return None
 
@@ -3815,7 +3911,7 @@ class VoiceAssistant:
                 kwargs["language"] = self.stt_language
             if self.stt_prompt:
                 kwargs["prompt"] = self.stt_prompt
-            response = self.openai_client.audio.transcriptions.create(**kwargs)
+            response = self.openai_stt_client.audio.transcriptions.create(**kwargs)
 
             text = response.text.strip()
             return self.normalize_stt_command_text(text) if text else None
@@ -3831,7 +3927,7 @@ class VoiceAssistant:
         model: str = "whisper-1",
     ) -> str | None:
         """Convert browser-recorded audio to text using OpenAI from the backend."""
-        if not self.openai_client:
+        if not self.openai_stt_client:
             raise ValueError("OpenAI client is not configured")
         if not audio_data:
             raise ValueError("audio data is empty")
@@ -3853,9 +3949,30 @@ class VoiceAssistant:
             kwargs["language"] = self.stt_language
         if self.stt_prompt:
             kwargs["prompt"] = self.stt_prompt
-        response = self.openai_client.audio.transcriptions.create(**kwargs)
+        response = self.openai_stt_client.audio.transcriptions.create(**kwargs)
         text = response.text.strip()
         return self.normalize_stt_command_text(text) if text else None
+
+    def web_audio_to_text_with_timeout(
+        self,
+        audio_data: bytes,
+        mime_type: str,
+        model: str = "whisper-1",
+    ) -> str | None:
+        """Transcribe browser audio with the same bounded STT guard as backend audio."""
+        started_at = time.perf_counter()
+        print(f"Web STT started (timeout {self.stt_timeout_seconds:.1f}s).", flush=True)
+        try:
+            text = self._run_timed_stage(
+                "stt",
+                self.stt_timeout_seconds,
+                lambda: self.web_audio_to_text_openai(audio_data, mime_type, model=model),
+            )
+        except TimeoutError as error:
+            print(f"Web STT timed out: {error}.", flush=True)
+            raise TimeoutError("Web speech transcription timed out; please try again.") from error
+        print(f"Web STT finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
+        return text
 
     def speaker_audio_from_web_bytes(self, audio_data: bytes, mime_type: str) -> bytes | None:
         if "wav" in (mime_type or "").lower():
@@ -3885,9 +4002,12 @@ class VoiceAssistant:
         if should_manage_backend_thinking:
             self.start_thinking_sound()
         try:
-            text = self.web_audio_to_text_openai(audio_data, mime_type, model=model) or ""
-            speaker_audio = self.speaker_audio_from_web_bytes(audio_data, mime_type)
-            speaker_result = self.recognize_speaker(speaker_audio, already_wav=True)
+            text = self.web_audio_to_text_with_timeout(audio_data, mime_type, model=model) or ""
+            if text:
+                speaker_audio = self.speaker_audio_from_web_bytes(audio_data, mime_type)
+                speaker_result = self.recognize_speaker_with_timeout(speaker_audio, already_wav=True)
+            else:
+                speaker_result = SpeakerRecognitionResult()
             speaker_payload = {
                 "speaker": speaker_result.speaker,
                 "speaker_confidence": speaker_result.confidence,
@@ -4914,8 +5034,9 @@ class VoiceAssistant:
                         if not self.wake_words:
                             self.start_thinking_sound()
                         # Convert to text
-                        text = self.audio_to_text(audio_data)
-                        speaker_result = self.recognize_speaker(audio_data)
+                        text = self.audio_to_text_with_timeout(audio_data)
+                        if text:
+                            speaker_result = self.recognize_speaker_with_timeout(audio_data)
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Stopping current assistant.")
                             self.stop_thinking_sound()
@@ -6264,6 +6385,7 @@ async def main():
         local_whisper_model = os.getenv("LOCAL_WHISPER_MODEL", "base")
         stt_language = normalize_locale(os.getenv("STT_LANGUAGE"))
         stt_prompt = os.getenv("STT_PROMPT", DEFAULT_STT_PROMPT)
+        stt_timeout_seconds = max(1.0, min(300.0, env_float("STT_TIMEOUT_SECONDS", DEFAULT_STT_TIMEOUT_SECONDS)))
         tts_config = resolve_tts_config_from_values(os.environ)
         cloud_tts_provider = tts_config.cloud_provider
         tts_provider = tts_config.backend_provider
@@ -6298,6 +6420,16 @@ async def main():
         speaker_backend = os.getenv("SPEAKER_BACKEND", "resemblyzer").strip().lower()
         speaker_threshold = max(0.0, min(1.0, env_float("SPEAKER_THRESHOLD", 0.75)))
         speaker_margin = max(0.0, min(1.0, env_float("SPEAKER_MARGIN", 0.10)))
+        speaker_recognition_timeout_seconds = max(
+            1.0,
+            min(
+                300.0,
+                env_float(
+                    "SPEAKER_RECOGNITION_TIMEOUT_SECONDS",
+                    DEFAULT_SPEAKER_RECOGNITION_TIMEOUT_SECONDS,
+                ),
+            ),
+        )
         speaker_profiles_max = max(0, min(5, env_int("SPEAKER_PROFILES_MAX", 5)))
         speaker_profiles = speaker_profiles_from_values(os.environ, speaker_profiles_max)
         web_stt_model = os.getenv("WEB_STT_MODEL", "whisper-1").strip()
@@ -6354,6 +6486,7 @@ async def main():
         print(f"Using ElevenLabs voice ID: {voice_id}")
         print(f"Using LLM provider: {llm_provider}")
         print(f"Using STT provider: {stt_provider}")
+        print(f"Using STT timeout: {stt_timeout_seconds:.1f}s")
         print(f"Using STT input: {stt_input}")
         print(f"Using cloud TTS provider: {cloud_tts_provider}")
         print(f"Using TTS provider: {tts_provider}")
@@ -6373,6 +6506,7 @@ async def main():
             f"{speaker_backend if speaker_recognition_enabled else 'disabled'} "
             f"({len([profile for profile in speaker_profiles if profile.enabled])}/{speaker_profiles_max} profiles)"
         )
+        print(f"Using speaker recognition timeout: {speaker_recognition_timeout_seconds:.1f}s")
         if web_audio_enabled:
             print(f"Using web audio: STT={web_stt_provider}, TTS={web_tts_provider}")
         print(f"Using wake word: {', '.join(wake_words) if wake_words else 'disabled'}")
@@ -6489,6 +6623,7 @@ async def main():
             local_whisper_model=local_whisper_model,
             stt_language=stt_language,
             stt_prompt=stt_prompt,
+            stt_timeout_seconds=stt_timeout_seconds,
             tts_provider=tts_provider,
             web_tts_enabled=web_tts_enabled,
             elevenlabs_voice_id=voice_id,
@@ -6528,6 +6663,7 @@ async def main():
             speaker_backend=speaker_backend,
             speaker_threshold=speaker_threshold,
             speaker_margin=speaker_margin,
+            speaker_recognition_timeout_seconds=speaker_recognition_timeout_seconds,
             speaker_profiles=speaker_profiles,
             system_prompt=system_prompt,
             reload_event=reload_event,
