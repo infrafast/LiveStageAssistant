@@ -483,7 +483,9 @@ class WebMonitor:
         self._backend_speaker_capture_stop_handler: Callable[[], None] | None = None
         self._backend_tts_test_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
         self._backend_audio_sample_handler: Callable[[str, dict[str, Any] | None], dict[str, Any]] | None = None
-        self._speaker_profile_sample_handler: Callable[[str, int, int], dict[str, Any]] | None = None
+        self._speaker_profile_sample_handler: (
+            Callable[[str, int, int, dict[str, Any] | None], dict[str, Any]] | None
+        ) = None
         self._speaker_embedding_notice_handler: Callable[[str], None] | None = None
         self._speaker_profile_update_handler: Callable[[dict[str, Any]], None] | None = None
         self._mcp_routing_save_handler: Callable[[dict[str, str]], dict[str, Any]] | None = None
@@ -639,7 +641,7 @@ class WebMonitor:
 
     def set_speaker_profile_sample_handler(
         self,
-        handler: Callable[[str, int, int], dict[str, Any]],
+        handler: Callable[[str, int, int, dict[str, Any] | None], dict[str, Any]],
     ) -> None:
         """Register backend playback control for saved speaker-profile samples."""
         with self._lock:
@@ -1335,19 +1337,46 @@ class WebMonitor:
                     return profile_index, sample_index
 
                 def _handle_speaker_profile_sample(self) -> None:
-                    handler = monitor._speaker_profile_sample_handler
-                    if handler is None:
-                        self.send_error(503, "Speaker profile sample playback is not available")
-                        return
                     payload = self._read_json_body()
                     if payload is None:
                         return
                     action = str(payload.get("action") or "play").strip().lower()
                     try:
                         profile_index, sample_index = self._speaker_profile_indices(payload)
-                        result = handler(action, profile_index, sample_index)
+                        if action == "browser":
+                            handler = monitor._speaker_profile_sample_handler
+                            if handler is not None:
+                                handler("stop", profile_index, sample_index, None)
+                            profile_root = Path(
+                                os.getenv("SPEAKER_PROFILES_DIR", "data/speaker_profiles")
+                            ).resolve()
+                            sample_path = (
+                                profile_root / f"profil{profile_index}_{sample_index}.wav"
+                            ).resolve()
+                            if sample_path.parent != profile_root or not sample_path.is_file():
+                                raise ValueError("speaker profile WAV is not available")
+                            result = {
+                                "ok": True,
+                                "action": "browser",
+                                "profile_index": profile_index,
+                                "sample_index": sample_index,
+                                "mime_type": "audio/wav",
+                                "audio_base64": base64.b64encode(sample_path.read_bytes()).decode("ascii"),
+                            }
+                        else:
+                            handler = monitor._speaker_profile_sample_handler
+                            if handler is None:
+                                self.send_error(503, "Speaker profile sample playback is not available")
+                                return
+                            result = handler(action, profile_index, sample_index, payload)
                     except ValueError as e:
                         self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        return
+                    except OSError as e:
+                        self._send_json_error(
+                            500,
+                            {"ok": False, "error": {"message": f"Could not read speaker sample: {e}"}},
+                        )
                         return
                     except Exception as e:
                         self._send_json_error(
@@ -1372,7 +1401,7 @@ class WebMonitor:
                     playback_handler = monitor._speaker_profile_sample_handler
                     if playback_handler is not None:
                         try:
-                            playback_handler("stop", profile_index, 1)
+                            playback_handler("stop", profile_index, 1, None)
                         except Exception:
                             pass
 

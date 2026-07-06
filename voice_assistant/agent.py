@@ -4342,6 +4342,7 @@ class VoiceAssistant:
         action: str,
         profile_index: int,
         sample_index: int,
+        options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Play one saved speaker sample through the configured backend output."""
         normalized_action = str(action or "play").strip().lower()
@@ -4366,10 +4367,35 @@ class VoiceAssistant:
 
         self.stop_backend_audio_sample()
         stop_event = threading.Event()
+        options = options or {}
+        output_device_index = self.audio_output_device_index
+        if "output_device" in options:
+            output_device_index, output_status, output_detail = resolve_pyaudio_device_index(
+                self.audio,
+                str(options.get("output_device") or ""),
+                input_device=False,
+            )
+            if output_status in {"invalid", "unavailable"}:
+                raise ValueError(f"backend audio output device is not available: {output_detail}")
+        try:
+            sample_volume = max(
+                0.0,
+                min(2.0, float(options.get("volume", self.backend_tts_volume))),
+            )
+            sample_pan = normalize_audio_pan(options.get("pan", self.backend_audio_output_pan))
+        except (TypeError, ValueError) as e:
+            raise ValueError("backend sample volume and pan must be numbers") from e
 
         def _play() -> None:
             try:
-                self.play_wav_file(sample_path, stop_event=stop_event)
+                play_wav_file_backend(
+                    self.audio,
+                    sample_path,
+                    output_device_index=output_device_index,
+                    stop_event=stop_event,
+                    volume=sample_volume,
+                    pan=sample_pan,
+                )
             except Exception as e:
                 print(f"Could not play speaker profile sample '{sample_path.name}': {concise_pyaudio_error(e)}")
 

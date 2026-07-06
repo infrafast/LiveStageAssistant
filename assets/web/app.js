@@ -242,6 +242,7 @@
     const speakerCaptureMaxSeconds = 10;
     const speakerCaptureMinSeconds = 3;
     let speakerCapture = null;
+    let currentSpeakerSample = null;
     let soundwaveAnimationId = null;
     let soundwaveStartedAt = 0;
     let conversationEnabled = false;
@@ -3262,6 +3263,7 @@
         row.append(nameWrap, uploadWrap, enabledLabel, status, path);
         speakerProfileGrid.appendChild(row);
       }
+      syncSpeakerProfileSampleControls();
     }
 
     function syncBackendAudioInputGainLabel() {
@@ -3271,8 +3273,45 @@
       backendAudioInputGainLabel.textContent = `${gain.toFixed(2)}× (${dbLabel})`;
     }
 
+    function syncSpeakerProfileSampleControls() {
+      const output = selectedTtsOutput();
+      const outputAvailable = output !== "silent"
+        && (output !== "backend" || backendAudioCapabilities.output)
+        && (output !== "browser" || browserAudioCapabilities.output);
+      const unavailableReason = output === "silent"
+        ? tr("speaker_sample_silent", "La lecture est désactivée lorsque TTS Output est sur Silent.")
+        : output === "backend" && !backendAudioCapabilities.output
+        ? tr("backend_audio_output_unavailable", "Aucune sortie audio backend n'est disponible.")
+        : output === "browser" && !browserAudioCapabilities.output
+        ? tr("browser_audio_output_unavailable", "Aucune sortie audio navigateur n'est disponible.")
+        : "";
+      for (const button of speakerProfileGrid.querySelectorAll(".speaker-sample-play")) {
+        const sampleWrap = button.closest(".speaker-sample");
+        const sampleReady = sampleWrap?.classList.contains("ready") || sampleWrap?.classList.contains("pending");
+        button.disabled = button === currentSpeakerSample?.button || !sampleReady || !outputAvailable;
+        button.title = unavailableReason || tr("speaker_sample_play", "Lire ce sample");
+      }
+    }
+
+    function stopCurrentSpeakerSample() {
+      const sample = currentSpeakerSample;
+      if (!sample) return;
+      currentSpeakerSample = null;
+      if (sample.audio) {
+        sample.audio.pause();
+        sample.audio.currentTime = 0;
+      }
+      sample.button?.classList.remove("playing");
+      sample.finish?.();
+    }
+
     async function playSpeakerProfileSample(row, sampleIndex, button) {
       if (!row || !button || button.disabled) return;
+      const output = selectedTtsOutput();
+      if (output === "silent") return;
+      stopCurrentSpeakerSample();
+      const playback = { button, audio: null, finish: null };
+      currentSpeakerSample = playback;
       button.disabled = true;
       button.classList.add("playing");
       try {
@@ -3280,14 +3319,42 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            action: "play",
+            action: output === "browser" ? "browser" : "play",
             profile_index: Number(row.dataset.index || 0),
-            sample_index: sampleIndex
+            sample_index: sampleIndex,
+            output_device: backendAudioOutput.value || "",
+            volume: output === "browser"
+              ? Number(webTtsVolume.value || 1)
+              : Number(backendTtsVolume.value || 1),
+            pan: Number(backendAudioOutputPan.value || 0)
           })
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ok) {
           throw new Error(data.error?.message || data.message || response.statusText);
+        }
+        if (currentSpeakerSample !== playback) return;
+        if (output === "browser") {
+          await unlockWebTtsAudio();
+          if (currentSpeakerSample !== playback) return;
+          const arrayBuffer = base64ToArrayBuffer(data.audio_base64 || "");
+          const blob = new Blob([arrayBuffer], { type: data.mime_type || "audio/wav" });
+          const objectUrl = URL.createObjectURL(blob);
+          const audio = new Audio(objectUrl);
+          playback.audio = audio;
+          audio.volume = Math.max(0, Math.min(1, Number(webTtsVolume.value || 1)));
+          await applyBrowserAudioOutput(audio);
+          if (currentSpeakerSample !== playback) return;
+          try {
+            await new Promise((resolve, reject) => {
+              playback.finish = resolve;
+              audio.addEventListener("ended", resolve, { once: true });
+              audio.addEventListener("error", reject, { once: true });
+              audio.play().catch(reject);
+            });
+          } finally {
+            URL.revokeObjectURL(objectUrl);
+          }
         }
       } catch (error) {
         const status = row.querySelector(".speaker-status");
@@ -3297,9 +3364,9 @@
           });
         }
       } finally {
+        if (currentSpeakerSample === playback) currentSpeakerSample = null;
         button.classList.remove("playing");
-        const sampleWrap = button.closest(".speaker-sample");
-        button.disabled = !sampleWrap?.classList.contains("ready") && !sampleWrap?.classList.contains("pending");
+        syncSpeakerProfileSampleControls();
       }
     }
 
@@ -4149,6 +4216,7 @@
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif" : "BACKEND_AUDIO_OUTPUT_PAN";
       ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
       syncAudioSampleControls();
+      syncSpeakerProfileSampleControls();
       syncAudioDeviceVisibility();
 	    }
 
@@ -5030,6 +5098,7 @@
     for (const input of ttsOutputInputs) {
       input.addEventListener("change", () => {
         stopCurrentAudioSample();
+        stopCurrentSpeakerSample();
         syncTtsProviderControls();
       });
     }
@@ -5068,6 +5137,7 @@
       try {
         await applyBrowserAudioOutput(thinkingAudio);
         await applyBrowserAudioOutput(currentWebTtsAudio);
+        await applyBrowserAudioOutput(currentSpeakerSample?.audio);
       } catch (error) {
         metaEl.textContent = `browser audio output unavailable: ${error}`;
       }
