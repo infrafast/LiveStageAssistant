@@ -9,7 +9,7 @@ For Docker/Synology architecture notes and tradeoffs, see [ARCHITECTURE.md](ARCH
 - `Dockerfile`: builds the Python app image with audio, ffmpeg, Node.js, and npm support.
 - `docker-compose.yml`: Synology compose file using bridge networking with the web monitor port published.
 - `container/config/.env.infrafast`: edit for the NAS/deployment folder.
-- `container/config/mcp_servers.synology.json`: MCP config for mounted or HTTP stage-control MCP servers.
+- `container/config/mcp_servers.infrafast.json`: MCP config used by the default Docker profile.
 - `.dockerignore`: keeps local virtualenvs, caches, and API key files out of the image.
 
 ## Folder Layout On The NAS
@@ -24,7 +24,7 @@ Create a project folder such as:
       .env.infrafast
       OPENAI_API_KEY.txt
       ELEVENLABS_API_KEY.txt
-      mcp_servers.synology.json
+      mcp_servers.infrafast.json
     data/
   assets/
   XMSeries-MCP/
@@ -39,7 +39,7 @@ container/
     .env.infrafast
     OPENAI_API_KEY.txt
     ELEVENLABS_API_KEY.txt
-    mcp_servers.synology.json
+    mcp_servers.infrafast.json
   data/
 ```
 
@@ -48,14 +48,23 @@ The Docker image includes `assets/web/static/`, including the vendored noVNC cli
 If the monitor is exposed on your LAN/NAS, set `WEB_PASSWORD` in the active env file to require a password before the web page opens. Leave `WEB_PASSWORD=` empty to keep the previous unauthenticated behavior.
 
 Edit `container/config/.env.infrafast`.
-Keep `container/config/mcp_servers.synology.json` in the same folder.
+Keep `container/config/mcp_servers.infrafast.json` in the same folder.
 Put API keys in the two text files. You can leave the ElevenLabs file empty only when neither `CLOUD_TTS_PROVIDER=elevenlabs` nor `WEB_TTS_PROVIDER=elevenlabs` is used.
+
+The repository ships a few additional Docker profile pairs for common network shapes:
+
+- `.env.infrafast` + `mcp_servers.infrafast.json`: default remote HTTP profile.
+- `.env.localhost` + `mcp_servers.localhost.json`: LAN/local HTTP MCP endpoints.
+- `.env.tailscaleHTTP` + `mcp_servers.tailscaleHTTP.json`: Tailscale HTTP MCP endpoints.
+- `.env.tailscaleSTDIO` + `mcp_servers.tailscaleSTDIO.json`: mounted local stdio MCP servers.
+
+Only one `.env*` profile is active at a time. `docker-compose.yml` starts `/config/.env.infrafast` by default; change `ASSISTANT_ENV_FILE` only when you intentionally want another profile.
 
 The compose file mounts `./container/config` to `/config` and `./container/data` to `/data`, and publishes `${WEB_MONITOR_HOST_PORT:-8765}:8765/tcp` so the web monitor is reachable through bridge networking. The Docker image entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when set, defaults to `/config/.env.infrafast`, and otherwise auto-detects the first `/config/.env*` file except `*.example`. Docker Compose `env_file` is intentionally not needed here because the assistant loads the mounted env file itself. Persisted web chat sessions should use a writable mounted path such as `SESSION_CONTEXT_DIR=/data/contexts`.
 
 `WEB_MONITOR_HOST_PORT` is read by Docker Compose before the container starts. It changes only the host/NAS published port. The assistant's internal listening port still comes from `WEB_MONITOR_PORT` in the selected `/config/.env*` file and should remain `8765` unless you also update the compose container-side port or run Compose with a matching interpolation environment.
 
-The web config profile dropdown lists `.env*` files from both the app working directory and the active env file's directory. In Docker, this means mounted profiles such as `/config/.env.infrafast`, `/config/.env.tailscaleHTTP`, and `/config/.env.tailscaleSTDIO` appear when the container is started with `ASSISTANT_ENV_FILE=/config/...`. Manual switching is disabled only when the assistant is started with `--env-file auto`. Use the HTTP Tailscale profile when XMSeries-MCP and QLCPlus-MCP are already running as reachable streamable HTTP services; use the STDIO Tailscale profile when the container should start mounted local MCP server scripts itself.
+The web config profile dropdown lists `.env*` files from both the app working directory and the active env file's directory. In Docker, this means mounted profiles such as `/config/.env.infrafast`, `/config/.env.localhost`, `/config/.env.tailscaleHTTP`, and `/config/.env.tailscaleSTDIO` appear when the container is started with `ASSISTANT_ENV_FILE=/config/...`. Manual switching is disabled only when the assistant is started with `--env-file auto`. Use the HTTP Tailscale profile when XMSeries-MCP and QLCPlus-MCP are already running as reachable streamable HTTP services; use the STDIO Tailscale profile when the container should start mounted local MCP server scripts itself.
 
 If you intentionally switch the assistant back to `network_mode: host`, remove the `ports` block because published ports are not used with host networking. In bridge mode, do not point MCP or Ollama URLs at `127.0.0.1` unless that service runs inside the same container; use the NAS LAN IP, Tailscale IP, or another reachable service name/address.
 
@@ -74,13 +83,13 @@ The compose file already includes the commented volume line:
 ```
 
 Enable that line after the folder exists and contains `dist/index.js`.
-The corresponding MCP server path is configured in `container/config/mcp_servers.synology.json`, not in the agent `.env` file:
+The corresponding MCP server path is configured in the selected MCP config file, for example `container/config/mcp_servers.tailscaleSTDIO.json`, not in the agent `.env` file:
 
 ```json
 "args": ["/xmseries-mcp/dist/index.js"]
 ```
 
-In this stdio setup, the `env` block in `container/config/mcp_servers.synology.json` is passed to the XMSeries-MCP child process. It is MCP-server configuration, not Live Stage Assistant application configuration.
+In this stdio setup, the `env` block in the selected `mcp_servers*.json` file is passed to the XMSeries-MCP child process. It is MCP-server configuration, not Live Stage Assistant application configuration.
 
 If XMSeries-MCP runs as a separate HTTP service/container, put `OSC_HOST`, `OSC_PORT`, `OSC_PROTOCOL`, and related mixer settings on that XMSeries-MCP service instead. In that case, the assistant MCP config should only point to the HTTP endpoint:
 
