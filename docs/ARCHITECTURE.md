@@ -157,7 +157,7 @@ MCP_AGENT_MAX_STEPS=20                         # Max MCPAgent steps for one resp
 MCP_TOOL_ROUTING_ENABLED=false                 # Use assistantOptions.routing keywords to expose only one MCP server's tools
 SESSION_CONTEXT_SIZE=6000                      # Inject up to this many session-summary chars; 0 disables injection
 SESSION_CONTEXT_DIR=.contexts                  # Local directory for .context JSON session files
-MCP_CONFIG=mcp_servers.offline.json             # Optional config override
+MCP_CONFIG=mcp_servers.json                     # Stage MCP server config
 
 # Optional - MCP-provided Assistant Instructions
 MCP_LOAD_SERVER_PROMPT=false                    # true | false, default false
@@ -324,7 +324,7 @@ When set to `true`, the assistant starts a short-lived parallel listener only du
 The repository includes ready-to-use environment profiles:
 
 - `.env.online`: `CONNECTIVITY_MODE=online`, cloud mode with OpenAI for LLM/STT, TTS dropdown set to ElevenLabs, and `mcp_servers.json`
-- `.env.offline`: `CONNECTIVITY_MODE=offline`, local mode with Ollama for LLM, local Whisper for STT, pyttsx3 for TTS, and `mcp_servers.offline.json`
+- `.env.offline`: `CONNECTIVITY_MODE=offline`, local mode with Ollama for LLM, local Whisper for STT, pyttsx3 for TTS, and the same stage-control `mcp_servers.json`
 - `raspi_service_pack_stdio/.env.online`: `CONNECTIVITY_MODE=online`, cloud LLM/STT/TTS with local stdio `XMSeries-MCP` and `QLCPlus-MCP` sibling folders through `raspi_service_pack_stdio/mcp_servers_raspi.json`
 - `raspi_service_pack_stdio/.env.offline`: `CONNECTIVITY_MODE=offline`, local Ollama/STT/TTS with the same Raspberry Pi stdio MCP config
 - `auto`: connectivity-driven profile selection. This is the default agent mode; it uses `.env.online` when internet is reachable and `.env.offline` otherwise, then switches between them when connectivity changes.
@@ -384,21 +384,12 @@ ollama pull qwen3:8b
 
 ### MCP Server Configuration
 
-The assistant loads MCP server configurations indicated in your environment file (see Online and Offline Profiles and Environment Variables) in the project root. The bundled examples commonly include:
+The assistant loads MCP server configurations indicated in your environment file (see Online and Offline Profiles and Environment Variables) in the project root. The default `mcp_servers.json` is the main stage-control config and is shared by the bundled online and offline profiles. It commonly includes:
 
-- **playwright**: Web automation and browser control
-- **linear**: Task and project management
 - **mixer**: control of a Behringer digital mixer  (see https://github.com/infrafast/XMSeries-MCP)
+- **qlcplus**: control of QLC+ lighting/DMX  (see https://github.com/infrafast/QLCPlus-MCP)
 
-For offline mode, use `mcp_servers.offline.json`:
-
-- **filesystem**: local filesystem access inside the configured root
-- **memory**: local MCP memory server
-- **mixer**: control of a Behringer digital mixer  (see https://github.com/infrafast/XMSeries-MCP)
-
-Set `MCP_CONFIG=mcp_servers.offline.json` in the selected env file.
-
-Compatible stage-control MCP servers include **XMSeries-MCP** for mixer control and **QLCPlus-MCP** for QLC+ lighting/DMX control. Add QLCPlus-MCP by adding a `qlcplus` server entry to the selected MCP JSON file, either as a local stdio command or as a streamable HTTP endpoint.
+Compatible stage-control MCP servers include **XMSeries-MCP** for mixer control and **QLCPlus-MCP** for QLC+ lighting/DMX control. Add or edit servers in the selected MCP JSON file, either as local stdio commands or as streamable HTTP endpoints.
 
 Server-specific paths belong in the selected MCP JSON file. For sibling local MCP repos, prefer portable relative paths such as `../XMSeries-MCP/dist/index.js` and `../QLCPlus-MCP/dist/src/index.js`; use absolute paths only for machine-specific private profiles. Put QLC+ connection settings in that server's `env` block. Environment placeholders can still appear inside JSON string values for secrets or shared settings. If a configured command or Node script cannot be found, the assistant prints that the MCP server instance could not be started and continues with the remaining available servers. When multiple MCP servers are configured, startup probes them individually; if one HTTP/stdio server is unreachable but another one works, the assistant starts with the available servers and reports the skipped server in the monitor state instead of disabling MCP entirely.
 
@@ -634,7 +625,7 @@ LOCAL_WHISPER_MODEL=base
 CLOUD_TTS_PROVIDER=none
 TTS_PROVIDER=pyttsx3
 WEB_TTS_PROVIDER=none
-MCP_CONFIG=mcp_servers.offline.json
+MCP_CONFIG=mcp_servers.json
 MCP_LOAD_SERVER_PROMPT=true
 ```
 
@@ -745,7 +736,7 @@ SPEAKER_PROFILE_1_ENABLED=false
 3. **MCP Server Connection Issues**
    - Ensure Node.js is installed
    - Check internet connection for first-time npx downloads
-   - Use `MCP_CONFIG=mcp_servers.offline.json` in the selected env file for local-only MCP servers
+   - Use `MCP_CONFIG=mcp_servers.json` in the selected env file for the bundled mixer + QLC+ stage-control servers
    - Verify API keys for specific servers
    - For mixer control, set the `mixer` script path in the selected MCP JSON file to the real `XMSeries-MCP/dist/index.js` path
    - For QLC+ lighting control, set the `qlcplus` script path or HTTP endpoint in the selected MCP JSON file to your QLCPlus-MCP server
@@ -786,7 +777,7 @@ SPEAKER_PROFILE_1_ENABLED=false
    - Confirm the selected env file includes `LLM_PROVIDER=ollama`
    - Confirm the selected env file includes `STT_PROVIDER=local-whisper`
    - Confirm the selected env file includes `STT_INPUT=backend`, `CLOUD_TTS_PROVIDER=none`, `TTS_PROVIDER=pyttsx3`, and `WEB_TTS_PROVIDER=none`
-   - Confirm the selected env file includes `MCP_CONFIG=mcp_servers.offline.json`
+   - Confirm the selected env file includes `MCP_CONFIG=mcp_servers.json`
    - Confirm the selected env file includes `MCP_LOAD_SERVER_PROMPT=true` when you expect MCP startup instructions to be appended to the assistant prompt
    - Ensure the Ollama model, faster-whisper model, and MCP npm packages were cached before disconnecting
 
