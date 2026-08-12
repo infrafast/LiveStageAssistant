@@ -2658,6 +2658,40 @@ class VoiceAssistant:
         except Exception:
             pass
 
+    @contextmanager
+    def _quiet_mcp_probe_stdio_errlog(self):
+        """Silence stdio MCP server stderr during startup probes only."""
+        try:
+            from mcp_use.client.connectors.stdio import StdioConnector
+        except Exception:
+            yield None
+            return
+
+        original_defaults = StdioConnector.__init__.__defaults__
+        if not original_defaults or len(original_defaults) < 4:
+            yield None
+            return
+
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace") as errlog:
+            patched_defaults = list(original_defaults)
+            patched_defaults[3] = errlog
+            StdioConnector.__init__.__defaults__ = tuple(patched_defaults)
+            try:
+                yield errlog
+            finally:
+                StdioConnector.__init__.__defaults__ = original_defaults
+
+    def _probe_errlog_tail(self, errlog: Any, max_lines: int = 12) -> str:
+        if errlog is None:
+            return ""
+        try:
+            errlog.flush()
+            errlog.seek(0)
+            lines = [line.strip() for line in errlog.read().splitlines() if line.strip()]
+        except Exception:
+            return ""
+        return "\n".join(lines[-max_lines:])
+
     async def _filter_connectable_mcp_servers(self, config: dict) -> tuple[dict, dict[str, str]]:
         """Keep startup usable when one configured MCP server is temporarily down."""
         server_configs = config.get("mcpServers") or {}
@@ -2668,14 +2702,19 @@ class VoiceAssistant:
         failed_servers: dict[str, str] = {}
         for server_name in server_configs:
             probe_config = self._mcp_config_subset(config, [server_name])
-            probe_client = MCPClient.from_dict(probe_config)
-            try:
-                await probe_client.create_session(server_name)
-                available_servers.append(server_name)
-            except Exception as e:
-                failed_servers[server_name] = str(e)
-            finally:
-                await self._close_probe_mcp_client(probe_client)
+            with self._quiet_mcp_probe_stdio_errlog() as probe_errlog:
+                probe_client = MCPClient.from_dict(probe_config)
+                try:
+                    await probe_client.create_session(server_name)
+                    available_servers.append(server_name)
+                except Exception as e:
+                    detail = str(e)
+                    stderr_tail = self._probe_errlog_tail(probe_errlog)
+                    if stderr_tail:
+                        detail = f"{detail}\nProbe stderr tail:\n{stderr_tail}"
+                    failed_servers[server_name] = detail
+                finally:
+                    await self._close_probe_mcp_client(probe_client)
 
         if not failed_servers:
             return config, {}
