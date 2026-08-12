@@ -58,15 +58,15 @@ printf '%s' 'your-openai-api-key' > OPENAI_API_KEY.txt
 printf '%s' 'your-elevenlabs-api-key' > ELEVENLABS_API_KEY.txt
 ```
 
-Then start with a bundled profile:
+Then start the assistant. By default it uses automatic online/offline profile selection:
 
 ```bash
-.venv/bin/python voice_assistant/agent.py --env-file .env.online
+.venv/bin/python voice_assistant/agent.py
 ```
 
 On Windows PowerShell, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
 
-For local/offline use, the install script tries to install Ollama and prepare `qwen3:8b`. It checks whether the model is already available before pulling it. If it reports that Ollama is installed but not running, start Ollama once with `ollama serve`, then rerun the install script or pull the model manually. Start the offline profile with:
+For local/offline use, the install script tries to install Ollama and prepare `qwen3:8b`. It checks whether the model is already available before pulling it. If it reports that Ollama is installed but not running, start Ollama once with `ollama serve`, then rerun the install script or pull the model manually. To force the offline profile instead of using auto mode:
 
 ```bash
 .venv/bin/python voice_assistant/agent.py --env-file .env.offline
@@ -147,8 +147,11 @@ For Synology, Tailscale, mounted MCP servers, bridge networking, and audio passt
 Common startup commands:
 
 ```bash
-# Default .env if present
+# Default: automatic online/offline profile switching
 .venv/bin/python voice_assistant/agent.py
+
+# Same as the default, written explicitly
+.venv/bin/python voice_assistant/agent.py --env-file auto
 
 # Online/cloud profile
 .venv/bin/python voice_assistant/agent.py --env-file .env.online
@@ -158,12 +161,9 @@ Common startup commands:
 
 # Raspberry Pi service-pack profile
 .venv/bin/python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
-
-# Automatic online/offline profile switching
-.venv/bin/python voice_assistant/agent.py --env-file auto
 ```
 
-With `--env-file auto`, the assistant uses `.env.online` when internet is reachable and `.env.offline` otherwise. Set `ASSISTANT_AUTO_ENV_DIR` to choose another directory for those two files; the Raspberry Pi service uses `/etc/livestageassistant`.
+By default, the assistant uses `--env-file auto`. Auto mode is not Raspberry-specific: it is the normal connectivity strategy that selects `.env.online` when internet is reachable and `.env.offline` otherwise, then keeps monitoring connectivity while the agent runs. Set `ASSISTANT_AUTO_ENV_DIR` to choose another directory for those two files; the Raspberry Pi service uses `/etc/livestageassistant` because its profiles are copied there.
 
 When the web monitor is enabled, startup prints a URL such as:
 

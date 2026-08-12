@@ -6905,8 +6905,8 @@ async def main():
     parser = argparse.ArgumentParser(description="Voice-enabled AI assistant")
     parser.add_argument(
         "--env-file",
-        default=".env",
-        help="Environment file to load before starting the assistant (default: .env)",
+        default="auto",
+        help="Environment file to load before starting the assistant (default: auto)",
     )
     args = parser.parse_args()
 

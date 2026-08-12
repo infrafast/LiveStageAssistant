@@ -327,11 +327,14 @@ The repository includes ready-to-use environment profiles:
 - `.env.offline`: `CONNECTIVITY_MODE=offline`, local mode with Ollama for LLM, local Whisper for STT, pyttsx3 for TTS, and `mcp_servers.offline.json`
 - `raspi_service_pack_stdio/.env.online`: `CONNECTIVITY_MODE=online`, cloud LLM/STT/TTS with local stdio `XMSeries-MCP` and `QLCPlus-MCP` sibling folders through `raspi_service_pack_stdio/mcp_servers_raspi.json`
 - `raspi_service_pack_stdio/.env.offline`: `CONNECTIVITY_MODE=offline`, local Ollama/STT/TTS with the same Raspberry Pi stdio MCP config
-- `auto`: switch to/from online to offline setting depending according to internet connectivity
+- `auto`: connectivity-driven profile selection. This is the default agent mode; it uses `.env.online` when internet is reachable and `.env.offline` otherwise, then switches between them when connectivity changes.
 
-Start the assistant by passing the profile you want:
+Start the assistant with the default auto profile selection, or pass a concrete profile when you want to lock the agent to one mode:
 
 ```bash
+# Default auto profile selection
+.venv/bin/python voice_assistant/agent.py
+
 # Online/cloud profile
 .venv/bin/python voice_assistant/agent.py --env-file .env.online
 
@@ -341,7 +344,7 @@ Start the assistant by passing the profile you want:
 # Raspberry Pi local stdio MCP profile
 .venv/bin/python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
 
-# auto
+# Same as the default, written explicitly
 .venv/bin/python voice_assistant/agent.py --env-file auto
 ```
 
@@ -539,8 +542,11 @@ With `MCP_PROMPT_MERGE_MODE=replace`, only the loaded remote instructions are us
 After installation, run the assistant:
 
 ```bash
-# Default env file: .env
+# Default: auto profile selection
 .venv/bin/python voice_assistant/agent.py
+
+# Same as the default, written explicitly
+.venv/bin/python voice_assistant/agent.py --env-file auto
 
 # Explicit online profile
 .venv/bin/python voice_assistant/agent.py --env-file .env.online
@@ -551,16 +557,13 @@ After installation, run the assistant:
 # Explicit Raspberry Pi local stdio MCP profile
 .venv/bin/python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
 
-# Auto profile selection
-.venv/bin/python voice_assistant/agent.py --env-file auto
-
 # Show the only CLI options
 .venv/bin/python voice_assistant/agent.py --help
 ```
 
 `OPENAI_API_KEY` is not required when the selected env file uses `LLM_PROVIDER=ollama` and `STT_PROVIDER=local-whisper`.
 
-With `--env-file auto`, the assistant checks internet connectivity at startup. It loads `.env.online` when internet is reachable, otherwise `.env.offline`. By default these files are read from the current working directory; set `ASSISTANT_AUTO_ENV_DIR` to point auto mode at another profile directory, as the Raspberry Pi service pack does with `/etc/livestageassistant`. It then monitors connectivity every 10 seconds and switches the running assistant profile when the connection state changes:
+With the default `--env-file auto`, the assistant checks internet connectivity at startup. It loads `.env.online` when internet is reachable, otherwise `.env.offline`. By default these files are read from the current working directory; set `ASSISTANT_AUTO_ENV_DIR` to point auto mode at another profile directory, as the Raspberry Pi service pack does with `/etc/livestageassistant`. It then monitors connectivity every 10 seconds and switches the running assistant profile when the connection state changes:
 
 - `Assistant connecté à internet` is announced when the online profile is selected
 - `Assistant fonctionne localement` is announced when the offline profile is selected
@@ -571,7 +574,7 @@ After the announcement, the current voice loop is interrupted if needed, the act
 
 At startup, once MCP initialization is complete, the assistant announces a short ready message. MCP server and web monitor details remain available in the console logs and web state.
 
-If you run `.venv/bin/python voice_assistant/agent.py` without `--env-file`, the assistant loads `.env` when present. If `.env` does not exist, internal defaults are used: OpenAI with `gpt-4o-mini` for the LLM, OpenAI Whisper for STT, ElevenLabs as the legacy backend TTS default, `CLOUD_TTS_PROVIDER=openai` for the TTS dropdown, `thinking.wav` for the processing sound, and `mcp_servers.json` when no explicit MCP config is provided. In that default mode, `OPENAI_API_KEY` is required because both the LLM and STT providers use OpenAI.
+If you run `.venv/bin/python voice_assistant/agent.py` without `--env-file`, it is exactly the same as passing `--env-file auto`. To force a fixed profile and disable automatic connectivity switching, pass a concrete env file such as `.env.online`, `.env.offline`, or another `.env*` profile.
 
 For short stage commands, `STT_PROMPT` can give Whisper mixer-specific context. The bundled default biases French mixer commands such as `mets Claude`, `baisse snare`, `mute Voc-Claude`, and the assistant also fixes the narrow transcription artifact where a leading `mets` command is fused with the following channel name. At runtime, any `assistantOptions.routing` keywords from the active `MCP_CONFIG` are appended to the STT prompt without rewriting the env file. The web config exposes the base value under **Config -> STT/TTS**.
 
