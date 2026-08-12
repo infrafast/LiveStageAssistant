@@ -25,7 +25,14 @@ The installer copies `.env.online` and `.env.offline` to `/etc/livestageassistan
 
 ## Prerequisites
 
-Install system packages used by backend audio capture/playback and cloud TTS MP3 playback:
+Run the repository install script before installing the service. It tries to install the system packages used by backend audio capture/playback and cloud TTS MP3 playback:
+
+```bash
+cd /home/pi/LiveStageAssistant
+./scripts/install.sh
+```
+
+If system package installation was skipped or failed, install them manually:
 
 ```bash
 sudo apt update
@@ -68,11 +75,10 @@ sudo systemctl restart livestageassistant
 
 Config -> User interface lists every top-level `assets/*.wav` file for the thinking sound and startup loader. Selecting a loader WAV sets `STARTUP_LOADER_SOUND_ENABLED=true` and `STARTUP_LOADER_SOUND_FILE`; selecting **No startup loader sound** disables it. The loader remains backend-only, loops on the selected backend output while the assistant starts, stops just before the startup announcement, and uses `BACKEND_TTS_VOLUME` plus `BACKEND_AUDIO_OUTPUT_PAN`. Its selector and Play button are disabled for Browser or Silent TTS output. Set `COMMAND_ACK_SOUND_ENABLED=true` from the same panel to play `assets/ring.wav` after the LLM/MCP response is ready and just before TTS generation/playback begins. The acknowledgement sound uses the selected speech side: backend PyAudio for backend TTS, or browser audio for browser TTS. It does not stop the thinking sound.
 
-On the Raspberry Pi, install the assistant dependencies with the repository install script. It installs the speaker-recognition stack too, using the same CPU Torch then Resemblyzer-without-dependencies order as desktop/server installs:
+On the Raspberry Pi, the repository install script installs both system/Python dependencies and the speaker-recognition stack, using the same CPU Torch then Resemblyzer-without-dependencies order as desktop/server installs:
 
 ```bash
 cd /home/pi/LiveStageAssistant
-uv venv
 ./scripts/install.sh
 ```
 

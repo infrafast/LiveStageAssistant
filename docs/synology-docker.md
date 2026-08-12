@@ -1,19 +1,8 @@
 # Synology DSM Docker Deployment
 
-This setup is intended for Synology DSM 7.x with Docker/Container Manager.
+This setup is intended for Synology DSM 7.x with Docker/Container Manager. For a first deployment, use the web monitor and text command injection with browser or silent TTS, then test microphone/speaker passthrough later.
 
-## Difficulty
-
-The application itself is not hard to containerize: it is a Python service with Node.js available for MCP servers.
-
-The harder parts are runtime integrations:
-
-- Microphone and speaker access require `/dev/snd` passthrough and working ALSA support on the NAS.
-- The mixer MCP server needs LAN access to the mixer. Bridge networking works when the required HTTP ports are published and MCP endpoints use reachable host/LAN/Tailscale addresses instead of container-local `127.0.0.1`.
-- Offline mode needs Ollama and local Whisper model caches available to the container.
-- Local stdio MCP servers such as XMSeries-MCP or QLCPlus-MCP must be mounted after they have been installed and built.
-
-For a first Synology deployment, use the web monitor and text command injection with `TTS_PROVIDER=none`. This leaves backend speaker output disabled and allows browser/web TTS to speak when `WEB_TTS_PROVIDER=openai|elevenlabs`.
+For Docker/Synology architecture notes and tradeoffs, see [ARCHITECTURE.md](ARCHITECTURE.md#dockersynology-architecture-notes).
 
 ## Files
 
@@ -66,7 +55,7 @@ The compose file mounts `./container/config` to `/config` and `./container/data`
 
 `WEB_MONITOR_HOST_PORT` is read by Docker Compose before the container starts. It changes only the host/NAS published port. The assistant's internal listening port still comes from `WEB_MONITOR_PORT` in the selected `/config/.env*` file and should remain `8765` unless you also update the compose container-side port or run Compose with a matching interpolation environment.
 
-The web config profile dropdown lists `.env*` files from both the app working directory and the active env file's directory. In Docker, this means mounted profiles such as `/config/.env.infrafast` and `/config/.env.tailscale` appear when the container is started with `ASSISTANT_ENV_FILE=/config/...`. Manual switching is disabled only when the assistant is started with `--env-file auto`.
+The web config profile dropdown lists `.env*` files from both the app working directory and the active env file's directory. In Docker, this means mounted profiles such as `/config/.env.infrafast`, `/config/.env.tailscaleHTTP`, and `/config/.env.tailscaleSTDIO` appear when the container is started with `ASSISTANT_ENV_FILE=/config/...`. Manual switching is disabled only when the assistant is started with `--env-file auto`. Use the HTTP Tailscale profile when XMSeries-MCP and QLCPlus-MCP are already running as reachable streamable HTTP services; use the STDIO Tailscale profile when the container should start mounted local MCP server scripts itself.
 
 If you intentionally switch the assistant back to `network_mode: host`, remove the `ports` block because published ports are not used with host networking. In bridge mode, do not point MCP or Ollama URLs at `127.0.0.1` unless that service runs inside the same container; use the NAS LAN IP, Tailscale IP, or another reachable service name/address.
 
