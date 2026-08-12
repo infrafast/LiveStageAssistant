@@ -287,6 +287,15 @@ Detailed MCP prompt loading, routing, tool limits, and RAG direction are documen
 - For Docker bridge networking, do not point HTTP MCP URLs to `127.0.0.1` unless the service is inside the same container.
 - Use the web Config -> MCP Servers panel to inspect route/proxy settings.
 
+### `mcp_use` Import Error
+
+If startup fails with `cannot import name 'RequestContext' from 'mcp.shared.context'`, the virtual environment has incompatible MCP Python packages. Pull the latest code and rerun:
+
+```bash
+./scripts/install.sh
+.venv/bin/python -c "from mcp_use import MCPAgent, MCPClient; from mcp.shared.context import RequestContext; print('MCP dependencies OK')"
+```
+
 ### Offline Mode Still Calls Cloud Services
 
 - Start with `.venv/bin/python voice_assistant/agent.py --env-file .env.offline`.

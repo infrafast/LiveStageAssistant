@@ -41,7 +41,8 @@ RUN python -m pip install --upgrade pip \
 
 RUN python -m pip install --no-cache-dir ".[speaker]" \
     && python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-    && python -m pip install --no-cache-dir resemblyzer --no-deps
+    && python -m pip install --no-cache-dir resemblyzer --no-deps \
+    && python -c "from importlib import metadata; from mcp.shared.context import RequestContext; from mcp_use import MCPAgent, MCPClient; from resemblyzer import VoiceEncoder, preprocess_wav; print('MCP dependencies OK: mcp-use ' + metadata.version('mcp-use') + ', mcp ' + metadata.version('mcp')); print('Speaker recognition dependencies OK: resemblyzer ' + metadata.version('resemblyzer'))"
 
 RUN chmod +x /usr/local/bin/live-stage-assistant-entrypoint \
     && mkdir -p /data/huggingface /data/cache /data/npm-cache /data/notes /data/speaker_profiles

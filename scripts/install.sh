@@ -116,6 +116,7 @@ if [ ! -d ".venv" ]; then
 fi
 
 uv pip install -e .
+uv pip install "mcp-use>=1.7.0,<2.0.0" "mcp>=1.24.0,<2.0.0"
 
 printf '%s\n' "Installing speaker recognition dependencies for ${system}/${machine}."
 uv pip install -e ".[speaker]"
@@ -128,6 +129,24 @@ case "$system" in
         ;;
 esac
 uv pip install resemblyzer --no-deps
+# Resemblyzer declares the legacy backport package "typing", which is not
+# compatible with modern Python and is not needed at runtime.
+uv pip uninstall typing >/dev/null 2>&1 || true
+
+uv run python - <<'PY'
+from importlib import metadata
+
+from mcp.shared.context import RequestContext
+from mcp_use import MCPAgent, MCPClient
+from resemblyzer import VoiceEncoder, preprocess_wav
+
+print(
+    "MCP dependencies OK: "
+    f"mcp-use {metadata.version('mcp-use')}, "
+    f"mcp {metadata.version('mcp')}"
+)
+print(f"Speaker recognition dependencies OK: resemblyzer {metadata.version('resemblyzer')}")
+PY
 
 if uv pip freeze | grep -Ei '^(nvidia|cuda|triton)' >/dev/null; then
     printf '%s\n' "Warning: GPU/CUDA packages are present in the environment:"

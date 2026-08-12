@@ -672,7 +672,11 @@ Speaker recognition is optional and runs after VAD/STT has accepted a speech seg
 
 Resemblyzer is installed by `scripts/install.sh` and by the Docker image after a non-CUDA PyTorch wheel is installed first. This avoids the CUDA/NVIDIA packages that PyPI's default Torch resolution may otherwise select. On Linux/Raspberry Pi and macOS, `scripts/install.sh` also attempts the common system audio packages through the host package manager. On Raspberry Pi, use the service-pack flow documented in `raspi_service_pack_stdio/README.md` after the script so the assistant service and profiles are installed cleanly.
 
+Resemblyzer `0.1.4` still declares the legacy backport package `typing`, which is not compatible with Python 3.11+ and is not needed at runtime. The install scripts remove that backport after installing Resemblyzer. A plain `pip check` may still report Resemblyzer's stale `typing` metadata; validate speaker recognition by importing `resemblyzer` instead.
+
 The install scripts default `UV_LINK_MODE=copy` to avoid uv hardlink warnings on Raspberry Pi, Docker bind mounts, network shares, or other layouts where the cache and virtual environment are on filesystems that cannot hardlink to each other. This is slightly less optimized than hardlinks but keeps installation output clear and deterministic.
+
+The assistant requires a compatible MCP Python stack: `mcp-use>=1.7.0,<2.0.0` and `mcp>=1.24.0,<2.0.0`. Older combinations can fail at startup with `cannot import name 'RequestContext' from 'mcp.shared.context'`. The install scripts explicitly upgrade those packages and run a post-install import check for `mcp_use.MCPAgent`, `mcp_use.MCPClient`, and `mcp.shared.context.RequestContext`.
 
 For offline mode, the install scripts also try to install Ollama and pull `qwen3:8b`. If Ollama is installed but not running, the scripts leave a clear message instead of failing the full install; start Ollama and rerun the install script to complete the model pull. Set `LSA_SKIP_OLLAMA=1` to skip that optional offline preparation, or `LSA_OLLAMA_MODEL=<model>` to prepare another model.
 
@@ -707,7 +711,7 @@ Main speaker-recognition settings:
 SPEAKER_RECOGNITION_ENABLED=false
 SPEAKER_BACKEND=resemblyzer
 SPEAKER_THRESHOLD=0.75
-SPEAKER_MARGIN=0.10
+SPEAKER_MARGIN=0.06
 SPEAKER_RECOGNITION_TIMEOUT_SECONDS=10          # Fall back to unknown if one voice analysis stalls
 SPEAKER_PROFILE_1_NAME=
 SPEAKER_PROFILE_1_ENABLED=false
