@@ -333,16 +333,16 @@ Start the assistant by passing the profile you want:
 
 ```bash
 # Online/cloud profile
-python voice_assistant/agent.py --env-file .env.online
+.venv/bin/python voice_assistant/agent.py --env-file .env.online
 
 # Offline/local profile
-python voice_assistant/agent.py --env-file .env.offline
+.venv/bin/python voice_assistant/agent.py --env-file .env.offline
 
 # Raspberry Pi local stdio MCP profile
-python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
+.venv/bin/python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
 
 # auto
-python voice_assistant/agent.py --env-file auto
+.venv/bin/python voice_assistant/agent.py --env-file auto
 ```
 
 For a Raspberry Pi service install, use the bundled stdio service pack:
@@ -540,22 +540,22 @@ After installation, run the assistant:
 
 ```bash
 # Default env file: .env
-python voice_assistant/agent.py
+.venv/bin/python voice_assistant/agent.py
 
 # Explicit online profile
-python voice_assistant/agent.py --env-file .env.online
+.venv/bin/python voice_assistant/agent.py --env-file .env.online
 
 # Explicit offline profile
-python voice_assistant/agent.py --env-file .env.offline
+.venv/bin/python voice_assistant/agent.py --env-file .env.offline
 
 # Explicit Raspberry Pi local stdio MCP profile
-python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
+.venv/bin/python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
 
 # Auto profile selection
-python voice_assistant/agent.py --env-file auto
+.venv/bin/python voice_assistant/agent.py --env-file auto
 
 # Show the only CLI options
-python voice_assistant/agent.py --help
+.venv/bin/python voice_assistant/agent.py --help
 ```
 
 `OPENAI_API_KEY` is not required when the selected env file uses `LLM_PROVIDER=ollama` and `STT_PROVIDER=local-whisper`.
@@ -571,7 +571,7 @@ After the announcement, the current voice loop is interrupted if needed, the act
 
 At startup, once MCP initialization is complete, the assistant announces a short ready message. MCP server and web monitor details remain available in the console logs and web state.
 
-If you run `python voice_assistant/agent.py` without `--env-file`, the assistant loads `.env` when present. If `.env` does not exist, internal defaults are used: OpenAI with `gpt-4o-mini` for the LLM, OpenAI Whisper for STT, ElevenLabs as the legacy backend TTS default, `CLOUD_TTS_PROVIDER=openai` for the TTS dropdown, `thinking.wav` for the processing sound, and `mcp_servers.json` when no explicit MCP config is provided. In that default mode, `OPENAI_API_KEY` is required because both the LLM and STT providers use OpenAI.
+If you run `.venv/bin/python voice_assistant/agent.py` without `--env-file`, the assistant loads `.env` when present. If `.env` does not exist, internal defaults are used: OpenAI with `gpt-4o-mini` for the LLM, OpenAI Whisper for STT, ElevenLabs as the legacy backend TTS default, `CLOUD_TTS_PROVIDER=openai` for the TTS dropdown, `thinking.wav` for the processing sound, and `mcp_servers.json` when no explicit MCP config is provided. In that default mode, `OPENAI_API_KEY` is required because both the LLM and STT providers use OpenAI.
 
 For short stage commands, `STT_PROMPT` can give Whisper mixer-specific context. The bundled default biases French mixer commands such as `mets Claude`, `baisse snare`, `mute Voc-Claude`, and the assistant also fixes the narrow transcription artifact where a leading `mets` command is fused with the following channel name. At runtime, any `assistantOptions.routing` keywords from the active `MCP_CONFIG` are appended to the STT prompt without rewriting the env file. The web config exposes the base value under **Config -> STT/TTS**.
 
@@ -616,14 +616,14 @@ ollama pull qwen3:8b
 ```
 3. Run assistant with the offline env profile:
 ```bash
-python voice_assistant/agent.py --env-file .env.offline
+.venv/bin/python voice_assistant/agent.py --env-file .env.offline
 ```
 
 The offline profile uses:
 ```bash
 CONNECTIVITY_MODE=offline
 LLM_PROVIDER=ollama
-OPENAI_MODEL=qwen3.5:4b
+OPENAI_MODEL=qwen3:8b
 OLLAMA_BASE_URL=http://localhost:11434
 STT_PROVIDER=local-whisper
 STT_INPUT=backend
@@ -671,6 +671,10 @@ Speaker recognition is optional and runs after VAD/STT has accepted a speech seg
 `SPEAKER_RECOGNITION_TIMEOUT_SECONDS` bounds each speaker analysis. If it expires, the accepted transcription continues with speaker `unknown`, speaker recognition is disabled for the remainder of that assistant session, and runtime state reports the timeout. This prevents optional voice identification from blocking command handling.
 
 Resemblyzer is installed by `scripts/install.sh` and by the Docker image after a non-CUDA PyTorch wheel is installed first. This avoids the CUDA/NVIDIA packages that PyPI's default Torch resolution may otherwise select. On Linux/Raspberry Pi and macOS, `scripts/install.sh` also attempts the common system audio packages through the host package manager. On Raspberry Pi, use the service-pack flow documented in `raspi_service_pack_stdio/README.md` after the script so the assistant service and profiles are installed cleanly.
+
+The install scripts default `UV_LINK_MODE=copy` to avoid uv hardlink warnings on Raspberry Pi, Docker bind mounts, network shares, or other layouts where the cache and virtual environment are on filesystems that cannot hardlink to each other. This is slightly less optimized than hardlinks but keeps installation output clear and deterministic.
+
+For offline mode, the install scripts also try to install Ollama and pull `qwen3:8b`. If Ollama is installed but not running, the scripts leave a clear message instead of failing the full install; start Ollama and rerun the install script to complete the model pull. Set `LSA_SKIP_OLLAMA=1` to skip that optional offline preparation, or `LSA_OLLAMA_MODEL=<model>` to prepare another model.
 
 For best speaker recognition, provide up to three WAV samples per profile. In the web UI, each sample can come from the existing WAV upload button or from the microphone capture button next to it. The capture source follows `STT Input`: Browser uses the selected browser microphone, Backend uses the selected PyAudio input, Both asks which microphone to use in the capture dialog, and Silent disables capture while leaving WAV upload available. Both capture paths record up to 10 seconds and reuse the same Stop, preview, retry, and validation flow. Browser capture requires HTTPS or `localhost`; backend capture temporarily pauses normal backend listening and does not require browser microphone permission. You can mix clean/studio samples and live-condition samples. A good starting strategy is sample 1: clean reference voice, sample 2: clean voice with another phrase, sample 3: live-condition voice from the microphone path used on stage.
 
@@ -770,7 +774,7 @@ SPEAKER_PROFILE_1_ENABLED=false
    - This usually means the MCP tool sequence completed, but the agent ran out of internal steps before producing the final spoken answer
 
 9. **Offline Mode Still Tries to Connect**
-   - Confirm you started with `python voice_assistant/agent.py --env-file .env.offline`
+   - Confirm you started with `.venv/bin/python voice_assistant/agent.py --env-file .env.offline`
    - Confirm the selected env file includes `CONNECTIVITY_MODE=offline`
    - Confirm the selected env file includes `LLM_PROVIDER=ollama`
    - Confirm the selected env file includes `STT_PROVIDER=local-whisper`
@@ -780,7 +784,7 @@ SPEAKER_PROFILE_1_ENABLED=false
    - Ensure the Ollama model, faster-whisper model, and MCP npm packages were cached before disconnecting
 
 9. **Auto Mode Selected The Wrong Profile**
-   - Start with `python voice_assistant/agent.py --env-file auto`
+   - Start with `.venv/bin/python voice_assistant/agent.py --env-file auto`
    - Auto mode checks a short TCP connection to `api.openai.com:443`
    - If that host is blocked by your network, auto mode may select `.env.offline`
    - If `.env.online` is selected, make sure `OPENAI_API_KEY.txt` and `ELEVENLABS_API_KEY.txt` exist when those services are configured

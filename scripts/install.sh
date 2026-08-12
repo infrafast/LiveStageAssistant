@@ -11,6 +11,7 @@ fi
 
 uv_cache_dir="${UV_CACHE_DIR:-/tmp/uv-cache}"
 export UV_CACHE_DIR="$uv_cache_dir"
+export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 
 install_system_packages() {
     if [ "${LSA_SKIP_SYSTEM_PACKAGES:-}" = "1" ]; then
@@ -24,10 +25,10 @@ install_system_packages() {
                 printf '%s\n' "Installing Linux audio/system packages with apt-get."
                 if [ "$(id -u 2>/dev/null || printf 1)" = "0" ]; then
                     apt-get update
-                    apt-get install -y portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
+                    apt-get install -y curl portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
                 elif command -v sudo >/dev/null 2>&1; then
                     sudo apt-get update
-                    sudo apt-get install -y portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
+                    sudo apt-get install -y curl portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
                 else
                     printf '%s\n' "Warning: sudo is not available; install audio packages manually if backend audio is needed." >&2
                 fi
@@ -48,10 +49,67 @@ install_system_packages() {
     esac
 }
 
+install_ollama() {
+    if [ "${LSA_SKIP_OLLAMA:-}" = "1" ]; then
+        printf '%s\n' "Skipping Ollama setup because LSA_SKIP_OLLAMA=1."
+        return
+    fi
+
+    ollama_model="${LSA_OLLAMA_MODEL:-qwen3:8b}"
+    case "$system" in
+        Linux)
+            if ! command -v ollama >/dev/null 2>&1; then
+                if command -v curl >/dev/null 2>&1; then
+                    printf '%s\n' "Installing Ollama for local/offline mode."
+                    curl -fsSL https://ollama.com/install.sh | sh
+                else
+                    printf '%s\n' "Warning: curl is not available; install Ollama manually for offline mode." >&2
+                    return
+                fi
+            fi
+            ;;
+        Darwin)
+            if ! command -v ollama >/dev/null 2>&1; then
+                if command -v brew >/dev/null 2>&1; then
+                    printf '%s\n' "Installing Ollama with Homebrew for local/offline mode."
+                    brew install ollama
+                else
+                    printf '%s\n' "Warning: Homebrew not found; install Ollama manually for offline mode." >&2
+                    return
+                fi
+            fi
+            ;;
+        *)
+            if ! command -v ollama >/dev/null 2>&1; then
+                printf '%s\n' "Warning: Ollama was not found; install it manually for offline mode." >&2
+                return
+            fi
+            ;;
+    esac
+
+    if ! command -v ollama >/dev/null 2>&1; then
+        printf '%s\n' "Warning: Ollama is still unavailable; skipping model pull." >&2
+        return
+    fi
+
+    if ! ollama list >/dev/null 2>&1; then
+        printf '%s\n' "Ollama is installed but not running. Start it with 'ollama serve', then pull ${ollama_model} for offline mode."
+        return
+    fi
+
+    if ollama list | awk '{print $1}' | grep -Fx "$ollama_model" >/dev/null 2>&1; then
+        printf '%s\n' "Ollama model ${ollama_model} is already available."
+    else
+        printf '%s\n' "Pulling Ollama model ${ollama_model} for local/offline mode."
+        ollama pull "$ollama_model"
+    fi
+}
+
 machine="$(uname -m 2>/dev/null || printf unknown)"
 system="$(uname -s 2>/dev/null || printf unknown)"
 
 install_system_packages
+install_ollama
 
 if [ ! -d ".venv" ]; then
     uv venv

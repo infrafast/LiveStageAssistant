@@ -49,7 +49,7 @@ cd LiveStageAssistant
 .\scripts\install.ps1
 ```
 
-The install scripts create `.venv` if needed, install the runtime, and install the speaker-recognition stack with CPU Torch. On Linux/Raspberry Pi and macOS, `install.sh` also tries to install the common system audio packages when the host package manager is available. CUDA/NVIDIA packages are not required.
+The install scripts create `.venv` if needed, install the runtime, install the speaker-recognition stack with CPU Torch, and prepare Ollama with `qwen3:8b` for offline mode when possible. On Linux/Raspberry Pi and macOS, `install.sh` also tries to install the common system audio packages when the host package manager is available. CUDA/NVIDIA packages are not required.
 
 Create API key files if you use OpenAI or ElevenLabs:
 
@@ -61,15 +61,15 @@ printf '%s' 'your-elevenlabs-api-key' > ELEVENLABS_API_KEY.txt
 Then start with a bundled profile:
 
 ```bash
-python voice_assistant/agent.py --env-file .env.online
+.venv/bin/python voice_assistant/agent.py --env-file .env.online
 ```
 
-For local/offline use, install Ollama, pull a tool-capable model, then start the offline profile:
+On Windows PowerShell, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
+
+For local/offline use, the install script tries to install Ollama and pull `qwen3:8b`. If it reports that Ollama is installed but not running, start Ollama once with `ollama serve`, then rerun the install script or pull the model manually. Start the offline profile with:
 
 ```bash
-ollama serve
-ollama pull qwen3:8b
-python voice_assistant/agent.py --env-file .env.offline
+.venv/bin/python voice_assistant/agent.py --env-file .env.offline
 ```
 
 ### 2. Raspberry Pi
@@ -148,19 +148,19 @@ Common startup commands:
 
 ```bash
 # Default .env if present
-python voice_assistant/agent.py
+.venv/bin/python voice_assistant/agent.py
 
 # Online/cloud profile
-python voice_assistant/agent.py --env-file .env.online
+.venv/bin/python voice_assistant/agent.py --env-file .env.online
 
 # Offline/local profile
-python voice_assistant/agent.py --env-file .env.offline
+.venv/bin/python voice_assistant/agent.py --env-file .env.offline
 
 # Raspberry Pi service-pack profile
-python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
+.venv/bin/python voice_assistant/agent.py --env-file raspi_service_pack_stdio/.env.online
 
 # Automatic online/offline profile switching
-python voice_assistant/agent.py --env-file auto
+.venv/bin/python voice_assistant/agent.py --env-file auto
 ```
 
 With `--env-file auto`, the assistant uses `.env.online` when internet is reachable and `.env.offline` otherwise. Set `ASSISTANT_AUTO_ENV_DIR` to choose another directory for those two files; the Raspberry Pi service uses `/etc/livestageassistant`.
@@ -289,7 +289,7 @@ Detailed MCP prompt loading, routing, tool limits, and RAG direction are documen
 
 ### Offline Mode Still Calls Cloud Services
 
-- Start with `python voice_assistant/agent.py --env-file .env.offline`.
+- Start with `.venv/bin/python voice_assistant/agent.py --env-file .env.offline`.
 - Confirm `CONNECTIVITY_MODE=offline`, `LLM_PROVIDER=ollama`, `STT_PROVIDER=local-whisper`, `TTS_PROVIDER=pyttsx3`, and `WEB_TTS_PROVIDER=none`.
 - Make sure Ollama and local Whisper model caches are available before disconnecting.
 
