@@ -97,7 +97,7 @@ install_ollama() {
         return
     fi
 
-    if ollama list | awk '{print $1}' | grep -Fx "$ollama_model" >/dev/null 2>&1; then
+    if ollama show "$ollama_model" >/dev/null 2>&1; then
         printf '%s\n' "Ollama model ${ollama_model} is already available."
     else
         printf '%s\n' "Pulling Ollama model ${ollama_model} for local/offline mode."

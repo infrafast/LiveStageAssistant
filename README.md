@@ -66,7 +66,7 @@ Then start with a bundled profile:
 
 On Windows PowerShell, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
 
-For local/offline use, the install script tries to install Ollama and pull `qwen3:8b`. If it reports that Ollama is installed but not running, start Ollama once with `ollama serve`, then rerun the install script or pull the model manually. Start the offline profile with:
+For local/offline use, the install script tries to install Ollama and prepare `qwen3:8b`. It checks whether the model is already available before pulling it. If it reports that Ollama is installed but not running, start Ollama once with `ollama serve`, then rerun the install script or pull the model manually. Start the offline profile with:
 
 ```bash
 .venv/bin/python voice_assistant/agent.py --env-file .env.offline

@@ -28,13 +28,19 @@ if ($env:LSA_SKIP_OLLAMA -eq "1") {
     if (Get-Command ollama -ErrorAction SilentlyContinue) {
         $ollamaListOk = $false
         try {
-            $ollamaList = ollama list
+            ollama list | Out-Null
             $ollamaListOk = $true
         } catch {
             Write-Host "Ollama is installed but not running. Start it, then pull $OllamaModel for offline mode."
         }
         if ($ollamaListOk) {
-            $hasModel = $ollamaList | Select-String -Pattern ("^" + [regex]::Escape($OllamaModel) + "\s")
+            $hasModel = $false
+            try {
+                ollama show $OllamaModel | Out-Null
+                $hasModel = $true
+            } catch {
+                $hasModel = $false
+            }
             if ($hasModel) {
                 Write-Host "Ollama model $OllamaModel is already available."
             } else {
