@@ -1,8 +1,10 @@
 [Unit]
 Description=Live Stage Assistant stdio MCP Agent
 Documentation=https://github.com/infrafast/LiveStageAssistant
-After=network-online.target tailscaled.service sound.target
+After=network-online.target tailscaled.service sound.target qlcplus.service
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple

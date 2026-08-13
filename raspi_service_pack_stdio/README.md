@@ -21,6 +21,10 @@ The service starts the Python agent in automatic online/offline profile mode:
 /home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file auto
 ```
 
+The unit is ordered after `qlcplus.service` with `After=qlcplus.service`, but it does not declare `Requires=` or `Wants=` for QLC+. This means Live Stage Assistant waits behind QLC+ only when systemd is starting both services in the same transaction; it still starts normally if `qlcplus.service` is not installed, disabled, stopped, or failed.
+
+The service restarts automatically after crashes with `Restart=always` and `RestartSec=5`, but systemd limits crash loops to three starts per 60 seconds with `StartLimitIntervalSec=60` and `StartLimitBurst=3`. If the limit is hit, inspect `livestageassistant logs`, fix the cause, then run `sudo systemctl reset-failed livestageassistant` before starting it again.
+
 The installer copies `.env.online` and `.env.offline` to `/etc/livestageassistant/` and makes that directory writable by `pi`. The service sets `ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant`, so `auto` loads `.env.online` when internet is reachable and `.env.offline` when it is not. Both profiles point `MCP_CONFIG` to `raspi_service_pack_stdio/mcp_servers_raspi.json`, so the stdio MCP servers keep using repo-relative paths to the sibling MCP folders. The web Config -> MCP Servers routing editor writes to the active `MCP_CONFIG`; keep that JSON writable by `pi` if you move it outside the repo.
 
 ## Prerequisites
