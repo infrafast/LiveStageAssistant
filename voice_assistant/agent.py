@@ -11,6 +11,7 @@ This version includes better error handling and fallback options.
 
 import asyncio
 import base64
+import contextlib
 from contextlib import contextmanager
 from dataclasses import dataclass
 import io
@@ -607,6 +608,8 @@ def list_pyaudio_devices(audio: pyaudio.PyAudio | None = None) -> dict[str, list
                 output_entry = dict(entry)
                 output_entry["default"] = _pyaudio_device_is_default(audio, index, input_device=False)
                 devices["outputs"].append(output_entry)
+        pipewire = list_pipewire_audio_nodes()
+        devices["outputs"].extend(pipewire["outputs"])
         return devices
     finally:
         if own_audio:
@@ -614,6 +617,79 @@ def list_pyaudio_devices(audio: pyaudio.PyAudio | None = None) -> dict[str, list
                 audio.terminate()
             except Exception:
                 pass
+
+
+def pipewire_id(kind: str, target: str) -> str:
+    """Build a backend audio selector value for a PipeWire node."""
+    return f"pipewire:{kind}:{target}"
+
+
+def parse_pipewire_id(selected_device: str | None, *, kind: str) -> str | None:
+    """Return the PipeWire node target from a backend selector value."""
+    selected = str(selected_device or "").strip()
+    prefix = f"pipewire:{kind}:"
+    if selected.startswith(prefix):
+        target = selected[len(prefix) :].strip()
+        return target or None
+    return None
+
+
+def pipewire_play_available() -> bool:
+    """Return whether PipeWire command-line playback is available."""
+    return shutil.which("pw-play") is not None
+
+
+def list_pipewire_audio_nodes() -> dict[str, list[dict[str, Any]]]:
+    """List stable PipeWire audio sinks/sources as backend-selectable devices."""
+    if shutil.which("pw-dump") is None:
+        return {"inputs": [], "outputs": []}
+
+    try:
+        process = subprocess.run(
+            ["pw-dump"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            timeout=2.0,
+        )
+        if process.returncode != 0 or not process.stdout.strip():
+            return {"inputs": [], "outputs": []}
+        objects = json.loads(process.stdout)
+    except Exception:
+        return {"inputs": [], "outputs": []}
+
+    devices = {"inputs": [], "outputs": []}
+    seen: set[str] = set()
+    for item in objects if isinstance(objects, list) else []:
+        if not isinstance(item, dict):
+            continue
+        props = ((item.get("info") or {}).get("props") or {}) if isinstance(item.get("info"), dict) else {}
+        media_class = str(props.get("media.class") or "").strip()
+        if media_class not in {"Audio/Sink", "Audio/Source"}:
+            continue
+        node_name = str(props.get("node.name") or "").strip()
+        if not node_name:
+            continue
+        direction = "outputs" if media_class == "Audio/Sink" else "inputs"
+        kind = "sink" if media_class == "Audio/Sink" else "source"
+        node_description = (
+            str(props.get("node.description") or props.get("node.nick") or props.get("device.description") or "").strip()
+            or node_name
+        )
+        entry_id = pipewire_id(kind, node_name)
+        if entry_id in seen:
+            continue
+        seen.add(entry_id)
+        devices[direction].append(
+            {
+                "id": entry_id,
+                "label": f"PipeWire: {node_description}",
+                "name": node_name,
+                "default": False,
+            }
+        )
+    return devices
 
 
 def resolve_pyaudio_device_index(
@@ -627,6 +703,15 @@ def resolve_pyaudio_device_index(
     direction = "input" if input_device else "output"
     max_channels_key = "maxInputChannels" if input_device else "maxOutputChannels"
     default_method = audio.get_default_input_device_info if input_device else audio.get_default_output_device_info
+
+    pipewire_kind = "source" if input_device else "sink"
+    pipewire_target = parse_pipewire_id(selected, kind=pipewire_kind)
+    if pipewire_target:
+        if input_device:
+            return None, "invalid", "PipeWire backend input is not supported yet; choose a PyAudio input device"
+        if not pipewire_play_available():
+            return None, "unavailable", "pw-play is not available for PipeWire backend output"
+        return None, "configured", f"PipeWire output: {pipewire_target}"
 
     if selected:
         try:
@@ -1012,6 +1097,82 @@ def pcm_with_volume_and_pan(
     return np.clip(samples, -32768, 32767).astype(np.int16).tobytes(), channels
 
 
+def write_pcm_wav(path: str | Path, pcm_bytes: bytes, *, sample_rate: int, channels: int) -> None:
+    """Write signed 16-bit PCM bytes to a WAV file."""
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(pcm_bytes)
+
+
+def run_pipewire_play(
+    wav_path: str | Path,
+    *,
+    target: str,
+    stop_event: threading.Event | None = None,
+) -> None:
+    """Play a WAV file through a specific PipeWire sink with pw-play."""
+    if not pipewire_play_available():
+        raise RuntimeError("pw-play is not available")
+    global TTS_PLAYBACK_PROCESS
+    process = subprocess.Popen(
+        ["pw-play", "--target", target, str(wav_path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    TTS_PLAYBACK_PROCESS = process
+    try:
+        while process.poll() is None:
+            if stop_event and stop_event.is_set():
+                process.terminate()
+                try:
+                    process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                break
+            time.sleep(0.03)
+        if process.returncode not in (0, None) and not (stop_event and stop_event.is_set()):
+            detail = ""
+            if process.stderr is not None:
+                with contextlib.suppress(Exception):
+                    detail = process.stderr.read().strip()
+            raise RuntimeError(f"PipeWire playback failed on {target}: {detail or process.returncode}")
+    finally:
+        if TTS_PLAYBACK_PROCESS is process:
+            TTS_PLAYBACK_PROCESS = None
+
+
+def play_pcm_bytes_pipewire(
+    pcm_bytes: bytes,
+    *,
+    sample_rate: int,
+    channels: int,
+    pipewire_target: str,
+    stop_event: threading.Event | None = None,
+    volume: float = 1.0,
+    pan: float = 0.0,
+) -> None:
+    """Play signed 16-bit PCM bytes through a specific PipeWire sink."""
+    pcm_bytes, output_channels = pcm_with_volume_and_pan(
+        pcm_bytes,
+        volume,
+        channels=channels,
+        pan=pan,
+    )
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            temp_path = temp_file.name
+        write_pcm_wav(temp_path, pcm_bytes, sample_rate=sample_rate, channels=output_channels)
+        run_pipewire_play(temp_path, target=pipewire_target, stop_event=stop_event)
+    finally:
+        if temp_path:
+            with contextlib.suppress(OSError):
+                os.unlink(temp_path)
+
+
 def apply_pcm_volume(pcm_bytes: bytes, volume: float) -> bytes:
     """Apply software gain to signed 16-bit PCM bytes."""
     volume = max(0.0, min(2.0, float(volume if volume is not None else 1.0)))
@@ -1039,11 +1200,24 @@ def play_pcm_bytes(
     sample_rate: int,
     channels: int,
     output_device_index: int | None = None,
+    pipewire_target: str | None = None,
     stop_event: threading.Event | None = None,
     volume: float = 1.0,
     pan: float = 0.0,
 ) -> None:
     """Play signed 16-bit PCM through PyAudio, optionally using a configured output device."""
+    if pipewire_target:
+        play_pcm_bytes_pipewire(
+            pcm_bytes,
+            sample_rate=sample_rate,
+            channels=channels,
+            pipewire_target=pipewire_target,
+            stop_event=stop_event,
+            volume=volume,
+            pan=pan,
+        )
+        return
+
     pcm_bytes, output_channels = pcm_with_volume_and_pan(
         pcm_bytes,
         volume,
@@ -1080,14 +1254,28 @@ def play_mp3_bytes(
     *,
     audio: pyaudio.PyAudio | None = None,
     output_device_index: int | None = None,
+    pipewire_target: str | None = None,
     volume: float = 1.0,
     pan: float = 0.0,
 ) -> None:
     """Play MP3 bytes locally, preferring backend-controlled PyAudio playback."""
-    if audio is not None:
+    if audio is not None or pipewire_target:
         if not ffmpeg_decode_available():
             raise RuntimeError("ffmpeg is required for backend-controlled MP3 playback")
         pcm_bytes = decode_mp3_to_pcm_bytes(audio_bytes)
+        if pipewire_target:
+            play_pcm_bytes_pipewire(
+                pcm_bytes,
+                sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+                channels=DEFAULT_BACKEND_MP3_CHANNELS,
+                pipewire_target=pipewire_target,
+                stop_event=TTS_STOP_EVENT,
+                volume=volume,
+                pan=pan,
+            )
+            return
+        if audio is None:
+            raise RuntimeError("PyAudio is required for backend-controlled MP3 playback")
         play_pcm_bytes(
             audio,
             pcm_bytes,
@@ -1146,11 +1334,30 @@ def play_wav_file_backend(
     wav_path: str | Path,
     *,
     output_device_index: int | None = None,
+    pipewire_target: str | None = None,
     stop_event: threading.Event | None = None,
     volume: float = 1.0,
     pan: float = 0.0,
 ) -> None:
     """Play a 16-bit PCM WAV file through backend PyAudio output selection."""
+    if pipewire_target:
+        with wave.open(str(wav_path), "rb") as wav_file:
+            sample_width = wav_file.getsampwidth()
+            if sample_width != 2:
+                raise RuntimeError("only 16-bit PCM WAV playback is supported")
+            source_channels = wav_file.getnchannels()
+            pcm_bytes = wav_file.readframes(wav_file.getnframes())
+            play_pcm_bytes_pipewire(
+                pcm_bytes,
+                sample_rate=wav_file.getframerate(),
+                channels=source_channels,
+                pipewire_target=pipewire_target,
+                stop_event=stop_event,
+                volume=volume,
+                pan=pan,
+            )
+        return
+
     with wave.open(str(wav_path), "rb") as wav_file:
         sample_width = wav_file.getsampwidth()
         if sample_width != 2:
@@ -1212,10 +1419,12 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
                 values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
                 input_device=False,
             )
+            pipewire_target = parse_pipewire_id(values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), kind="sink")
             play_mp3_bytes(
                 audio_bytes,
                 audio=temp_audio,
                 output_device_index=output_device_index,
+                pipewire_target=pipewire_target,
                 volume=backend_tts_volume,
                 pan=backend_audio_output_pan,
             )
@@ -1647,6 +1856,16 @@ class VoiceAssistant:
             backend_audio_output_device,
             input_device=False,
         )
+        self.audio_input_pipewire_target = (
+            parse_pipewire_id(backend_audio_input_device, kind="source")
+            if self.audio_input_device_status == "configured"
+            else None
+        )
+        self.audio_output_pipewire_target = (
+            parse_pipewire_id(backend_audio_output_device, kind="sink")
+            if self.audio_output_device_status == "configured"
+            else None
+        )
         print(
             "Startup timing: backend audio devices resolved "
             f"in {time.perf_counter() - stage_started_at:.3f}s",
@@ -1968,6 +2187,7 @@ class VoiceAssistant:
                         sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
                         channels=DEFAULT_BACKEND_MP3_CHANNELS,
                         output_device_index=self.audio_output_device_index,
+                        pipewire_target=self.audio_output_pipewire_target,
                         volume=volume,
                         pan=self.backend_audio_output_pan,
                     )
@@ -1999,6 +2219,7 @@ class VoiceAssistant:
                         sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
                         channels=DEFAULT_BACKEND_MP3_CHANNELS,
                         output_device_index=self.audio_output_device_index,
+                        pipewire_target=self.audio_output_pipewire_target,
                         stop_event=self.startup_loader_sound_stop_event,
                         volume=self.backend_tts_volume,
                         pan=self.backend_audio_output_pan,
@@ -2014,6 +2235,12 @@ class VoiceAssistant:
             return
         try:
             while not self.thinking_sound_stop_event.is_set():
+                if self.audio_output_pipewire_target:
+                    self.play_wav_file(
+                        self.thinking_sound_path,
+                        stop_event=self.thinking_sound_stop_event,
+                    )
+                    continue
                 with wave.open(str(self.thinking_sound_path), "rb") as wav_file:
                     sample_width = wav_file.getsampwidth()
                     if sample_width != 2:
@@ -3330,6 +3557,8 @@ class VoiceAssistant:
         """Open a backend output stream for microphone monitoring."""
         if self.audio_output_device_status == "unavailable":
             raise RuntimeError("backend audio output is unavailable")
+        if self.audio_output_pipewire_target:
+            raise RuntimeError("backend pass-through monitor is not supported with PipeWire output")
         output_channels = 2 if self.channels == 1 and abs(self.backend_audio_output_pan) > 1e-6 else self.channels
         with suppress_native_stderr():
             return self.audio.open(
@@ -3377,6 +3606,7 @@ class VoiceAssistant:
                 sample_rate=self.rate,
                 channels=self.channels,
                 output_device_index=self.audio_output_device_index,
+                pipewire_target=self.audio_output_pipewire_target,
                 volume=self.backend_audio_monitor_volume,
                 pan=self.backend_audio_output_pan,
             )
@@ -4139,6 +4369,7 @@ class VoiceAssistant:
                             audio,
                             audio=self.audio,
                             output_device_index=self.audio_output_device_index,
+                            pipewire_target=self.audio_output_pipewire_target,
                             volume=self.backend_tts_volume,
                             pan=self.backend_audio_output_pan,
                         )
@@ -4146,7 +4377,7 @@ class VoiceAssistant:
                 except Exception as e:
                     if local_tts_playback_available():
                         print(f"OpenAI TTS failed: {e}")
-                        if self.audio_output_device_index is not None:
+                        if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
                             self.stop_thinking_sound()
                             print("Skipping local pyttsx3 fallback because a selected backend output failed.")
                             return False
@@ -4171,6 +4402,7 @@ class VoiceAssistant:
                             audio_bytes,
                             audio=self.audio,
                             output_device_index=self.audio_output_device_index,
+                            pipewire_target=self.audio_output_pipewire_target,
                             volume=self.backend_tts_volume,
                             pan=self.backend_audio_output_pan,
                         )
@@ -4178,7 +4410,7 @@ class VoiceAssistant:
                 except Exception as e:
                     if local_tts_playback_available():
                         print(f"ElevenLabs TTS failed: {e}")
-                        if self.audio_output_device_index is not None:
+                        if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
                             self.stop_thinking_sound()
                             print("Skipping local pyttsx3 fallback because a selected backend output failed.")
                             return False
@@ -4221,11 +4453,11 @@ class VoiceAssistant:
                         self.play_local_tts_file(temp_path, stop_event=TTS_STOP_EVENT)
                         return True
                     except Exception as e:
-                        if self.audio_output_device_index is not None:
+                        if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
                             print(f"Local pyttsx3 backend playback failed on selected output: {e}")
                             return False
                         print(f"Local pyttsx3 backend playback failed: {e}. Falling back to direct system TTS...")
-                if self.audio_output_device_index is not None:
+                if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
                     print("Local pyttsx3 file rendering failed; direct system TTS skipped because a backend output device is selected.")
                     self.stop_thinking_sound()
                     return False
@@ -4253,7 +4485,7 @@ class VoiceAssistant:
             return
         except Exception as wav_error:
             if not ffmpeg_decode_available():
-                if self.audio_output_device_index is not None:
+                if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
                     raise RuntimeError(
                         f"local TTS file is not directly playable and ffmpeg is unavailable: {wav_error}"
                     ) from wav_error
@@ -4266,6 +4498,7 @@ class VoiceAssistant:
             sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
             channels=DEFAULT_BACKEND_MP3_CHANNELS,
             output_device_index=self.audio_output_device_index,
+            pipewire_target=self.audio_output_pipewire_target,
             stop_event=stop_event,
             volume=self.backend_tts_volume,
             pan=self.backend_audio_output_pan,
@@ -4283,6 +4516,7 @@ class VoiceAssistant:
             self.audio,
             wav_path,
             output_device_index=self.audio_output_device_index,
+            pipewire_target=self.audio_output_pipewire_target,
             stop_event=stop_event,
             volume=self.backend_tts_volume if volume is None else volume,
             pan=self.backend_audio_output_pan,
@@ -4308,6 +4542,7 @@ class VoiceAssistant:
             raise ValueError(f"audio sample '{clean_filename}' was not found in assets/")
 
         output_device_index = self.audio_output_device_index
+        output_pipewire_target = self.audio_output_pipewire_target
         if output_device is not None:
             output_device_index, output_status, output_detail = resolve_pyaudio_device_index(
                 self.audio,
@@ -4316,6 +4551,7 @@ class VoiceAssistant:
             )
             if output_status in {"invalid", "unavailable"}:
                 raise ValueError(f"backend audio output device is not available: {output_detail}")
+            output_pipewire_target = parse_pipewire_id(output_device, kind="sink")
 
         sample_volume = max(0.0, min(2.0, float(volume if volume is not None else self.backend_tts_volume)))
         sample_pan = normalize_audio_pan(pan if pan is not None else self.backend_audio_output_pan)
@@ -4325,6 +4561,7 @@ class VoiceAssistant:
                     self.audio,
                     sample_path,
                     output_device_index=output_device_index,
+                    pipewire_target=output_pipewire_target,
                     stop_event=stop_event,
                     volume=sample_volume,
                     pan=sample_pan,
@@ -4337,6 +4574,7 @@ class VoiceAssistant:
                     sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
                     channels=DEFAULT_BACKEND_MP3_CHANNELS,
                     output_device_index=output_device_index,
+                    pipewire_target=output_pipewire_target,
                     stop_event=stop_event,
                     volume=sample_volume,
                     pan=sample_pan,
@@ -4408,14 +4646,17 @@ class VoiceAssistant:
         stop_event = threading.Event()
         options = options or {}
         output_device_index = self.audio_output_device_index
+        output_pipewire_target = self.audio_output_pipewire_target
         if "output_device" in options:
+            output_device = str(options.get("output_device") or "")
             output_device_index, output_status, output_detail = resolve_pyaudio_device_index(
                 self.audio,
-                str(options.get("output_device") or ""),
+                output_device,
                 input_device=False,
             )
             if output_status in {"invalid", "unavailable"}:
                 raise ValueError(f"backend audio output device is not available: {output_detail}")
+            output_pipewire_target = parse_pipewire_id(output_device, kind="sink")
         try:
             sample_volume = max(
                 0.0,
@@ -4431,6 +4672,7 @@ class VoiceAssistant:
                     self.audio,
                     sample_path,
                     output_device_index=output_device_index,
+                    pipewire_target=output_pipewire_target,
                     stop_event=stop_event,
                     volume=sample_volume,
                     pan=sample_pan,
@@ -4469,6 +4711,7 @@ class VoiceAssistant:
         test_volume = max(0.0, min(2.0, float(volume if volume is not None else self.backend_tts_volume)))
         test_pan = normalize_audio_pan(pan if pan is not None else self.backend_audio_output_pan)
         test_output_device_index = self.audio_output_device_index
+        test_output_pipewire_target = self.audio_output_pipewire_target
         if output_device is not None:
             test_output_device_index, output_status, output_detail = resolve_pyaudio_device_index(
                 self.audio,
@@ -4477,21 +4720,25 @@ class VoiceAssistant:
             )
             if output_status in {"invalid", "unavailable"}:
                 raise ValueError(f"backend audio output device is not available: {output_detail}")
+            test_output_pipewire_target = parse_pipewire_id(output_device, kind="sink")
 
         TTS_STOP_EVENT.clear()
         if selected_provider == "pyttsx3":
             previous_volume = self.backend_tts_volume
             previous_pan = self.backend_audio_output_pan
             previous_output_device_index = self.audio_output_device_index
+            previous_output_pipewire_target = self.audio_output_pipewire_target
             self.backend_tts_volume = test_volume
             self.backend_audio_output_pan = test_pan
             self.audio_output_device_index = test_output_device_index
+            self.audio_output_pipewire_target = test_output_pipewire_target
             try:
                 return self.text_to_speech_pyttsx3(text)
             finally:
                 self.backend_tts_volume = previous_volume
                 self.backend_audio_output_pan = previous_pan
                 self.audio_output_device_index = previous_output_device_index
+                self.audio_output_pipewire_target = previous_output_pipewire_target
 
         if selected_provider == "openai":
             with TTS_LOCK:
@@ -4506,6 +4753,7 @@ class VoiceAssistant:
                     audio,
                     audio=self.audio,
                     output_device_index=test_output_device_index,
+                    pipewire_target=test_output_pipewire_target,
                     volume=test_volume,
                     pan=test_pan,
                 )
@@ -4518,15 +4766,18 @@ class VoiceAssistant:
                     previous_volume = self.backend_tts_volume
                     previous_pan = self.backend_audio_output_pan
                     previous_output_device_index = self.audio_output_device_index
+                    previous_output_pipewire_target = self.audio_output_pipewire_target
                     self.backend_tts_volume = test_volume
                     self.backend_audio_output_pan = test_pan
                     self.audio_output_device_index = test_output_device_index
+                    self.audio_output_pipewire_target = test_output_pipewire_target
                     try:
                         return self.text_to_speech_pyttsx3(text)
                     finally:
                         self.backend_tts_volume = previous_volume
                         self.backend_audio_output_pan = previous_pan
                         self.audio_output_device_index = previous_output_device_index
+                        self.audio_output_pipewire_target = previous_output_pipewire_target
                 return False
             with TTS_LOCK:
                 TTS_STOP_EVENT.clear()
@@ -4540,6 +4791,7 @@ class VoiceAssistant:
                     audio_bytes,
                     audio=self.audio,
                     output_device_index=test_output_device_index,
+                    pipewire_target=test_output_pipewire_target,
                     volume=test_volume,
                     pan=test_pan,
                 )
