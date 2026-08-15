@@ -529,7 +529,7 @@ def env_float_from_mapping(values: dict, name: str, default: float) -> float:
 
 def elevenlabs_playback_available() -> bool:
     """Return whether generated MP3 audio can be played or decoded locally."""
-    return ffmpeg_decode_available() or shutil.which("ffplay") is not None
+    return ffmpeg_decode_available()
 
 
 def local_tts_playback_available() -> bool:
@@ -702,7 +702,7 @@ def resolve_pyaudio_device_index(
     *,
     input_device: bool,
 ) -> tuple[int | None, str, str]:
-    """Resolve a configured PyAudio device index, falling back to the system default."""
+    """Resolve a configured device; use the system default only when the config is empty."""
     selected = str(selected_device or "").strip()
     direction = "input" if input_device else "output"
     max_channels_key = "maxInputChannels" if input_device else "maxOutputChannels"
@@ -1292,45 +1292,7 @@ def play_mp3_bytes(
         )
         return
 
-    if shutil.which("ffplay") is None:
-        raise RuntimeError("ffplay is not available")
-
-    global TTS_PLAYBACK_PROCESS
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as temp_file:
-            temp_file.write(audio_bytes)
-            temp_path = temp_file.name
-        TTS_PLAYBACK_PROCESS = subprocess.Popen(
-            [
-                "ffplay",
-                "-nodisp",
-                "-autoexit",
-                "-loglevel",
-                "quiet",
-                "-volume",
-                str(int(max(0.0, min(2.0, float(volume or 1.0))) * 100)),
-                temp_path,
-            ],
-        )
-        while TTS_PLAYBACK_PROCESS.poll() is None:
-            if TTS_STOP_EVENT.is_set():
-                TTS_PLAYBACK_PROCESS.terminate()
-                try:
-                    TTS_PLAYBACK_PROCESS.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    TTS_PLAYBACK_PROCESS.kill()
-                break
-            time.sleep(0.05)
-        if TTS_PLAYBACK_PROCESS.returncode not in (0, None) and not TTS_STOP_EVENT.is_set():
-            raise subprocess.CalledProcessError(TTS_PLAYBACK_PROCESS.returncode, TTS_PLAYBACK_PROCESS.args)
-    finally:
-        TTS_PLAYBACK_PROCESS = None
-        if temp_path:
-            try:
-                os.unlink(temp_path)
-            except OSError:
-                pass
+    raise RuntimeError("backend MP3 playback requires the configured PyAudio device or PipeWire sink")
 
 
 def play_wav_file_backend(
@@ -1423,6 +1385,8 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
                 values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
                 input_device=False,
             )
+            if _status in {"invalid", "unavailable"}:
+                raise RuntimeError(_detail)
             pipewire_target = parse_pipewire_id(values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), kind="sink")
             play_mp3_bytes(
                 audio_bytes,
@@ -1500,13 +1464,7 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
             else:
                 return
 
-        if not local_tts_playback_available():
-            return
-        try:
-            TTS_ENGINE.say(text)
-            TTS_ENGINE.runAndWait()
-        except Exception as e:
-            print(f"Auto network status local TTS failed: {e}")
+        print("Auto network status local direct TTS skipped to avoid using the system default audio output.")
 
 
 class AutoNetworkMonitor:
@@ -1899,9 +1857,9 @@ class VoiceAssistant:
             flush=True,
         )
         if self.audio_input_device_status == "invalid":
-            print(f"Backend audio input fallback: {self.audio_input_device_detail}")
+            print(f"Backend audio input invalid: {self.audio_input_device_detail}")
         if self.audio_output_device_status == "invalid":
-            print(f"Backend audio output fallback: {self.audio_output_device_detail}")
+            print(f"Backend audio output invalid: {self.audio_output_device_detail}")
         print(f"Resolved backend audio input: {self.audio_input_device_detail}")
         print(f"Resolved backend audio output: {self.audio_output_device_detail}")
 
@@ -2033,7 +1991,7 @@ class VoiceAssistant:
         self.microphone_warning_shown = False
         if not self.backend_stt_enabled:
             self.microphone_available = False
-        elif self.audio_input_device_status == "unavailable":
+        elif not self._backend_input_ready():
             self.microphone_available = False
         if self.web_monitor:
             self.web_monitor.update(
@@ -2070,6 +2028,14 @@ class VoiceAssistant:
             flush=True,
         )
 
+    def _backend_input_ready(self) -> bool:
+        """Return true only when backend STT can use the configured input route."""
+        return self.audio_input_device_status not in {"invalid", "unavailable"}
+
+    def _backend_output_ready(self) -> bool:
+        """Return true only when backend playback can use the configured output route."""
+        return self.audio_output_device_status not in {"invalid", "unavailable"}
+
     def _resolve_asset_path(self, value: str) -> Path | None:
         """Resolve a configured asset path, falling back to ./assets for bare filenames."""
         configured_path = Path(value).expanduser()
@@ -2096,6 +2062,8 @@ class VoiceAssistant:
     def start_thinking_sound(self) -> None:
         """Loop the configured thinking sound until stop_thinking_sound is called."""
         if self.tts_provider == "none":
+            return
+        if not self._backend_output_ready():
             return
         if not self.thinking_sound_file:
             return
@@ -2133,7 +2101,7 @@ class VoiceAssistant:
         """Loop the startup loader sound through backend output until startup is ready."""
         if not self.startup_loader_sound_enabled:
             return
-        if self.tts_provider == "none" or self.audio_output_device_status == "unavailable":
+        if self.tts_provider == "none" or not self._backend_output_ready():
             return
         if not self.startup_loader_sound_path:
             if not self.startup_loader_sound_warning_shown:
@@ -2170,7 +2138,7 @@ class VoiceAssistant:
         if (
             not self.command_ack_sound_enabled
             or self.tts_provider == "none"
-            or self.audio_output_device_status == "unavailable"
+            or not self._backend_output_ready()
         ):
             return
 
@@ -3083,7 +3051,11 @@ class VoiceAssistant:
 
     def record_audio(self) -> bytes | None:
         """Record audio from microphone."""
-        if not self.microphone_available or self.backend_audio_diagnostic_requested.is_set():
+        if (
+            not self.microphone_available
+            or not self._backend_input_ready()
+            or self.backend_audio_diagnostic_requested.is_set()
+        ):
             return None
 
         print("\nListening... (speak now)")
@@ -3559,7 +3531,7 @@ class VoiceAssistant:
 
     def _open_backend_audio_monitor_stream(self):
         """Open a backend output stream for microphone monitoring."""
-        if self.audio_output_device_status == "unavailable":
+        if not self._backend_output_ready():
             raise RuntimeError("backend audio output is unavailable")
         if self.audio_output_pipewire_target:
             raise RuntimeError("backend pass-through monitor is not supported with PipeWire output")
@@ -3600,7 +3572,7 @@ class VoiceAssistant:
         if (
             self.backend_audio_monitor_mode != "rejected"
             or not audio_data
-            or self.audio_output_device_status == "unavailable"
+            or not self._backend_output_ready()
         ):
             return
         try:
@@ -3678,7 +3650,11 @@ class VoiceAssistant:
 
     def record_voice_cancel_audio(self, stop_event: threading.Event) -> bytes | None:
         """Capture a short audio window while the assistant is thinking."""
-        if not self.microphone_available or self.backend_audio_diagnostic_requested.is_set():
+        if (
+            not self.microphone_available
+            or not self._backend_input_ready()
+            or self.backend_audio_diagnostic_requested.is_set()
+        ):
             return None
 
         stream = None
@@ -4351,6 +4327,10 @@ class VoiceAssistant:
         if self.tts_provider == "none":
             self.stop_thinking_sound()
             return False
+        if not self._backend_output_ready():
+            self.stop_thinking_sound()
+            print(f"Backend TTS skipped: backend audio output is {self.audio_output_device_status}.")
+            return False
 
         TTS_STOP_EVENT.clear()
         if self.tts_provider == "pyttsx3":
@@ -4364,30 +4344,36 @@ class VoiceAssistant:
                     self.stop_thinking_sound()
                     return False
             else:
+                audio = None
                 try:
                     with TTS_LOCK:
                         TTS_STOP_EVENT.clear()
                         audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
-                        self.stop_thinking_sound()
-                        play_mp3_bytes(
-                            audio,
-                            audio=self.audio,
-                            output_device_index=self.audio_output_device_index,
-                            pipewire_target=self.audio_output_pipewire_target,
-                            volume=self.backend_tts_volume,
-                            pan=self.backend_audio_output_pan,
-                        )
-                    return True
                 except Exception as e:
                     if local_tts_playback_available():
-                        print(f"OpenAI TTS failed: {e}")
-                        if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
-                            self.stop_thinking_sound()
-                            print("Skipping local pyttsx3 fallback because a selected backend output failed.")
-                            return False
-                        print("Falling back to local pyttsx3 TTS...")
+                        print(f"OpenAI TTS generation failed: {e}")
+                        print("Falling back to local pyttsx3 TTS on the configured backend output...")
                     else:
                         self.stop_thinking_sound()
+                        return False
+                if audio is not None:
+                    try:
+                        with TTS_LOCK:
+                            self.stop_thinking_sound()
+                            play_mp3_bytes(
+                                audio,
+                                audio=self.audio,
+                                output_device_index=self.audio_output_device_index,
+                                pipewire_target=self.audio_output_pipewire_target,
+                                volume=self.backend_tts_volume,
+                                pan=self.backend_audio_output_pan,
+                            )
+                        return True
+                    except Exception as e:
+                        if local_tts_playback_available():
+                            print(f"OpenAI TTS playback failed: {e}")
+                        self.stop_thinking_sound()
+                        print("Skipping local pyttsx3 fallback because backend cloud TTS playback failed.")
                         return False
 
         elif self.tts_provider == "elevenlabs":
@@ -4396,31 +4382,37 @@ class VoiceAssistant:
                     if local_tts_playback_available():
                         print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
                     return self.text_to_speech_pyttsx3(text)
+                audio_bytes = None
                 try:
                     with TTS_LOCK:
                         TTS_STOP_EVENT.clear()
                         audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
                         audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
-                        self.stop_thinking_sound()
-                        play_mp3_bytes(
-                            audio_bytes,
-                            audio=self.audio,
-                            output_device_index=self.audio_output_device_index,
-                            pipewire_target=self.audio_output_pipewire_target,
-                            volume=self.backend_tts_volume,
-                            pan=self.backend_audio_output_pan,
-                        )
-                    return True
                 except Exception as e:
                     if local_tts_playback_available():
-                        print(f"ElevenLabs TTS failed: {e}")
-                        if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
-                            self.stop_thinking_sound()
-                            print("Skipping local pyttsx3 fallback because a selected backend output failed.")
-                            return False
-                        print("Falling back to local pyttsx3 TTS...")
+                        print(f"ElevenLabs TTS generation failed: {e}")
+                        print("Falling back to local pyttsx3 TTS on the configured backend output...")
                     else:
                         self.stop_thinking_sound()
+                        return False
+                if audio_bytes is not None:
+                    try:
+                        with TTS_LOCK:
+                            self.stop_thinking_sound()
+                            play_mp3_bytes(
+                                audio_bytes,
+                                audio=self.audio,
+                                output_device_index=self.audio_output_device_index,
+                                pipewire_target=self.audio_output_pipewire_target,
+                                volume=self.backend_tts_volume,
+                                pan=self.backend_audio_output_pan,
+                            )
+                        return True
+                    except Exception as e:
+                        if local_tts_playback_available():
+                            print(f"ElevenLabs TTS playback failed: {e}")
+                        self.stop_thinking_sound()
+                        print("Skipping local pyttsx3 fallback because backend cloud TTS playback failed.")
                         return False
             elif local_tts_playback_available():
                 print("ElevenLabs TTS selected but ELEVENLABS_API_KEY is missing. Falling back to pyttsx3...")
@@ -4440,6 +4432,10 @@ class VoiceAssistant:
         """Speak text through local TTS, preferring a file rendered into backend PyAudio output."""
         if not local_tts_playback_available():
             return False
+        if not self._backend_output_ready():
+            self.stop_thinking_sound()
+            print(f"Local pyttsx3 TTS skipped: backend audio output is {self.audio_output_device_status}.")
+            return False
 
         spoken_text = prepare_text_for_tts(text)
         temp_path = None
@@ -4457,20 +4453,12 @@ class VoiceAssistant:
                         self.play_local_tts_file(temp_path, stop_event=TTS_STOP_EVENT)
                         return True
                     except Exception as e:
-                        if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
-                            print(f"Local pyttsx3 backend playback failed on selected output: {e}")
-                            return False
-                        print(f"Local pyttsx3 backend playback failed: {e}. Falling back to direct system TTS...")
-                if self.audio_output_device_index is not None or self.audio_output_pipewire_target:
-                    print("Local pyttsx3 file rendering failed; direct system TTS skipped because a backend output device is selected.")
-                    self.stop_thinking_sound()
-                    return False
+                        print(f"Local pyttsx3 backend playback failed on configured output: {e}")
+                        return False
                 if not file_rendered:
-                    print("Local pyttsx3 file rendering failed. Falling back to direct system TTS...")
+                    print("Local pyttsx3 file rendering failed; direct system TTS is disabled.")
                 self.stop_thinking_sound()
-                TTS_ENGINE.say(spoken_text)
-                TTS_ENGINE.runAndWait()
-            return True
+                return False
         except Exception as e:
             self.stop_thinking_sound()
             print(f"Local pyttsx3 TTS failed: {e}")
@@ -4516,6 +4504,8 @@ class VoiceAssistant:
         volume: float | None = None,
     ) -> None:
         """Play a WAV file through backend PyAudio output selection."""
+        if not self._backend_output_ready():
+            raise RuntimeError(f"backend audio output is {self.audio_output_device_status}")
         play_wav_file_backend(
             self.audio,
             wav_path,
@@ -4556,6 +4546,8 @@ class VoiceAssistant:
             if output_status in {"invalid", "unavailable"}:
                 raise ValueError(f"backend audio output device is not available: {output_detail}")
             output_pipewire_target = parse_pipewire_id(output_device, kind="sink")
+        elif not self._backend_output_ready():
+            raise ValueError(f"backend audio output device is not available: {self.audio_output_device_detail}")
 
         sample_volume = max(0.0, min(2.0, float(volume if volume is not None else self.backend_tts_volume)))
         sample_pan = normalize_audio_pan(pan if pan is not None else self.backend_audio_output_pan)
@@ -4661,6 +4653,8 @@ class VoiceAssistant:
             if output_status in {"invalid", "unavailable"}:
                 raise ValueError(f"backend audio output device is not available: {output_detail}")
             output_pipewire_target = parse_pipewire_id(output_device, kind="sink")
+        elif not self._backend_output_ready():
+            raise ValueError(f"backend audio output device is not available: {self.audio_output_device_detail}")
         try:
             sample_volume = max(
                 0.0,
@@ -4725,6 +4719,8 @@ class VoiceAssistant:
             if output_status in {"invalid", "unavailable"}:
                 raise ValueError(f"backend audio output device is not available: {output_detail}")
             test_output_pipewire_target = parse_pipewire_id(output_device, kind="sink")
+        elif not self._backend_output_ready():
+            raise ValueError(f"backend audio output device is not available: {self.audio_output_device_detail}")
 
         TTS_STOP_EVENT.clear()
         if selected_provider == "pyttsx3":
