@@ -609,6 +609,7 @@ def list_pyaudio_devices(audio: pyaudio.PyAudio | None = None) -> dict[str, list
                 output_entry["default"] = _pyaudio_device_is_default(audio, index, input_device=False)
                 devices["outputs"].append(output_entry)
         pipewire = list_pipewire_audio_nodes()
+        devices["inputs"].extend(pipewire["inputs"])
         devices["outputs"].extend(pipewire["outputs"])
         return devices
     finally:
@@ -681,14 +682,17 @@ def list_pipewire_audio_nodes() -> dict[str, list[dict[str, Any]]]:
         if entry_id in seen:
             continue
         seen.add(entry_id)
-        devices[direction].append(
-            {
-                "id": entry_id,
-                "label": f"PipeWire: {node_description}",
-                "name": node_name,
-                "default": False,
-            }
-        )
+        entry = {
+            "id": entry_id,
+            "label": f"PipeWire: {node_description}",
+            "name": node_name,
+            "default": False,
+            "available": True,
+        }
+        if direction == "inputs":
+            entry["available"] = False
+            entry["reason"] = "PipeWire backend input capture is not supported yet; choose a PyAudio/ALSA input"
+        devices[direction].append(entry)
     return devices
 
 
@@ -6436,8 +6440,12 @@ async def main():
             raise ValueError(f"OpenAI TTS voice '{openai_tts_voice}' is not available in the web config")
 
         backend_audio_devices = list_pyaudio_devices()
-        backend_audio_input_ids = {item["id"] for item in backend_audio_devices["inputs"]}
-        backend_audio_output_ids = {item["id"] for item in backend_audio_devices["outputs"]}
+        backend_audio_input_ids = {
+            item["id"] for item in backend_audio_devices["inputs"] if item.get("available", True)
+        }
+        backend_audio_output_ids = {
+            item["id"] for item in backend_audio_devices["outputs"] if item.get("available", True)
+        }
         if backend_audio_input_device and backend_audio_input_device not in backend_audio_input_ids:
             LOGGER.warning(
                 "Backend audio input device %r is not available; clearing saved selection",

@@ -4574,8 +4574,12 @@
         const selectedBackendAudioInput = data.selected_backend_audio_input_device || "";
         backendAudioInput.appendChild(option(backendAudioCapabilities.input ? "Default input" : "No backend input", "", !backendAudioCapabilities.input, !selectedBackendAudioInput));
         for (const device of data.backend_audio_inputs || []) {
-          const label = device.default ? `${device.label || device.id} (default)` : (device.label || device.id);
-          backendAudioInput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioInput));
+          const unavailable = device.available === false;
+          const baseLabel = device.label || device.id;
+          const label = `${device.default ? `${baseLabel} (default)` : baseLabel}${unavailable ? " (non sélectionnable)" : ""}`;
+          const opt = option(label, device.id, unavailable, device.id === selectedBackendAudioInput);
+          if (device.reason) opt.title = device.reason;
+          backendAudioInput.appendChild(opt);
         }
         if (selectedBackendAudioInput && ![...backendAudioInput.options].some((item) => item.value === selectedBackendAudioInput)) {
           backendAudioInput.options[0].textContent = `Default input (current unavailable: ${selectedBackendAudioInput})`;
