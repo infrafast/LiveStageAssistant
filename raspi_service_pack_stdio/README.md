@@ -40,14 +40,14 @@ If system package installation was skipped or failed, install them manually:
 
 ```bash
 sudo apt update
-sudo apt install portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
+sudo apt install portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
 ```
 
-`alsa-utils` provides tools such as `aplay` for ALSA device checks, and `ffmpeg` is required for backend OpenAI/ElevenLabs MP3 TTS playback. It is also used to decode browser WebM/Opus audio before optional Resemblyzer speaker recognition. Without `ffmpeg`, backend cloud TTS can fall back to `pyttsx3` and browser-side speaker recognition may return `unknown`.
+`alsa-utils` provides tools such as `aplay` for ALSA device checks, `pipewire-bin` provides `pw-cat`/`pw-record` for targeted PipeWire backend input, and `ffmpeg` is required for backend OpenAI/ElevenLabs MP3 TTS playback. It is also used to decode browser WebM/Opus audio before optional Resemblyzer speaker recognition. Without `ffmpeg`, backend cloud TTS playback is skipped and browser-side speaker recognition may return `unknown`.
 
 Backend input gain, TTS volume, backend microphone monitoring volume, and pan are software controls. `BACKEND_AUDIO_INPUT_GAIN=1.00` leaves captured microphone PCM unchanged; values from `0.50` to `2.00` are applied before VAD, STT, diagnostics, and speaker-profile capture. In the web Config -> Audio In/Out section, `BACKEND_AUDIO_OUTPUT_PAN=0.00` keeps backend audio centered; `-1.00` sends it left and `1.00` sends it right. `BACKEND_AUDIO_MONITOR_MODE=off` keeps the current behavior, `passthrough` forwards backend microphone chunks to backend output while capture is running, and `rejected` replays only wake-word-rejected phrases. `BACKEND_AUDIO_MONITOR_VOLUME=1.00` controls that microphone monitoring path separately from TTS gain.
 
-The backend input **Test** button performs a bounded seven-second diagnostic on the Raspberry Pi instead of repeatedly opening the ALSA device for a live meter. It temporarily pauses normal STT listening and uses the configured input format. The hardware verdict uses fixed reference VAD values (`0.50`, `120 ms`) with level, noise, speech-detection, and clipping measurements; a separate status indicates whether the active `.env` VAD settings would accept the same recording. The WAV preview is held only in the HTTP response and is not written to the Raspberry Pi filesystem.
+The backend input **Test** button performs a bounded seven-second diagnostic on the Raspberry Pi instead of repeatedly opening the audio device for a live meter. It temporarily pauses normal STT listening and uses the configured input format. With multiple USB sound cards, prefer a named `PipeWire: ...` backend input when PyAudio/ALSA indexes are unstable; the assistant targets that source directly and does not change the global default source. The hardware verdict uses fixed reference VAD values (`0.50`, `120 ms`) with level, noise, speech-detection, and clipping measurements; a separate status indicates whether the active `.env` VAD settings would accept the same recording. The WAV preview is held only in the HTTP response and is not written to the Raspberry Pi filesystem.
 
 At startup, `Startup timing:` log lines measure Silero/ONNX loading, Resemblyzer validation, PyAudio creation, device lookup, input-format probing, and total assistant construction. Use the largest duration to distinguish a slow ML import from an ALSA/device delay.
 
@@ -55,11 +55,10 @@ Backend microphone monitoring is **experimental** and has not yet been validated
 
 Backend and browser transcription are bounded by `STT_TIMEOUT_SECONDS` (25 seconds in the bundled profiles). Optional Resemblyzer analysis is bounded separately by `SPEAKER_RECOGNITION_TIMEOUT_SECONDS` (10 seconds). If the journal stops after `Processing...`, the next diagnostic lines identify whether STT or speaker recognition started, finished, or timed out; a timeout returns control to listening instead of leaving the service loop blocked.
 
-On Raspberry Pi with PipeWire, USB audio devices may be busy when opened directly through ALSA `hw:` or `plughw:`. Prefer selecting the `pipewire` backend output in the web UI, then set the USB sink as PipeWire's default output:
+On Raspberry Pi with PipeWire, USB audio devices may be busy or unstable when opened directly through ALSA `hw:` or `plughw:`. Prefer selecting the named `PipeWire: ...` backend input/output entries in the web UI. This targets the selected source/sink directly and does not require changing the global default devices:
 
 ```bash
 wpctl status
-wpctl set-default <USB_SINK_ID>
 ```
 
 The installed system service runs as `pi` but outside the interactive login shell. To let PyAudio see the same PipeWire/Pulse devices as an interactive `pi` terminal, the service exports:

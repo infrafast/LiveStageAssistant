@@ -21,6 +21,7 @@ RUN apt-get update \
         libportaudiocpp0 \
         nodejs \
         npm \
+        pipewire-bin \
         portaudio19-dev \
         build-essential \
     && ffmpeg -version >/dev/null \

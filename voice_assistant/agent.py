@@ -640,6 +640,103 @@ def pipewire_play_available() -> bool:
     return shutil.which("pw-play") is not None
 
 
+PIPEWIRE_CAPTURE_RATE = 16000
+PIPEWIRE_CAPTURE_CHANNELS = 1
+PIPEWIRE_CAPTURE_CHUNK = 1024
+
+
+def pipewire_record_command() -> str | None:
+    """Return a PipeWire command able to record raw PCM from a targeted source."""
+    for command in ("pw-cat", "pw-record"):
+        if shutil.which(command):
+            return command
+    return None
+
+
+def pipewire_record_available() -> bool:
+    """Return whether targeted PipeWire backend input capture is available."""
+    return pipewire_record_command() is not None
+
+
+class PipeWireInputStream:
+    """Small stream adapter matching the PyAudio read/close methods used by STT."""
+
+    def __init__(self, target: str, *, rate: int, channels: int, chunk: int):
+        commands = [command for command in ("pw-cat", "pw-record") if shutil.which(command)]
+        if not commands:
+            raise RuntimeError("pw-cat or pw-record is required for PipeWire backend input")
+        base_args = [
+            "--raw",
+            "--target",
+            target,
+            "--format",
+            "s16",
+            "--rate",
+            str(rate),
+            "--channels",
+            str(channels),
+            "-",
+        ]
+        self.process = None
+        self.rate = rate
+        self.channels = channels
+        self.chunk = chunk
+        self.bytes_per_frame = channels * 2
+        for command in commands:
+            args = [command, "--record", *base_args] if Path(command).name == "pw-cat" else [command, *base_args]
+            process = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
+            time.sleep(0.05)
+            if process.poll() is None:
+                self.process = process
+                break
+            with contextlib.suppress(Exception):
+                process.kill()
+                process.wait(timeout=1.0)
+            if process.stdout:
+                with contextlib.suppress(Exception):
+                    process.stdout.close()
+        if self.process is None:
+            raise RuntimeError(f"PipeWire input capture failed for source '{target}'")
+
+    def read(self, chunk: int, exception_on_overflow: bool = False) -> bytes:
+        del exception_on_overflow
+        if not self.process.stdout:
+            raise RuntimeError("PipeWire input capture has no stdout stream")
+        expected = max(1, int(chunk)) * self.bytes_per_frame
+        parts: list[bytes] = []
+        remaining = expected
+        while remaining > 0:
+            data = self.process.stdout.read(remaining)
+            if not data:
+                raise RuntimeError("PipeWire input capture stopped")
+            parts.append(data)
+            remaining -= len(data)
+        return b"".join(parts)
+
+    def is_active(self) -> bool:
+        return self.process.poll() is None
+
+    def stop_stream(self) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=1.0)
+        if self.process.stdout:
+            with contextlib.suppress(Exception):
+                self.process.stdout.close()
+
+
 def list_pipewire_audio_nodes() -> dict[str, list[dict[str, Any]]]:
     """List stable PipeWire audio sinks/sources as backend-selectable devices."""
     if shutil.which("pw-dump") is None:
@@ -689,9 +786,9 @@ def list_pipewire_audio_nodes() -> dict[str, list[dict[str, Any]]]:
             "default": False,
             "available": True,
         }
-        if direction == "inputs":
+        if direction == "inputs" and not pipewire_record_available():
             entry["available"] = False
-            entry["reason"] = "PipeWire backend input capture is not supported yet; choose a PyAudio/ALSA input"
+            entry["reason"] = "PipeWire backend input requires pw-cat or pw-record"
         devices[direction].append(entry)
     return devices
 
@@ -706,16 +803,19 @@ def resolve_pyaudio_device_index(
     selected = str(selected_device or "").strip()
     direction = "input" if input_device else "output"
     max_channels_key = "maxInputChannels" if input_device else "maxOutputChannels"
-    default_method = audio.get_default_input_device_info if input_device else audio.get_default_output_device_info
 
     pipewire_kind = "source" if input_device else "sink"
     pipewire_target = parse_pipewire_id(selected, kind=pipewire_kind)
     if pipewire_target:
         if input_device:
-            return None, "invalid", "PipeWire backend input is not supported yet; choose a PyAudio input device"
+            if not pipewire_record_available():
+                return None, "unavailable", "pw-cat or pw-record is not available for PipeWire backend input"
+            return None, "configured", f"PipeWire input: {pipewire_target}"
         if not pipewire_play_available():
             return None, "unavailable", "pw-play is not available for PipeWire backend output"
         return None, "configured", f"PipeWire output: {pipewire_target}"
+
+    default_method = audio.get_default_input_device_info if input_device else audio.get_default_output_device_info
 
     if selected:
         try:
@@ -817,6 +917,41 @@ def resolve_backend_input_format(
     if last_error is not None:
         detail = f"{detail}; {concise_pyaudio_error(last_error)}"
     return {"ok": False, "channels": 1, "rate": 16000, "chunk": 1024, "detail": detail}
+
+
+def pipewire_backend_input_format() -> dict[str, Any]:
+    """Return the fixed raw PCM format requested from PipeWire backend sources."""
+    return {
+        "ok": True,
+        "channels": PIPEWIRE_CAPTURE_CHANNELS,
+        "rate": PIPEWIRE_CAPTURE_RATE,
+        "chunk": PIPEWIRE_CAPTURE_CHUNK,
+        "detail": f"{PIPEWIRE_CAPTURE_CHANNELS}ch/{PIPEWIRE_CAPTURE_RATE}Hz via PipeWire",
+    }
+
+
+def open_backend_input_stream(
+    audio: pyaudio.PyAudio,
+    *,
+    audio_format: int,
+    channels: int,
+    rate: int,
+    chunk: int,
+    input_device_index: int | None = None,
+    pipewire_target: str | None = None,
+):
+    """Open either a targeted PipeWire source or a PyAudio input stream."""
+    if pipewire_target:
+        return PipeWireInputStream(pipewire_target, rate=rate, channels=channels, chunk=chunk)
+    with suppress_native_stderr():
+        return audio.open(
+            format=audio_format,
+            channels=channels,
+            rate=rate,
+            input=True,
+            input_device_index=input_device_index,
+            frames_per_buffer=chunk,
+        )
 
 
 def pcm_to_vad_16k_mono(audio_data: bytes, *, source_rate: int, channels: int) -> bytes:
@@ -1692,7 +1827,7 @@ class VoiceAssistant:
             elevenlabs_voice_id: ElevenLabs voice ID (default: Rachel)
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
             command_ack_sound_enabled: Play a short backend chime when a command is accepted
-            backend_audio_input_device: Optional PyAudio input device index from BACKEND_AUDIO_INPUT_DEVICE
+            backend_audio_input_device: Optional PyAudio input index or PipeWire source from BACKEND_AUDIO_INPUT_DEVICE
             backend_audio_input_gain: Software gain applied to backend microphone PCM, 0.5 to 2.0
             backend_audio_output_device: Optional PyAudio output device index from BACKEND_AUDIO_OUTPUT_DEVICE
             vad_model_path: Local Silero VAD ONNX model path
@@ -1836,10 +1971,14 @@ class VoiceAssistant:
         stage_started_at = time.perf_counter()
         input_format_status = "skipped"
         if self.audio_input_device_status not in {"invalid", "unavailable"}:
-            input_format = resolve_backend_input_format(
-                self.audio,
-                self.audio_input_device_index,
-                self.audio_format,
+            input_format = (
+                pipewire_backend_input_format()
+                if self.audio_input_pipewire_target
+                else resolve_backend_input_format(
+                    self.audio,
+                    self.audio_input_device_index,
+                    self.audio_format,
+                )
             )
             if input_format["ok"]:
                 input_format_status = "ready"
@@ -3066,15 +3205,15 @@ class VoiceAssistant:
         try:
             if self.backend_audio_diagnostic_requested.is_set():
                 return None
-            with suppress_native_stderr():
-                stream = self.audio.open(
-                    format=self.audio_format,
-                    channels=self.channels,
-                    rate=self.rate,
-                    input=True,
-                    input_device_index=self.audio_input_device_index,
-                    frames_per_buffer=self.chunk,
-                )
+            stream = open_backend_input_stream(
+                self.audio,
+                audio_format=self.audio_format,
+                channels=self.channels,
+                rate=self.rate,
+                chunk=self.chunk,
+                input_device_index=self.audio_input_device_index,
+                pipewire_target=self.audio_input_pipewire_target,
+            )
             if self.backend_audio_monitor_mode == "passthrough":
                 try:
                     monitor_stream = self._open_backend_audio_monitor_stream()
@@ -3209,21 +3348,26 @@ class VoiceAssistant:
             if status in {"invalid", "unavailable"}:
                 raise ValueError(detail)
 
-            input_format = resolve_backend_input_format(audio, input_device_index, pyaudio.paInt16)
+            pipewire_target = parse_pipewire_id(selected_device, kind="source")
+            input_format = (
+                pipewire_backend_input_format()
+                if pipewire_target
+                else resolve_backend_input_format(audio, input_device_index, pyaudio.paInt16)
+            )
             if not input_format["ok"]:
                 raise RuntimeError(f"{detail}; {input_format['detail']}")
             channels = int(input_format["channels"])
             rate = int(input_format["rate"])
             chunk = int(input_format["chunk"])
-            with suppress_native_stderr():
-                stream = audio.open(
-                    format=pyaudio.paInt16,
-                    channels=channels,
-                    rate=rate,
-                    input=True,
-                    input_device_index=input_device_index,
-                    frames_per_buffer=chunk,
-                )
+            stream = open_backend_input_stream(
+                audio,
+                audio_format=pyaudio.paInt16,
+                channels=channels,
+                rate=rate,
+                chunk=chunk,
+                input_device_index=input_device_index,
+                pipewire_target=pipewire_target,
+            )
 
             duration_seconds = max(3.0, min(12.0, float(duration_seconds)))
             diagnostic_input_gain = max(
@@ -3374,7 +3518,7 @@ class VoiceAssistant:
             wav_buffer = io.BytesIO()
             with wave.open(wav_buffer, "wb") as wav_file:
                 wav_file.setnchannels(channels)
-                wav_file.setsampwidth(audio.get_sample_size(pyaudio.paInt16))
+                wav_file.setsampwidth(2)
                 wav_file.setframerate(rate)
                 wav_file.writeframes(pcm)
 
@@ -3460,21 +3604,26 @@ class VoiceAssistant:
             if status in {"invalid", "unavailable"}:
                 raise ValueError(detail)
 
-            input_format = resolve_backend_input_format(audio, input_device_index, pyaudio.paInt16)
+            pipewire_target = parse_pipewire_id(selected_device, kind="source")
+            input_format = (
+                pipewire_backend_input_format()
+                if pipewire_target
+                else resolve_backend_input_format(audio, input_device_index, pyaudio.paInt16)
+            )
             if not input_format["ok"]:
                 raise RuntimeError(f"{detail}; {input_format['detail']}")
             channels = int(input_format["channels"])
             rate = int(input_format["rate"])
             chunk = int(input_format["chunk"])
-            with suppress_native_stderr():
-                stream = audio.open(
-                    format=pyaudio.paInt16,
-                    channels=channels,
-                    rate=rate,
-                    input=True,
-                    input_device_index=input_device_index,
-                    frames_per_buffer=chunk,
-                )
+            stream = open_backend_input_stream(
+                audio,
+                audio_format=pyaudio.paInt16,
+                channels=channels,
+                rate=rate,
+                chunk=chunk,
+                input_device_index=input_device_index,
+                pipewire_target=pipewire_target,
+            )
 
             duration_seconds = max(3.0, min(10.0, float(duration_seconds)))
             chunk_count = max(1, math.ceil(duration_seconds * rate / chunk))
@@ -3496,7 +3645,7 @@ class VoiceAssistant:
             wav_buffer = io.BytesIO()
             with wave.open(wav_buffer, "wb") as wav_file:
                 wav_file.setnchannels(channels)
-                wav_file.setsampwidth(audio.get_sample_size(pyaudio.paInt16))
+                wav_file.setsampwidth(2)
                 wav_file.setframerate(rate)
                 wav_file.writeframes(pcm)
 
@@ -3662,15 +3811,15 @@ class VoiceAssistant:
         try:
             if self.backend_audio_diagnostic_requested.is_set():
                 return None
-            with suppress_native_stderr():
-                stream = self.audio.open(
-                    format=self.audio_format,
-                    channels=self.channels,
-                    rate=self.rate,
-                    input=True,
-                    input_device_index=self.audio_input_device_index,
-                    frames_per_buffer=self.chunk,
-                )
+            stream = open_backend_input_stream(
+                self.audio,
+                audio_format=self.audio_format,
+                channels=self.channels,
+                rate=self.rate,
+                chunk=self.chunk,
+                input_device_index=self.audio_input_device_index,
+                pipewire_target=self.audio_input_pipewire_target,
+            )
 
             self.vad.reset()
             frames = []

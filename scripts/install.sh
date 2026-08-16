@@ -25,15 +25,15 @@ install_system_packages() {
                 printf '%s\n' "Installing Linux audio/system packages with apt-get."
                 if [ "$(id -u 2>/dev/null || printf 1)" = "0" ]; then
                     apt-get update
-                    apt-get install -y curl portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
+                    apt-get install -y curl portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
                 elif command -v sudo >/dev/null 2>&1; then
                     sudo apt-get update
-                    sudo apt-get install -y curl portaudio19-dev alsa-utils ffmpeg espeak espeak-ng libespeak1 libespeak-ng1
+                    sudo apt-get install -y curl portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
                 else
                     printf '%s\n' "Warning: sudo is not available; install audio packages manually if backend audio is needed." >&2
                 fi
             else
-                printf '%s\n' "Warning: apt-get not found; install PortAudio, ffmpeg, ALSA, and espeak packages manually if backend audio is needed." >&2
+                printf '%s\n' "Warning: apt-get not found; install PortAudio, ffmpeg, ALSA, PipeWire tools, and espeak packages manually if backend audio is needed." >&2
             fi
             ;;
         Darwin)

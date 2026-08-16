@@ -268,7 +268,7 @@ Detailed MCP prompt loading, routing, tool limits, and RAG direction are documen
 ### No Audio Input
 
 - Check browser microphone permission for browser STT.
-- Use Settings -> Audio In/Out -> backend input Test for a remote/backend microphone diagnostic.
+- Use Settings -> Audio In/Out -> backend input Test for a remote/backend microphone diagnostic. On Raspberry Pi with multiple sound cards, prefer a named `PipeWire: ...` backend input when PyAudio/ALSA indexes are unstable.
 - Install PortAudio/ALSA packages on Linux/Raspberry Pi.
 - If no backend input exists, use the web text composer.
 
@@ -278,7 +278,7 @@ Detailed MCP prompt loading, routing, tool limits, and RAG direction are documen
 - Verify API keys and provider quota.
 - For browser TTS, set `TTS_PROVIDER=none` and `WEB_TTS_PROVIDER=openai` or `elevenlabs`.
 - For backend TTS, verify `BACKEND_AUDIO_OUTPUT_DEVICE`, `BACKEND_TTS_VOLUME`, and host audio passthrough.
-- On Raspberry Pi with multiple sound cards, prefer a named `PipeWire: ...` backend output over direct `hw:*` ALSA devices; this targets one sink without changing the system default output.
+- On Raspberry Pi with multiple sound cards, prefer named `PipeWire: ...` backend input/output entries over direct `hw:*` ALSA devices; this targets one source/sink without changing the system default audio devices.
 - In headless Docker, start with Browser or Silent output.
 
 ### MCP Server Not Available
