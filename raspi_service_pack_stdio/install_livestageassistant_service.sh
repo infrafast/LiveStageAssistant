@@ -23,6 +23,16 @@ PY
     echo "Error: Live Stage Assistant requires Python >= 3.11." >&2
     exit 1
   fi
+
+  if ! "$PYTHON_BIN" - <<'PY'
+from importlib import metadata
+metadata.version("openwakeword")
+PY
+  then
+    echo "Warning: openWakeWord is not installed in $APP_DIR/.venv." >&2
+    echo "Run: cd $APP_DIR && ./scripts/install.sh" >&2
+    echo "Or manually: $PYTHON_BIN -m pip install -e '.[wakeword]'" >&2
+  fi
 }
 
 require_node_stack() {

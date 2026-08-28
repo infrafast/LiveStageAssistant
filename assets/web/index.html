@@ -241,6 +241,62 @@
                       <input class="vad-control" id="vad-max-speech-seconds" type="range" min="1" max="30" step="0.5" value="8">
                     </div>
                   </div>
+                  <div class="vad-group" id="backend-wake-word-group">
+                    <div class="vad-group-title">
+                      <span>Wake word backend</span>
+                      <span class="detail">Le mode streaming écoute localement avant STT pour mieux attraper le début de phrase.</span>
+                    </div>
+                    <div class="field">
+                      <label title="BACKEND_WAKE_WORD_MODE">Méthode backend</label>
+                      <div class="segmented" id="backend-wake-word-mode" role="radiogroup" aria-label="Backend wake word mode">
+                        <label><input type="radio" name="backend-wake-word-mode" value="post_stt">Après STT</label>
+                        <label><input type="radio" name="backend-wake-word-mode" value="openwakeword">Streaming</label>
+                      </div>
+                      <div class="field-hint">Après STT garde le comportement historique. Streaming utilise openWakeWord et nécessite un modèle local.</div>
+                    </div>
+                    <div class="field full-row">
+                      <label for="backend-wake-word-model-paths" title="BACKEND_WAKE_WORD_MODEL_PATHS">Fichiers modèles openWakeWord</label>
+                      <input id="backend-wake-word-model-paths" type="text" placeholder="data/wake_words/regie.onnx,data/wake_words/console.onnx">
+                      <div class="field-hint">Chemins séparés par des virgules. À privilégier pour des wake words personnalisés comme régie ou console.</div>
+                    </div>
+                    <div class="field full-row">
+                      <label for="backend-wake-word-model-names" title="BACKEND_WAKE_WORD_MODEL_NAMES">Noms modèles openWakeWord</label>
+                      <input id="backend-wake-word-model-names" type="text" placeholder="hey_jarvis">
+                      <div class="field-hint">Option avancée: noms de modèles fournis par openWakeWord, séparés par des virgules.</div>
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="backend-wake-word-threshold" title="BACKEND_WAKE_WORD_THRESHOLD">
+                        <span>Sensibilité wake word</span>
+                        <span class="vad-value" id="backend-wake-word-threshold-label">0.50</span>
+                      </label>
+                      <div class="field-hint">Plus bas déclenche plus facilement; plus haut réduit les faux départs.</div>
+                      <input id="backend-wake-word-threshold" type="range" min="0.05" max="0.99" step="0.01" value="0.50">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="backend-wake-word-pre-roll-ms" title="BACKEND_WAKE_WORD_PRE_ROLL_MS">
+                        <span>Audio gardé avant détection</span>
+                        <span class="vad-value" id="backend-wake-word-pre-roll-ms-label">1600 ms</span>
+                      </label>
+                      <div class="field-hint">Plus long protège mieux le début de phrase; plus court consomme un peu moins de mémoire.</div>
+                      <input id="backend-wake-word-pre-roll-ms" type="range" min="200" max="5000" step="100" value="1600">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="backend-wake-word-cooldown-ms" title="BACKEND_WAKE_WORD_COOLDOWN_MS">
+                        <span>Repos entre deux déclenchements</span>
+                        <span class="vad-value" id="backend-wake-word-cooldown-ms-label">1200 ms</span>
+                      </label>
+                      <div class="field-hint">Évite qu'un même mot de réveil déclenche plusieurs commandes d'affilée.</div>
+                      <input id="backend-wake-word-cooldown-ms" type="range" min="0" max="10000" step="100" value="1200">
+                    </div>
+                    <div class="field vad-field">
+                      <label class="vad-label" for="backend-wake-word-vad-threshold" title="BACKEND_WAKE_WORD_VAD_THRESHOLD">
+                        <span>Filtre voix openWakeWord</span>
+                        <span class="vad-value" id="backend-wake-word-vad-threshold-label">Off</span>
+                      </label>
+                      <div class="field-hint">0 désactive ce filtre interne. Monte-le si le wake word réagit au bruit ou à la musique.</div>
+                      <input id="backend-wake-word-vad-threshold" type="range" min="0" max="1" step="0.01" value="0">
+                    </div>
+                  </div>
                 </div>
                 <div class="vad-examples">
                   <div class="vad-example">

@@ -102,6 +102,9 @@ DEFAULT_MCP_AGENT_MAX_STEPS = 20
 DEFAULT_STT_TIMEOUT_SECONDS = 25.0
 DEFAULT_SPEAKER_RECOGNITION_TIMEOUT_SECONDS = 10.0
 DEFAULT_SILERO_VAD_MODEL = Path("assets/web/static/vendor/silero-vad/silero_vad_v6.onnx")
+DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS = 1600
+DEFAULT_BACKEND_WAKE_WORD_THRESHOLD = 0.5
+DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS = 1200
 BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD = 0.5
 BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS = 120.0
 BACKEND_AUDIO_DIAGNOSTIC_MIN_GOOD_SPEECH_DBFS = -40.0
@@ -643,6 +646,90 @@ def pipewire_play_available() -> bool:
 PIPEWIRE_CAPTURE_RATE = 16000
 PIPEWIRE_CAPTURE_CHANNELS = 1
 PIPEWIRE_CAPTURE_CHUNK = 1024
+
+
+def normalize_backend_wake_word_mode(value: str | None) -> str:
+    """Normalize backend wake-word detection mode."""
+    mode = str(value or "post_stt").strip().lower().replace("-", "_")
+    aliases = {
+        "off": "post_stt",
+        "text": "post_stt",
+        "post": "post_stt",
+        "poststt": "post_stt",
+        "legacy": "post_stt",
+        "stream": "openwakeword",
+        "streaming": "openwakeword",
+        "open_wake_word": "openwakeword",
+        "oww": "openwakeword",
+    }
+    return aliases.get(mode, mode if mode in {"post_stt", "openwakeword"} else "post_stt")
+
+
+def parse_env_list(value: str | None) -> list[str]:
+    """Parse comma/semicolon/pipe separated env values."""
+    if not value:
+        return []
+    return [item.strip() for item in re.split(r"[,;|]", value) if item.strip()]
+
+
+class BackendWakeWordDetector:
+    """Optional openWakeWord adapter for backend microphone streaming detection."""
+
+    def __init__(
+        self,
+        *,
+        model_paths: list[str],
+        model_names: list[str],
+        threshold: float = DEFAULT_BACKEND_WAKE_WORD_THRESHOLD,
+        cooldown_ms: int = DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS,
+        vad_threshold: float | None = None,
+    ) -> None:
+        try:
+            from openwakeword.model import Model
+        except ImportError as error:
+            raise RuntimeError("openWakeWord is not installed; install the optional wakeword dependencies") from error
+
+        wakeword_models = model_paths or model_names
+        if not wakeword_models:
+            raise RuntimeError("openWakeWord needs BACKEND_WAKE_WORD_MODEL_PATHS or BACKEND_WAKE_WORD_MODEL_NAMES")
+
+        kwargs: dict[str, Any] = {"wakeword_models": wakeword_models}
+        if vad_threshold is not None and vad_threshold > 0:
+            kwargs["vad_threshold"] = vad_threshold
+        self.model = Model(**kwargs)
+        self.threshold = max(0.01, min(0.99, float(threshold)))
+        self.cooldown_seconds = max(0.0, float(cooldown_ms) / 1000.0)
+        self.last_detection_at = 0.0
+        self.frame_samples = 1280  # 80 ms at 16 kHz, the efficient openWakeWord frame size.
+        self._buffer = bytearray()
+
+    def process_pcm16_16k(self, audio_data: bytes) -> tuple[str, float] | None:
+        """Return the first detected model label and score from 16 kHz mono int16 PCM."""
+        if not audio_data:
+            return None
+
+        self._buffer.extend(audio_data)
+        frame_bytes = self.frame_samples * 2
+        while len(self._buffer) >= frame_bytes:
+            frame = bytes(self._buffer[:frame_bytes])
+            del self._buffer[:frame_bytes]
+            samples = np.frombuffer(frame, dtype=np.int16)
+            prediction = self.model.predict(samples)
+            if not isinstance(prediction, dict) or not prediction:
+                continue
+
+            label, score = max(
+                ((str(name), float(value)) for name, value in prediction.items()),
+                key=lambda item: item[1],
+            )
+            if score < self.threshold:
+                continue
+            now = time.monotonic()
+            if self.cooldown_seconds and now - self.last_detection_at < self.cooldown_seconds:
+                continue
+            self.last_detection_at = now
+            return label, score
+        return None
 
 
 def pipewire_record_command() -> str | None:
@@ -1775,6 +1862,13 @@ class VoiceAssistant:
         vad_min_silence_ms: int = 650,
         vad_speech_pad_ms: int = 100,
         vad_max_speech_seconds: float = 8.0,
+        backend_wake_word_mode: str = "post_stt",
+        backend_wake_word_model_paths: list[str] | None = None,
+        backend_wake_word_model_names: list[str] | None = None,
+        backend_wake_word_threshold: float = DEFAULT_BACKEND_WAKE_WORD_THRESHOLD,
+        backend_wake_word_pre_roll_ms: int = DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS,
+        backend_wake_word_cooldown_ms: int = DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS,
+        backend_wake_word_vad_threshold: float | None = None,
         backend_stt_enabled: bool = True,
         tts_speed: float = 1.0,
         backend_tts_volume: float = 1.0,
@@ -1837,6 +1931,13 @@ class VoiceAssistant:
             vad_min_silence_ms: Silence duration that ends an accepted phrase
             vad_speech_pad_ms: Audio retained before detected speech
             vad_max_speech_seconds: Hard cap for one accepted utterance
+            backend_wake_word_mode: Backend wake gate mode: post_stt or openwakeword
+            backend_wake_word_model_paths: Optional openWakeWord custom model paths
+            backend_wake_word_model_names: Optional openWakeWord bundled/custom model names
+            backend_wake_word_threshold: openWakeWord score required to activate
+            backend_wake_word_pre_roll_ms: Audio retained before streaming wake detection
+            backend_wake_word_cooldown_ms: Minimum delay between streaming wake detections
+            backend_wake_word_vad_threshold: Optional openWakeWord internal VAD threshold
             backend_stt_enabled: Whether the backend microphone should listen for normal commands
             tts_speed: Cloud TTS speed for backend/non-web speech
             backend_tts_volume: Software gain for backend TTS playback, 0.0 to 2.0
@@ -1911,6 +2012,29 @@ class VoiceAssistant:
         self.backend_audio_diagnostic_requested = threading.Event()
         self.backend_speaker_capture_stop_event = threading.Event()
         self.wake_words = wake_words or []
+        self.backend_wake_word_mode = normalize_backend_wake_word_mode(backend_wake_word_mode)
+        self.backend_wake_word_model_paths = list(backend_wake_word_model_paths or [])
+        self.backend_wake_word_model_names = list(backend_wake_word_model_names or [])
+        self.backend_wake_word_threshold = max(
+            0.01,
+            min(0.99, float(backend_wake_word_threshold or DEFAULT_BACKEND_WAKE_WORD_THRESHOLD)),
+        )
+        self.backend_wake_word_pre_roll_ms = max(
+            0,
+            min(5000, int(backend_wake_word_pre_roll_ms or DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS)),
+        )
+        self.backend_wake_word_cooldown_ms = max(
+            0,
+            min(10000, int(backend_wake_word_cooldown_ms or DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS)),
+        )
+        self.backend_wake_word_vad_threshold = (
+            max(0.0, min(1.0, float(backend_wake_word_vad_threshold)))
+            if backend_wake_word_vad_threshold is not None
+            else None
+        )
+        self.backend_wake_word_detector: BackendWakeWordDetector | None = None
+        self.backend_wake_word_unavailable_reason = ""
+        self.last_backend_streaming_wake_detected = False
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
         self.backend_stt_enabled = bool(backend_stt_enabled)
@@ -2126,6 +2250,7 @@ class VoiceAssistant:
         self.last_processed_command_at: float = 0.0
         self.pending_mcp_confirmation_route: dict[str, Any] | None = None
         self.mcp_reconnect_after_response = False
+        self._initialize_backend_wake_word_detector()
         self.microphone_available = True
         self.microphone_warning_shown = False
         if not self.backend_stt_enabled:
@@ -2170,6 +2295,36 @@ class VoiceAssistant:
     def _backend_input_ready(self) -> bool:
         """Return true only when backend STT can use the configured input route."""
         return self.audio_input_device_status not in {"invalid", "unavailable"}
+
+    def _initialize_backend_wake_word_detector(self) -> None:
+        """Initialize optional backend streaming wake-word detection."""
+        if self.backend_wake_word_mode != "openwakeword" or not self.wake_words:
+            return
+        try:
+            self.backend_wake_word_detector = BackendWakeWordDetector(
+                model_paths=self.backend_wake_word_model_paths,
+                model_names=self.backend_wake_word_model_names,
+                threshold=self.backend_wake_word_threshold,
+                cooldown_ms=self.backend_wake_word_cooldown_ms,
+                vad_threshold=self.backend_wake_word_vad_threshold,
+            )
+            configured_models = self.backend_wake_word_model_paths or self.backend_wake_word_model_names
+            print(
+                "Backend streaming wake-word detector enabled "
+                f"({len(configured_models)} openWakeWord model(s), threshold {self.backend_wake_word_threshold:.2f}).",
+                flush=True,
+            )
+        except Exception as e:
+            self.backend_wake_word_detector = None
+            self.backend_wake_word_unavailable_reason = str(e)
+            print(f"Backend streaming wake-word detector unavailable; using post-STT wake gate: {e}", flush=True)
+
+    def _backend_streaming_wake_active(self) -> bool:
+        return (
+            self.backend_wake_word_mode == "openwakeword"
+            and bool(self.wake_words)
+            and self.backend_wake_word_detector is not None
+        )
 
     def _backend_output_ready(self) -> bool:
         """Return true only when backend playback can use the configured output route."""
@@ -3190,6 +3345,7 @@ class VoiceAssistant:
 
     def record_audio(self) -> bytes | None:
         """Record audio from microphone."""
+        self.last_backend_streaming_wake_detected = False
         if (
             not self.microphone_available
             or not self._backend_input_ready()
@@ -3197,7 +3353,11 @@ class VoiceAssistant:
         ):
             return None
 
-        print("\nListening... (speak now)")
+        streaming_wake_active = self._backend_streaming_wake_active()
+        if streaming_wake_active:
+            print("\nListening for wake word...")
+        else:
+            print("\nListening... (speak now)")
 
         stream = None
         monitor_stream = None
@@ -3230,8 +3390,14 @@ class VoiceAssistant:
             silence_ms = 0.0
             recorded_speech_ms = 0.0
             audio_chunk_ms = self.chunk / self.rate * 1000.0
-            pad_frames = max(1, int((self.vad.speech_pad_ms / audio_chunk_ms) + 0.999))
+            pre_roll_ms = (
+                max(self.vad.speech_pad_ms, self.backend_wake_word_pre_roll_ms)
+                if streaming_wake_active
+                else self.vad.speech_pad_ms
+            )
+            pad_frames = max(1, int((pre_roll_ms / audio_chunk_ms) + 0.999))
             has_speech = False
+            wake_detected = not streaming_wake_active
 
             while True:
                 if self.backend_audio_diagnostic_requested.is_set():
@@ -3262,6 +3428,44 @@ class VoiceAssistant:
                             print(f"Backend audio pass-through monitor stopped: {e}")
                             self.backend_audio_monitor_warning_shown = True
                 vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
+                if streaming_wake_active and not wake_detected:
+                    pre_roll.append(data)
+                    if len(pre_roll) > pad_frames:
+                        pre_roll = pre_roll[-pad_frames:]
+                    try:
+                        detection = self.backend_wake_word_detector.process_pcm16_16k(vad_data)
+                    except Exception as e:
+                        self.backend_wake_word_detector = None
+                        self.backend_wake_word_unavailable_reason = str(e)
+                        streaming_wake_active = False
+                        wake_detected = True
+                        pre_roll = []
+                        self.vad.reset()
+                        print(
+                            "Backend streaming wake-word detector failed during capture; "
+                            f"falling back to post-STT wake gate: {e}",
+                            flush=True,
+                        )
+                        continue
+                    if not detection:
+                        continue
+                    detected_label, detected_score = detection
+                    wake_detected = True
+                    self.last_backend_streaming_wake_detected = True
+                    has_speech = True
+                    frames = list(pre_roll)
+                    pre_roll = []
+                    speech_candidate = []
+                    speech_candidate_ms = 0.0
+                    silence_ms = 0.0
+                    recorded_speech_ms = 0.0
+                    self.vad.reset()
+                    print(
+                        f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
+                        flush=True,
+                    )
+                    continue
+
                 probabilities = self.vad.process_pcm(vad_data)
                 speech_probability = max(probabilities) if probabilities else 0.0
                 chunk_ms = self.vad.chunk_ms * max(1, len(probabilities))
@@ -5511,7 +5715,12 @@ class VoiceAssistant:
                             self.stop_thinking_sound()
                             continue
 
+                        streaming_wake_detected = self.last_backend_streaming_wake_detected
                         should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
+                        if not should_process and streaming_wake_detected:
+                            should_process = True
+                            command_text = text.strip()
+                            print("Wake word accepted by backend streaming detector.")
                         if not should_process:
                             print("Wake word not detected. Ignoring transcription.")
                             self.stop_thinking_sound()
@@ -5521,6 +5730,9 @@ class VoiceAssistant:
                             print(f"Wake word detected: {matched_wake_word}")
                             if command_text != text:
                                 print(f"Command after wake word: {command_text}")
+                            self.start_thinking_sound()
+                        elif streaming_wake_detected:
+                            print("Command accepted after backend streaming wake detection.")
                             self.start_thinking_sound()
                         text = command_text
 
@@ -6264,6 +6476,31 @@ async def main():
         current_vad_min_silence_ms = env_int_from_values(values, "VAD_MIN_SILENCE_MS", 650)
         current_vad_speech_pad_ms = env_int_from_values(values, "VAD_SPEECH_PAD_MS", 100)
         current_vad_max_speech_seconds = env_float_from_values(values, "VAD_MAX_SPEECH_SECONDS", 8.0)
+        current_backend_wake_word_mode = normalize_backend_wake_word_mode(
+            values.get("BACKEND_WAKE_WORD_MODE") or "post_stt"
+        )
+        current_backend_wake_word_model_paths = (values.get("BACKEND_WAKE_WORD_MODEL_PATHS") or "").strip()
+        current_backend_wake_word_model_names = (values.get("BACKEND_WAKE_WORD_MODEL_NAMES") or "").strip()
+        current_backend_wake_word_threshold = env_float_from_values(
+            values,
+            "BACKEND_WAKE_WORD_THRESHOLD",
+            DEFAULT_BACKEND_WAKE_WORD_THRESHOLD,
+        )
+        current_backend_wake_word_pre_roll_ms = env_int_from_values(
+            values,
+            "BACKEND_WAKE_WORD_PRE_ROLL_MS",
+            DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS,
+        )
+        current_backend_wake_word_cooldown_ms = env_int_from_values(
+            values,
+            "BACKEND_WAKE_WORD_COOLDOWN_MS",
+            DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS,
+        )
+        current_backend_wake_word_vad_threshold = env_float_from_values(
+            values,
+            "BACKEND_WAKE_WORD_VAD_THRESHOLD",
+            0.0,
+        )
         current_backend_audio_input_device = (values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
         current_backend_audio_output_device = (values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
         current_speaker_profiles_max = max(0, min(5, env_int_from_values(values, "SPEAKER_PROFILES_MAX", 5)))
@@ -6346,6 +6583,13 @@ async def main():
             "selected_vad_min_silence_ms": current_vad_min_silence_ms,
             "selected_vad_speech_pad_ms": current_vad_speech_pad_ms,
             "selected_vad_max_speech_seconds": current_vad_max_speech_seconds,
+            "selected_backend_wake_word_mode": current_backend_wake_word_mode,
+            "selected_backend_wake_word_model_paths": current_backend_wake_word_model_paths,
+            "selected_backend_wake_word_model_names": current_backend_wake_word_model_names,
+            "selected_backend_wake_word_threshold": current_backend_wake_word_threshold,
+            "selected_backend_wake_word_pre_roll_ms": current_backend_wake_word_pre_roll_ms,
+            "selected_backend_wake_word_cooldown_ms": current_backend_wake_word_cooldown_ms,
+            "selected_backend_wake_word_vad_threshold": current_backend_wake_word_vad_threshold,
             "selected_speaker_recognition_enabled": current_speaker_recognition_enabled,
             "selected_speaker_backend": current_speaker_backend,
             "selected_speaker_threshold": current_speaker_threshold,
@@ -6402,6 +6646,13 @@ async def main():
         vad_min_silence_ms: int,
         vad_speech_pad_ms: int,
         vad_max_speech_seconds: float,
+        backend_wake_word_mode: str,
+        backend_wake_word_model_paths: str,
+        backend_wake_word_model_names: str,
+        backend_wake_word_threshold: float,
+        backend_wake_word_pre_roll_ms: int,
+        backend_wake_word_cooldown_ms: int,
+        backend_wake_word_vad_threshold: float,
         speaker_recognition_enabled: bool,
         speaker_backend: str,
         speaker_threshold: float,
@@ -6455,6 +6706,51 @@ async def main():
         vad_min_silence_ms = max(100, min(5000, int(vad_min_silence_ms or 650)))
         vad_speech_pad_ms = max(0, min(1000, int(vad_speech_pad_ms or 100)))
         vad_max_speech_seconds = max(1.0, min(30.0, float(vad_max_speech_seconds or 8.0)))
+        backend_wake_word_mode = normalize_backend_wake_word_mode(backend_wake_word_mode)
+        backend_wake_word_model_paths = str(backend_wake_word_model_paths or "").strip()
+        backend_wake_word_model_names = str(backend_wake_word_model_names or "").strip()
+        backend_wake_word_threshold = max(
+            0.05,
+            min(
+                0.99,
+                float(
+                    backend_wake_word_threshold
+                    if backend_wake_word_threshold is not None
+                    else DEFAULT_BACKEND_WAKE_WORD_THRESHOLD
+                ),
+            ),
+        )
+        backend_wake_word_pre_roll_ms = max(
+            200,
+            min(
+                5000,
+                int(
+                    backend_wake_word_pre_roll_ms
+                    if backend_wake_word_pre_roll_ms is not None
+                    else DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS
+                ),
+            ),
+        )
+        backend_wake_word_cooldown_ms = max(
+            0,
+            min(
+                10000,
+                int(
+                    backend_wake_word_cooldown_ms
+                    if backend_wake_word_cooldown_ms is not None
+                    else DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS
+                ),
+            ),
+        )
+        backend_wake_word_vad_threshold = max(
+            0.0,
+            min(
+                1.0,
+                float(backend_wake_word_vad_threshold if backend_wake_word_vad_threshold is not None else 0.0),
+            ),
+        )
+        if backend_wake_word_mode == "openwakeword" and not wake_word:
+            backend_wake_word_mode = "post_stt"
         speaker_recognition_enabled = bool(speaker_recognition_enabled)
         speaker_backend = (speaker_backend or "resemblyzer").strip().lower()
         if speaker_backend not in {"resemblyzer", "speechbrain"}:
@@ -6638,6 +6934,17 @@ async def main():
                 "VAD_MIN_SILENCE_MS": str(vad_min_silence_ms),
                 "VAD_SPEECH_PAD_MS": str(vad_speech_pad_ms),
                 "VAD_MAX_SPEECH_SECONDS": f"{vad_max_speech_seconds:.1f}".rstrip("0").rstrip("."),
+                "BACKEND_WAKE_WORD_MODE": backend_wake_word_mode,
+                "BACKEND_WAKE_WORD_MODEL_PATHS": backend_wake_word_model_paths,
+                "BACKEND_WAKE_WORD_MODEL_NAMES": backend_wake_word_model_names,
+                "BACKEND_WAKE_WORD_THRESHOLD": f"{backend_wake_word_threshold:.2f}".rstrip("0").rstrip("."),
+                "BACKEND_WAKE_WORD_PRE_ROLL_MS": str(backend_wake_word_pre_roll_ms),
+                "BACKEND_WAKE_WORD_COOLDOWN_MS": str(backend_wake_word_cooldown_ms),
+                "BACKEND_WAKE_WORD_VAD_THRESHOLD": (
+                    f"{backend_wake_word_vad_threshold:.2f}".rstrip("0").rstrip(".")
+                    if backend_wake_word_vad_threshold > 0
+                    else ""
+                ),
                 "WAKE_WORD": wake_word,
                 "STT_PROMPT": stt_prompt,
                 "ASSISTANT_SYSTEM_PROMPT": system_prompt,
@@ -6873,6 +7180,33 @@ async def main():
         vad_min_silence_ms = env_int("VAD_MIN_SILENCE_MS", 650)
         vad_speech_pad_ms = env_int("VAD_SPEECH_PAD_MS", 100)
         vad_max_speech_seconds = env_float("VAD_MAX_SPEECH_SECONDS", 8.0)
+        backend_wake_word_mode = normalize_backend_wake_word_mode(os.getenv("BACKEND_WAKE_WORD_MODE", "post_stt"))
+        backend_wake_word_model_paths = parse_env_list(os.getenv("BACKEND_WAKE_WORD_MODEL_PATHS"))
+        backend_wake_word_model_names = parse_env_list(os.getenv("BACKEND_WAKE_WORD_MODEL_NAMES"))
+        backend_wake_word_threshold = max(
+            0.01,
+            min(0.99, env_float("BACKEND_WAKE_WORD_THRESHOLD", DEFAULT_BACKEND_WAKE_WORD_THRESHOLD)),
+        )
+        backend_wake_word_pre_roll_ms = max(
+            0,
+            min(5000, env_int("BACKEND_WAKE_WORD_PRE_ROLL_MS", DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS)),
+        )
+        backend_wake_word_cooldown_ms = max(
+            0,
+            min(10000, env_int("BACKEND_WAKE_WORD_COOLDOWN_MS", DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS)),
+        )
+        raw_backend_wake_word_vad_threshold = os.getenv("BACKEND_WAKE_WORD_VAD_THRESHOLD", "").strip()
+        try:
+            backend_wake_word_vad_threshold = (
+                max(0.0, min(1.0, float(raw_backend_wake_word_vad_threshold)))
+                if raw_backend_wake_word_vad_threshold
+                else None
+            )
+        except ValueError:
+            print(
+                f"Invalid BACKEND_WAKE_WORD_VAD_THRESHOLD={raw_backend_wake_word_vad_threshold!r}; ignoring it."
+            )
+            backend_wake_word_vad_threshold = None
         voice_cancel_during_thinking = env_bool("VOICE_CANCEL_DURING_THINKING", False)
         interrupt_conversation_enabled = env_bool("INTERRUPT_CONVERSATION_ENABLED", False)
         web_stt_provider = os.getenv("WEB_STT_PROVIDER", "openai").strip().lower()
@@ -6942,6 +7276,9 @@ async def main():
         if mcp_prompt_merge_mode not in {"append", "replace"}:
             print(f"Error: MCP_PROMPT_MERGE_MODE must be 'append' or 'replace', got: {mcp_prompt_merge_mode}")
             sys.exit(1)
+        if backend_wake_word_mode == "openwakeword" and not wake_words:
+            print("BACKEND_WAKE_WORD_MODE=openwakeword requires WAKE_WORD; falling back to post_stt.")
+            backend_wake_word_mode = "post_stt"
 
         backend_stt_enabled = stt_input in {"both", "backend"}
         browser_stt_enabled = stt_input in {"both", "browser"}
@@ -6978,6 +7315,18 @@ async def main():
         if web_audio_enabled:
             print(f"Using web audio: STT={web_stt_provider}, TTS={web_tts_provider}")
         print(f"Using wake word: {', '.join(wake_words) if wake_words else 'disabled'}")
+        if wake_words:
+            model_count = len(backend_wake_word_model_paths or backend_wake_word_model_names)
+            print(
+                "Using backend wake word mode: "
+                f"{backend_wake_word_mode}"
+                + (
+                    f" ({model_count} model(s), threshold {backend_wake_word_threshold:.2f}, "
+                    f"pre-roll {backend_wake_word_pre_roll_ms} ms)"
+                    if backend_wake_word_mode == "openwakeword"
+                    else ""
+                )
+            )
         print(f"Using MCP agent memory: {mcp_agent_memory_enabled}")
         print(f"Using MCP agent max steps: {max(5, mcp_agent_max_steps)}")
         print(f"Using MCP tool routing: {'enabled' if mcp_tool_routing_enabled else 'disabled'}")
@@ -7109,6 +7458,13 @@ async def main():
             vad_min_silence_ms=vad_min_silence_ms,
             vad_speech_pad_ms=vad_speech_pad_ms,
             vad_max_speech_seconds=vad_max_speech_seconds,
+            backend_wake_word_mode=backend_wake_word_mode,
+            backend_wake_word_model_paths=backend_wake_word_model_paths,
+            backend_wake_word_model_names=backend_wake_word_model_names,
+            backend_wake_word_threshold=backend_wake_word_threshold,
+            backend_wake_word_pre_roll_ms=backend_wake_word_pre_roll_ms,
+            backend_wake_word_cooldown_ms=backend_wake_word_cooldown_ms,
+            backend_wake_word_vad_threshold=backend_wake_word_vad_threshold,
             backend_stt_enabled=backend_stt_enabled,
             tts_speed=web_tts_speed,
             backend_tts_volume=backend_tts_volume,
@@ -7568,7 +7924,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, startup_loader_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, startup_loader_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, backend_wake_word_mode, backend_wake_word_model_paths, backend_wake_word_model_names, backend_wake_word_threshold, backend_wake_word_pre_roll_ms, backend_wake_word_cooldown_ms, backend_wake_word_vad_threshold, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -7604,6 +7960,13 @@ async def main():
                 vad_min_silence_ms,
                 vad_speech_pad_ms,
                 vad_max_speech_seconds,
+                backend_wake_word_mode,
+                backend_wake_word_model_paths,
+                backend_wake_word_model_names,
+                backend_wake_word_threshold,
+                backend_wake_word_pre_roll_ms,
+                backend_wake_word_cooldown_ms,
+                backend_wake_word_vad_threshold,
                 speaker_recognition_enabled,
                 speaker_backend,
                 speaker_threshold,

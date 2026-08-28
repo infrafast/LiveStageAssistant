@@ -55,6 +55,22 @@ Backend microphone monitoring is **experimental** and has not yet been validated
 
 Backend and browser transcription are bounded by `STT_TIMEOUT_SECONDS` (25 seconds in the bundled profiles). Optional Resemblyzer analysis is bounded separately by `SPEAKER_RECOGNITION_TIMEOUT_SECONDS` (10 seconds). If the journal stops after `Processing...`, the next diagnostic lines identify whether STT or speaker recognition started, finished, or timed out; a timeout returns control to listening instead of leaving the service loop blocked.
 
+For more reliable backend wake-word timing, the service profiles include openWakeWord settings. The default `BACKEND_WAKE_WORD_MODE=post_stt` keeps the legacy behavior. `./scripts/install.sh` installs the openWakeWord dependency by default; set `LSA_SKIP_WAKEWORD=1` only if you explicitly want to skip it. To switch the Raspberry Pi backend microphone to local streaming detection, point the env file to trained openWakeWord model files or use **Config -> Voice Activity Detection (VAD) -> Wake word backend**:
+
+```bash
+cd /home/pi/LiveStageAssistant
+./scripts/install.sh
+```
+
+```env
+BACKEND_WAKE_WORD_MODE=openwakeword
+BACKEND_WAKE_WORD_MODEL_PATHS=data/wake_words/regie.onnx,data/wake_words/console.onnx
+BACKEND_WAKE_WORD_THRESHOLD=0.50
+BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
+```
+
+With this mode active, the backend microphone keeps a short ring buffer and launches STT only after the local wake detector fires. This avoids losing the beginning of phrases such as `console, quel est le volume ?`. The browser microphone and uploaded WAV commands intentionally stay on the post-STT wake-word gate for now.
+
 On Raspberry Pi with PipeWire, USB audio devices may be busy or unstable when opened directly through ALSA `hw:` or `plughw:`. Prefer selecting the named `PipeWire: ...` backend input/output entries in the web UI. This targets the selected source/sink directly and does not require changing the global default devices:
 
 ```bash

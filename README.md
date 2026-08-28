@@ -8,6 +8,7 @@ Live Stage Assistant is a voice-enabled AI assistant for live musicians and stag
 - Voice output with OpenAI, ElevenLabs, local pyttsx3, browser TTS, backend TTS, or silent text mode.
 - Chat-style web monitor with command input, microphone controls, config, logs, sessions, cancellation, and profile management.
 - Optional wake word such as `régie` or `console`.
+- Optional local backend streaming wake-word detection with openWakeWord models.
 - Optional speaker recognition with up to three WAV samples per profile.
 - Online mode with OpenAI/ElevenLabs and offline mode with Ollama/local Whisper/pyttsx3.
 - MCP integration for stage-control servers such as XMSeries-MCP and QLCPlus-MCP.
@@ -208,6 +209,17 @@ WEB_MONITOR_ENABLED=true
 WEB_MONITOR_PORT=8765
 MCP_CONFIG=mcp_servers.json
 ```
+
+Backend microphone wake-word handling defaults to the legacy post-STT gate. `scripts/install.sh` installs the local openWakeWord extra by default; set `LSA_SKIP_WAKEWORD=1` before running the installer only if you explicitly want to skip it. For more robust Raspberry Pi/backend use, provide one or more openWakeWord models and switch **Config -> Voice Activity Detection (VAD) -> Wake word backend** to streaming:
+
+```env
+BACKEND_WAKE_WORD_MODE=openwakeword
+BACKEND_WAKE_WORD_MODEL_PATHS=data/wake_words/regie.onnx,data/wake_words/console.onnx
+BACKEND_WAKE_WORD_THRESHOLD=0.50
+BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
+```
+
+In this mode, the backend microphone captures into a short ring buffer before the wake word fires. STT starts only after the local detector activates, and the buffered audio is kept so the beginning of the phrase is not cut off. Browser microphone, push-to-talk, and uploaded WAV commands keep the post-STT wake-word gate for now.
 
 For the exhaustive env reference and runtime internals, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

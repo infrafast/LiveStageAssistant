@@ -1686,11 +1686,22 @@ class WebMonitor:
                         vad_min_silence_ms = int(payload.get("vad_min_silence_ms") or 650)
                         vad_speech_pad_ms = int(payload.get("vad_speech_pad_ms") or 100)
                         vad_max_speech_seconds = float(payload.get("vad_max_speech_seconds") or 8.0)
+                        backend_wake_word_threshold = float(payload.get("backend_wake_word_threshold") or 0.5)
+                        backend_wake_word_pre_roll_ms = int(payload.get("backend_wake_word_pre_roll_ms") or 1600)
+                        backend_wake_word_cooldown_ms = int(payload.get("backend_wake_word_cooldown_ms") or 1200)
+                        backend_wake_word_vad_threshold = float(
+                            payload.get("backend_wake_word_vad_threshold")
+                            if payload.get("backend_wake_word_vad_threshold") is not None
+                            else 0.0
+                        )
                         speaker_threshold = float(payload.get("speaker_threshold") or 0.75)
                         speaker_margin = float(payload.get("speaker_margin") or 0.10)
                     except (TypeError, ValueError):
-                        self.send_error(400, "Voice detection and speaker settings must be numeric")
+                        self.send_error(400, "Voice detection, wake-word, and speaker settings must be numeric")
                         return
+                    backend_wake_word_mode = str(payload.get("backend_wake_word_mode") or "post_stt").strip().lower()
+                    backend_wake_word_model_paths = str(payload.get("backend_wake_word_model_paths") or "").strip()
+                    backend_wake_word_model_names = str(payload.get("backend_wake_word_model_names") or "").strip()
                     speaker_recognition_enabled = bool(payload.get("speaker_recognition_enabled"))
                     speaker_backend = str(payload.get("speaker_backend") or "resemblyzer").strip().lower()
                     speaker_profiles = payload.get("speaker_profiles") or []
@@ -1734,6 +1745,13 @@ class WebMonitor:
                             vad_min_silence_ms,
                             vad_speech_pad_ms,
                             vad_max_speech_seconds,
+                            backend_wake_word_mode,
+                            backend_wake_word_model_paths,
+                            backend_wake_word_model_names,
+                            backend_wake_word_threshold,
+                            backend_wake_word_pre_roll_ms,
+                            backend_wake_word_cooldown_ms,
+                            backend_wake_word_vad_threshold,
                             speaker_recognition_enabled,
                             speaker_backend,
                             speaker_threshold,

@@ -58,6 +58,13 @@ if (-not (Test-Path ".venv")) {
 uv pip install -e .
 uv pip install "mcp-use>=1.7.0,<2.0.0" "mcp>=1.24.0,<2.0.0"
 
+if ($env:LSA_SKIP_WAKEWORD -eq "1") {
+    Write-Host "Skipping openWakeWord dependencies because LSA_SKIP_WAKEWORD=1."
+} else {
+    Write-Host "Installing local wake-word detection dependencies."
+    uv pip install -e ".[wakeword]"
+}
+
 Write-Host "Installing speaker recognition dependencies for Windows."
 uv pip install -e ".[speaker]"
 uv pip install torch --index-url https://download.pytorch.org/whl/cpu
@@ -66,7 +73,7 @@ uv pip install resemblyzer --no-deps
 # compatible with modern Python and is not needed at runtime.
 uv pip uninstall typing | Out-Null
 
-uv run python -c "from importlib import metadata; from mcp.shared.context import RequestContext; from mcp_use import MCPAgent, MCPClient; from resemblyzer import VoiceEncoder, preprocess_wav; print('MCP dependencies OK: mcp-use ' + metadata.version('mcp-use') + ', mcp ' + metadata.version('mcp')); print('Speaker recognition dependencies OK: resemblyzer ' + metadata.version('resemblyzer'))"
+uv run python -c "from importlib import metadata; from mcp.shared.context import RequestContext; from mcp_use import MCPAgent, MCPClient; from resemblyzer import VoiceEncoder, preprocess_wav; print('MCP dependencies OK: mcp-use ' + metadata.version('mcp-use') + ', mcp ' + metadata.version('mcp')); print('Speaker recognition dependencies OK: resemblyzer ' + metadata.version('resemblyzer'));`ntry:`n    print('Wake-word dependencies OK: openwakeword ' + metadata.version('openwakeword'))`nexcept metadata.PackageNotFoundError:`n    print('Wake-word dependencies skipped: openwakeword is not installed')"
 
 $gpuPackages = uv pip freeze | Select-String -Pattern "^(nvidia|cuda|triton)" -CaseSensitive:$false
 if ($gpuPackages) {

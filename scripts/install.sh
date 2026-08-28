@@ -118,6 +118,13 @@ fi
 uv pip install -e .
 uv pip install "mcp-use>=1.7.0,<2.0.0" "mcp>=1.24.0,<2.0.0"
 
+if [ "${LSA_SKIP_WAKEWORD:-}" = "1" ]; then
+    printf '%s\n' "Skipping openWakeWord dependencies because LSA_SKIP_WAKEWORD=1."
+else
+    printf '%s\n' "Installing local wake-word detection dependencies."
+    uv pip install -e ".[wakeword]"
+fi
+
 printf '%s\n' "Installing speaker recognition dependencies for ${system}/${machine}."
 uv pip install -e ".[speaker]"
 case "$system" in
@@ -146,6 +153,10 @@ print(
     f"mcp {metadata.version('mcp')}"
 )
 print(f"Speaker recognition dependencies OK: resemblyzer {metadata.version('resemblyzer')}")
+try:
+    print(f"Wake-word dependencies OK: openwakeword {metadata.version('openwakeword')}")
+except metadata.PackageNotFoundError:
+    print("Wake-word dependencies skipped: openwakeword is not installed")
 PY
 
 if uv pip freeze | grep -Ei '^(nvidia|cuda|triton)' >/dev/null; then

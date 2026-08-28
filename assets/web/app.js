@@ -107,6 +107,18 @@
     const vadSpeechPadMsLabel = document.querySelector("#vad-speech-pad-ms-label");
     const vadMaxSpeechSeconds = document.querySelector("#vad-max-speech-seconds");
     const vadMaxSpeechSecondsLabel = document.querySelector("#vad-max-speech-seconds-label");
+    const backendWakeWordGroup = document.querySelector("#backend-wake-word-group");
+    const backendWakeWordModeInputs = Array.from(document.querySelectorAll('input[name="backend-wake-word-mode"]'));
+    const backendWakeWordModelPaths = document.querySelector("#backend-wake-word-model-paths");
+    const backendWakeWordModelNames = document.querySelector("#backend-wake-word-model-names");
+    const backendWakeWordThreshold = document.querySelector("#backend-wake-word-threshold");
+    const backendWakeWordThresholdLabel = document.querySelector("#backend-wake-word-threshold-label");
+    const backendWakeWordPreRollMs = document.querySelector("#backend-wake-word-pre-roll-ms");
+    const backendWakeWordPreRollMsLabel = document.querySelector("#backend-wake-word-pre-roll-ms-label");
+    const backendWakeWordCooldownMs = document.querySelector("#backend-wake-word-cooldown-ms");
+    const backendWakeWordCooldownMsLabel = document.querySelector("#backend-wake-word-cooldown-ms-label");
+    const backendWakeWordVadThreshold = document.querySelector("#backend-wake-word-vad-threshold");
+    const backendWakeWordVadThresholdLabel = document.querySelector("#backend-wake-word-vad-threshold-label");
     const vadPresetButtons = Array.from(document.querySelectorAll(".vad-preset"));
     const speakerRecognitionGroup = document.querySelector("#speaker-recognition-group");
     const speakerRecognitionInputs = Array.from(document.querySelectorAll('input[name="speaker-recognition"]'));
@@ -123,6 +135,14 @@
       vadMinSilenceMs,
       vadSpeechPadMs,
       vadMaxSpeechSeconds
+    ];
+    const backendWakeWordControls = [
+      backendWakeWordModelPaths,
+      backendWakeWordModelNames,
+      backendWakeWordThreshold,
+      backendWakeWordPreRollMs,
+      backendWakeWordCooldownMs,
+      backendWakeWordVadThreshold
     ];
     const cloudApiDetails = document.querySelector("#cloud-api-details");
     const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
@@ -2925,6 +2945,13 @@
         vad_min_silence_ms: Number(vadMinSilenceMs.value || 650),
         vad_speech_pad_ms: Number(vadSpeechPadMs.value || 100),
         vad_max_speech_seconds: Number(vadMaxSpeechSeconds.value || 8),
+        backend_wake_word_mode: selectedBackendWakeWordMode(),
+        backend_wake_word_model_paths: backendWakeWordModelPaths.value.trim(),
+        backend_wake_word_model_names: backendWakeWordModelNames.value.trim(),
+        backend_wake_word_threshold: Number(backendWakeWordThreshold.value || 0.5),
+        backend_wake_word_pre_roll_ms: Number(backendWakeWordPreRollMs.value || 1600),
+        backend_wake_word_cooldown_ms: Number(backendWakeWordCooldownMs.value || 1200),
+        backend_wake_word_vad_threshold: Number(backendWakeWordVadThreshold.value || 0),
         speaker_recognition_enabled: selectedSpeakerRecognitionEnabled(),
         speaker_backend: speakerBackend.value || "resemblyzer",
         speaker_threshold: Number(speakerThreshold.value || 0.75),
@@ -3093,6 +3120,57 @@
       vadMaxSpeechSecondsLabel.textContent = `${Number(vadMaxSpeechSeconds.value || 8).toFixed(1)} s`;
     }
 
+    function selectedBackendWakeWordMode() {
+      const checked = backendWakeWordModeInputs.find((input) => input.checked);
+      return checked ? checked.value : "post_stt";
+    }
+
+    function setSelectedBackendWakeWordMode(value) {
+      const nextValue = value === "openwakeword" ? "openwakeword" : "post_stt";
+      for (const input of backendWakeWordModeInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function backendWakeWordModeAvailable(value) {
+      if (value !== "openwakeword") return true;
+      return Boolean(wakeWord.value.trim()) && backendAudioCapabilities.input;
+    }
+
+    function backendWakeWordModeReason(value) {
+      if (value !== "openwakeword") return "";
+      if (!wakeWord.value.trim()) return "BACKEND_WAKE_WORD_MODE=openwakeword nécessite un wake word configuré.";
+      if (!backendAudioCapabilities.input) return "BACKEND_WAKE_WORD_MODE=openwakeword nécessite une entrée audio backend disponible.";
+      return "";
+    }
+
+    function syncBackendWakeWordLabels() {
+      backendWakeWordThresholdLabel.textContent = Number(backendWakeWordThreshold.value || 0.5).toFixed(2);
+      backendWakeWordPreRollMsLabel.textContent = `${Number(backendWakeWordPreRollMs.value || 1600)} ms`;
+      backendWakeWordCooldownMsLabel.textContent = `${Number(backendWakeWordCooldownMs.value || 1200)} ms`;
+      const vadValue = Number(backendWakeWordVadThreshold.value || 0);
+      backendWakeWordVadThresholdLabel.textContent = vadValue > 0 ? vadValue.toFixed(2) : "Off";
+    }
+
+    function syncBackendWakeWordControls() {
+      for (const input of backendWakeWordModeInputs) {
+        setSegmentOptionEnabled(input, backendWakeWordModeAvailable(input.value), backendWakeWordModeReason(input.value));
+      }
+      if (!backendWakeWordModeAvailable(selectedBackendWakeWordMode())) {
+        setSelectedBackendWakeWordMode("post_stt");
+      }
+      const streaming = selectedBackendWakeWordMode() === "openwakeword";
+      const reason = streaming ? "" : "Actif seulement avec BACKEND_WAKE_WORD_MODE=openwakeword.";
+      for (const control of backendWakeWordControls) {
+        control.disabled = !streaming;
+        control.title = streaming ? "" : reason;
+      }
+      if (backendWakeWordGroup) {
+        backendWakeWordGroup.title = streaming ? "" : reason;
+      }
+      syncBackendWakeWordLabels();
+    }
+
     function setVadControls(data) {
       vadSpeechThreshold.value = String(data.selected_vad_speech_threshold ?? 0.5);
       vadNegativeThreshold.value = String(data.selected_vad_negative_threshold ?? 0.35);
@@ -3100,7 +3178,15 @@
       vadMinSilenceMs.value = String(data.selected_vad_min_silence_ms ?? 650);
       vadSpeechPadMs.value = String(data.selected_vad_speech_pad_ms ?? 100);
       vadMaxSpeechSeconds.value = String(data.selected_vad_max_speech_seconds ?? 8);
+      setSelectedBackendWakeWordMode(data.selected_backend_wake_word_mode || "post_stt");
+      backendWakeWordModelPaths.value = data.selected_backend_wake_word_model_paths || "";
+      backendWakeWordModelNames.value = data.selected_backend_wake_word_model_names || "";
+      backendWakeWordThreshold.value = String(data.selected_backend_wake_word_threshold ?? 0.5);
+      backendWakeWordPreRollMs.value = String(data.selected_backend_wake_word_pre_roll_ms ?? 1600);
+      backendWakeWordCooldownMs.value = String(data.selected_backend_wake_word_cooldown_ms ?? 1200);
+      backendWakeWordVadThreshold.value = String(data.selected_backend_wake_word_vad_threshold ?? 0);
       syncVadLabels();
+      syncBackendWakeWordLabels();
     }
 
     function selectedSpeakerRecognitionEnabled() {
@@ -4154,6 +4240,7 @@
         offline ? (ttsOutputAvailable("backend") ? "backend" : "silent")
           : (forceSilentTts ? "silent" : firstAvailableTtsOutput(selectedTtsOutput()))
       );
+      syncBackendWakeWordControls();
       syncAudioDeviceVisibility();
     }
 
@@ -4182,6 +4269,7 @@
         setSelectedSttInput(firstAvailableSttInput(selectedSttInput()));
       }
       syncAudioDeviceVisibility();
+      syncBackendWakeWordControls();
     }
 
 	    function syncTtsProviderControls() {
@@ -4456,6 +4544,8 @@
       commandAckSound.disabled = true;
       ttsTest.disabled = true;
       for (const control of vadControls) control.disabled = true;
+      for (const input of backendWakeWordModeInputs) input.disabled = true;
+      for (const control of backendWakeWordControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
       setSpeakerControlsDisabled(true, "Loading speaker recognition options...");
       backendAudioInput.disabled = true;
@@ -4667,6 +4757,7 @@
         for (const button of vadPresetButtons) button.disabled = false;
         setSpeakerControlsDisabled(Boolean(speakerRecognitionUnavailableReason), speakerRecognitionUnavailableReason);
 	        syncConnectivityControls();
+        syncBackendWakeWordControls();
         backendAudioInput.disabled = !backendAudioCapabilities.input || backendAudioInput.options.length === 0;
         backendAudioOutput.disabled = !backendAudioCapabilities.output || backendAudioOutput.options.length === 0;
         syncBackendAudioMonitorControls();
@@ -5211,6 +5302,13 @@
       const vadMinSilenceMsValue = Number(vadMinSilenceMs.value || 650);
       const vadSpeechPadMsValue = Number(vadSpeechPadMs.value || 100);
       const vadMaxSpeechSecondsValue = Number(vadMaxSpeechSeconds.value || 8);
+      const backendWakeWordModeValue = selectedBackendWakeWordMode();
+      const backendWakeWordModelPathsValue = backendWakeWordModelPaths.value.trim();
+      const backendWakeWordModelNamesValue = backendWakeWordModelNames.value.trim();
+      const backendWakeWordThresholdValue = Number(backendWakeWordThreshold.value || 0.5);
+      const backendWakeWordPreRollMsValue = Number(backendWakeWordPreRollMs.value || 1600);
+      const backendWakeWordCooldownMsValue = Number(backendWakeWordCooldownMs.value || 1200);
+      const backendWakeWordVadThresholdValue = Number(backendWakeWordVadThreshold.value || 0);
       const speakerRecognitionEnabledValue = selectedSpeakerRecognitionEnabled();
       const speakerBackendValue = speakerBackend.value || "resemblyzer";
       const speakerThresholdValue = Number(speakerThreshold.value || 0.75);
@@ -5259,6 +5357,13 @@
             vad_min_silence_ms: vadMinSilenceMsValue,
             vad_speech_pad_ms: vadSpeechPadMsValue,
             vad_max_speech_seconds: vadMaxSpeechSecondsValue,
+            backend_wake_word_mode: backendWakeWordModeValue,
+            backend_wake_word_model_paths: backendWakeWordModelPathsValue,
+            backend_wake_word_model_names: backendWakeWordModelNamesValue,
+            backend_wake_word_threshold: backendWakeWordThresholdValue,
+            backend_wake_word_pre_roll_ms: backendWakeWordPreRollMsValue,
+            backend_wake_word_cooldown_ms: backendWakeWordCooldownMsValue,
+            backend_wake_word_vad_threshold: backendWakeWordVadThresholdValue,
             speaker_recognition_enabled: speakerRecognitionEnabledValue,
             speaker_backend: speakerBackendValue,
             speaker_threshold: speakerThresholdValue,
@@ -5301,10 +5406,17 @@
     commandAckSound.addEventListener("click", () => setCommandAckSoundEnabled(!commandAckSoundEnabled()));
     wakeWord.addEventListener("input", () => {
       syncBackendAudioMonitorControls();
+      syncBackendWakeWordControls();
       syncAudioDeviceVisibility();
     });
     for (const control of vadControls) {
       control.addEventListener("input", syncVadLabels);
+    }
+    for (const input of backendWakeWordModeInputs) {
+      input.addEventListener("change", syncBackendWakeWordControls);
+    }
+    for (const control of backendWakeWordControls) {
+      control.addEventListener("input", syncBackendWakeWordLabels);
     }
     for (const button of vadPresetButtons) {
       button.addEventListener("click", () => applyVadPreset(button.dataset.vadPreset || ""));

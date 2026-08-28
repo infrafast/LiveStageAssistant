@@ -121,6 +121,13 @@ VAD_MIN_SPEECH_MS=120                            # Minimum speech duration befor
 VAD_MIN_SILENCE_MS=650                           # Silence duration before ending an accepted utterance
 VAD_SPEECH_PAD_MS=100                            # Backend pre-roll kept before detected speech
 VAD_MAX_SPEECH_SECONDS=8                         # Hard cap for one detected utterance
+BACKEND_WAKE_WORD_MODE=post_stt                  # post_stt or openwakeword for backend microphone wake gating
+BACKEND_WAKE_WORD_MODEL_PATHS=                   # Comma-separated openWakeWord model files, when streaming is enabled
+BACKEND_WAKE_WORD_MODEL_NAMES=                   # Comma-separated openWakeWord bundled/custom model names
+BACKEND_WAKE_WORD_THRESHOLD=0.50                 # Streaming wake score required to activate
+BACKEND_WAKE_WORD_PRE_ROLL_MS=1600               # Backend ring-buffer audio retained before streaming wake activation
+BACKEND_WAKE_WORD_COOLDOWN_MS=1200               # Minimum delay between streaming wake activations
+BACKEND_WAKE_WORD_VAD_THRESHOLD=                 # Optional openWakeWord internal VAD threshold
 INTERRUPT_CONVERSATION_ENABLED=false            # Let new text/STT commands cancel current processing/TTS first
 VOICE_CANCEL_DURING_THINKING=false             # Optional spoken stop/annule cancel listener while processing
 THINKING_SOUND_FILE=thinking.wav                # WAV loop during accepted STT/LLM/MCP processing; empty disables it
@@ -179,6 +186,10 @@ Web chat sessions are persisted as `.context.json` files under `SESSION_CONTEXT_
 
 `WAKE_WORD` is optional. When it is empty, the assistant processes every successful transcription. When it is set, spoken transcriptions are processed only if the wake word appears at the start of the phrase or very close to it.
 
+Backend microphone wake gating has two modes. `BACKEND_WAKE_WORD_MODE=post_stt` keeps the legacy path: Silero VAD records a phrase, STT transcribes it, and `WAKE_WORD` is matched against the resulting text. `BACKEND_WAKE_WORD_MODE=openwakeword` enables an optional local streaming gate when the `openwakeword` package and at least one model in `BACKEND_WAKE_WORD_MODEL_PATHS` or `BACKEND_WAKE_WORD_MODEL_NAMES` are available. In streaming mode, the backend microphone is read continuously inside the normal listening loop, the latest `BACKEND_WAKE_WORD_PRE_ROLL_MS` of audio is retained, openWakeWord decides when the wake word fires, and STT is launched only after that activation. The retained pre-roll is prepended to the command audio so the beginning of `régie` or `console` is not lost when speech starts before a VAD boundary.
+
+Streaming wake detection is backend-only for now. Browser conversation audio, browser push-to-talk, and WAV files uploaded through the chat composer keep the post-STT wake-word gate so the web path remains stable. If openWakeWord cannot be imported, has no configured model, or fails during capture, the assistant logs the reason and falls back to `post_stt` instead of disabling the web monitor or backend microphone.
+
 The thinking sound follows the same gate. Without a configured wake word, it may start while an audio sample is being transcribed. With a configured wake word, transcription stays silent and the thinking sound starts only after the wake word has been detected and the command has been accepted. Ambient speech rejected by the wake-word gate therefore produces no thinking sound. This applies to the backend microphone, browser conversation audio, and WAV files injected through the chat composer. Set `THINKING_SOUND_FILE=` or select **No thinking sound** in the web configuration to disable it entirely.
 
 For example, with `WAKE_WORD="régie,console"`, all of these are accepted and the command text after the wake word is sent to the agent:
@@ -196,6 +207,12 @@ WAKE_WORD="régie,console"
 ```
 
 The web config exposes the same value in the STT/TTS section. Saving the config writes `WAKE_WORD` to the active env file and reloads the assistant, so the new wake-word gate applies after the runtime reload.
+
+The standard installer installs the local wake-word stack by default. Set `LSA_SKIP_WAKEWORD=1` before running it only on systems where backend streaming wake detection will never be used. For manual installs, use:
+
+```bash
+python -m pip install -e ".[wakeword]"
+```
 
 ### Web Monitor
 
@@ -275,7 +292,7 @@ Browser audio input/output device choices are local to each browser and are save
 
 The conversation button next to the microphone enables continuous browser listening. In this mode the push-to-talk button is disabled, the browser detects speech/silence locally, sends each detected utterance to the backend, and then restarts listening after the assistant is done. If `WAKE_WORD` is configured, conversation-mode transcriptions must pass the same wake-word gate before being injected. Manual push-to-talk remains direct command input and does not require the wake word.
 
-Backend microphone STT and browser microphone STT now use the same bundled Silero VAD ONNX model offline. Backend microphone input uses `STT_PROVIDER`, `LOCAL_WHISPER_MODEL`, `STT_LANGUAGE`, and `STT_PROMPT` for transcription selection and Whisper biasing; browser microphone input uses `WEB_STT_PROVIDER` and `WEB_STT_MODEL`. `STT_LANGUAGE` is also the web GUI locale and is selected from Settings -> Config -> **User interface**. Available choices are discovered from `assets/i18n/<locale>.json`; the repository ships `fr` and `en`, and changing the language saves the active `.env` file and reloads the assistant. Before either path sends audio to STT, Silero estimates speech probability. `VAD_SPEECH_THRESHOLD` starts speech, `VAD_NEGATIVE_THRESHOLD` allows accepted speech to end, `VAD_MIN_SPEECH_MS` rejects tiny noises, `VAD_MIN_SILENCE_MS` controls end-of-phrase timing, `VAD_SPEECH_PAD_MS` keeps backend pre-roll before detected speech, and `VAD_MAX_SPEECH_SECONDS` caps one utterance. Raise thresholds or minimum speech values to reject breaths/noise; lower them if short spoken commands are missed.
+Backend microphone STT and browser microphone STT now use the same bundled Silero VAD ONNX model offline. Backend microphone input uses `STT_PROVIDER`, `LOCAL_WHISPER_MODEL`, `STT_LANGUAGE`, and `STT_PROMPT` for transcription selection and Whisper biasing; browser microphone input uses `WEB_STT_PROVIDER` and `WEB_STT_MODEL`. `STT_LANGUAGE` is also the web GUI locale and is selected from Settings -> Config -> **User interface**. Available choices are discovered from `assets/i18n/<locale>.json`; the repository ships `fr` and `en`, and changing the language saves the active `.env` file and reloads the assistant. Before browser audio or the legacy backend path sends audio to STT, Silero estimates speech probability. With `BACKEND_WAKE_WORD_MODE=openwakeword`, the backend microphone first waits for local streaming wake activation, keeps `BACKEND_WAKE_WORD_PRE_ROLL_MS` of pre-roll audio, then uses Silero to decide when the accepted command ends. `VAD_SPEECH_THRESHOLD` starts speech, `VAD_NEGATIVE_THRESHOLD` allows accepted speech to end, `VAD_MIN_SPEECH_MS` rejects tiny noises, `VAD_MIN_SILENCE_MS` controls end-of-phrase timing, `VAD_SPEECH_PAD_MS` keeps backend pre-roll before detected speech in legacy mode, and `VAD_MAX_SPEECH_SECONDS` caps one utterance. Raise thresholds or minimum speech values to reject breaths/noise; lower them if short spoken commands are missed.
 
 `STT_TIMEOUT_SECONDS` bounds both backend and browser transcription. Runtime logs bracket transcription with `STT started` / `STT finished`; when the deadline is exceeded, the assistant discards that utterance and returns to listening instead of remaining frozen after `Processing...`. The OpenAI audio client uses the same request timeout with automatic retries disabled. A timed-out worker is isolated as a daemon; while it is still running, another STT attempt fails fast instead of creating unbounded stuck workers.
 
