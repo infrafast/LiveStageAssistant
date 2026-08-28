@@ -255,9 +255,14 @@
                       <div class="field-hint">Après STT garde le comportement historique. Streaming utilise openWakeWord et nécessite un modèle local.</div>
                     </div>
                     <div class="field full-row">
-                      <label for="backend-wake-word-model-paths" title="BACKEND_WAKE_WORD_MODEL_PATHS">Fichiers modèles openWakeWord</label>
+                      <label for="backend-wake-word-model-select" title="BACKEND_WAKE_WORD_MODEL_PATHS">Modèles openWakeWord disponibles</label>
+                      <select id="backend-wake-word-model-select" multiple size="4"></select>
+                      <div class="field-hint">Sélectionne un ou plusieurs fichiers `.onnx` trouvés dans `data/`. La sauvegarde écrit les chemins dans BACKEND_WAKE_WORD_MODEL_PATHS.</div>
+                    </div>
+                    <div class="field full-row">
+                      <label for="backend-wake-word-model-paths" title="BACKEND_WAKE_WORD_MODEL_PATHS">Chemins modèles openWakeWord</label>
                       <input id="backend-wake-word-model-paths" type="text" placeholder="data/wake_words/regie.onnx,data/wake_words/console.onnx">
-                      <div class="field-hint">Chemins séparés par des virgules. À privilégier pour des wake words personnalisés comme régie ou console.</div>
+                      <div class="field-hint">Aperçu modifiable. Utilise des chemins séparés par des virgules si tu veux forcer un chemin non listé.</div>
                     </div>
                     <div class="field full-row">
                       <label for="backend-wake-word-model-names" title="BACKEND_WAKE_WORD_MODEL_NAMES">Noms modèles openWakeWord</label>

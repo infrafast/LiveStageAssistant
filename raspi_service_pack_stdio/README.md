@@ -88,6 +88,8 @@ BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
 
 With this mode active, the backend microphone keeps a short ring buffer and launches STT only after the local wake detector fires. This avoids losing the beginning of phrases such as `console, quel est le volume ?`. The browser microphone and uploaded WAV commands intentionally stay on the post-STT wake-word gate for now.
 
+The web configuration lists `.onnx` files found under `/home/pi/LiveStageAssistant/data/` so you can select one or more wake-word models without typing paths. The text field below the list remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value.
+
 On Raspberry Pi with PipeWire, USB audio devices may be busy or unstable when opened directly through ALSA `hw:` or `plughw:`. Prefer selecting the named `PipeWire: ...` backend input/output entries in the web UI. This targets the selected source/sink directly and does not require changing the global default devices:
 
 ```bash

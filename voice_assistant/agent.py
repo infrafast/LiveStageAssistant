@@ -6248,6 +6248,22 @@ async def main():
             if wav_path.is_file()
         ]
 
+    def list_wake_word_model_options() -> list[dict[str, str]]:
+        data_dir = Path("data")
+        if not data_dir.exists():
+            return []
+
+        options = []
+        for model_path in sorted(data_dir.rglob("*.onnx"), key=lambda path: path.as_posix().lower()):
+            if not model_path.is_file():
+                continue
+            try:
+                model_id = model_path.relative_to(Path.cwd()).as_posix()
+            except ValueError:
+                model_id = model_path.as_posix()
+            options.append({"id": model_id, "label": model_id})
+        return options
+
     def display_env_path(path: Path) -> str:
         try:
             return str(path.resolve().relative_to(Path.cwd().resolve()))
@@ -6593,6 +6609,7 @@ async def main():
             "selected_backend_wake_word_pre_roll_ms": current_backend_wake_word_pre_roll_ms,
             "selected_backend_wake_word_cooldown_ms": current_backend_wake_word_cooldown_ms,
             "selected_backend_wake_word_vad_threshold": current_backend_wake_word_vad_threshold,
+            "wake_word_model_files": list_wake_word_model_options(),
             "selected_speaker_recognition_enabled": current_speaker_recognition_enabled,
             "selected_speaker_backend": current_speaker_backend,
             "selected_speaker_threshold": current_speaker_threshold,

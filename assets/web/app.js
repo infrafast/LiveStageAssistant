@@ -109,6 +109,7 @@
     const vadMaxSpeechSecondsLabel = document.querySelector("#vad-max-speech-seconds-label");
     const backendWakeWordGroup = document.querySelector("#backend-wake-word-group");
     const backendWakeWordModeInputs = Array.from(document.querySelectorAll('input[name="backend-wake-word-mode"]'));
+    const backendWakeWordModelSelect = document.querySelector("#backend-wake-word-model-select");
     const backendWakeWordModelPaths = document.querySelector("#backend-wake-word-model-paths");
     const backendWakeWordModelNames = document.querySelector("#backend-wake-word-model-names");
     const backendWakeWordThreshold = document.querySelector("#backend-wake-word-threshold");
@@ -137,6 +138,7 @@
       vadMaxSpeechSeconds
     ];
     const backendWakeWordControls = [
+      backendWakeWordModelSelect,
       backendWakeWordModelPaths,
       backendWakeWordModelNames,
       backendWakeWordThreshold,
@@ -3152,6 +3154,44 @@
       backendWakeWordVadThresholdLabel.textContent = vadValue > 0 ? vadValue.toFixed(2) : "Off";
     }
 
+    function splitModelPaths(value) {
+      return String(value || "")
+        .split(/[,;|]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    function selectedWakeWordModelPaths() {
+      return Array.from(backendWakeWordModelSelect.selectedOptions || []).map((item) => item.value).filter(Boolean);
+    }
+
+    function syncWakeWordModelTextFromSelect() {
+      const selected = selectedWakeWordModelPaths();
+      const known = new Set(Array.from(backendWakeWordModelSelect.options || []).map((item) => item.value));
+      const manual = splitModelPaths(backendWakeWordModelPaths.value).filter((item) => !known.has(item));
+      backendWakeWordModelPaths.value = [...selected, ...manual].join(",");
+    }
+
+    function syncWakeWordModelSelectFromText() {
+      const selected = new Set(splitModelPaths(backendWakeWordModelPaths.value));
+      for (const opt of backendWakeWordModelSelect.options || []) {
+        opt.selected = Boolean(opt.value) && selected.has(opt.value);
+      }
+    }
+
+    function setWakeWordModelFiles(files, selectedPathsText) {
+      const selected = new Set(splitModelPaths(selectedPathsText));
+      backendWakeWordModelSelect.replaceChildren();
+      for (const item of files || []) {
+        const id = item.id || "";
+        if (!id) continue;
+        backendWakeWordModelSelect.appendChild(option(item.label || id, id, false, selected.has(id)));
+      }
+      if (backendWakeWordModelSelect.options.length === 0) {
+        backendWakeWordModelSelect.appendChild(option("Aucun fichier .onnx trouvé dans data/", "", true, true));
+      }
+    }
+
     function syncBackendWakeWordControls() {
       for (const input of backendWakeWordModeInputs) {
         setSegmentOptionEnabled(input, backendWakeWordModeAvailable(input.value), backendWakeWordModeReason(input.value));
@@ -3179,7 +3219,9 @@
       vadSpeechPadMs.value = String(data.selected_vad_speech_pad_ms ?? 100);
       vadMaxSpeechSeconds.value = String(data.selected_vad_max_speech_seconds ?? 8);
       setSelectedBackendWakeWordMode(data.selected_backend_wake_word_mode || "post_stt");
-      backendWakeWordModelPaths.value = data.selected_backend_wake_word_model_paths || "";
+      const selectedModelPaths = data.selected_backend_wake_word_model_paths || "";
+      backendWakeWordModelPaths.value = selectedModelPaths;
+      setWakeWordModelFiles(data.wake_word_model_files || [], selectedModelPaths);
       backendWakeWordModelNames.value = data.selected_backend_wake_word_model_names || "";
       backendWakeWordThreshold.value = String(data.selected_backend_wake_word_threshold ?? 0.5);
       backendWakeWordPreRollMs.value = String(data.selected_backend_wake_word_pre_roll_ms ?? 1600);
@@ -5415,6 +5457,8 @@
     for (const input of backendWakeWordModeInputs) {
       input.addEventListener("change", syncBackendWakeWordControls);
     }
+    backendWakeWordModelSelect.addEventListener("change", syncWakeWordModelTextFromSelect);
+    backendWakeWordModelPaths.addEventListener("input", syncWakeWordModelSelectFromText);
     for (const control of backendWakeWordControls) {
       control.addEventListener("input", syncBackendWakeWordLabels);
     }

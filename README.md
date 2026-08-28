@@ -223,6 +223,8 @@ BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
 
 In this mode, the backend microphone captures into a short ring buffer before the wake word fires. STT starts only after the local detector activates, and the buffered audio is kept so the beginning of the phrase is not cut off. Browser microphone, push-to-talk, and uploaded WAV commands keep the post-STT wake-word gate for now.
 
+The web configuration lists `.onnx` files found under `data/` for safer model selection. The text field remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value.
+
 For the exhaustive env reference and runtime internals, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Using The Web Monitor
