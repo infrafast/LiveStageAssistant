@@ -212,7 +212,7 @@ MCP_CONFIG=mcp_servers.json
 
 Backend microphone wake-word handling defaults to the legacy post-STT gate. `scripts/install.sh` installs the local openWakeWord extra by default; set `LSA_SKIP_WAKEWORD=1` before running the installer only if you explicitly want to skip it. For more robust Raspberry Pi/backend use, provide one or more openWakeWord models and switch **Config -> Voice Activity Detection (VAD) -> Wake word backend** to streaming:
 
-On Raspberry Pi/Linux, openWakeWord requires a Python 3.11 environment because `tflite-runtime` does not currently provide compatible Raspberry Pi wheels for Python 3.12. If the installer skips openWakeWord, recreate `.venv` with `LSA_PYTHON=python3.11 ./scripts/install.sh`.
+On Raspberry Pi/Linux, `scripts/install.sh` installs openWakeWord in ONNX-only mode to avoid the `tflite-runtime` wheel issue on recent Python/Raspberry Pi OS releases. Use `.onnx` wake-word models with `BACKEND_WAKE_WORD_MODEL_PATHS`.
 
 ```env
 BACKEND_WAKE_WORD_MODE=openwakeword

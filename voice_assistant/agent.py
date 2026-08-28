@@ -693,7 +693,10 @@ class BackendWakeWordDetector:
         if not wakeword_models:
             raise RuntimeError("openWakeWord needs BACKEND_WAKE_WORD_MODEL_PATHS or BACKEND_WAKE_WORD_MODEL_NAMES")
 
-        kwargs: dict[str, Any] = {"wakeword_models": wakeword_models}
+        kwargs: dict[str, Any] = {
+            "wakeword_models": wakeword_models,
+            "inference_framework": "onnx",
+        }
         if vad_threshold is not None and vad_threshold > 0:
             kwargs["vad_threshold"] = vad_threshold
         self.model = Model(**kwargs)

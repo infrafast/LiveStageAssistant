@@ -208,7 +208,7 @@ WAKE_WORD="régie,console"
 
 The web config exposes the same value in the STT/TTS section. Saving the config writes `WAKE_WORD` to the active env file and reloads the assistant, so the new wake-word gate applies after the runtime reload.
 
-The standard installer installs the local wake-word stack by default. Set `LSA_SKIP_WAKEWORD=1` before running it only on systems where backend streaming wake detection will never be used. For manual installs, use:
+The standard installer installs the local wake-word stack by default. Set `LSA_SKIP_WAKEWORD=1` before running it only on systems where backend streaming wake detection will never be used. On Raspberry Pi/Linux, use `./scripts/install.sh` because it installs openWakeWord in ONNX-only mode and avoids the `tflite-runtime` wheel issue. For non-Linux manual installs, use:
 
 ```bash
 python -m pip install -e ".[wakeword]"

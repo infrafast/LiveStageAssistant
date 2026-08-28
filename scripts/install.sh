@@ -105,32 +105,6 @@ install_ollama() {
     fi
 }
 
-run_apt_install() {
-    if [ "$(id -u 2>/dev/null || printf 1)" = "0" ]; then
-        apt-get install -y "$@"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo apt-get install -y "$@"
-    else
-        return 1
-    fi
-}
-
-ensure_python311_for_wakeword() {
-    if [ "$system" != "Linux" ] || [ "${LSA_SKIP_WAKEWORD:-}" = "1" ] || [ -n "${LSA_PYTHON:-}" ]; then
-        return
-    fi
-    if command -v python3.11 >/dev/null 2>&1; then
-        return
-    fi
-    if command -v apt-get >/dev/null 2>&1; then
-        printf '%s\n' "Python 3.11 is required for openWakeWord on Raspberry Pi/Linux; trying to install it."
-        if run_apt_install python3.11 python3.11-venv python3.11-dev; then
-            return
-        fi
-    fi
-    printf '%s\n' "Warning: python3.11 was not found. openWakeWord may be skipped if this venv uses Python 3.12+." >&2
-}
-
 create_venv() {
     if [ -n "${LSA_PYTHON:-}" ]; then
         uv venv --python "$LSA_PYTHON"
@@ -147,63 +121,20 @@ create_venv() {
     uv venv
 }
 
-existing_venv_python_major_minor() {
-    if [ ! -x ".venv/bin/python" ]; then
-        return 1
-    fi
-    .venv/bin/python - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PY
-}
-
-venv_python_major_minor() {
-    uv run python - <<'PY'
-import sys
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PY
-}
-
-ensure_venv_for_wakeword() {
-    if [ "$system" != "Linux" ] || [ "${LSA_SKIP_WAKEWORD:-}" = "1" ]; then
-        return
-    fi
-    if [ ! -d ".venv" ]; then
-        return
-    fi
-    python_version="$(existing_venv_python_major_minor || printf unknown)"
-    if [ "$python_version" = "3.11" ]; then
-        return
-    fi
-    if [ -n "${LSA_PYTHON:-}" ] && [ "$LSA_PYTHON" != "python3.11" ]; then
-        printf '%s\n' "Warning: existing .venv uses Python ${python_version}; openWakeWord needs Python 3.11 on Raspberry Pi/Linux." >&2
-        return
-    fi
-    if command -v python3.11 >/dev/null 2>&1; then
-        printf '%s\n' "Existing .venv uses Python ${python_version}; recreating it with Python 3.11 for openWakeWord."
-        rm -rf .venv
-        uv venv --python python3.11
-    fi
-}
-
 install_wakeword_dependencies() {
     if [ "${LSA_SKIP_WAKEWORD:-}" = "1" ]; then
         printf '%s\n' "Skipping openWakeWord dependencies because LSA_SKIP_WAKEWORD=1."
         return
     fi
 
-    python_version="$(venv_python_major_minor)"
-    if [ "$system" = "Linux" ] && [ "$python_version" != "3.11" ]; then
-        printf '%s\n' "Error: openWakeWord cannot be installed on Linux Python ${python_version}." >&2
-        printf '%s\n' "tflite-runtime does not provide compatible wheels for this Python ABI on Raspberry Pi." >&2
-        printf '%s\n' "Install python3.11, then rerun ./scripts/install.sh so it can recreate .venv." >&2
-        printf '%s\n' "If you explicitly want to skip streaming wake-word support, run:" >&2
-        printf '%s\n' "  LSA_SKIP_WAKEWORD=1 ./scripts/install.sh" >&2
-        exit 1
-    fi
-
     printf '%s\n' "Installing local wake-word detection dependencies."
-    uv pip install -e ".[wakeword]"
+    if [ "$system" = "Linux" ]; then
+        printf '%s\n' "Installing openWakeWord in ONNX-only mode to avoid Raspberry Pi tflite-runtime wheel issues."
+        uv pip install "onnxruntime>=1.16,<2" "tqdm>=4,<5" "requests>=2,<3" "scikit-learn>=1,<2"
+        uv pip install "openwakeword>=0.6,<1" --no-deps
+    else
+        uv pip install -e ".[wakeword]"
+    fi
 }
 
 machine="$(uname -m 2>/dev/null || printf unknown)"
@@ -211,8 +142,6 @@ system="$(uname -s 2>/dev/null || printf unknown)"
 
 install_system_packages
 install_ollama
-ensure_python311_for_wakeword
-ensure_venv_for_wakeword
 
 if [ ! -d ".venv" ]; then
     create_venv
