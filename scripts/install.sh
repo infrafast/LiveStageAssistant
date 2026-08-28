@@ -194,13 +194,12 @@ install_wakeword_dependencies() {
 
     python_version="$(venv_python_major_minor)"
     if [ "$system" = "Linux" ] && [ "$python_version" != "3.11" ]; then
-        printf '%s\n' "Warning: openWakeWord is skipped on Linux Python ${python_version}." >&2
+        printf '%s\n' "Error: openWakeWord cannot be installed on Linux Python ${python_version}." >&2
         printf '%s\n' "tflite-runtime does not provide compatible wheels for this Python ABI on Raspberry Pi." >&2
-        printf '%s\n' "To enable backend streaming wake words, recreate the venv with Python 3.11:" >&2
-        printf '%s\n' "  cd $repo_dir" >&2
-        printf '%s\n' "  rm -rf .venv" >&2
-        printf '%s\n' "  LSA_PYTHON=python3.11 ./scripts/install.sh" >&2
-        return
+        printf '%s\n' "Install python3.11, then rerun ./scripts/install.sh so it can recreate .venv." >&2
+        printf '%s\n' "If you explicitly want to skip streaming wake-word support, run:" >&2
+        printf '%s\n' "  LSA_SKIP_WAKEWORD=1 ./scripts/install.sh" >&2
+        exit 1
     fi
 
     printf '%s\n' "Installing local wake-word detection dependencies."
@@ -239,6 +238,7 @@ uv pip install resemblyzer --no-deps
 uv pip uninstall typing >/dev/null 2>&1 || true
 
 uv run python - <<'PY'
+import os
 from importlib import metadata
 
 from mcp.shared.context import RequestContext
@@ -254,7 +254,10 @@ print(f"Speaker recognition dependencies OK: resemblyzer {metadata.version('rese
 try:
     print(f"Wake-word dependencies OK: openwakeword {metadata.version('openwakeword')}")
 except metadata.PackageNotFoundError:
-    print("Wake-word dependencies skipped: openwakeword is not installed")
+    if os.environ.get("LSA_SKIP_WAKEWORD") == "1":
+        print("Wake-word dependencies skipped: openwakeword is not installed")
+    else:
+        raise SystemExit("Wake-word dependency check failed: openwakeword is not installed")
 PY
 
 if uv pip freeze | grep -Ei '^(nvidia|cuda|triton)' >/dev/null; then
