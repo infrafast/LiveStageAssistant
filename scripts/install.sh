@@ -105,6 +105,50 @@ install_ollama() {
     fi
 }
 
+create_venv() {
+    if [ -n "${LSA_PYTHON:-}" ]; then
+        uv venv --python "$LSA_PYTHON"
+        return
+    fi
+    case "$system" in
+        Linux)
+            if command -v python3.11 >/dev/null 2>&1; then
+                uv venv --python python3.11
+                return
+            fi
+            ;;
+    esac
+    uv venv
+}
+
+venv_python_major_minor() {
+    uv run python - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+}
+
+install_wakeword_dependencies() {
+    if [ "${LSA_SKIP_WAKEWORD:-}" = "1" ]; then
+        printf '%s\n' "Skipping openWakeWord dependencies because LSA_SKIP_WAKEWORD=1."
+        return
+    fi
+
+    python_version="$(venv_python_major_minor)"
+    if [ "$system" = "Linux" ] && [ "$python_version" != "3.11" ]; then
+        printf '%s\n' "Warning: openWakeWord is skipped on Linux Python ${python_version}." >&2
+        printf '%s\n' "tflite-runtime does not provide compatible wheels for this Python ABI on Raspberry Pi." >&2
+        printf '%s\n' "To enable backend streaming wake words, recreate the venv with Python 3.11:" >&2
+        printf '%s\n' "  cd $repo_dir" >&2
+        printf '%s\n' "  rm -rf .venv" >&2
+        printf '%s\n' "  LSA_PYTHON=python3.11 ./scripts/install.sh" >&2
+        return
+    fi
+
+    printf '%s\n' "Installing local wake-word detection dependencies."
+    uv pip install -e ".[wakeword]"
+}
+
 machine="$(uname -m 2>/dev/null || printf unknown)"
 system="$(uname -s 2>/dev/null || printf unknown)"
 
@@ -112,18 +156,12 @@ install_system_packages
 install_ollama
 
 if [ ! -d ".venv" ]; then
-    uv venv
+    create_venv
 fi
 
 uv pip install -e .
 uv pip install "mcp-use>=1.7.0,<2.0.0" "mcp>=1.24.0,<2.0.0"
-
-if [ "${LSA_SKIP_WAKEWORD:-}" = "1" ]; then
-    printf '%s\n' "Skipping openWakeWord dependencies because LSA_SKIP_WAKEWORD=1."
-else
-    printf '%s\n' "Installing local wake-word detection dependencies."
-    uv pip install -e ".[wakeword]"
-fi
+install_wakeword_dependencies
 
 printf '%s\n' "Installing speaker recognition dependencies for ${system}/${machine}."
 uv pip install -e ".[speaker]"

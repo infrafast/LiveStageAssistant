@@ -62,6 +62,26 @@ cd /home/pi/LiveStageAssistant
 ./scripts/install.sh
 ```
 
+On Raspberry Pi, openWakeWord currently needs a Python 3.11 virtual environment because its `tflite-runtime` dependency does not provide Linux Raspberry Pi wheels for Python 3.12. Check the active venv with:
+
+```bash
+cd /home/pi/LiveStageAssistant
+.venv/bin/python --version
+```
+
+If it prints Python 3.12 and `./scripts/install.sh` reports that openWakeWord was skipped, recreate the venv with Python 3.11:
+
+```bash
+cd /home/pi/LiveStageAssistant
+livestageassistant stop
+rm -rf .venv
+LSA_PYTHON=python3.11 ./scripts/install.sh
+sudo ./raspi_service_pack_stdio/install_livestageassistant_service.sh
+livestageassistant restart
+```
+
+If `python3.11` is missing, install it first or use a Raspberry Pi OS release that provides Python 3.11 for the assistant environment.
+
 ```env
 BACKEND_WAKE_WORD_MODE=openwakeword
 BACKEND_WAKE_WORD_MODEL_PATHS=data/wake_words/regie.onnx,data/wake_words/console.onnx
