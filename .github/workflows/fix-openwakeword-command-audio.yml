@@ -1,0 +1,148 @@
+name: Apply openWakeWord command audio fix
+
+on:
+  push:
+    branches:
+      - fix/openwakeword-command-audio
+    paths:
+      - .github/workflows/fix-openwakeword-command-audio.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/openwakeword-command-audio
+
+      - name: Patch streaming wake capture
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          agent = Path('voice_assistant/agent.py')
+          text = agent.read_text()
+          old = '''                    if detection:
+                        detected_label, detected_score = detection
+                        wake_detected = True
+                        self.last_backend_streaming_wake_detected = True
+                        if has_speech:
+                            frames.append(data)
+                            wake_command_armed = False
+                            wake_command_wait_ms = 0.0
+                            wake_audio_frames = []
+                        else:
+                            wake_audio_frames = list(pre_roll)
+                            frames = []
+                            pre_roll = []
+                            speech_candidate = []
+                            speech_candidate_ms = 0.0
+                            silence_ms = 0.0
+                            recorded_speech_ms = 0.0
+                            wake_command_armed = True
+                            wake_command_wait_ms = 0.0
+                            self.vad.reset()
+                        print(
+                            f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
+                            flush=True,
+                        )
+                        continue
+'''
+          new = '''                    if detection:
+                        detected_label, detected_score = detection
+                        wake_detected = True
+                        self.last_backend_streaming_wake_detected = True
+                        # openWakeWord has already consumed the wake phrase. Start a fresh
+                        # VAD segment immediately after the trigger so pre-trigger audio
+                        # cannot be transcribed and leak the wake word into the LLM command.
+                        # This also covers the case where Silero had already classified the
+                        # wake phrase itself as speech before openWakeWord fired.
+                        has_speech = False
+                        frames = []
+                        pre_roll = []
+                        speech_candidate = []
+                        speech_candidate_ms = 0.0
+                        silence_ms = 0.0
+                        recorded_speech_ms = 0.0
+                        wake_audio_frames = []
+                        wake_command_armed = True
+                        wake_command_wait_ms = 0.0
+                        self.vad.reset()
+                        print(
+                            f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
+                            flush=True,
+                        )
+                        continue
+'''
+          if old not in text:
+              raise SystemExit('Expected openWakeWord detection block was not found; refusing to patch.')
+          agent.write_text(text.replace(old, new, 1))
+
+          readme = Path('README.md')
+          text = readme.read_text()
+          old = ('In this mode, the backend microphone captures into a short ring buffer before the wake word fires. '
+                 'After the local detector activates, the assistant waits for real command speech before starting STT; '
+                 'if no command speech follows, it returns to listening without calling Whisper. The buffered audio is '
+                 'kept so the beginning of the phrase is not cut off. Browser microphone, push-to-talk, and uploaded WAV '
+                 'commands keep the post-STT wake-word gate for now.')
+          new = ('In this mode, the backend microphone captures into a short ring buffer before the wake word fires. '
+                 'After the local detector activates, the assistant discards all pre-trigger audio and immediately starts '
+                 'a fresh VAD segment for the command. The wake phrase itself is therefore never sent to STT or the LLM. '
+                 'If no command speech follows, it returns to listening without calling Whisper. Browser microphone, '
+                 'push-to-talk, and uploaded WAV commands keep the post-STT wake-word gate for now.')
+          if old not in text:
+              raise SystemExit('Expected README streaming wake paragraph was not found; refusing to patch.')
+          readme.write_text(text.replace(old, new, 1))
+
+          architecture = Path('docs/ARCHITECTURE.md')
+          text = architecture.read_text()
+          old = ('In streaming mode, the backend microphone is read continuously inside the normal listening loop, the latest '
+                 '`BACKEND_WAKE_WORD_PRE_ROLL_MS` of audio is retained, openWakeWord decides when the wake word fires, then the '
+                 'assistant waits for real command speech before launching STT. If the wake detector fires on silence or noise '
+                 'and no command speech follows, the assistant returns to listening without calling STT. The retained pre-roll '
+                 'is prepended to the command audio so the beginning of the command is not lost when speech starts before a VAD boundary.')
+          new = ('In streaming mode, the backend microphone is read continuously inside the normal listening loop and the latest '
+                 '`BACKEND_WAKE_WORD_PRE_ROLL_MS` of audio is retained only until openWakeWord decides that the wake word fired. '
+                 'At that point all pre-trigger audio is discarded and a fresh VAD segment starts immediately for the command, '
+                 'so the wake phrase itself cannot reach STT or the LLM. If the wake detector fires on silence or noise and no '
+                 'command speech follows, the assistant returns to listening without calling STT. No extra post-trigger delay '
+                 'is introduced; command capture continues on the next audio chunk.')
+          if old not in text:
+              raise SystemExit('Expected architecture streaming wake paragraph was not found; refusing to patch.')
+          architecture.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Verify patch
+        shell: bash
+        run: |
+          python -m py_compile voice_assistant/agent.py
+          python - <<'PY'
+          from pathlib import Path
+          source = Path('voice_assistant/agent.py').read_text()
+          start = source.index('                    if detection:')
+          end = source.index('                probabilities = self.vad.process_pcm(vad_data)', start)
+          block = source[start:end]
+          assert 'wake_audio_frames = list(pre_roll)' not in block
+          assert 'has_speech = False' in block
+          assert 'frames = []' in block
+          assert 'pre_roll = []' in block
+          assert 'wake_command_armed = True' in block
+          assert 'self.vad.reset()' in block
+          assert 'The wake phrase itself is therefore never sent to STT or the LLM.' in Path('README.md').read_text()
+          print('openWakeWord pre-trigger audio is discarded before command STT.')
+          PY
+          git diff --check
+
+      - name: Commit fix and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/fix-openwakeword-command-audio.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add voice_assistant/agent.py README.md docs/ARCHITECTURE.md .github/workflows/fix-openwakeword-command-audio.yml
+          git commit -m "fix: keep streaming wake word out of STT command audio"
+          git push origin HEAD:fix/openwakeword-command-audio
