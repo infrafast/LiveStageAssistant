@@ -3628,11 +3628,13 @@ class VoiceAssistant:
                         detected_label, detected_score = detection
                         wake_detected = True
                         self.last_backend_streaming_wake_detected = True
-                        # openWakeWord has already consumed the wake phrase. Start a fresh
-                        # VAD segment immediately after the trigger so pre-trigger audio
-                        # cannot be transcribed and leak the wake word into the LLM command.
-                        # This also covers the case where Silero had already classified the
-                        # wake phrase itself as speech before openWakeWord fired.
+                        # Discard audio from before the openWakeWord trigger, but keep the
+                        # trigger chunk itself as the first post-wake command candidate. A
+                        # detector can fire late enough that this chunk already contains the
+                        # beginning of an immediately-following command (for example the first
+                        # syllable after any configured single- or multi-word wake phrase).
+                        # Keeping only this chunk avoids reintroducing the full wake-word
+                        # pre-roll while preserving commands spoken without a pause.
                         has_speech = False
                         frames = []
                         pre_roll = []
@@ -3644,11 +3646,11 @@ class VoiceAssistant:
                         wake_command_armed = True
                         wake_command_wait_ms = 0.0
                         self.vad.reset()
+                        streaming_pre_wake_frame = False
                         print(
                             f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
                             flush=True,
                         )
-                        continue
 
                 probabilities = self.vad.process_pcm(vad_data)
                 speech_probability = max(probabilities) if probabilities else 0.0
