@@ -3610,22 +3610,22 @@ class VoiceAssistant:
                         detected_label, detected_score = detection
                         wake_detected = True
                         self.last_backend_streaming_wake_detected = True
-                        if has_speech:
-                            frames.append(data)
-                            wake_command_armed = False
-                            wake_command_wait_ms = 0.0
-                            wake_audio_frames = []
-                        else:
-                            wake_audio_frames = list(pre_roll)
-                            frames = []
-                            pre_roll = []
-                            speech_candidate = []
-                            speech_candidate_ms = 0.0
-                            silence_ms = 0.0
-                            recorded_speech_ms = 0.0
-                            wake_command_armed = True
-                            wake_command_wait_ms = 0.0
-                            self.vad.reset()
+                        # openWakeWord has already consumed the wake phrase. Start a fresh
+                        # VAD segment immediately after the trigger so pre-trigger audio
+                        # cannot be transcribed and leak the wake word into the LLM command.
+                        # This also covers the case where Silero had already classified the
+                        # wake phrase itself as speech before openWakeWord fired.
+                        has_speech = False
+                        frames = []
+                        pre_roll = []
+                        speech_candidate = []
+                        speech_candidate_ms = 0.0
+                        silence_ms = 0.0
+                        recorded_speech_ms = 0.0
+                        wake_audio_frames = []
+                        wake_command_armed = True
+                        wake_command_wait_ms = 0.0
+                        self.vad.reset()
                         print(
                             f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
                             flush=True,

@@ -221,7 +221,7 @@ BACKEND_WAKE_WORD_THRESHOLD=0.65
 BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
 ```
 
-In this mode, the backend microphone captures into a short ring buffer before the wake word fires. After the local detector activates, the assistant waits for real command speech before starting STT; if no command speech follows, it returns to listening without calling Whisper. The buffered audio is kept so the beginning of the phrase is not cut off. Browser microphone, push-to-talk, and uploaded WAV commands keep the post-STT wake-word gate for now.
+In this mode, the backend microphone captures into a short ring buffer before the wake word fires. After the local detector activates, the assistant discards all pre-trigger audio and immediately starts a fresh VAD segment for the command. The wake phrase itself is therefore never sent to STT or the LLM. If no command speech follows, it returns to listening without calling Whisper. Browser microphone, push-to-talk, and uploaded WAV commands keep the post-STT wake-word gate for now.
 
 The web configuration lists `.onnx` files found under `data/` for safer model selection. The text field remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value. macOS metadata files named like `._momo.onnx` are ignored; they can also be removed with `find data/wake_words -name '._*.onnx' -delete`.
 
