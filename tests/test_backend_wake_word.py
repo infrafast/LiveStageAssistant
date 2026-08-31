@@ -3,7 +3,12 @@ import types
 
 import numpy as np
 
-from voice_assistant.agent import BackendWakeWordDetector, normalize_backend_wake_word_mode, parse_env_list
+from voice_assistant.agent import (
+    BackendWakeWordDetector,
+    format_backend_listening_message,
+    normalize_backend_wake_word_mode,
+    parse_env_list,
+)
 
 
 def install_fake_openwakeword(monkeypatch, scores):
@@ -36,6 +41,8 @@ def test_backend_wake_word_detector_buffers_80ms_frames(monkeypatch):
 
     assert detector.process_pcm16_16k(partial_frame) is None
     assert detector.process_pcm16_16k(full_frame_tail) == ("regie", 0.8)
+    assert detector.model.kwargs["inference_framework"] == "onnx"
+    assert detector.model.kwargs["wakeword_models"] == ["regie.onnx"]
 
 
 def test_backend_wake_word_detector_uses_threshold(monkeypatch):
@@ -62,3 +69,9 @@ def test_backend_wake_word_config_helpers():
         "c.onnx",
         "d.onnx",
     ]
+    assert format_backend_listening_message(["momo"], "openwakeword") == 'Listening for "momo" using openwakeword...'
+    assert (
+        format_backend_listening_message(["régie", "console"], "generic")
+        == 'Listening for "régie, console" using generic...'
+    )
+    assert format_backend_listening_message([], None) == "Listening (no wake word)"

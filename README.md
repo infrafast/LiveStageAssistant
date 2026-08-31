@@ -212,7 +212,7 @@ MCP_CONFIG=mcp_servers.json
 
 Backend microphone wake-word handling defaults to the legacy post-STT gate. `scripts/install.sh` installs the local openWakeWord extra by default; set `LSA_SKIP_WAKEWORD=1` before running the installer only if you explicitly want to skip it. For more robust Raspberry Pi/backend use, provide one or more openWakeWord models and switch **Config -> Voice Activity Detection (VAD) -> Wake word backend** to streaming:
 
-On Raspberry Pi/Linux, `scripts/install.sh` installs openWakeWord in ONNX-only mode to avoid the `tflite-runtime` wheel issue on recent Python/Raspberry Pi OS releases. Use `.onnx` wake-word models with `BACKEND_WAKE_WORD_MODEL_PATHS`.
+On Raspberry Pi/Linux, `scripts/install.sh` installs openWakeWord in ONNX-only mode to avoid the `tflite-runtime` wheel issue on recent Python/Raspberry Pi OS releases. It also downloads the internal ONNX resources required by openWakeWord, including `melspectrogram.onnx` and `embedding_model.onnx`, then validates the install by instantiating an ONNX `Model`. Use `.onnx` wake-word models with `BACKEND_WAKE_WORD_MODEL_PATHS`.
 
 ```env
 BACKEND_WAKE_WORD_MODE=openwakeword
@@ -223,7 +223,7 @@ BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
 
 In this mode, the backend microphone captures into a short ring buffer before the wake word fires. STT starts only after the local detector activates, and the buffered audio is kept so the beginning of the phrase is not cut off. Browser microphone, push-to-talk, and uploaded WAV commands keep the post-STT wake-word gate for now.
 
-The web configuration lists `.onnx` files found under `data/` for safer model selection. The text field remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value.
+The web configuration lists `.onnx` files found under `data/` for safer model selection. The text field remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value. macOS metadata files named like `._momo.onnx` are ignored; they can also be removed with `find data/wake_words -name '._*.onnx' -delete`.
 
 For the exhaustive env reference and runtime internals, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

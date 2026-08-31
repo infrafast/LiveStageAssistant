@@ -672,6 +672,14 @@ def parse_env_list(value: str | None) -> list[str]:
     return [item.strip() for item in re.split(r"[,;|]", value) if item.strip()]
 
 
+def format_backend_listening_message(wake_words: list[str], engine: str | None) -> str:
+    """Return the single backend listening status line."""
+    if not wake_words:
+        return "Listening (no wake word)"
+    wake_word_label = ", ".join(wake_words)
+    return f'Listening for "{wake_word_label}" using {engine or "generic"}...'
+
+
 class BackendWakeWordDetector:
     """Optional openWakeWord adapter for backend microphone streaming detection."""
 
@@ -2320,7 +2328,7 @@ class VoiceAssistant:
         except Exception as e:
             self.backend_wake_word_detector = None
             self.backend_wake_word_unavailable_reason = str(e)
-            print(f"Backend streaming wake-word detector unavailable; using post-STT wake gate: {e}", flush=True)
+            print(f"Backend openWakeWord unavailable; using generic wake gate: {e}", flush=True)
 
     def _backend_streaming_wake_active(self) -> bool:
         return (
@@ -2328,6 +2336,11 @@ class VoiceAssistant:
             and bool(self.wake_words)
             and self.backend_wake_word_detector is not None
         )
+
+    def _backend_wake_word_engine_name(self) -> str:
+        if self._backend_streaming_wake_active():
+            return "openwakeword"
+        return "generic"
 
     def _backend_output_ready(self) -> bool:
         """Return true only when backend playback can use the configured output route."""
@@ -3357,10 +3370,10 @@ class VoiceAssistant:
             return None
 
         streaming_wake_active = self._backend_streaming_wake_active()
-        if streaming_wake_active:
-            print("\nListening for wake word...")
-        else:
-            print("\nListening... (speak now)")
+        print(
+            f"\n{format_backend_listening_message(self.wake_words, self._backend_wake_word_engine_name())}",
+            flush=True,
+        )
 
         stream = None
         monitor_stream = None
@@ -3445,8 +3458,12 @@ class VoiceAssistant:
                         pre_roll = []
                         self.vad.reset()
                         print(
-                            "Backend streaming wake-word detector failed during capture; "
-                            f"falling back to post-STT wake gate: {e}",
+                            "Backend openWakeWord failed during capture; "
+                            f"using generic wake gate: {e}",
+                            flush=True,
+                        )
+                        print(
+                            f"\n{format_backend_listening_message(self.wake_words, self._backend_wake_word_engine_name())}",
                             flush=True,
                         )
                         continue
@@ -6256,6 +6273,8 @@ async def main():
         options = []
         for model_path in sorted(data_dir.rglob("*.onnx"), key=lambda path: path.as_posix().lower()):
             if not model_path.is_file():
+                continue
+            if model_path.name.startswith("._"):
                 continue
             try:
                 model_id = model_path.relative_to(Path.cwd()).as_posix()

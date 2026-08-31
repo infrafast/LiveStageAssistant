@@ -130,8 +130,22 @@ install_wakeword_dependencies() {
     printf '%s\n' "Installing local wake-word detection dependencies."
     if [ "$system" = "Linux" ]; then
         printf '%s\n' "Installing openWakeWord in ONNX-only mode to avoid Raspberry Pi tflite-runtime wheel issues."
-        uv pip install "onnxruntime>=1.16,<2" "tqdm>=4,<5" "requests>=2,<3" "scikit-learn>=1,<2"
+        uv pip install "onnxruntime>=1.16,<2" "tqdm>=4,<5" "requests>=2,<3" "scikit-learn>=1,<2" "scipy>=1.11,<1.13"
         uv pip install "openwakeword>=0.6,<1" --no-deps
+        uv run python - <<'PY'
+from pathlib import Path
+
+from openwakeword import utils as oww_utils
+
+download_models = getattr(oww_utils, "download_models", None)
+if not callable(download_models):
+    raise SystemExit("openWakeWord resource download failed: openwakeword.utils.download_models is unavailable")
+
+download_models()
+
+for metadata_file in Path("data").rglob("._*.onnx"):
+    print(f"Ignoring macOS metadata file: {metadata_file}")
+PY
     else
         uv pip install -e ".[wakeword]"
     fi
@@ -181,7 +195,42 @@ print(
 )
 print(f"Speaker recognition dependencies OK: resemblyzer {metadata.version('resemblyzer')}")
 try:
-    print(f"Wake-word dependencies OK: openwakeword {metadata.version('openwakeword')}")
+    import importlib.resources as resources
+    from pathlib import Path
+
+    from openwakeword import utils as oww_utils
+    from openwakeword.model import Model
+
+    download_models = getattr(oww_utils, "download_models", None)
+    if callable(download_models):
+        download_models()
+
+    models_dir = resources.files("openwakeword") / "resources" / "models"
+    required_resources = ("melspectrogram.onnx", "embedding_model.onnx")
+    missing_resources = [
+        name for name in required_resources if not (models_dir / name).is_file()
+    ]
+    if missing_resources:
+        raise SystemExit(
+            "Wake-word dependency check failed: missing openWakeWord ONNX resource(s): "
+            + ", ".join(missing_resources)
+        )
+    if not (models_dir / "silero_vad.onnx").is_file():
+        print("Wake-word dependency warning: optional openWakeWord silero_vad.onnx resource is missing")
+
+    local_models = [
+        path
+        for path in sorted(Path("data").rglob("*.onnx"))
+        if path.is_file() and not path.name.startswith("._")
+    ]
+    model_kwargs = {"inference_framework": "onnx"}
+    if local_models:
+        model_kwargs["wakeword_models"] = [str(local_models[0])]
+    Model(**model_kwargs)
+    print(
+        "Wake-word dependencies OK: "
+        f"openwakeword {metadata.version('openwakeword')} with ONNX runtime/resources"
+    )
 except metadata.PackageNotFoundError:
     if os.environ.get("LSA_SKIP_WAKEWORD") == "1":
         print("Wake-word dependencies skipped: openwakeword is not installed")
