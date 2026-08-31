@@ -777,6 +777,18 @@ class BackendWakeWordDetector:
         self.frame_samples = 1280  # 80 ms at 16 kHz, the efficient openWakeWord frame size.
         self._buffer = bytearray()
 
+    def reset(self, *, clear_cooldown: bool = False) -> None:
+        """Reset buffered wake-word audio and model state when a capture cycle is abandoned."""
+        self._buffer.clear()
+        if clear_cooldown:
+            self.last_detection_at = 0.0
+        reset_model = getattr(self.model, "reset", None)
+        if callable(reset_model):
+            try:
+                reset_model()
+            except Exception:
+                pass
+
     def process_pcm16_16k(self, audio_data: bytes) -> tuple[str, float] | None:
         """Return the first detected model label and score from 16 kHz mono int16 PCM."""
         if not audio_data:
@@ -3635,6 +3647,8 @@ class VoiceAssistant:
                     and wake_command_wait_ms >= DEFAULT_BACKEND_WAKE_WORD_COMMAND_TIMEOUT_MS
                 ):
                     print("Wake word fired, but no command speech followed; returning to listening.")
+                    if self.backend_wake_word_detector:
+                        self.backend_wake_word_detector.reset(clear_cooldown=True)
                     return None
 
                 if len(frames) > self.rate / self.chunk * 30:
