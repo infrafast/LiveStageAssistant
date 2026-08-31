@@ -3534,10 +3534,12 @@ class VoiceAssistant:
                             print(f"Backend audio pass-through monitor stopped: {e}")
                             self.backend_audio_monitor_warning_shown = True
                 vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
+                streaming_pre_wake_frame = streaming_wake_active and not wake_detected
                 if streaming_wake_active and not wake_detected:
-                    pre_roll.append(data)
-                    if len(pre_roll) > pad_frames:
-                        pre_roll = pre_roll[-pad_frames:]
+                    if not has_speech:
+                        pre_roll.append(data)
+                        if len(pre_roll) > pad_frames:
+                            pre_roll = pre_roll[-pad_frames:]
                     try:
                         detection = self.backend_wake_word_detector.process_pcm16_16k(vad_data)
                     except Exception as e:
@@ -3557,24 +3559,26 @@ class VoiceAssistant:
                             flush=True,
                         )
                         continue
-                    if not detection:
+                    if detection:
+                        detected_label, detected_score = detection
+                        wake_detected = True
+                        self.last_backend_streaming_wake_detected = True
+                        accepted_frames = list(frames) if has_speech else list(pre_roll)
+                        if has_speech:
+                            accepted_frames.append(data)
+                        has_speech = True
+                        frames = accepted_frames
+                        pre_roll = []
+                        speech_candidate = []
+                        speech_candidate_ms = 0.0
+                        silence_ms = 0.0
+                        recorded_speech_ms = 0.0
+                        self.vad.reset()
+                        print(
+                            f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
+                            flush=True,
+                        )
                         continue
-                    detected_label, detected_score = detection
-                    wake_detected = True
-                    self.last_backend_streaming_wake_detected = True
-                    has_speech = True
-                    frames = list(pre_roll)
-                    pre_roll = []
-                    speech_candidate = []
-                    speech_candidate_ms = 0.0
-                    silence_ms = 0.0
-                    recorded_speech_ms = 0.0
-                    self.vad.reset()
-                    print(
-                        f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
-                        flush=True,
-                    )
-                    continue
 
                 probabilities = self.vad.process_pcm(vad_data)
                 speech_probability = max(probabilities) if probabilities else 0.0
@@ -3592,7 +3596,8 @@ class VoiceAssistant:
                     if recorded_speech_ms >= self.vad.max_speech_seconds * 1000:
                         break
                 elif speech_probability >= self.vad.threshold:
-                    speech_candidate.append(data)
+                    if not streaming_pre_wake_frame:
+                        speech_candidate.append(data)
                     speech_candidate_ms += chunk_ms
                     if speech_candidate_ms >= self.vad.min_speech_ms:
                         has_speech = True
@@ -3603,9 +3608,10 @@ class VoiceAssistant:
                 else:
                     speech_candidate = []
                     speech_candidate_ms = 0.0
-                    pre_roll.append(data)
-                    if len(pre_roll) > pad_frames:
-                        pre_roll = pre_roll[-pad_frames:]
+                    if not streaming_pre_wake_frame:
+                        pre_roll.append(data)
+                        if len(pre_roll) > pad_frames:
+                            pre_roll = pre_roll[-pad_frames:]
 
                 if len(frames) > self.rate / self.chunk * 30:
                     break
@@ -3618,6 +3624,11 @@ class VoiceAssistant:
 
             if not has_speech:
                 print("No speech detected.")
+                return None
+
+            if streaming_wake_active and not wake_detected:
+                print("Wake word not detected. Replaying rejected backend audio.")
+                self.play_rejected_backend_audio(b"".join(frames))
                 return None
 
             print("Processing...")

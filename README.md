@@ -225,6 +225,8 @@ In this mode, the backend microphone captures into a short ring buffer before th
 
 The web configuration lists `.onnx` files found under `data/` for safer model selection. The text field remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value. macOS metadata files named like `._momo.onnx` are ignored; they can also be removed with `find data/wake_words -name '._*.onnx' -delete`.
 
+If backend audio monitoring is set to `rejected`, phrases heard by the backend microphone without a detected wake word are replayed through the configured backend output in both generic and openWakeWord modes.
+
 For the exhaustive env reference and runtime internals, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Using The Web Monitor
