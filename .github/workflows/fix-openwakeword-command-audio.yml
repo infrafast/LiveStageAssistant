@@ -6,6 +6,9 @@ on:
       - fix/openwakeword-command-audio
     paths:
       - .github/workflows/fix-openwakeword-command-audio.yml
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
