@@ -106,6 +106,7 @@ DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS = 1600
 DEFAULT_BACKEND_WAKE_WORD_THRESHOLD = 0.65
 DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS = 1200
 DEFAULT_BACKEND_WAKE_WORD_COMMAND_TIMEOUT_MS = 2500
+DEFAULT_BACKEND_WAKE_WORD_POST_TTS_SUPPRESS_MS = 350
 API_CREDIT_ALERT_SOUND_FILE = "insuficientAPIcredit.wav"
 BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD = 0.5
 BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS = 120.0
@@ -2123,6 +2124,7 @@ class VoiceAssistant:
         self.backend_wake_word_detector: BackendWakeWordDetector | None = None
         self.backend_wake_word_unavailable_reason = ""
         self.last_backend_streaming_wake_detected = False
+        self.backend_wake_word_suppress_until = 0.0
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
         self.backend_stt_enabled = bool(backend_stt_enabled)
@@ -3581,6 +3583,22 @@ class VoiceAssistant:
                             print(f"Backend audio pass-through monitor stopped: {e}")
                             self.backend_audio_monitor_warning_shown = True
                 vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
+                if (
+                    streaming_wake_active
+                    and not wake_detected
+                    and time.monotonic() < self.backend_wake_word_suppress_until
+                ):
+                    # Keep draining the microphone immediately after backend TTS, but do
+                    # not let the acoustic tail or loopback audio reach openWakeWord/VAD.
+                    pre_roll = []
+                    frames = []
+                    speech_candidate = []
+                    speech_candidate_ms = 0.0
+                    silence_ms = 0.0
+                    recorded_speech_ms = 0.0
+                    self.backend_wake_word_detector.reset(clear_cooldown=True)
+                    self.vad.reset()
+                    continue
                 streaming_pre_wake_frame = streaming_wake_active and not wake_detected
                 if streaming_wake_active and not wake_detected:
                     if not has_speech:
@@ -6132,6 +6150,17 @@ class VoiceAssistant:
                                 pass
                 else:
                     await self.text_to_speech(response)
+
+                if self._backend_streaming_wake_active():
+                    self.backend_wake_word_suppress_until = (
+                        time.monotonic() + DEFAULT_BACKEND_WAKE_WORD_POST_TTS_SUPPRESS_MS / 1000.0
+                    )
+                    self.backend_wake_word_detector.reset(clear_cooldown=True)
+                    self.vad.reset()
+                    LOGGER.debug(
+                        "Suppressing backend openWakeWord input for %d ms after TTS",
+                        DEFAULT_BACKEND_WAKE_WORD_POST_TTS_SUPPRESS_MS,
+                    )
 
                 if self.mcp_reconnect_after_response:
                     self.mcp_reconnect_after_response = False
