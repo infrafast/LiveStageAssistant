@@ -82,11 +82,11 @@ livestageassistant restart
 ```env
 BACKEND_WAKE_WORD_MODE=openwakeword
 BACKEND_WAKE_WORD_MODEL_PATHS=data/wake_words/regie.onnx,data/wake_words/console.onnx
-BACKEND_WAKE_WORD_THRESHOLD=0.50
+BACKEND_WAKE_WORD_THRESHOLD=0.65
 BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
 ```
 
-With this mode active, the backend microphone keeps a short ring buffer and launches STT only after the local wake detector fires. This avoids losing the beginning of phrases such as `console, quel est le volume ?`. The browser microphone and uploaded WAV commands intentionally stay on the post-STT wake-word gate for now.
+With this mode active, the backend microphone keeps a short ring buffer and launches STT only after the local wake detector fires and real command speech follows. This avoids losing the beginning of phrases such as `console, quel est le volume ?`, while false activations on silence return to listening without spending a Whisper call. The browser microphone and uploaded WAV commands intentionally stay on the post-STT wake-word gate for now.
 
 The web configuration lists `.onnx` files found under `/home/pi/LiveStageAssistant/data/` so you can select one or more wake-word models without typing paths. The text field below the list remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value. macOS metadata files named like `._momo.onnx` are ignored; if you copied files from a Mac, you can clean them with `find data/wake_words -name '._*.onnx' -delete`.
 

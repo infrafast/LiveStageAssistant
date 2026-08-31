@@ -103,8 +103,9 @@ DEFAULT_STT_TIMEOUT_SECONDS = 25.0
 DEFAULT_SPEAKER_RECOGNITION_TIMEOUT_SECONDS = 10.0
 DEFAULT_SILERO_VAD_MODEL = Path("assets/web/static/vendor/silero-vad/silero_vad_v6.onnx")
 DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS = 1600
-DEFAULT_BACKEND_WAKE_WORD_THRESHOLD = 0.5
+DEFAULT_BACKEND_WAKE_WORD_THRESHOLD = 0.65
 DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS = 1200
+DEFAULT_BACKEND_WAKE_WORD_COMMAND_TIMEOUT_MS = 2500
 API_CREDIT_ALERT_SOUND_FILE = "insuficientAPIcredit.wav"
 BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD = 0.5
 BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS = 120.0
@@ -1931,7 +1932,7 @@ class VoiceAssistant:
         vad_model_path: str | Path = DEFAULT_SILERO_VAD_MODEL,
         vad_speech_threshold: float = 0.5,
         vad_negative_threshold: float | None = None,
-        vad_min_speech_ms: int = 120,
+        vad_min_speech_ms: int = 250,
         vad_min_silence_ms: int = 650,
         vad_speech_pad_ms: int = 100,
         vad_max_speech_seconds: float = 8.0,
@@ -3504,6 +3505,9 @@ class VoiceAssistant:
             pad_frames = max(1, int((pre_roll_ms / audio_chunk_ms) + 0.999))
             has_speech = False
             wake_detected = not streaming_wake_active
+            wake_command_armed = False
+            wake_command_wait_ms = 0.0
+            wake_audio_frames: list[bytes] = []
 
             while True:
                 if self.backend_audio_diagnostic_requested.is_set():
@@ -3563,17 +3567,22 @@ class VoiceAssistant:
                         detected_label, detected_score = detection
                         wake_detected = True
                         self.last_backend_streaming_wake_detected = True
-                        accepted_frames = list(frames) if has_speech else list(pre_roll)
                         if has_speech:
-                            accepted_frames.append(data)
-                        has_speech = True
-                        frames = accepted_frames
-                        pre_roll = []
-                        speech_candidate = []
-                        speech_candidate_ms = 0.0
-                        silence_ms = 0.0
-                        recorded_speech_ms = 0.0
-                        self.vad.reset()
+                            frames.append(data)
+                            wake_command_armed = False
+                            wake_command_wait_ms = 0.0
+                            wake_audio_frames = []
+                        else:
+                            wake_audio_frames = list(pre_roll)
+                            frames = []
+                            pre_roll = []
+                            speech_candidate = []
+                            speech_candidate_ms = 0.0
+                            silence_ms = 0.0
+                            recorded_speech_ms = 0.0
+                            wake_command_armed = True
+                            wake_command_wait_ms = 0.0
+                            self.vad.reset()
                         print(
                             f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
                             flush=True,
@@ -3583,6 +3592,8 @@ class VoiceAssistant:
                 probabilities = self.vad.process_pcm(vad_data)
                 speech_probability = max(probabilities) if probabilities else 0.0
                 chunk_ms = self.vad.chunk_ms * max(1, len(probabilities))
+                if wake_command_armed and not has_speech:
+                    wake_command_wait_ms += audio_chunk_ms
 
                 if has_speech:
                     frames.append(data)
@@ -3601,8 +3612,11 @@ class VoiceAssistant:
                     speech_candidate_ms += chunk_ms
                     if speech_candidate_ms >= self.vad.min_speech_ms:
                         has_speech = True
-                        frames = pre_roll + speech_candidate
+                        frames = wake_audio_frames + pre_roll + speech_candidate
                         recorded_speech_ms = speech_candidate_ms
+                        wake_command_armed = False
+                        wake_command_wait_ms = 0.0
+                        wake_audio_frames = []
                         pre_roll = []
                         speech_candidate = []
                 else:
@@ -3612,6 +3626,16 @@ class VoiceAssistant:
                         pre_roll.append(data)
                         if len(pre_roll) > pad_frames:
                             pre_roll = pre_roll[-pad_frames:]
+
+                if (
+                    streaming_wake_active
+                    and wake_detected
+                    and wake_command_armed
+                    and not has_speech
+                    and wake_command_wait_ms >= DEFAULT_BACKEND_WAKE_WORD_COMMAND_TIMEOUT_MS
+                ):
+                    print("Wake word fired, but no command speech followed; returning to listening.")
+                    return None
 
                 if len(frames) > self.rate / self.chunk * 30:
                     break
@@ -6652,7 +6676,7 @@ async def main():
         )
         current_vad_speech_threshold = env_float_from_values(values, "VAD_SPEECH_THRESHOLD", 0.5)
         current_vad_negative_threshold = env_float_from_values(values, "VAD_NEGATIVE_THRESHOLD", 0.35)
-        current_vad_min_speech_ms = env_int_from_values(values, "VAD_MIN_SPEECH_MS", 120)
+        current_vad_min_speech_ms = env_int_from_values(values, "VAD_MIN_SPEECH_MS", 250)
         current_vad_min_silence_ms = env_int_from_values(values, "VAD_MIN_SILENCE_MS", 650)
         current_vad_speech_pad_ms = env_int_from_values(values, "VAD_SPEECH_PAD_MS", 100)
         current_vad_max_speech_seconds = env_float_from_values(values, "VAD_MAX_SPEECH_SECONDS", 8.0)
@@ -7357,7 +7381,7 @@ async def main():
         vad_model_path = os.getenv("VAD_MODEL_PATH", str(DEFAULT_SILERO_VAD_MODEL)).strip() or str(DEFAULT_SILERO_VAD_MODEL)
         vad_speech_threshold = env_float("VAD_SPEECH_THRESHOLD", 0.5)
         vad_negative_threshold = env_float("VAD_NEGATIVE_THRESHOLD", 0.35)
-        vad_min_speech_ms = env_int("VAD_MIN_SPEECH_MS", 120)
+        vad_min_speech_ms = env_int("VAD_MIN_SPEECH_MS", 250)
         vad_min_silence_ms = env_int("VAD_MIN_SILENCE_MS", 650)
         vad_speech_pad_ms = env_int("VAD_SPEECH_PAD_MS", 100)
         vad_max_speech_seconds = env_float("VAD_MAX_SPEECH_SECONDS", 8.0)
