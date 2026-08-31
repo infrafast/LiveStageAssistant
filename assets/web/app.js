@@ -178,6 +178,9 @@
     const thinkingSoundField = document.querySelector("#thinking-sound-field");
     const thinkingSound = document.querySelector("#thinking-sound");
     const thinkingSoundPlay = document.querySelector("#thinking-sound-play");
+    const listeningSoundField = document.querySelector("#listening-sound-field");
+    const listeningSound = document.querySelector("#listening-sound");
+    const listeningSoundPlay = document.querySelector("#listening-sound-play");
     const startupLoaderSoundField = document.querySelector("#startup-loader-sound-field");
     const startupLoaderSound = document.querySelector("#startup-loader-sound");
     const startupLoaderSoundPlay = document.querySelector("#startup-loader-sound-play");
@@ -2795,6 +2798,13 @@
         : (backendOutputUnavailable ? backendUnavailableReason : "THINKING_SOUND_FILE");
       thinkingSoundPlay.title = thinkingSoundField.title;
 
+      const listeningBackendUnavailable = !backendAudioCapabilities.output;
+      listeningSound.disabled = listeningBackendUnavailable;
+      listeningSoundPlay.disabled = !listeningSound.value || listeningBackendUnavailable;
+      listeningSoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "LISTENING_SOUND_FILE";
+      listeningSound.title = listeningSoundField.title;
+      listeningSoundPlay.title = listeningSoundField.title;
+
       const loaderBackendEnabled = output === "backend";
       startupLoaderSound.disabled = !loaderBackendEnabled;
       startupLoaderSoundPlay.disabled = !loaderBackendEnabled || !startupLoaderSound.value || backendOutputUnavailable;
@@ -2807,8 +2817,8 @@
 
     async function toggleAudioSample(select, button, backendOnly = false) {
       const filename = String(select.value || "").trim();
-      const output = selectedTtsOutput();
-      if (!filename || output === "silent" || (backendOnly && output !== "backend")) return;
+      const output = backendOnly ? "backend" : selectedTtsOutput();
+      if (!filename || (!backendOnly && output === "silent")) return;
 
       if (currentAudioSample && currentAudioSample.button === button) {
         stopCurrentAudioSample();
@@ -2935,6 +2945,7 @@
         backend_audio_monitor_volume: Number(backendAudioMonitorVolume.value || 1),
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
+        listening_sound_file: listeningSound.value || "",
         startup_loader_sound_file: startupLoaderSound.value || "",
         command_ack_sound_enabled: commandAckSound.getAttribute("aria-checked") === "true",
         openai_tts_voice: openaiTtsVoice.value || "",
@@ -4595,6 +4606,7 @@
       backendAudioTest.disabled = true;
       backendAudioOutput.disabled = true;
       thinkingSound.disabled = true;
+      listeningSound.disabled = true;
       llmSave.disabled = true;
       llmMessage.textContent = tr("loading_llm_options", "Loading LLM options...");
       try {
@@ -4749,6 +4761,31 @@
           }
         }
 
+        listeningSound.replaceChildren();
+        const selectedListeningSound = data.selected_listening_sound_file || "";
+        listeningSound.appendChild(option(
+          tr("listening_sound_disabled", "No listening sound"),
+          "",
+          false,
+          !selectedListeningSound
+        ));
+        for (const sound of sounds) {
+          listeningSound.appendChild(option(
+            sound.label || sound.id,
+            sound.id,
+            false,
+            sound.id === selectedListeningSound
+          ));
+        }
+        if (selectedListeningSound && !sounds.some((sound) => sound.id === selectedListeningSound)) {
+          listeningSound.appendChild(option(
+            `${selectedListeningSound} (${tr("current", "current")})`,
+            selectedListeningSound,
+            false,
+            true
+          ));
+        }
+
         startupLoaderSound.replaceChildren();
         const selectedStartupLoaderSound = data.selected_startup_loader_sound_file || "";
         startupLoaderSound.appendChild(option(
@@ -4807,7 +4844,9 @@
         backendAudioOutputPan.disabled = !backendAudioCapabilities.output || backendAudioOutputPanField.classList.contains("hidden");
         browserAudioTest.disabled = !browserAudioCapabilities.input || browserAudioInputField.classList.contains("hidden");
         backendAudioTest.disabled = !backendAudioCapabilities.input || backendAudioInputField.classList.contains("hidden");
-        thinkingSound.disabled = thinkingSound.options.length === 0 || !thinkingSound.value;
+        thinkingSound.disabled = thinkingSound.options.length === 0;
+        listeningSound.disabled = listeningSound.options.length === 0;
+        syncAudioSampleControls();
         llmSave.disabled = !llmProvider.value;
         llmOptionsLoading = false;
       }
@@ -5243,11 +5282,16 @@
       stopCurrentAudioSample();
       syncAudioSampleControls();
     });
+    listeningSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncAudioSampleControls();
+    });
     startupLoaderSound.addEventListener("change", () => {
       stopCurrentAudioSample();
       syncAudioSampleControls();
     });
     thinkingSoundPlay.addEventListener("click", () => toggleAudioSample(thinkingSound, thinkingSoundPlay));
+    listeningSoundPlay.addEventListener("click", () => toggleAudioSample(listeningSound, listeningSoundPlay, true));
     startupLoaderSoundPlay.addEventListener("click", () => toggleAudioSample(
       startupLoaderSound,
       startupLoaderSoundPlay,
@@ -5332,6 +5376,7 @@
       const backendAudioMonitorVolumeValue = Number(backendAudioMonitorVolume.value || 1);
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
+      const listeningSoundFile = listeningSound.value;
       const startupLoaderSoundFile = startupLoaderSound.value;
       const commandAckSoundEnabledValue = commandAckSoundEnabled();
       const openAiTtsVoiceValue = openaiTtsVoice.value;
@@ -5387,6 +5432,7 @@
             system_prompt: systemPromptValue,
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
+            listening_sound_file: listeningSoundFile,
             startup_loader_sound_file: startupLoaderSoundFile,
             command_ack_sound_enabled: commandAckSoundEnabledValue,
             openai_tts_voice: openAiTtsVoiceValue,

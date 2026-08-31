@@ -1672,6 +1672,7 @@ class WebMonitor:
                     backend_audio_monitor_mode = str(payload.get("backend_audio_monitor_mode") or "off").strip().lower()
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
+                    listening_sound_file = str(payload.get("listening_sound_file") or "").strip()
                     startup_loader_sound_file = str(payload.get("startup_loader_sound_file") or "").strip()
                     command_ack_sound_enabled = bool(payload.get("command_ack_sound_enabled"))
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
@@ -1740,6 +1741,7 @@ class WebMonitor:
                             backend_audio_output_device,
                             voice_id,
                             thinking_sound_file,
+                            listening_sound_file,
                             startup_loader_sound_file,
                             command_ack_sound_enabled,
                             openai_tts_voice,

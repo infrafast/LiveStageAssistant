@@ -184,7 +184,7 @@ Important files and folders:
 - `mcp_servers*.json`: MCP server definitions.
 - `container/config/*.env*`: Docker/Synology profiles.
 - `data/speaker_profiles`: local speaker-recognition samples and embeddings.
-- `assets/*.wav`: selectable thinking/startup/acknowledgement sounds.
+- `assets/*.wav`: selectable thinking/listening/startup/acknowledgement sounds.
 
 API keys should be stored in text files and referenced from env variables:
 
