@@ -241,6 +241,8 @@ The web monitor is the primary operator UI:
 
 Browser audio device choices are stored in browser `localStorage`; backend audio device choices are saved in the active `.env` file.
 
+Cloud API quota, credit, authentication, and temporary rate-limit failures are shown as short operator messages instead of raw provider errors. If backend STT cannot run because cloud credit is exhausted, the assistant plays `assets/insuficientAPIcredit.wav` through the configured backend output and returns to listening. If the WAV is missing, it falls back to local `pyttsx3` on the same configured output.
+
 ## Speaker Recognition
 
 Speaker recognition is optional. Enable it in the web config or with:

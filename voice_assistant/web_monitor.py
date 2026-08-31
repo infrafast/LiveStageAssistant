@@ -198,7 +198,17 @@ def concise_web_tts_error(error: Exception | str) -> dict[str, str]:
     detail_match = re.search(r"['\"]message['\"]\s*:\s*['\"]([^'\"]+)['\"]", raw)
     detail = detail_match.group(1).strip() if detail_match else ""
 
-    if any(marker in lowered for marker in ("quota_exceeded", "insufficient_quota", "exceeds your quota")):
+    if any(
+        marker in lowered
+        for marker in (
+            "credit_balance_exhausted",
+            "quota_exceeded",
+            "insufficient_quota",
+            "exceeds your quota",
+            "no credits remaining",
+            "plus de crédit",
+        )
+    ):
         return {
             "kind": "quota",
             "message": "Plus de crédit TTS disponible.",
@@ -2073,15 +2083,32 @@ class WebMonitor:
                         return
                     except Exception as e:
                         error_text = str(e)
-                        status = 429 if "insufficient_quota" in error_text or "Error code: 429" in error_text else 500
+                        lowered_error = error_text.lower()
+                        quota_error = any(
+                            marker in lowered_error
+                            for marker in (
+                                "credit_balance_exhausted",
+                                "insufficient_quota",
+                                "quota_exceeded",
+                                "no credits remaining",
+                                "plus de crédit",
+                                "error code: 429",
+                            )
+                        )
+                        status = 429 if quota_error else 500
                         code = "insufficient_quota" if status == 429 else "transcription_failed"
+                        message = (
+                            "Plus de crédit API pour la transcription vocale."
+                            if status == 429
+                            else f"Could not transcribe web audio: {error_text}"
+                        )
                         self._send_json_error(
                             status,
                             {
                                 "ok": False,
                                 "error": {
                                     "code": code,
-                                    "message": f"Could not transcribe web audio: {error_text}",
+                                    "message": message,
                                 },
                             },
                         )
@@ -2212,10 +2239,22 @@ class WebMonitor:
                     try:
                         result = handler(text, options)
                     except ValueError as e:
-                        self._send_json_error(400, {"ok": False, "error": {"message": str(e)}})
+                        error = concise_web_tts_error(e)
+                        status = 402 if error.get("kind") in {"quota", "billing"} else 400
+                        self._send_json_error(status, {"ok": False, "error": error})
                         return
                     except Exception as e:
-                        self._send_json_error(500, {"ok": False, "error": {"message": f"Could not test backend TTS: {e}"}})
+                        error = concise_web_tts_error(e)
+                        if error.get("kind") in {"quota", "billing"}:
+                            status = 402
+                        elif error.get("kind") == "auth":
+                            status = 401
+                        elif error.get("kind") == "rate_limit":
+                            status = 429
+                        else:
+                            status = 500
+                            error = {"message": f"Could not test backend TTS: {e}"}
+                        self._send_json_error(status, {"ok": False, "error": error})
                         return
                     self._send_json(result)
 

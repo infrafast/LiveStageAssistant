@@ -105,6 +105,7 @@ DEFAULT_SILERO_VAD_MODEL = Path("assets/web/static/vendor/silero-vad/silero_vad_
 DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS = 1600
 DEFAULT_BACKEND_WAKE_WORD_THRESHOLD = 0.5
 DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS = 1200
+API_CREDIT_ALERT_SOUND_FILE = "insuficientAPIcredit.wav"
 BACKEND_AUDIO_DIAGNOSTIC_VAD_THRESHOLD = 0.5
 BACKEND_AUDIO_DIAGNOSTIC_MIN_SPEECH_MS = 120.0
 BACKEND_AUDIO_DIAGNOSTIC_MIN_GOOD_SPEECH_DBFS = -40.0
@@ -159,6 +160,67 @@ SESSION_LLM_SUMMARY_PROMPT = (
     "Write short bullets under 2500 characters.\n\n"
     "Transcript summary to compress:\n"
 )
+
+
+class CloudApiUserError(RuntimeError):
+    """User-facing cloud API failure that should not expose provider internals."""
+
+    def __init__(self, message: str, *, provider: str = "cloud", stage: str = "api", kind: str = "error") -> None:
+        super().__init__(message)
+        self.message = message
+        self.provider = provider
+        self.stage = stage
+        self.kind = kind
+
+
+def classify_cloud_api_error(error: Exception | str, *, provider: str = "cloud", stage: str = "api") -> CloudApiUserError | None:
+    """Return a concise user-facing API error when a provider failure is recognizable."""
+    raw = str(error or "").strip()
+    lowered = raw.lower()
+    provider_label = provider.strip() or "cloud"
+    stage_label = stage.strip() or "api"
+
+    quota_markers = (
+        "credit_balance_exhausted",
+        "insufficient_quota",
+        "quota_exceeded",
+        "exceeds your quota",
+        "current quota",
+        "billing quota",
+        "no credits remaining",
+        "run out of credits",
+        "no balance left",
+        "credits remaining",
+        "free tier credits",
+    )
+    if any(marker in lowered for marker in quota_markers):
+        if provider_label.lower() == "openai":
+            message = "Plus de crédit API OpenAI. Passe en mode local ou ajoute du crédit."
+        elif provider_label.lower() == "elevenlabs":
+            message = "Plus de crédit API ElevenLabs pour la voix."
+        else:
+            message = "Plus de crédit API pour ce service cloud."
+        return CloudApiUserError(message, provider=provider_label, stage=stage_label, kind="quota")
+
+    auth_markers = ("invalid_api_key", "invalid api key", "unauthorized", "status code: 401", "status_code: 401")
+    if any(marker in lowered for marker in auth_markers):
+        return CloudApiUserError(
+            f"Clé API {provider_label} invalide ou refusée.",
+            provider=provider_label,
+            stage=stage_label,
+            kind="auth",
+        )
+
+    rate_markers = ("rate_limit_exceeded", "rate limit", "too many requests", "status code: 429", "status_code: 429")
+    if any(marker in lowered for marker in rate_markers):
+        return CloudApiUserError(
+            f"Limite temporaire API {provider_label} atteinte. Réessaie dans un moment.",
+            provider=provider_label,
+            stage=stage_label,
+            kind="rate_limit",
+        )
+
+    return None
 
 
 def speaker_reason_user_message(reason: str | None) -> str:
@@ -2229,6 +2291,7 @@ class VoiceAssistant:
         self.backend_audio_sample_lock = threading.Lock()
         self.backend_audio_sample_stop_event: threading.Event | None = None
         self.backend_audio_sample_thread: threading.Thread | None = None
+        self.cloud_api_alert_last_played_at = 0.0
 
         # MCP configuration
         self.mcp_config = mcp_config
@@ -2368,6 +2431,33 @@ class VoiceAssistant:
             if asset_path:
                 return asset_path
         return None
+
+    def speak_cloud_api_alert(self, message: str, *, throttle_seconds: float = 8.0) -> None:
+        """Play a local cloud-API failure alert through the configured backend route."""
+        if not self._backend_output_ready():
+            print(f"Cloud API alert audio skipped: backend audio output is {self.audio_output_device_status}.")
+            return
+        now = time.monotonic()
+        if throttle_seconds > 0 and now - self.cloud_api_alert_last_played_at < throttle_seconds:
+            return
+        self.cloud_api_alert_last_played_at = now
+        self.stop_thinking_sound()
+        alert_path = self._resolve_asset_path(API_CREDIT_ALERT_SOUND_FILE)
+        if alert_path:
+            try:
+                with TTS_LOCK:
+                    TTS_STOP_EVENT.clear()
+                    self.play_wav_file(alert_path, stop_event=TTS_STOP_EVENT)
+                return
+            except Exception as e:
+                print(f"Could not play cloud API alert sound '{API_CREDIT_ALERT_SOUND_FILE}': {e}")
+        if local_tts_playback_available():
+            previous_provider = self.tts_provider
+            self.tts_provider = "pyttsx3"
+            try:
+                self.text_to_speech_pyttsx3(message)
+            finally:
+                self.tts_provider = previous_provider
 
     def start_thinking_sound(self) -> None:
         """Loop the configured thinking sound until stop_thinking_sound is called."""
@@ -4539,6 +4629,10 @@ class VoiceAssistant:
             return self.normalize_stt_command_text(text) if text else None
 
         except Exception as e:
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt")
+            if cloud_error:
+                print(f"OpenAI Whisper failed: {cloud_error.message} ({e})")
+                raise cloud_error from e
             print(f"Error transcribing audio: {e}")
             return None
 
@@ -4571,7 +4665,14 @@ class VoiceAssistant:
             kwargs["language"] = self.stt_language
         if self.stt_prompt:
             kwargs["prompt"] = self.stt_prompt
-        response = self.openai_stt_client.audio.transcriptions.create(**kwargs)
+        try:
+            response = self.openai_stt_client.audio.transcriptions.create(**kwargs)
+        except Exception as e:
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt")
+            if cloud_error:
+                print(f"Web OpenAI transcription failed: {cloud_error.message} ({e})")
+                raise cloud_error from e
+            raise
         text = response.text.strip()
         return self.normalize_stt_command_text(text) if text else None
 
@@ -4723,6 +4824,11 @@ class VoiceAssistant:
                         TTS_STOP_EVENT.clear()
                         audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
                 except Exception as e:
+                    cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="tts")
+                    if cloud_error:
+                        print(f"OpenAI TTS generation failed: {cloud_error.message} ({e})")
+                        self.speak_cloud_api_alert(cloud_error.message)
+                        return False
                     if local_tts_playback_available():
                         print(f"OpenAI TTS generation failed: {e}")
                         print("Falling back to local pyttsx3 TTS on the configured backend output...")
@@ -4762,6 +4868,11 @@ class VoiceAssistant:
                         audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
                         audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
                 except Exception as e:
+                    cloud_error = classify_cloud_api_error(e, provider="ElevenLabs", stage="tts")
+                    if cloud_error:
+                        print(f"ElevenLabs TTS generation failed: {cloud_error.message} ({e})")
+                        self.speak_cloud_api_alert(cloud_error.message)
+                        return False
                     if local_tts_playback_available():
                         print(f"ElevenLabs TTS generation failed: {e}")
                         print("Falling back to local pyttsx3 TTS on the configured backend output...")
@@ -5411,6 +5522,13 @@ class VoiceAssistant:
             print(f"[MCP CALL: {server_name} only] empty response, falling back to all tools")
             routed_failed = True
         except Exception as e:
+            cloud_error = classify_cloud_api_error(
+                e,
+                provider="OpenAI" if self.llm_provider == "openai" else self.llm_provider,
+                stage="llm",
+            )
+            if cloud_error:
+                raise cloud_error from e
             print(f"[MCP CALL: {server_name} only] failed: {e}; falling back to all tools")
             routed_failed = True
         finally:
@@ -5490,6 +5608,10 @@ class VoiceAssistant:
             return "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple."
         except Exception as e:
             error_text = str(e)
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI" if self.llm_provider == "openai" else self.llm_provider, stage="llm")
+            if cloud_error:
+                print(f"LLM cloud API failed: {cloud_error.message} ({e})")
+                return cloud_error.message
             if "context_length_exceeded" in error_text or "maximum context length" in error_text:
                 return (
                     "I reached the model context limit because tool definitions are too large for the current model. "
@@ -5724,7 +5846,16 @@ class VoiceAssistant:
                         if not self.wake_words:
                             self.start_thinking_sound()
                         # Convert to text
-                        text = self.audio_to_text_with_timeout(audio_data)
+                        try:
+                            text = self.audio_to_text_with_timeout(audio_data)
+                        except CloudApiUserError as e:
+                            self.stop_thinking_sound()
+                            print(f"Voice transcription stopped: {e.message}")
+                            if self.web_monitor:
+                                self.web_monitor.append_dialogue("assistant", e.message, speak=False)
+                                self.web_monitor.set_assistant_busy(False)
+                            self.speak_cloud_api_alert(e.message)
+                            continue
                         if text:
                             speaker_result = self.recognize_speaker_with_timeout(audio_data)
                         if self.reload_event and self.reload_event.is_set():

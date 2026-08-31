@@ -5,6 +5,7 @@ import numpy as np
 
 from voice_assistant.agent import (
     BackendWakeWordDetector,
+    classify_cloud_api_error,
     format_backend_listening_message,
     normalize_backend_wake_word_mode,
     parse_env_list,
@@ -75,3 +76,22 @@ def test_backend_wake_word_config_helpers():
         == 'Listening for "régie, console" using generic...'
     )
     assert format_backend_listening_message([], None) == "Listening (no wake word)"
+
+
+def test_cloud_api_error_classification_is_user_facing():
+    quota = classify_cloud_api_error(
+        "Error code: 429 - {'error': {'code': 'credit_balance_exhausted', 'message': 'no credits remaining'}}",
+        provider="OpenAI",
+        stage="llm",
+    )
+    assert quota is not None
+    assert quota.kind == "quota"
+    assert "Plus de crédit API OpenAI" in quota.message
+
+    auth = classify_cloud_api_error("status code: 401 invalid_api_key", provider="ElevenLabs", stage="tts")
+    assert auth is not None
+    assert auth.kind == "auth"
+
+    rate = classify_cloud_api_error("rate_limit_exceeded", provider="OpenAI", stage="stt")
+    assert rate is not None
+    assert rate.kind == "rate_limit"
