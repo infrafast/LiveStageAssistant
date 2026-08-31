@@ -24,15 +24,10 @@
       ],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "DOTENV_CONFIG_QUIET": "true",
-        "QLC_HOST": "192.168.0.160",
-        "QLC_OSC_INPUT_PORT": "7700",
-        "QLC_OSC_OUTPUT_PORT": "9000",
-        "QLC_UNIVERSE": "1",
-        "QLC_WIDGETS_FILE": "../QLCPlus-MCP/config/widgets.json",
-        "QLC_ALLOW_RAW_OSC": "false",
+        "QLC_NATIVE_HOST": "192.168.0.160",
+        "QLC_NATIVE_PORT": "9998",
+        "QLC_NATIVE_CLIENT_NAME": "QLCPlus-MCP",
         "QLC_DRY_RUN": "false",
-        "MCP_PROMPT_FILE": "../QLCPlus-MCP/PROMPT.md",
         "LOG_LEVEL": "info",
         "NODE_ENV": "production"
       },
