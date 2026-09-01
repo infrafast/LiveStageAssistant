@@ -3511,13 +3511,19 @@ class VoiceAssistant:
                 self.web_monitor.update(services={"MCP": {"status": "error", "detail": str(e)}})
             return False
 
-    def record_audio(self) -> bytes | None:
+    def record_audio(
+        self,
+        *,
+        stop_event: threading.Event | None = None,
+        interrupt_capture: bool = False,
+    ) -> bytes | None:
         """Record audio from microphone."""
         self.last_backend_streaming_wake_detected = False
         if (
             not self.microphone_available
             or not self._backend_input_ready()
             or self.backend_audio_diagnostic_requested.is_set()
+            or (stop_event is not None and stop_event.is_set())
         ):
             return None
 
@@ -3528,7 +3534,10 @@ class VoiceAssistant:
             print(f"Backend wake word is configured but unavailable; microphone capture paused: {reason}", flush=True)
             time.sleep(1.0)
             return None
-        self._set_backend_audio_state(self._backend_listening_state(), "record_audio")
+        if not interrupt_capture:
+            self._set_backend_audio_state(self._backend_listening_state(), "record_audio")
+        elif not wake_required:
+            self._set_backend_audio_state(BackendAudioState.CAPTURE_COMMAND, "interrupt capture")
         print(
             f"\n{format_backend_listening_message(self.wake_words, self._backend_wake_word_engine_name())}",
             flush=True,
@@ -3549,7 +3558,7 @@ class VoiceAssistant:
                 input_device_index=self.audio_input_device_index,
                 pipewire_target=self.audio_input_pipewire_target,
             )
-            if not wake_required:
+            if not wake_required and not interrupt_capture:
                 self.play_listening_sound()
             if self.backend_audio_monitor_mode == "passthrough":
                 try:
@@ -3580,6 +3589,9 @@ class VoiceAssistant:
             wake_audio_frames: list[bytes] = []
 
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    self._set_backend_audio_state(self._backend_listening_state(), "interrupt stopped")
+                    return None
                 if self.backend_audio_diagnostic_requested.is_set():
                     print("Backend microphone diagnostic requested. Pausing normal capture.")
                     self._set_backend_audio_state(self._backend_listening_state(), "diagnostic")
@@ -3651,7 +3663,7 @@ class VoiceAssistant:
                         self.last_backend_streaming_wake_detected = True
                         self._set_backend_audio_state(
                             BackendAudioState.CAPTURE_COMMAND,
-                            f"wake {detected_label} {detected_score:.2f}",
+                            f"{'interrupt ' if interrupt_capture else ''}wake {detected_label} {detected_score:.2f}",
                         )
                         # Discard audio from before the openWakeWord trigger, but keep the
                         # trigger chunk itself as the first post-wake command candidate. A
@@ -4673,12 +4685,16 @@ class VoiceAssistant:
         activity_task: asyncio.Task,
     ) -> str | None:
         """Return a new spoken command or an empty string for cancel-only interruption."""
-        if not self.microphone_available:
+        if not self.interrupt_conversation_enabled or not self.microphone_available:
             return None
 
-        print("Voice interrupt listener active.")
+        print("Voice interrupt listener active through backend audio state machine.")
         while not stop_event.is_set() and not activity_task.done():
-            audio_data = await asyncio.to_thread(self.record_voice_cancel_audio, stop_event)
+            audio_data = await asyncio.to_thread(
+                self.record_audio,
+                stop_event=stop_event,
+                interrupt_capture=True,
+            )
             if stop_event.is_set() or activity_task.done():
                 return None
             if not audio_data:
@@ -4692,10 +4708,7 @@ class VoiceAssistant:
             if self.is_voice_cancel_phrase(text):
                 return ""
 
-            should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
-            if not should_process:
-                print("Wake word not detected for interrupt command. Ignoring transcription.")
-                continue
+            command_text, matched_wake_word = strip_leading_wake_word_if_present(text, self.wake_words)
             if matched_wake_word and command_text != text:
                 print(f"Interrupt command after wake word: {command_text}")
             return command_text

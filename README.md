@@ -235,7 +235,7 @@ The web monitor is the primary operator UI:
 
 - Type commands in the bottom composer.
 - Use the microphone button for browser voice input when enabled.
-- Use the stop button to cancel current processing or TTS.
+- Use the stop button to cancel current processing or TTS. Voice interruption is disabled by default; enable **Interrupt conversation** in Settings -> Config -> STT/TTS if you want a new accepted voice command to cancel the current response.
 - Use the `+` button to upload a text file into the prompt or send a WAV through the same STT path as browser audio.
 - Open Settings to change model, STT/TTS, audio devices, speaker profiles, MCP routing, prompts, and env profiles.
 - Use Monitor -> Console Log for technical logs without cluttering the chat bubbles.

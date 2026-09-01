@@ -44,6 +44,7 @@
     "wake_word": "Wake word",
     "disabled": "Disabled",
     "interrupt_conversation": "Interrupt conversation",
+    "interrupt_conversation_hint": "Disabled by default. If a wake word is configured, it must be spoken to interrupt the assistant.",
     "tts_output": "TTS output",
     "browser": "Browser",
     "backend": "Backend",

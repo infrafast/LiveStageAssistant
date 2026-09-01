@@ -44,6 +44,7 @@
     "wake_word": "Wake word",
     "disabled": "Désactivé",
     "interrupt_conversation": "Interrompre une conversation",
+    "interrupt_conversation_hint": "Désactivé par défaut. Si un wake word est configuré, il doit être prononcé pour interrompre l'assistant.",
     "tts_output": "Sortie TTS",
     "browser": "Navigateur",
     "backend": "Backend",
