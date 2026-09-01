@@ -14,6 +14,7 @@ import base64
 import contextlib
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 import io
 import json
 import logging
@@ -133,6 +134,17 @@ EXTERNAL_STATE_FRESHNESS_RULE = (
     "external state from memory, previous tool results, or assumptions. If no suitable read tool is available, "
     "say that you cannot verify the current state."
 )
+
+
+class BackendAudioState(str, Enum):
+    """Explicit backend audio pipeline state."""
+
+    WAIT_WAKE = "WAIT_WAKE"
+    CAPTURE_COMMAND = "CAPTURE_COMMAND"
+    PROCESSING = "PROCESSING"
+    TTS = "TTS"
+
+
 TOOL_ACTION_FRESHNESS_RULE = (
     "Internal tool freshness rule: previous tool results and previous tool errors are not proof of the current "
     "state for a new user request. If the new request asks you to perform an external action or check an external "
@@ -2115,6 +2127,9 @@ class VoiceAssistant:
         self.backend_wake_word_unavailable_reason = ""
         self.last_backend_streaming_wake_detected = False
         self.backend_wake_word_suppress_until = 0.0
+        self.backend_audio_state = (
+            BackendAudioState.WAIT_WAKE if self.wake_words else BackendAudioState.CAPTURE_COMMAND
+        )
         self.voice_cancel_during_thinking = voice_cancel_during_thinking
         self.interrupt_conversation_enabled = interrupt_conversation_enabled
         self.backend_stt_enabled = bool(backend_stt_enabled)
@@ -2383,6 +2398,20 @@ class VoiceAssistant:
     def _backend_input_ready(self) -> bool:
         """Return true only when backend STT can use the configured input route."""
         return self.audio_input_device_status not in {"invalid", "unavailable"}
+
+    def _set_backend_audio_state(self, state: BackendAudioState, detail: str | None = None) -> None:
+        """Centralize backend audio state transitions for logs and future monitor wiring."""
+        if self.backend_audio_state == state:
+            return
+        previous = self.backend_audio_state
+        self.backend_audio_state = state
+        suffix = f" ({detail})" if detail else ""
+        LOGGER.debug("Backend audio state: %s -> %s%s", previous.value, state.value, suffix)
+        if os.getenv("DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}:
+            print(f"Backend audio state: {previous.value} -> {state.value}{suffix}", flush=True)
+
+    def _backend_listening_state(self) -> BackendAudioState:
+        return BackendAudioState.WAIT_WAKE if self.wake_words else BackendAudioState.CAPTURE_COMMAND
 
     def _initialize_backend_wake_word_detector(self) -> None:
         """Initialize backend openWakeWord when a wake word is configured."""
@@ -3492,17 +3521,18 @@ class VoiceAssistant:
         ):
             return None
 
-        streaming_wake_active = self._backend_streaming_wake_active()
-        if self.wake_words and not streaming_wake_active:
+        wake_required = bool(self.wake_words)
+        wake_detector_active = self._backend_streaming_wake_active()
+        if wake_required and not wake_detector_active:
             reason = self.backend_wake_word_unavailable_reason or "openWakeWord is not initialized"
             print(f"Backend wake word is configured but unavailable; microphone capture paused: {reason}", flush=True)
             time.sleep(1.0)
             return None
+        self._set_backend_audio_state(self._backend_listening_state(), "record_audio")
         print(
             f"\n{format_backend_listening_message(self.wake_words, self._backend_wake_word_engine_name())}",
             flush=True,
         )
-        self.play_listening_sound()
 
         stream = None
         monitor_stream = None
@@ -3519,6 +3549,8 @@ class VoiceAssistant:
                 input_device_index=self.audio_input_device_index,
                 pipewire_target=self.audio_input_pipewire_target,
             )
+            if not wake_required:
+                self.play_listening_sound()
             if self.backend_audio_monitor_mode == "passthrough":
                 try:
                     monitor_stream = self._open_backend_audio_monitor_stream()
@@ -3537,12 +3569,12 @@ class VoiceAssistant:
             audio_chunk_ms = self.chunk / self.rate * 1000.0
             pre_roll_ms = (
                 max(self.vad.speech_pad_ms, self.backend_wake_word_pre_roll_ms)
-                if streaming_wake_active
+                if wake_detector_active
                 else self.vad.speech_pad_ms
             )
             pad_frames = max(1, int((pre_roll_ms / audio_chunk_ms) + 0.999))
             has_speech = False
-            wake_detected = not streaming_wake_active
+            wake_detected = not wake_detector_active
             wake_command_armed = False
             wake_command_wait_ms = 0.0
             wake_audio_frames: list[bytes] = []
@@ -3550,16 +3582,19 @@ class VoiceAssistant:
             while True:
                 if self.backend_audio_diagnostic_requested.is_set():
                     print("Backend microphone diagnostic requested. Pausing normal capture.")
+                    self._set_backend_audio_state(self._backend_listening_state(), "diagnostic")
                     return None
                 if self.web_monitor:
                     injected_command = self.web_monitor.pop_injected_command()
                     if injected_command:
                         self.pending_injected_command = injected_command
                         print("Injected command received while listening. Stopping microphone capture.")
+                        self._set_backend_audio_state(self._backend_listening_state(), "injected command")
                         break
 
                 if self.reload_event and self.reload_event.is_set():
                     print("Auto environment reload requested while recording.")
+                    self._set_backend_audio_state(self._backend_listening_state(), "reload")
                     break
 
                 data = apply_backend_input_gain(
@@ -3577,7 +3612,7 @@ class VoiceAssistant:
                             self.backend_audio_monitor_warning_shown = True
                 vad_data = pcm_to_vad_16k_mono(data, source_rate=self.rate, channels=self.channels)
                 if (
-                    streaming_wake_active
+                    wake_detector_active
                     and not wake_detected
                     and time.monotonic() < self.backend_wake_word_suppress_until
                 ):
@@ -3592,8 +3627,8 @@ class VoiceAssistant:
                     self.backend_wake_word_detector.reset(clear_cooldown=True)
                     self.vad.reset()
                     continue
-                streaming_pre_wake_frame = streaming_wake_active and not wake_detected
-                if streaming_wake_active and not wake_detected:
+                streaming_pre_wake_frame = wake_detector_active and not wake_detected
+                if wake_detector_active and not wake_detected:
                     if not has_speech:
                         pre_roll.append(data)
                         if len(pre_roll) > pad_frames:
@@ -3614,6 +3649,10 @@ class VoiceAssistant:
                         detected_label, detected_score = detection
                         wake_detected = True
                         self.last_backend_streaming_wake_detected = True
+                        self._set_backend_audio_state(
+                            BackendAudioState.CAPTURE_COMMAND,
+                            f"wake {detected_label} {detected_score:.2f}",
+                        )
                         # Discard audio from before the openWakeWord trigger, but keep the
                         # trigger chunk itself as the first post-wake command candidate. A
                         # detector can fire late enough that this chunk already contains the
@@ -3637,6 +3676,8 @@ class VoiceAssistant:
                             f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
                             flush=True,
                         )
+                    else:
+                        continue
 
                 probabilities = self.vad.process_pcm(vad_data)
                 speech_probability = max(probabilities) if probabilities else 0.0
@@ -3677,7 +3718,7 @@ class VoiceAssistant:
                             pre_roll = pre_roll[-pad_frames:]
 
                 if (
-                    streaming_wake_active
+                    wake_detector_active
                     and wake_detected
                     and wake_command_armed
                     and not has_speech
@@ -3686,24 +3727,29 @@ class VoiceAssistant:
                     print("Wake word fired, but no command speech followed; returning to listening.")
                     if self.backend_wake_word_detector:
                         self.backend_wake_word_detector.reset(clear_cooldown=True)
+                    self._set_backend_audio_state(self._backend_listening_state(), "command timeout")
                     return None
 
                 if len(frames) > self.rate / self.chunk * 30:
                     break
 
             if self.pending_injected_command:
+                self._set_backend_audio_state(self._backend_listening_state(), "injected command")
                 return None
 
             if self.reload_event and self.reload_event.is_set():
+                self._set_backend_audio_state(self._backend_listening_state(), "reload")
                 return None
 
             if not has_speech:
                 print("No speech detected.")
+                self._set_backend_audio_state(self._backend_listening_state(), "no speech")
                 return None
 
-            if streaming_wake_active and not wake_detected:
+            if wake_detector_active and not wake_detected:
                 print("Wake word not detected. Replaying rejected backend audio.")
                 self.play_rejected_backend_audio(b"".join(frames))
+                self._set_backend_audio_state(self._backend_listening_state(), "wake not detected")
                 return None
 
             print("Processing...")
@@ -3712,6 +3758,7 @@ class VoiceAssistant:
         except Exception as e:
             print(f"Error recording audio: {e}")
             self._mark_microphone_unavailable(e)
+            self._set_backend_audio_state(self._backend_listening_state(), "capture error")
             return None
         finally:
             self._close_audio_stream(monitor_stream)
@@ -5929,6 +5976,7 @@ class VoiceAssistant:
                     elif not audio_data:
                         continue
                     else:
+                        self._set_backend_audio_state(BackendAudioState.PROCESSING, "audio captured")
                         if not self.wake_words:
                             self.start_thinking_sound()
                         # Convert to text
@@ -5936,6 +5984,7 @@ class VoiceAssistant:
                             text = self.audio_to_text_with_timeout(audio_data)
                         except CloudApiUserError as e:
                             self.stop_thinking_sound()
+                            self._set_backend_audio_state(self._backend_listening_state(), "stt cloud error")
                             print(f"Voice transcription stopped: {e.message}")
                             if self.web_monitor:
                                 self.web_monitor.append_dialogue("assistant", e.message, speak=False)
@@ -5947,9 +5996,11 @@ class VoiceAssistant:
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Stopping current assistant.")
                             self.stop_thinking_sound()
+                            self._set_backend_audio_state(self._backend_listening_state(), "reload")
                             return "reload"
                         if not text:
                             self.stop_thinking_sound()
+                            self._set_backend_audio_state(self._backend_listening_state(), "empty transcription")
                             continue
 
                         if self.wake_words:
@@ -5957,6 +6008,7 @@ class VoiceAssistant:
                                 print("Backend wake word was configured but no openWakeWord trigger authorized this audio.")
                                 self.stop_thinking_sound()
                                 self.play_rejected_backend_audio(audio_data)
+                                self._set_backend_audio_state(self._backend_listening_state(), "unauthorized audio")
                                 continue
                             command_text, matched_wake_word = strip_leading_wake_word_if_present(text, self.wake_words)
                         else:
@@ -5975,9 +6027,11 @@ class VoiceAssistant:
                 if self._should_skip_duplicate_command(text):
                     print(f"Duplicate command ignored: {text}")
                     self.stop_thinking_sound()
+                    self._set_backend_audio_state(self._backend_listening_state(), "duplicate command")
                     continue
 
                 # Process command
+                self._set_backend_audio_state(BackendAudioState.PROCESSING, "command accepted")
                 process_task = asyncio.create_task(self.process_command(text, speaker_result=speaker_result))
                 voice_cancel_stop_event = None
                 voice_cancel_task = None
@@ -6026,6 +6080,7 @@ class VoiceAssistant:
                             except asyncio.CancelledError:
                                 pass
                             self.web_monitor.set_assistant_busy(False)
+                            self._set_backend_audio_state(self._backend_listening_state(), "web cancel")
                             command_cancelled = True
                             break
                         if voice_cancel_detected:
@@ -6043,6 +6098,7 @@ class VoiceAssistant:
                                 self.web_monitor.set_assistant_busy(False)
                             if interrupt_command:
                                 self.pending_injected_command = interrupt_command
+                            self._set_backend_audio_state(self._backend_listening_state(), "voice cancel")
                             command_cancelled = True
                             break
                         if self.reload_event and self.reload_event.is_set():
@@ -6055,6 +6111,7 @@ class VoiceAssistant:
                                 pass
                             if self.web_monitor:
                                 self.web_monitor.set_assistant_busy(False)
+                            self._set_backend_audio_state(self._backend_listening_state(), "reload")
                             return "reload"
                         await asyncio.sleep(0.1)
                 finally:
@@ -6075,6 +6132,7 @@ class VoiceAssistant:
                     print("Auto environment reload requested. Discarding current response.")
                     if self.web_monitor:
                         self.web_monitor.set_assistant_busy(False)
+                    self._set_backend_audio_state(self._backend_listening_state(), "reload")
                     return "reload"
 
                 self.play_command_ack_sound()
@@ -6092,9 +6150,11 @@ class VoiceAssistant:
 
                 # Check for exit
                 if text.lower() in ["exit", "quit", "goodbye"]:
+                    self._set_backend_audio_state(self._backend_listening_state(), "exit")
                     break
 
                 # Try to speak the response
+                self._set_backend_audio_state(BackendAudioState.TTS, "speaking response")
                 if self.interrupt_conversation_enabled and self.microphone_available and self.tts_provider != "none":
                     tts_task = asyncio.create_task(
                         asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(response)))
@@ -6148,6 +6208,7 @@ class VoiceAssistant:
                         "Suppressing backend openWakeWord input for %d ms after TTS",
                         DEFAULT_BACKEND_WAKE_WORD_POST_TTS_SUPPRESS_MS,
                     )
+                self._set_backend_audio_state(self._backend_listening_state(), "tts complete")
 
                 if self.mcp_reconnect_after_response:
                     self.mcp_reconnect_after_response = False
