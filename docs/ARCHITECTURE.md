@@ -817,6 +817,20 @@ SPEAKER_PROFILE_1_ENABLED=false
 
 ---
 
+## Remaining Wake Word And Audio Validation Work
+
+The wake-word/audio refactor implementation is complete at the code level: `BACKEND_WAKE_WORD_MODE` has been removed from runtime/config, `WAKE_WORD=` disables wake detection, `WAKE_WORD=<value>` requires openWakeWord, backend capture uses the explicit `WAIT_WAKE` / `CAPTURE_COMMAND` / `PROCESSING` / `TTS` state machine, optional voice interruption reuses that state machine, and STT plus speaker recognition run in parallel when speaker recognition is enabled.
+
+Remaining work is validation-oriented:
+
+- Build a real validation corpus with representative Raspberry Pi/backend microphone recordings: ambient speech without wake word, wake plus command with no pause, wake plus command with a pause, short commands, stage noise, post-TTS tail, and interruption during processing/TTS.
+- Evaluate the selected openWakeWord model with that corpus before changing thresholds or training/replacing the wake model.
+- Expand automated tests beyond the current helper and regression coverage to exercise the full backend state machine, including long `WAIT_WAKE`, ambient speech ignored before wake, command timeout, post-TTS rearm, interruption disabled/enabled, and wake plus command timing cases.
+- Run the full test suite in an environment where dev dependencies are installed with the project venv.
+- Complete hardware recette on Raspberry Pi with real input/output devices, backend TTS, browser TTS, browser STT, backend diagnostic, speaker recognition, MCP routing, env reload, and stop/interruption behavior.
+
+Acceptance remains practical: no legacy backend `generic/post_stt` behavior should return, normal logs should stay quiet, `DEBUG=true` should provide enough timing detail to diagnose latency, and a wake-detector failure must remain explicit instead of silently falling back to text wake gating.
+
 ## Future RAG And MCP Knowledge Architecture
 
 ## Objectif
