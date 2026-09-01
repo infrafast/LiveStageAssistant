@@ -53,7 +53,7 @@ At startup, `Startup timing:` log lines measure Silero/ONNX loading, Resemblyzer
 
 Backend microphone monitoring is **experimental** and has not yet been validated on Raspberry Pi hardware. Leave it on `off` for normal operation. When testing, use headphones and a low monitoring volume first; ALSA/PipeWire device contention, feedback, latency, and channel/rate compatibility may require platform-specific adjustments.
 
-Backend and browser transcription are bounded by `STT_TIMEOUT_SECONDS` (25 seconds in the bundled profiles). Optional Resemblyzer analysis is bounded separately by `SPEAKER_RECOGNITION_TIMEOUT_SECONDS` (10 seconds). If the journal stops after `Processing...`, the next diagnostic lines identify whether STT or speaker recognition started, finished, or timed out; a timeout returns control to listening instead of leaving the service loop blocked.
+Backend and browser transcription are bounded by `STT_TIMEOUT_SECONDS` (25 seconds in the bundled profiles). Optional Resemblyzer analysis is bounded separately by `SPEAKER_RECOGNITION_TIMEOUT_SECONDS` (10 seconds) and runs in parallel with STT when speaker recognition is enabled. If the journal stops after `Processing...`, the next diagnostic lines identify whether STT or speaker recognition started, finished, or timed out; a timeout returns control to listening instead of leaving the service loop blocked.
 
 For reliable backend wake-word timing, the service profiles use openWakeWord when `WAKE_WORD` is set. `WAKE_WORD=` disables wake-word detection. `WAKE_WORD=momo` requires openWakeWord and a configured ONNX model; the backend no longer falls back to a post-transcription wake gate.
 

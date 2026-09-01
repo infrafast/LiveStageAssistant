@@ -11,6 +11,7 @@ This version includes better error handling and fallback options.
 
 import asyncio
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import contextlib
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -4446,6 +4447,36 @@ class VoiceAssistant:
         print(f"Speaker recognition finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
         return result
 
+    def _speaker_recognition_should_run(self, audio_data: bytes | None) -> bool:
+        return bool(self.speaker_recognition_enabled and self.speaker_recognizer and audio_data)
+
+    def transcribe_and_recognize_audio(
+        self,
+        transcribe_operation,
+        speaker_audio: bytes | None,
+        *,
+        speaker_already_wav: bool = False,
+        speaker_operation=None,
+    ) -> tuple[str | None, SpeakerRecognitionResult]:
+        """Run STT and optional speaker recognition together for one accepted utterance."""
+        if speaker_operation is None:
+            if not self._speaker_recognition_should_run(speaker_audio):
+                return transcribe_operation(), SpeakerRecognitionResult()
+            speaker_operation = lambda: self.recognize_speaker_with_timeout(
+                speaker_audio,
+                already_wav=speaker_already_wav,
+            )
+        elif not self.speaker_recognition_enabled or not self.speaker_recognizer:
+            return transcribe_operation(), SpeakerRecognitionResult()
+
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="voice-assistant-audio-analysis") as executor:
+            stt_future = executor.submit(transcribe_operation)
+            speaker_future = executor.submit(speaker_operation)
+            text = stt_future.result()
+            if not text:
+                return text, SpeakerRecognitionResult()
+            return text, speaker_future.result()
+
     def recognize_speaker(self, audio_data: bytes | None, *, already_wav: bool = False) -> SpeakerRecognitionResult:
         """Return a speaker recognition result without applying any business rule."""
         if not self.speaker_recognition_enabled or not self.speaker_recognizer or not audio_data:
@@ -4635,6 +4666,19 @@ class VoiceAssistant:
             "unavailable_reason": self.speaker_recognition_unavailable_reason,
         }
 
+    def speaker_result_payload(self, speaker_result: SpeakerRecognitionResult) -> dict[str, Any]:
+        return {
+            "speaker": speaker_result.speaker,
+            "speaker_confidence": speaker_result.confidence,
+            "speaker_backend": speaker_result.backend,
+            "speaker_second_confidence": speaker_result.second_confidence,
+            "speaker_reason": speaker_result.reason,
+            "speaker_candidates": [
+                {"name": name, "confidence": score}
+                for name, score in (speaker_result.candidates or [])
+            ],
+        }
+
     def injected_command_parts(self, injected: str | dict[str, Any] | None) -> tuple[str | None, SpeakerRecognitionResult]:
         if injected is None:
             return None, SpeakerRecognitionResult()
@@ -4683,7 +4727,7 @@ class VoiceAssistant:
         self,
         stop_event: threading.Event,
         activity_task: asyncio.Task,
-    ) -> str | None:
+    ) -> str | dict[str, Any] | None:
         """Return a new spoken command or an empty string for cancel-only interruption."""
         if not self.interrupt_conversation_enabled or not self.microphone_available:
             return None
@@ -4701,7 +4745,11 @@ class VoiceAssistant:
                 await asyncio.sleep(0.05)
                 continue
 
-            text = await asyncio.to_thread(self.audio_to_text_with_timeout, audio_data)
+            text, speaker_result = await asyncio.to_thread(
+                self.transcribe_and_recognize_audio,
+                lambda: self.audio_to_text_with_timeout(audio_data),
+                audio_data,
+            )
             if not text:
                 continue
             print(f"Voice interrupt listener heard: {text}")
@@ -4711,6 +4759,12 @@ class VoiceAssistant:
             command_text, matched_wake_word = strip_leading_wake_word_if_present(text, self.wake_words)
             if matched_wake_word and command_text != text:
                 print(f"Interrupt command after wake word: {command_text}")
+            if (
+                speaker_result.speaker != UNKNOWN_SPEAKER
+                or speaker_result.backend != "none"
+                or speaker_result.reason
+            ):
+                return {"text": command_text, **self.speaker_result_payload(speaker_result)}
             return command_text
 
         return None
@@ -4871,23 +4925,19 @@ class VoiceAssistant:
         if should_manage_backend_thinking:
             self.start_thinking_sound()
         try:
-            text = self.web_audio_to_text_with_timeout(audio_data, mime_type, model=model) or ""
-            if text:
-                speaker_audio = self.speaker_audio_from_web_bytes(audio_data, mime_type)
-                speaker_result = self.recognize_speaker_with_timeout(speaker_audio, already_wav=True)
-            else:
-                speaker_result = SpeakerRecognitionResult()
-            speaker_payload = {
-                "speaker": speaker_result.speaker,
-                "speaker_confidence": speaker_result.confidence,
-                "speaker_backend": speaker_result.backend,
-                "speaker_second_confidence": speaker_result.second_confidence,
-                "speaker_reason": speaker_result.reason,
-                "speaker_candidates": [
-                    {"name": name, "confidence": score}
-                    for name, score in (speaker_result.candidates or [])
-                ],
-            }
+            speaker_operation = None
+            if self._speaker_recognition_should_run(audio_data):
+                speaker_operation = lambda: self.recognize_speaker_with_timeout(
+                    self.speaker_audio_from_web_bytes(audio_data, mime_type),
+                    already_wav=True,
+                )
+            text, speaker_result = self.transcribe_and_recognize_audio(
+                lambda: self.web_audio_to_text_with_timeout(audio_data, mime_type, model=model),
+                None,
+                speaker_operation=speaker_operation,
+            )
+            text = text or ""
+            speaker_payload = self.speaker_result_payload(speaker_result)
             if not text:
                 return {"text": "", "accepted": False, "command_text": "", "message": "No speech detected.", **speaker_payload}
 
@@ -5994,7 +6044,10 @@ class VoiceAssistant:
                             self.start_thinking_sound()
                         # Convert to text
                         try:
-                            text = self.audio_to_text_with_timeout(audio_data)
+                            text, speaker_result = self.transcribe_and_recognize_audio(
+                                lambda: self.audio_to_text_with_timeout(audio_data),
+                                audio_data,
+                            )
                         except CloudApiUserError as e:
                             self.stop_thinking_sound()
                             self._set_backend_audio_state(self._backend_listening_state(), "stt cloud error")
@@ -6004,8 +6057,6 @@ class VoiceAssistant:
                                 self.web_monitor.set_assistant_busy(False)
                             self.speak_cloud_api_alert(e.message)
                             continue
-                        if text:
-                            speaker_result = self.recognize_speaker_with_timeout(audio_data)
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Stopping current assistant.")
                             self.stop_thinking_sound()
@@ -6048,7 +6099,7 @@ class VoiceAssistant:
                 process_task = asyncio.create_task(self.process_command(text, speaker_result=speaker_result))
                 voice_cancel_stop_event = None
                 voice_cancel_task = None
-                interrupt_command: str | None = None
+                interrupt_command: str | dict[str, Any] | None = None
                 if self.microphone_available and (
                     self.interrupt_conversation_enabled or self.voice_cancel_during_thinking
                 ):

@@ -270,6 +270,8 @@ A profile becomes usable as soon as one sample embedding exists. Samples can be 
 - sample 2: clean voice with another phrase
 - sample 3: live-condition voice from the microphone path used on stage
 
+When speaker recognition is enabled and available, it runs in parallel with STT on accepted voice segments. If it is disabled, transcription keeps the normal STT-only path.
+
 The assistant does not decide what a speaker means for the mixer or lighting. It passes speaker context to MCP servers; each MCP server owns its own mapping, such as `XMS_SPEAKER_MAP` in XMSeries-MCP.
 
 ## MCP Servers
