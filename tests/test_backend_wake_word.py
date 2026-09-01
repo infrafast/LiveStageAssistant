@@ -1,14 +1,16 @@
 import sys
+import time
 import types
 
 import numpy as np
 
 from voice_assistant.agent import (
     BackendWakeWordDetector,
+    VoiceAssistant,
     classify_cloud_api_error,
     format_backend_listening_message,
-    normalize_backend_wake_word_mode,
     parse_env_list,
+    SpeakerRecognitionResult,
 )
 
 
@@ -61,9 +63,6 @@ def test_backend_wake_word_detector_uses_threshold(monkeypatch):
 
 
 def test_backend_wake_word_config_helpers():
-    assert normalize_backend_wake_word_mode("streaming") == "openwakeword"
-    assert normalize_backend_wake_word_mode("post-stt") == "post_stt"
-    assert normalize_backend_wake_word_mode("unknown") == "post_stt"
     assert parse_env_list("a.onnx, b.onnx;c.onnx| d.onnx") == [
         "a.onnx",
         "b.onnx",
@@ -71,11 +70,99 @@ def test_backend_wake_word_config_helpers():
         "d.onnx",
     ]
     assert format_backend_listening_message(["momo"], "openwakeword") == 'Listening for "momo" using openwakeword...'
-    assert (
-        format_backend_listening_message(["régie", "console"], "generic")
-        == 'Listening for "régie, console" using generic...'
-    )
     assert format_backend_listening_message([], None) == "Listening (no wake word)"
+
+
+def test_backend_wake_word_debug_reports_rejected_and_triggered(monkeypatch, capsys):
+    monkeypatch.setenv("DEBUG", "true")
+    install_fake_openwakeword(monkeypatch, [0.2, 0.8])
+    detector = BackendWakeWordDetector(
+        model_paths=["regie.onnx"],
+        model_names=[],
+        threshold=0.5,
+        cooldown_ms=0,
+    )
+    frame = np.zeros(1280, dtype=np.int16).tobytes()
+
+    assert detector.process_pcm16_16k(frame) is None
+    assert detector.process_pcm16_16k(frame) == ("regie", 0.8)
+
+    output = capsys.readouterr().out
+    assert "openWakeWord regie: score=0.20 max=0.20 threshold=0.50 rejected" in output
+    assert "openWakeWord regie: score=0.80 threshold=0.50 triggered" in output
+
+
+def test_transcribe_and_recognize_audio_runs_stt_only_when_speaker_disabled():
+    assistant = VoiceAssistant.__new__(VoiceAssistant)
+    assistant.speaker_recognition_enabled = False
+    assistant.speaker_recognizer = object()
+    called = {"speaker": False}
+
+    def transcribe():
+        return "monte guitare"
+
+    def speaker():
+        called["speaker"] = True
+        return SpeakerRecognitionResult(speaker="laurent", confidence=0.9, backend="resemblyzer")
+
+    text, speaker_result = assistant.transcribe_and_recognize_audio(
+        transcribe,
+        b"audio",
+        speaker_operation=speaker,
+    )
+
+    assert text == "monte guitare"
+    assert speaker_result.speaker == "unknown"
+    assert called["speaker"] is False
+
+
+def test_transcribe_and_recognize_audio_parallelizes_stt_and_speaker():
+    assistant = VoiceAssistant.__new__(VoiceAssistant)
+    assistant.speaker_recognition_enabled = True
+    assistant.speaker_recognizer = object()
+
+    def transcribe():
+        time.sleep(0.12)
+        return "monte guitare"
+
+    def speaker():
+        time.sleep(0.12)
+        return SpeakerRecognitionResult(speaker="laurent", confidence=0.9, backend="resemblyzer")
+
+    started_at = time.perf_counter()
+    text, speaker_result = assistant.transcribe_and_recognize_audio(
+        transcribe,
+        b"audio",
+        speaker_operation=speaker,
+    )
+
+    assert time.perf_counter() - started_at < 0.20
+    assert text == "monte guitare"
+    assert speaker_result.speaker == "laurent"
+
+
+def test_transcribe_and_recognize_audio_does_not_wait_for_speaker_when_stt_is_empty():
+    assistant = VoiceAssistant.__new__(VoiceAssistant)
+    assistant.speaker_recognition_enabled = True
+    assistant.speaker_recognizer = object()
+
+    def transcribe():
+        return ""
+
+    def speaker():
+        time.sleep(0.25)
+        return SpeakerRecognitionResult(speaker="laurent", confidence=0.9, backend="resemblyzer")
+
+    started_at = time.perf_counter()
+    text, speaker_result = assistant.transcribe_and_recognize_audio(
+        transcribe,
+        b"audio",
+        speaker_operation=speaker,
+    )
+
+    assert time.perf_counter() - started_at < 0.12
+    assert text == ""
+    assert speaker_result.speaker == "unknown"
 
 
 def test_cloud_api_error_classification_is_user_facing():

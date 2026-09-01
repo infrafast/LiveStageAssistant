@@ -24,7 +24,7 @@ Le dépôt connaît déjà son contexte fonctionnel. Respecter les règles de ma
 - [x] Jalon 2 — introduire la machine d'état audio explicite `WAIT_WAKE` / `CAPTURE_COMMAND` / `PROCESSING` / `TTS`. Le backend ne lance plus Silero en `WAIT_WAKE`; openWakeWord est seul propriétaire de l'attente wake, puis Silero prend le relais en `CAPTURE_COMMAND`.
 - [x] Jalon 3 — intégrer l'interruption vocale optionnelle à cette machine d'état. `INTERRUPT_CONVERSATION_ENABLED=false` reste le défaut, la Web GUI permet l'activation, et l'interruption backend repasse par `record_audio()` au lieu d'une capture micro spéciale.
 - [x] Jalon 4 — paralléliser STT et speaker recognition sur les segments audio acceptés. Le backend, les uploads/audio navigateur et les commandes vocales d'interruption lancent la reconnaissance locuteur en parallèle de la transcription uniquement quand le speaker recognition est activé et disponible.
-- [ ] Jalon 5 — ajouter les timings/debug openWakeWord et les tests de non-régression.
+- [x] Jalon 5 — ajouter les timings/debug openWakeWord et les tests de non-régression. `DEBUG=true` affiche les scores openWakeWord throttlés, les timings de capture backend et les timings STT/speaker; les tests couvrent le debug wake, la suppression du mode legacy et la parallélisation sans coût quand speaker recognition est désactivé.
 
 ---
 

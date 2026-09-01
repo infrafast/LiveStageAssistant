@@ -55,6 +55,8 @@ Backend microphone monitoring is **experimental** and has not yet been validated
 
 Backend and browser transcription are bounded by `STT_TIMEOUT_SECONDS` (25 seconds in the bundled profiles). Optional Resemblyzer analysis is bounded separately by `SPEAKER_RECOGNITION_TIMEOUT_SECONDS` (10 seconds) and runs in parallel with STT when speaker recognition is enabled. If the journal stops after `Processing...`, the next diagnostic lines identify whether STT or speaker recognition started, finished, or timed out; a timeout returns control to listening instead of leaving the service loop blocked.
 
+Set `DEBUG=true` temporarily when diagnosing wake-word latency. The journal then includes `openWakeWord ... rejected/triggered`, `Backend audio timing:`, and `Audio analysis timing:` lines with bounded, non-spammy details; leave it unset for normal stage use.
+
 For reliable backend wake-word timing, the service profiles use openWakeWord when `WAKE_WORD` is set. `WAKE_WORD=` disables wake-word detection. `WAKE_WORD=momo` requires openWakeWord and a configured ONNX model; the backend no longer falls back to a post-transcription wake gate.
 
 ```bash

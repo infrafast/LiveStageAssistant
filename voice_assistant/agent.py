@@ -732,6 +732,10 @@ def parse_env_list(value: str | None) -> list[str]:
     return [item.strip() for item in re.split(r"[,;|]", value) if item.strip()]
 
 
+def debug_logging_enabled() -> bool:
+    return os.getenv("DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def format_backend_listening_message(wake_words: list[str], engine: str | None) -> str:
     """Return the single backend listening status line."""
     if not wake_words:
@@ -783,10 +787,20 @@ class BackendWakeWordDetector:
         self.last_detection_at = 0.0
         self.frame_samples = 1280  # 80 ms at 16 kHz, the efficient openWakeWord frame size.
         self._buffer = bytearray()
+        self._debug_max_label = ""
+        self._debug_max_score = 0.0
+        self._debug_last_score = 0.0
+        self._debug_last_label = ""
+        self._debug_last_report_at = 0.0
 
     def reset(self, *, clear_cooldown: bool = False) -> None:
         """Reset buffered wake-word audio and model state when a capture cycle is abandoned."""
         self._buffer.clear()
+        self._debug_max_label = ""
+        self._debug_max_score = 0.0
+        self._debug_last_score = 0.0
+        self._debug_last_label = ""
+        self._debug_last_report_at = 0.0
         if clear_cooldown:
             self.last_detection_at = 0.0
         reset_model = getattr(self.model, "reset", None)
@@ -815,14 +829,48 @@ class BackendWakeWordDetector:
                 ((str(name), float(value)) for name, value in prediction.items()),
                 key=lambda item: item[1],
             )
+            self._debug_last_label = label
+            self._debug_last_score = score
+            if score >= self._debug_max_score:
+                self._debug_max_label = label
+                self._debug_max_score = score
             if score < self.threshold:
+                self._debug_report_rejected()
                 continue
             now = time.monotonic()
             if self.cooldown_seconds and now - self.last_detection_at < self.cooldown_seconds:
+                self._debug_report_rejected(reason="cooldown")
                 continue
             self.last_detection_at = now
+            self._debug_report_triggered(label, score)
             return label, score
         return None
+
+    def _debug_report_rejected(self, *, reason: str = "below_threshold") -> None:
+        if not debug_logging_enabled():
+            return
+        now = time.monotonic()
+        if now - self._debug_last_report_at < 2.0:
+            return
+        self._debug_last_report_at = now
+        label = self._debug_max_label or self._debug_last_label or "unknown"
+        print(
+            "openWakeWord "
+            f"{label}: score={self._debug_last_score:.2f} max={self._debug_max_score:.2f} "
+            f"threshold={self.threshold:.2f} rejected ({reason})",
+            flush=True,
+        )
+
+    def _debug_report_triggered(self, label: str, score: float) -> None:
+        if not debug_logging_enabled():
+            return
+        print(
+            f"openWakeWord {label}: score={score:.2f} threshold={self.threshold:.2f} triggered",
+            flush=True,
+        )
+        self._debug_max_label = ""
+        self._debug_max_score = 0.0
+        self._debug_last_report_at = time.monotonic()
 
 
 def pipewire_record_command() -> str | None:
@@ -2408,7 +2456,7 @@ class VoiceAssistant:
         self.backend_audio_state = state
         suffix = f" ({detail})" if detail else ""
         LOGGER.debug("Backend audio state: %s -> %s%s", previous.value, state.value, suffix)
-        if os.getenv("DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}:
+        if debug_logging_enabled():
             print(f"Backend audio state: {previous.value} -> {state.value}{suffix}", flush=True)
 
     def _backend_listening_state(self) -> BackendAudioState:
@@ -3546,6 +3594,10 @@ class VoiceAssistant:
 
         stream = None
         monitor_stream = None
+        capture_started_at = time.perf_counter()
+        wake_detected_at: float | None = None
+        command_speech_started_at: float | None = None
+        command_speech_ended_at: float | None = None
         self.backend_audio_capture_lock.acquire()
         try:
             if self.backend_audio_diagnostic_requested.is_set():
@@ -3661,6 +3713,7 @@ class VoiceAssistant:
                     if detection:
                         detected_label, detected_score = detection
                         wake_detected = True
+                        wake_detected_at = time.perf_counter()
                         self.last_backend_streaming_wake_detected = True
                         self._set_backend_audio_state(
                             BackendAudioState.CAPTURE_COMMAND,
@@ -3715,6 +3768,7 @@ class VoiceAssistant:
                     speech_candidate_ms += chunk_ms
                     if speech_candidate_ms >= self.vad.min_speech_ms:
                         has_speech = True
+                        command_speech_started_at = time.perf_counter()
                         frames = wake_audio_frames + pre_roll + speech_candidate
                         recorded_speech_ms = speech_candidate_ms
                         wake_command_armed = False
@@ -3765,6 +3819,15 @@ class VoiceAssistant:
                 self._set_backend_audio_state(self._backend_listening_state(), "wake not detected")
                 return None
 
+            command_speech_ended_at = time.perf_counter()
+            self._debug_backend_capture_timing(
+                capture_started_at=capture_started_at,
+                wake_detected_at=wake_detected_at,
+                command_speech_started_at=command_speech_started_at,
+                command_speech_ended_at=command_speech_ended_at,
+                endpoint_silence_ms=silence_ms,
+                wake_required=wake_detector_active,
+            )
             print("Processing...")
             return b"".join(frames)
 
@@ -3777,6 +3840,29 @@ class VoiceAssistant:
             self._close_audio_stream(monitor_stream)
             self._close_audio_stream(stream)
             self.backend_audio_capture_lock.release()
+
+    def _debug_backend_capture_timing(
+        self,
+        *,
+        capture_started_at: float,
+        wake_detected_at: float | None,
+        command_speech_started_at: float | None,
+        command_speech_ended_at: float,
+        endpoint_silence_ms: float,
+        wake_required: bool,
+    ) -> None:
+        if not debug_logging_enabled():
+            return
+        parts = []
+        if wake_required and wake_detected_at is not None:
+            parts.append(f"wake_detection={(wake_detected_at - capture_started_at) * 1000.0:.0f}ms")
+        if command_speech_started_at is not None:
+            origin = wake_detected_at if wake_detected_at is not None else capture_started_at
+            parts.append(f"command_start={(command_speech_started_at - origin) * 1000.0:.0f}ms")
+            parts.append(f"command_audio={(command_speech_ended_at - command_speech_started_at) * 1000.0:.0f}ms")
+        parts.append(f"endpoint_silence={endpoint_silence_ms:.0f}ms")
+        parts.append(f"total_capture={(command_speech_ended_at - capture_started_at) * 1000.0:.0f}ms")
+        print(f"Backend audio timing: {', '.join(parts)}", flush=True)
 
     def diagnose_backend_audio_input(
         self,
@@ -4403,10 +4489,11 @@ class VoiceAssistant:
         audio_data: bytes | None,
         *,
         already_wav: bool = False,
+        publish_result: bool = True,
     ) -> SpeakerRecognitionResult:
         """Recognize a speaker with a bounded wait and safe unknown fallback."""
         if not self.speaker_recognition_enabled or not self.speaker_recognizer or not audio_data:
-            return self.recognize_speaker(audio_data, already_wav=already_wav)
+            return self.recognize_speaker(audio_data, already_wav=already_wav, publish_result=publish_result)
 
         started_at = time.perf_counter()
         print(
@@ -4417,7 +4504,11 @@ class VoiceAssistant:
             result = self._run_timed_stage(
                 "speaker-recognition",
                 self.speaker_recognition_timeout_seconds,
-                lambda: self.recognize_speaker(audio_data, already_wav=already_wav),
+                lambda: self.recognize_speaker(
+                    audio_data,
+                    already_wav=already_wav,
+                    publish_result=publish_result,
+                ),
             )
         except TimeoutError as error:
             print(
@@ -4432,7 +4523,8 @@ class VoiceAssistant:
                 backend=self.speaker_backend,
                 reason="timeout",
             )
-            self.last_speaker_result = result
+            if publish_result:
+                self.last_speaker_result = result
             if self.web_monitor:
                 self.web_monitor.update(runtime={"speaker_recognition": self.speaker_recognition_runtime_state()})
             return result
@@ -4465,23 +4557,67 @@ class VoiceAssistant:
             speaker_operation = lambda: self.recognize_speaker_with_timeout(
                 speaker_audio,
                 already_wav=speaker_already_wav,
+                publish_result=False,
             )
         elif not self.speaker_recognition_enabled or not self.speaker_recognizer:
             return transcribe_operation(), SpeakerRecognitionResult()
 
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="voice-assistant-audio-analysis") as executor:
-            stt_future = executor.submit(transcribe_operation)
-            speaker_future = executor.submit(speaker_operation)
+        executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="voice-assistant-audio-analysis")
+        timings: dict[str, float] = {"started_at": time.perf_counter()}
+        wait_for_workers = True
+
+        def run_timed(label: str, operation):
+            timings[f"{label}_start"] = time.perf_counter()
+            try:
+                return operation()
+            finally:
+                timings[f"{label}_end"] = time.perf_counter()
+
+        try:
+            stt_future = executor.submit(lambda: run_timed("stt", transcribe_operation))
+            speaker_future = executor.submit(lambda: run_timed("speaker", speaker_operation))
             text = stt_future.result()
             if not text:
+                wait_for_workers = False
+                executor.shutdown(wait=False, cancel_futures=True)
+                self._debug_audio_analysis_timing(timings, include_speaker=False)
                 return text, SpeakerRecognitionResult()
-            return text, speaker_future.result()
+            speaker_result = speaker_future.result()
+            self.last_speaker_result = speaker_result
+            self._debug_audio_analysis_timing(timings, include_speaker=True)
+            return text, speaker_result
+        except Exception:
+            wait_for_workers = False
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        finally:
+            executor.shutdown(wait=wait_for_workers)
 
-    def recognize_speaker(self, audio_data: bytes | None, *, already_wav: bool = False) -> SpeakerRecognitionResult:
+    def _debug_audio_analysis_timing(self, timings: dict[str, float], *, include_speaker: bool) -> None:
+        if not debug_logging_enabled():
+            return
+        stt_ms = (timings.get("stt_end", 0.0) - timings.get("stt_start", 0.0)) * 1000.0
+        speaker_ms = (
+            (timings.get("speaker_end", 0.0) - timings.get("speaker_start", 0.0)) * 1000.0
+            if include_speaker
+            else 0.0
+        )
+        total_ms = (time.perf_counter() - timings.get("started_at", time.perf_counter())) * 1000.0
+        speaker_detail = f", speaker={speaker_ms:.0f}ms" if include_speaker else ""
+        print(f"Audio analysis timing: stt={stt_ms:.0f}ms{speaker_detail}, total={total_ms:.0f}ms", flush=True)
+
+    def recognize_speaker(
+        self,
+        audio_data: bytes | None,
+        *,
+        already_wav: bool = False,
+        publish_result: bool = True,
+    ) -> SpeakerRecognitionResult:
         """Return a speaker recognition result without applying any business rule."""
         if not self.speaker_recognition_enabled or not self.speaker_recognizer or not audio_data:
             result = SpeakerRecognitionResult()
-            self.last_speaker_result = result
+            if publish_result:
+                self.last_speaker_result = result
             return result
         try:
             self.prepare_missing_speaker_embeddings()
@@ -4509,7 +4645,8 @@ class VoiceAssistant:
                 print("Speaker recognition disabled for this session after runtime failure.")
             else:
                 print("Speaker recognition kept enabled after per-utterance failure.")
-        self.last_speaker_result = result
+        if publish_result:
+            self.last_speaker_result = result
         if result.speaker != UNKNOWN_SPEAKER:
             print(
                 f"Speaker recognized: {result.speaker} "
@@ -4930,6 +5067,7 @@ class VoiceAssistant:
                 speaker_operation = lambda: self.recognize_speaker_with_timeout(
                     self.speaker_audio_from_web_bytes(audio_data, mime_type),
                     already_wav=True,
+                    publish_result=False,
                 )
             text, speaker_result = self.transcribe_and_recognize_audio(
                 lambda: self.web_audio_to_text_with_timeout(audio_data, mime_type, model=model),
