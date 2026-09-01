@@ -72,7 +72,6 @@ SECRET_KEY_MARKERS = (
 
 LOGGER = logging.getLogger(__name__)
 TOOL_RESULT_MARKER = "Tool result:"
-COMMAND_ACK_SOUND_CANDIDATES = ("ring.wav", "bell.wav")
 WEB_SESSION_COOKIE = "lsa_web_session"
 
 
@@ -169,12 +168,12 @@ LOGIN_HTML = """<!doctype html>
 """
 
 
-def command_ack_sound_url() -> str:
-    """Return the available command acknowledgement asset URL."""
-    for filename in COMMAND_ACK_SOUND_CANDIDATES:
-        if (Path("assets") / filename).is_file():
-            return f"/assets/{filename}"
-    return "/assets/ring.wav"
+def asset_sound_url(filename: str | None) -> str:
+    """Return a web URL for a selected top-level assets WAV file."""
+    cleaned = Path(filename or "").name
+    if cleaned and (Path("assets") / cleaned).is_file():
+        return f"/assets/{cleaned}"
+    return ""
 
 
 def redact_config_value(key: str, value: Any) -> Any:
@@ -529,7 +528,7 @@ class WebMonitor:
             "remote_screen": {"vnc_url": "vnc://192.168.0.160:5900?password=ronron", "view_only": True},
             "web_audio": {"enabled": False, "stt_enabled": False, "tts_enabled": False},
             "runtime": {},
-            "command_ack_sound_url": command_ack_sound_url(),
+            "command_ack_sound_url": "",
             "updated_at": time.time(),
         }
 
@@ -1675,7 +1674,7 @@ class WebMonitor:
                     listening_sound_file = str(payload.get("listening_sound_file") or "").strip()
                     wake_detected_sound_file = str(payload.get("wake_detected_sound_file") or "").strip()
                     startup_loader_sound_file = str(payload.get("startup_loader_sound_file") or "").strip()
-                    command_ack_sound_enabled = bool(payload.get("command_ack_sound_enabled"))
+                    command_ack_sound_file = str(payload.get("command_ack_sound_file") or "").strip()
                     openai_tts_voice = str(payload.get("openai_tts_voice") or "").strip()
                     try:
                         openai_tts_speed = float(payload.get("openai_tts_speed") or 1.0)
@@ -1744,7 +1743,7 @@ class WebMonitor:
                             listening_sound_file,
                             wake_detected_sound_file,
                             startup_loader_sound_file,
-                            command_ack_sound_enabled,
+                            command_ack_sound_file,
                             openai_tts_voice,
                             openai_tts_speed,
                             web_tts_volume,
@@ -2545,6 +2544,7 @@ class WebMonitor:
         remote_screen: dict[str, Any] | None = None,
         runtime: dict[str, Any] | None = None,
         thinking_sound_file: str | None = None,
+        command_ack_sound_file: str | None = None,
     ) -> None:
         with self._lock:
             if mode is not None:
@@ -2581,12 +2581,9 @@ class WebMonitor:
                 merged_runtime.update(runtime)
                 self._snapshot["runtime"] = merged_runtime
             if thinking_sound_file is not None:
-                cleaned_file = Path(thinking_sound_file).name if thinking_sound_file else ""
-                if cleaned_file:
-                    self._snapshot["thinking_sound_url"] = f"/assets/{cleaned_file}"
-                else:
-                    self._snapshot["thinking_sound_url"] = ""
-                self._snapshot["command_ack_sound_url"] = command_ack_sound_url()
+                self._snapshot["thinking_sound_url"] = asset_sound_url(thinking_sound_file)
+            if command_ack_sound_file is not None:
+                self._snapshot["command_ack_sound_url"] = asset_sound_url(command_ack_sound_file)
             self._snapshot["updated_at"] = time.time()
 
     def snapshot(self) -> dict[str, Any]:

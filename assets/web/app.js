@@ -188,6 +188,7 @@
     const startupLoaderSoundPlay = document.querySelector("#startup-loader-sound-play");
     const commandAckSoundField = document.querySelector("#command-ack-sound-field");
     const commandAckSound = document.querySelector("#command-ack-sound");
+    const commandAckSoundPlay = document.querySelector("#command-ack-sound-play");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
     const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
@@ -307,7 +308,7 @@
     let currentWebTtsAudio = null;
     let thinkingAudio = null;
     let thinkingAudioUrl = "";
-    let commandAckSoundUrl = "/assets/ring.wav";
+    let commandAckSoundUrl = "";
     let thinkingAudioPlaying = false;
     let currentAudioSample = null;
     let audioSampleRequestId = 0;
@@ -1935,7 +1936,7 @@
     }
 
     async function playBrowserCommandAckSound() {
-      if (!commandAckSoundEnabled() || !webAudio.tts_enabled || webAudio.tts_output !== "browser") return;
+      if (!commandAckSoundUrl || !webAudio.tts_enabled || webAudio.tts_output !== "browser") return;
       const nowMs = Date.now();
       if (nowMs - lastBrowserCommandAckAt < 900) return;
       lastBrowserCommandAckAt = nowMs;
@@ -2956,7 +2957,7 @@
         listening_sound_file: listeningSound.value || "",
         wake_detected_sound_file: wakeDetectedSound.value || "",
         startup_loader_sound_file: startupLoaderSound.value || "",
-        command_ack_sound_enabled: commandAckSound.getAttribute("aria-checked") === "true",
+        command_ack_sound_file: commandAckSound.value || "",
         openai_tts_voice: openaiTtsVoice.value || "",
         openai_tts_speed: Number(openaiTtsSpeed.value || 1),
         web_tts_volume: Number(webTtsVolume.value || 1),
@@ -3111,16 +3112,6 @@
       for (const input of backendAudioMonitorModeInputs) {
         input.checked = input.value === nextValue;
       }
-    }
-
-    function setCommandAckSoundEnabled(enabled) {
-      commandAckSound.setAttribute("aria-checked", enabled ? "true" : "false");
-      commandAckSound.textContent = enabled ? "On" : "Off";
-      commandAckSound.classList.toggle("enabled", enabled);
-    }
-
-    function commandAckSoundEnabled() {
-      return commandAckSound.getAttribute("aria-checked") === "true";
     }
 
     function envFlag(value, fallback = false) {
@@ -4143,6 +4134,8 @@
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled
         ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif"
         : "BACKEND_AUDIO_OUTPUT_PAN";
+      syncCommandAckSoundControls();
+      syncAudioSampleControls();
       syncSpeakerCaptureButtons();
     }
 
@@ -4183,10 +4176,26 @@
     }
 
     function syncCommandAckSoundControls() {
-      commandAckSound.disabled = !backendAudioCapabilities.output && !webAudio.tts_enabled;
-      commandAckSoundField.title = commandAckSound.disabled
-        ? "COMMAND_ACK_SOUND_ENABLED - nécessite une sortie audio backend ou TTS navigateur disponible"
-        : "COMMAND_ACK_SOUND_ENABLED";
+      const output = selectedTtsOutput();
+      const browserUnavailable = output === "browser" && !browserAudioCapabilities.output;
+      const backendUnavailable = output === "backend" && !backendAudioCapabilities.output;
+      const disabled = output === "silent" || browserUnavailable || backendUnavailable;
+      const reason = output === "silent"
+        ? "COMMAND_ACK_SOUND_FILE - sortie TTS silencieuse"
+        : browserUnavailable
+          ? "COMMAND_ACK_SOUND_FILE - sortie audio navigateur indisponible"
+          : backendUnavailable
+            ? "COMMAND_ACK_SOUND_FILE - sortie audio backend indisponible"
+            : "COMMAND_ACK_SOUND_FILE";
+      commandAckSound.disabled = disabled;
+      commandAckSoundPlay.disabled = disabled || !commandAckSound.value;
+      commandAckSoundField.title = reason;
+      commandAckSound.title = reason;
+      commandAckSoundPlay.title = disabled
+        ? reason
+        : commandAckSound.value
+          ? tr("play_audio_sample", "Play sample")
+          : tr("command_ack_sound_disabled", "No command acknowledgement sound");
     }
 
     function setSegmentOptionEnabled(input, enabled, reason = "") {
@@ -4572,6 +4581,7 @@
       for (const input of backendAudioMonitorModeInputs) input.disabled = true;
       backendAudioOutputPan.disabled = true;
       commandAckSound.disabled = true;
+      commandAckSoundPlay.disabled = true;
       ttsTest.disabled = true;
       for (const control of vadControls) control.disabled = true;
       for (const control of backendWakeWordControls) control.disabled = true;
@@ -4584,6 +4594,8 @@
         thinkingSound.disabled = true;
         listeningSound.disabled = true;
         wakeDetectedSound.disabled = true;
+        commandAckSound.disabled = true;
+        commandAckSoundPlay.disabled = true;
         llmSave.disabled = true;
       llmMessage.textContent = tr("loading_llm_options", "Loading LLM options...");
       try {
@@ -4681,7 +4693,6 @@
 	        backendAudioMonitorVolume.value = String(data.selected_backend_audio_monitor_volume ?? 1.0);
 	        backendAudioInputGain.value = String(data.selected_backend_audio_input_gain ?? 1.0);
 	        backendAudioOutputPan.value = String(data.selected_backend_audio_output_pan ?? 0.0);
-	        setCommandAckSoundEnabled(Boolean(data.selected_command_ack_sound_enabled));
 	        syncOpenAiSpeedLabel();
         syncTtsVolumeLabels();
         syncBackendAudioMonitorVolumeLabel();
@@ -4812,6 +4823,31 @@
             true
           ));
         }
+
+        commandAckSound.replaceChildren();
+        const selectedCommandAckSound = data.selected_command_ack_sound_file || "";
+        commandAckSound.appendChild(option(
+          tr("command_ack_sound_disabled", "No command acknowledgement sound"),
+          "",
+          false,
+          !selectedCommandAckSound
+        ));
+        for (const sound of sounds) {
+          commandAckSound.appendChild(option(
+            sound.label || sound.id,
+            sound.id,
+            false,
+            sound.id === selectedCommandAckSound
+          ));
+        }
+        if (selectedCommandAckSound && !sounds.some((sound) => sound.id === selectedCommandAckSound)) {
+          commandAckSound.appendChild(option(
+            `${selectedCommandAckSound} (${tr("current", "current")})`,
+            selectedCommandAckSound,
+            false,
+            true
+          ));
+        }
         syncAudioSampleControls();
 
         llmMessage.textContent = data.message || "";
@@ -4849,6 +4885,8 @@
         thinkingSound.disabled = thinkingSound.options.length === 0;
         listeningSound.disabled = listeningSound.options.length === 0;
         wakeDetectedSound.disabled = wakeDetectedSound.options.length === 0;
+        commandAckSound.disabled = commandAckSound.options.length === 0;
+        syncCommandAckSoundControls();
         syncAudioSampleControls();
         llmSave.disabled = !llmProvider.value;
         llmOptionsLoading = false;
@@ -4937,7 +4975,7 @@
         webAudio = data.web_audio || { enabled: false, stt_enabled: false, audio_file_stt_enabled: false, tts_enabled: false, tts_output: "silent" };
         interruptConversationEnabled = Boolean(webAudio.interrupt_conversation_enabled);
         thinkingAudioUrl = data.thinking_sound_url || "";
-        commandAckSoundUrl = data.command_ack_sound_url || "/assets/ring.wav";
+        commandAckSoundUrl = data.command_ack_sound_url || "";
         if (!webAudio.stt_enabled && conversationEnabled) {
           setConversationEnabled(false);
         }
@@ -5391,7 +5429,7 @@
       const listeningSoundFile = listeningSound.value;
       const wakeDetectedSoundFile = wakeDetectedSound.value;
       const startupLoaderSoundFile = startupLoaderSound.value;
-      const commandAckSoundEnabledValue = commandAckSoundEnabled();
+      const commandAckSoundFile = commandAckSound.value;
       const openAiTtsVoiceValue = openaiTtsVoice.value;
       const openAiTtsSpeedValue = Number(openaiTtsSpeed.value || 1);
       const webTtsVolumeValue = Number(webTtsVolume.value || 1);
@@ -5447,7 +5485,7 @@
             listening_sound_file: listeningSoundFile,
             wake_detected_sound_file: wakeDetectedSoundFile,
             startup_loader_sound_file: startupLoaderSoundFile,
-            command_ack_sound_enabled: commandAckSoundEnabledValue,
+            command_ack_sound_file: commandAckSoundFile,
             openai_tts_voice: openAiTtsVoiceValue,
             openai_tts_speed: openAiTtsSpeedValue,
             web_tts_volume: webTtsVolumeValue,
@@ -5503,7 +5541,11 @@
       });
     }
     backendAudioOutputPan.addEventListener("input", syncBackendAudioOutputPanLabel);
-    commandAckSound.addEventListener("click", () => setCommandAckSoundEnabled(!commandAckSoundEnabled()));
+    commandAckSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncCommandAckSoundControls();
+    });
+    commandAckSoundPlay.addEventListener("click", () => toggleAudioSample(commandAckSound, commandAckSoundPlay));
     wakeWord.addEventListener("input", () => {
       syncBackendAudioMonitorControls();
       syncBackendWakeWordControls();

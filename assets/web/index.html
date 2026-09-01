@@ -485,9 +485,12 @@
             <summary data-i18n="user_interface">Interface utilisateur</summary>
             <div class="config-controls">
               <div class="audio-sound-stack">
-                <div class="field" id="command-ack-sound-field" title="COMMAND_ACK_SOUND_ENABLED">
-                  <label for="command-ack-sound">Ding!</label>
-                  <button class="small-button" id="command-ack-sound" type="button" role="switch" aria-checked="false">Off</button>
+                <div class="field" id="command-ack-sound-field">
+                  <label for="command-ack-sound" title="COMMAND_ACK_SOUND_FILE" data-i18n="command_ack_sound">Command acknowledgement sound</label>
+                  <div class="audio-sample-row">
+                    <select id="command-ack-sound"></select>
+                    <button class="small-button audio-preview-button" id="command-ack-sound-play" type="button" title="Play sample" aria-label="Play command acknowledgement sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_command_ack_sample">&#9654;</button>
+                  </div>
                 </div>
                 <div class="field">
                   <label for="stt-language" title="STT_LANGUAGE" data-i18n="stt_language">Langue</label>
