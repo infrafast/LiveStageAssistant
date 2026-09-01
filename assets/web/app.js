@@ -108,7 +108,6 @@
     const vadMaxSpeechSeconds = document.querySelector("#vad-max-speech-seconds");
     const vadMaxSpeechSecondsLabel = document.querySelector("#vad-max-speech-seconds-label");
     const backendWakeWordGroup = document.querySelector("#backend-wake-word-group");
-    const backendWakeWordModeInputs = Array.from(document.querySelectorAll('input[name="backend-wake-word-mode"]'));
     const backendWakeWordModelSelect = document.querySelector("#backend-wake-word-model-select");
     const backendWakeWordModelPaths = document.querySelector("#backend-wake-word-model-paths");
     const backendWakeWordModelNames = document.querySelector("#backend-wake-word-model-names");
@@ -2958,7 +2957,6 @@
         vad_min_silence_ms: Number(vadMinSilenceMs.value || 650),
         vad_speech_pad_ms: Number(vadSpeechPadMs.value || 100),
         vad_max_speech_seconds: Number(vadMaxSpeechSeconds.value || 8),
-        backend_wake_word_mode: selectedBackendWakeWordMode(),
         backend_wake_word_model_paths: backendWakeWordModelPaths.value.trim(),
         backend_wake_word_model_names: backendWakeWordModelNames.value.trim(),
         backend_wake_word_threshold: Number(backendWakeWordThreshold.value || 0.5),
@@ -3133,30 +3131,6 @@
       vadMaxSpeechSecondsLabel.textContent = `${Number(vadMaxSpeechSeconds.value || 8).toFixed(1)} s`;
     }
 
-    function selectedBackendWakeWordMode() {
-      const checked = backendWakeWordModeInputs.find((input) => input.checked);
-      return checked ? checked.value : "post_stt";
-    }
-
-    function setSelectedBackendWakeWordMode(value) {
-      const nextValue = value === "openwakeword" ? "openwakeword" : "post_stt";
-      for (const input of backendWakeWordModeInputs) {
-        input.checked = input.value === nextValue;
-      }
-    }
-
-    function backendWakeWordModeAvailable(value) {
-      if (value !== "openwakeword") return true;
-      return Boolean(wakeWord.value.trim()) && backendAudioCapabilities.input;
-    }
-
-    function backendWakeWordModeReason(value) {
-      if (value !== "openwakeword") return "";
-      if (!wakeWord.value.trim()) return "BACKEND_WAKE_WORD_MODE=openwakeword nécessite un wake word configuré.";
-      if (!backendAudioCapabilities.input) return "BACKEND_WAKE_WORD_MODE=openwakeword nécessite une entrée audio backend disponible.";
-      return "";
-    }
-
     function syncBackendWakeWordLabels() {
       backendWakeWordThresholdLabel.textContent = Number(backendWakeWordThreshold.value || 0.5).toFixed(2);
       backendWakeWordPreRollMsLabel.textContent = `${Number(backendWakeWordPreRollMs.value || 1600)} ms`;
@@ -3204,20 +3178,14 @@
     }
 
     function syncBackendWakeWordControls() {
-      for (const input of backendWakeWordModeInputs) {
-        setSegmentOptionEnabled(input, backendWakeWordModeAvailable(input.value), backendWakeWordModeReason(input.value));
-      }
-      if (!backendWakeWordModeAvailable(selectedBackendWakeWordMode())) {
-        setSelectedBackendWakeWordMode("post_stt");
-      }
-      const streaming = selectedBackendWakeWordMode() === "openwakeword";
-      const reason = streaming ? "" : "Actif seulement avec BACKEND_WAKE_WORD_MODE=openwakeword.";
+      const active = Boolean(wakeWord.value.trim());
+      const reason = active ? "" : tr("backend_wake_word_disabled_hint", "Active only when a wake word is configured.");
       for (const control of backendWakeWordControls) {
-        control.disabled = !streaming;
-        control.title = streaming ? "" : reason;
+        control.disabled = !active;
+        control.title = active ? "" : reason;
       }
       if (backendWakeWordGroup) {
-        backendWakeWordGroup.title = streaming ? "" : reason;
+        backendWakeWordGroup.title = active ? "" : reason;
       }
       syncBackendWakeWordLabels();
     }
@@ -3229,7 +3197,6 @@
       vadMinSilenceMs.value = String(data.selected_vad_min_silence_ms ?? 650);
       vadSpeechPadMs.value = String(data.selected_vad_speech_pad_ms ?? 100);
       vadMaxSpeechSeconds.value = String(data.selected_vad_max_speech_seconds ?? 8);
-      setSelectedBackendWakeWordMode(data.selected_backend_wake_word_mode || "post_stt");
       const selectedModelPaths = data.selected_backend_wake_word_model_paths || "";
       backendWakeWordModelPaths.value = selectedModelPaths;
       setWakeWordModelFiles(data.wake_word_model_files || [], selectedModelPaths);
@@ -4597,7 +4564,6 @@
       commandAckSound.disabled = true;
       ttsTest.disabled = true;
       for (const control of vadControls) control.disabled = true;
-      for (const input of backendWakeWordModeInputs) input.disabled = true;
       for (const control of backendWakeWordControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
       setSpeakerControlsDisabled(true, "Loading speaker recognition options...");
@@ -5389,7 +5355,6 @@
       const vadMinSilenceMsValue = Number(vadMinSilenceMs.value || 650);
       const vadSpeechPadMsValue = Number(vadSpeechPadMs.value || 100);
       const vadMaxSpeechSecondsValue = Number(vadMaxSpeechSeconds.value || 8);
-      const backendWakeWordModeValue = selectedBackendWakeWordMode();
       const backendWakeWordModelPathsValue = backendWakeWordModelPaths.value.trim();
       const backendWakeWordModelNamesValue = backendWakeWordModelNames.value.trim();
       const backendWakeWordThresholdValue = Number(backendWakeWordThreshold.value || 0.5);
@@ -5445,7 +5410,6 @@
             vad_min_silence_ms: vadMinSilenceMsValue,
             vad_speech_pad_ms: vadSpeechPadMsValue,
             vad_max_speech_seconds: vadMaxSpeechSecondsValue,
-            backend_wake_word_mode: backendWakeWordModeValue,
             backend_wake_word_model_paths: backendWakeWordModelPathsValue,
             backend_wake_word_model_names: backendWakeWordModelNamesValue,
             backend_wake_word_threshold: backendWakeWordThresholdValue,
@@ -5499,9 +5463,6 @@
     });
     for (const control of vadControls) {
       control.addEventListener("input", syncVadLabels);
-    }
-    for (const input of backendWakeWordModeInputs) {
-      input.addEventListener("change", syncBackendWakeWordControls);
     }
     backendWakeWordModelSelect.addEventListener("change", syncWakeWordModelTextFromSelect);
     backendWakeWordModelPaths.addEventListener("input", syncWakeWordModelSelectFromText);

@@ -55,7 +55,7 @@ Backend microphone monitoring is **experimental** and has not yet been validated
 
 Backend and browser transcription are bounded by `STT_TIMEOUT_SECONDS` (25 seconds in the bundled profiles). Optional Resemblyzer analysis is bounded separately by `SPEAKER_RECOGNITION_TIMEOUT_SECONDS` (10 seconds). If the journal stops after `Processing...`, the next diagnostic lines identify whether STT or speaker recognition started, finished, or timed out; a timeout returns control to listening instead of leaving the service loop blocked.
 
-For more reliable backend wake-word timing, the service profiles include openWakeWord settings. The default `BACKEND_WAKE_WORD_MODE=post_stt` keeps the legacy behavior. `./scripts/install.sh` installs the openWakeWord dependency by default; set `LSA_SKIP_WAKEWORD=1` only if you explicitly want to skip it. To switch the Raspberry Pi backend microphone to local streaming detection, point the env file to trained openWakeWord model files or use **Config -> Voice Activity Detection (VAD) -> Wake word backend**:
+For reliable backend wake-word timing, the service profiles use openWakeWord when `WAKE_WORD` is set. `WAKE_WORD=` disables wake-word detection. `WAKE_WORD=momo` requires openWakeWord and a configured ONNX model; the backend no longer falls back to a post-transcription wake gate.
 
 ```bash
 cd /home/pi/LiveStageAssistant
@@ -80,13 +80,13 @@ livestageassistant restart
 ```
 
 ```env
-BACKEND_WAKE_WORD_MODE=openwakeword
+WAKE_WORD=regie
 BACKEND_WAKE_WORD_MODEL_PATHS=data/wake_words/regie.onnx,data/wake_words/console.onnx
 BACKEND_WAKE_WORD_THRESHOLD=0.65
 BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
 ```
 
-With this mode active, the backend microphone keeps a short ring buffer and launches STT only after the local wake detector fires and real command speech follows. This avoids losing the beginning of phrases such as `console, quel est le volume ?`, while false activations on silence return to listening without spending a Whisper call. The browser microphone and uploaded WAV commands intentionally stay on the post-STT wake-word gate for now.
+With wake word active, the backend microphone keeps a short ring buffer and launches STT only after the local wake detector fires and real command speech follows. This avoids losing the beginning of phrases such as `console, quel est le volume ?`, while false activations on silence return to listening without spending a Whisper call. If openWakeWord or the configured model cannot load, backend microphone capture pauses and the service log reports the error.
 
 The web configuration lists `.onnx` files found under `/home/pi/LiveStageAssistant/data/` so you can select one or more wake-word models without typing paths. The text field below the list remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value. macOS metadata files named like `._momo.onnx` are ignored; if you copied files from a Mac, you can clean them with `find data/wake_words -name '._*.onnx' -delete`.
 

@@ -1710,7 +1710,6 @@ class WebMonitor:
                     except (TypeError, ValueError):
                         self.send_error(400, "Voice detection, wake-word, and speaker settings must be numeric")
                         return
-                    backend_wake_word_mode = str(payload.get("backend_wake_word_mode") or "post_stt").strip().lower()
                     backend_wake_word_model_paths = str(payload.get("backend_wake_word_model_paths") or "").strip()
                     backend_wake_word_model_names = str(payload.get("backend_wake_word_model_names") or "").strip()
                     speaker_recognition_enabled = bool(payload.get("speaker_recognition_enabled"))
@@ -1757,7 +1756,6 @@ class WebMonitor:
                             vad_min_silence_ms,
                             vad_speech_pad_ms,
                             vad_max_speech_seconds,
-                            backend_wake_word_mode,
                             backend_wake_word_model_paths,
                             backend_wake_word_model_names,
                             backend_wake_word_threshold,

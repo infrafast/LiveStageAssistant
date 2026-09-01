@@ -210,22 +210,22 @@ WEB_MONITOR_PORT=8765
 MCP_CONFIG=mcp_servers.json
 ```
 
-Backend microphone wake-word handling defaults to the legacy post-STT gate. `scripts/install.sh` installs the local openWakeWord extra by default; set `LSA_SKIP_WAKEWORD=1` before running the installer only if you explicitly want to skip it. For more robust Raspberry Pi/backend use, provide one or more openWakeWord models and switch **Config -> Voice Activity Detection (VAD) -> Wake word backend** to streaming:
+Backend microphone wake-word handling is controlled only by `WAKE_WORD`. Leave `WAKE_WORD=` empty to disable wake-word detection. When `WAKE_WORD` is set, the backend microphone requires openWakeWord and one or more local models; there is no silent fallback to a post-transcription wake gate.
 
 On Raspberry Pi/Linux, `scripts/install.sh` installs openWakeWord in ONNX-only mode to avoid the `tflite-runtime` wheel issue on recent Python/Raspberry Pi OS releases. It also downloads the internal ONNX resources required by openWakeWord, including `melspectrogram.onnx` and `embedding_model.onnx`, then validates the install by instantiating an ONNX `Model`. Use `.onnx` wake-word models with `BACKEND_WAKE_WORD_MODEL_PATHS`.
 
 ```env
-BACKEND_WAKE_WORD_MODE=openwakeword
+WAKE_WORD=regie
 BACKEND_WAKE_WORD_MODEL_PATHS=data/wake_words/regie.onnx,data/wake_words/console.onnx
 BACKEND_WAKE_WORD_THRESHOLD=0.65
 BACKEND_WAKE_WORD_PRE_ROLL_MS=1600
 ```
 
-In this mode, the backend microphone captures into a short ring buffer before the wake word fires. After the local detector activates, the assistant discards all pre-trigger audio and immediately starts a fresh VAD segment for the command. The wake phrase itself is therefore never sent to STT or the LLM. If no command speech follows, it returns to listening without calling Whisper. Browser microphone, push-to-talk, and uploaded WAV commands keep the post-STT wake-word gate for now.
+With wake word enabled, the backend microphone waits for openWakeWord first, then uses Silero VAD to capture the command. After the local detector activates, the assistant discards pre-trigger audio and starts a fresh VAD segment for the command. If no command speech follows, it returns to listening without calling Whisper. If openWakeWord or the configured model is unavailable, backend microphone capture is paused and the log explains why.
 
 The web configuration lists `.onnx` files found under `data/` for safer model selection. The text field remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value. macOS metadata files named like `._momo.onnx` are ignored; they can also be removed with `find data/wake_words -name '._*.onnx' -delete`.
 
-If backend audio monitoring is set to `rejected`, phrases heard by the backend microphone without a detected wake word are replayed through the configured backend output in both generic and openWakeWord modes.
+If backend audio monitoring is set to `rejected`, phrases rejected before a valid wake-word command can be replayed through the configured backend output.
 
 For the exhaustive env reference and runtime internals, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

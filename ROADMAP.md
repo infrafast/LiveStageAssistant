@@ -18,6 +18,14 @@ Refondre et simplifier le pipeline audio de LiveStageAssistant autour des princi
 
 Le dépôt connaît déjà son contexte fonctionnel. Respecter les règles de maintenance présentes dans `AGENT.md`.
 
+## Suivi d'implémentation
+
+- [x] Jalon 1 — retirer `BACKEND_WAKE_WORD_MODE` du runtime, de la sauvegarde `.env`, des profils, de la Web GUI et de la documentation utilisateur. Le backend ne retombe plus silencieusement sur le gate wake word post-STT quand `WAKE_WORD` est défini mais openWakeWord est indisponible.
+- [ ] Jalon 2 — introduire la machine d'état audio explicite `WAIT_WAKE` / `CAPTURE_COMMAND` / `PROCESSING` / `TTS`.
+- [ ] Jalon 3 — intégrer l'interruption vocale à cette machine d'état sans second listener concurrent.
+- [ ] Jalon 4 — paralléliser STT et speaker recognition sur les segments audio acceptés.
+- [ ] Jalon 5 — ajouter les timings/debug openWakeWord et les tests de non-régression.
+
 ---
 
 # 1. Architecture cible

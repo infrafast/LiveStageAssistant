@@ -243,31 +243,23 @@
                   </div>
                   <div class="vad-group" id="backend-wake-word-group">
                     <div class="vad-group-title">
-                      <span>Wake word backend</span>
-                      <span class="detail">Le mode streaming écoute localement avant STT pour mieux attraper le début de phrase.</span>
-                    </div>
-                    <div class="field">
-                      <label title="BACKEND_WAKE_WORD_MODE">Méthode backend</label>
-                      <div class="segmented" id="backend-wake-word-mode" role="radiogroup" aria-label="Backend wake word mode">
-                        <label><input type="radio" name="backend-wake-word-mode" value="post_stt">Après STT</label>
-                        <label><input type="radio" name="backend-wake-word-mode" value="openwakeword">Streaming</label>
-                      </div>
-                      <div class="field-hint">Après STT garde le comportement historique. Streaming utilise openWakeWord et nécessite un modèle local.</div>
+                      <span data-i18n="backend_wake_word">Wake word backend</span>
+                      <span class="detail" data-i18n="backend_wake_word_detail">Vide désactive le wake word. Renseigné, il utilise openWakeWord local avant STT.</span>
                     </div>
                     <div class="field full-row">
-                      <label for="backend-wake-word-model-select" title="BACKEND_WAKE_WORD_MODEL_PATHS">Modèles openWakeWord disponibles</label>
+                      <label for="backend-wake-word-model-select" title="BACKEND_WAKE_WORD_MODEL_PATHS" data-i18n="backend_wake_word_models">Modèles openWakeWord disponibles</label>
                       <select id="backend-wake-word-model-select" multiple size="4"></select>
-                      <div class="field-hint">Sélectionne un ou plusieurs fichiers `.onnx` trouvés dans `data/`. La sauvegarde écrit les chemins dans BACKEND_WAKE_WORD_MODEL_PATHS.</div>
+                      <div class="field-hint" data-i18n="backend_wake_word_models_hint">Sélectionne un ou plusieurs fichiers `.onnx` trouvés dans `data/`. La sauvegarde écrit les chemins dans BACKEND_WAKE_WORD_MODEL_PATHS.</div>
                     </div>
                     <div class="field full-row">
-                      <label for="backend-wake-word-model-paths" title="BACKEND_WAKE_WORD_MODEL_PATHS">Chemins modèles openWakeWord</label>
+                      <label for="backend-wake-word-model-paths" title="BACKEND_WAKE_WORD_MODEL_PATHS" data-i18n="backend_wake_word_model_paths">Chemins modèles openWakeWord</label>
                       <input id="backend-wake-word-model-paths" type="text" placeholder="data/wake_words/regie.onnx,data/wake_words/console.onnx">
-                      <div class="field-hint">Aperçu modifiable. Utilise des chemins séparés par des virgules si tu veux forcer un chemin non listé.</div>
+                      <div class="field-hint" data-i18n="backend_wake_word_model_paths_hint">Aperçu modifiable. Utilise des chemins séparés par des virgules si tu veux forcer un chemin non listé.</div>
                     </div>
                     <div class="field full-row">
-                      <label for="backend-wake-word-model-names" title="BACKEND_WAKE_WORD_MODEL_NAMES">Noms modèles openWakeWord</label>
+                      <label for="backend-wake-word-model-names" title="BACKEND_WAKE_WORD_MODEL_NAMES" data-i18n="backend_wake_word_model_names">Noms modèles openWakeWord</label>
                       <input id="backend-wake-word-model-names" type="text" placeholder="hey_jarvis">
-                      <div class="field-hint">Option avancée: noms de modèles fournis par openWakeWord, séparés par des virgules.</div>
+                      <div class="field-hint" data-i18n="backend_wake_word_model_names_hint">Option avancée: noms de modèles fournis par openWakeWord, séparés par des virgules.</div>
                     </div>
                     <div class="field vad-field">
                       <label class="vad-label" for="backend-wake-word-threshold" title="BACKEND_WAKE_WORD_THRESHOLD">

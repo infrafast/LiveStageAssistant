@@ -712,23 +712,6 @@ PIPEWIRE_CAPTURE_CHANNELS = 1
 PIPEWIRE_CAPTURE_CHUNK = 1024
 
 
-def normalize_backend_wake_word_mode(value: str | None) -> str:
-    """Normalize backend wake-word detection mode."""
-    mode = str(value or "post_stt").strip().lower().replace("-", "_")
-    aliases = {
-        "off": "post_stt",
-        "text": "post_stt",
-        "post": "post_stt",
-        "poststt": "post_stt",
-        "legacy": "post_stt",
-        "stream": "openwakeword",
-        "streaming": "openwakeword",
-        "open_wake_word": "openwakeword",
-        "oww": "openwakeword",
-    }
-    return aliases.get(mode, mode if mode in {"post_stt", "openwakeword"} else "post_stt")
-
-
 def parse_env_list(value: str | None) -> list[str]:
     """Parse comma/semicolon/pipe separated env values."""
     if not value:
@@ -741,7 +724,17 @@ def format_backend_listening_message(wake_words: list[str], engine: str | None) 
     if not wake_words:
         return "Listening (no wake word)"
     wake_word_label = ", ".join(wake_words)
-    return f'Listening for "{wake_word_label}" using {engine or "generic"}...'
+    return f'Listening for "{wake_word_label}" using {engine or "openwakeword"}...'
+
+
+def strip_leading_wake_word_if_present(text: str, wake_words: list[str]) -> tuple[str, str]:
+    """Remove a leading wake word from an already-authorized command without validating it."""
+    if not wake_words:
+        return text, ""
+    should_process, matched_wake_word, command_text = apply_wake_word(text, wake_words)
+    if should_process and matched_wake_word:
+        return command_text, matched_wake_word
+    return text.strip(), ""
 
 
 class BackendWakeWordDetector:
@@ -1950,7 +1943,6 @@ class VoiceAssistant:
         vad_min_silence_ms: int = 650,
         vad_speech_pad_ms: int = 100,
         vad_max_speech_seconds: float = 8.0,
-        backend_wake_word_mode: str = "post_stt",
         backend_wake_word_model_paths: list[str] | None = None,
         backend_wake_word_model_names: list[str] | None = None,
         backend_wake_word_threshold: float = DEFAULT_BACKEND_WAKE_WORD_THRESHOLD,
@@ -2020,7 +2012,6 @@ class VoiceAssistant:
             vad_min_silence_ms: Silence duration that ends an accepted phrase
             vad_speech_pad_ms: Audio retained before detected speech
             vad_max_speech_seconds: Hard cap for one accepted utterance
-            backend_wake_word_mode: Backend wake gate mode: post_stt or openwakeword
             backend_wake_word_model_paths: Optional openWakeWord custom model paths
             backend_wake_word_model_names: Optional openWakeWord bundled/custom model names
             backend_wake_word_threshold: openWakeWord score required to activate
@@ -2101,7 +2092,6 @@ class VoiceAssistant:
         self.backend_audio_diagnostic_requested = threading.Event()
         self.backend_speaker_capture_stop_event = threading.Event()
         self.wake_words = wake_words or []
-        self.backend_wake_word_mode = normalize_backend_wake_word_mode(backend_wake_word_mode)
         self.backend_wake_word_model_paths = list(backend_wake_word_model_paths or [])
         self.backend_wake_word_model_names = list(backend_wake_word_model_names or [])
         self.backend_wake_word_threshold = max(
@@ -2395,8 +2385,8 @@ class VoiceAssistant:
         return self.audio_input_device_status not in {"invalid", "unavailable"}
 
     def _initialize_backend_wake_word_detector(self) -> None:
-        """Initialize optional backend streaming wake-word detection."""
-        if self.backend_wake_word_mode != "openwakeword" or not self.wake_words:
+        """Initialize backend openWakeWord when a wake word is configured."""
+        if not self.wake_words:
             return
         try:
             self.backend_wake_word_detector = BackendWakeWordDetector(
@@ -2415,19 +2405,17 @@ class VoiceAssistant:
         except Exception as e:
             self.backend_wake_word_detector = None
             self.backend_wake_word_unavailable_reason = str(e)
-            print(f"Backend openWakeWord unavailable; using generic wake gate: {e}", flush=True)
+            print(f"Backend openWakeWord unavailable; backend wake word disabled: {e}", flush=True)
 
     def _backend_streaming_wake_active(self) -> bool:
-        return (
-            self.backend_wake_word_mode == "openwakeword"
-            and bool(self.wake_words)
-            and self.backend_wake_word_detector is not None
-        )
+        return bool(self.wake_words) and self.backend_wake_word_detector is not None
 
     def _backend_wake_word_engine_name(self) -> str:
         if self._backend_streaming_wake_active():
             return "openwakeword"
-        return "generic"
+        if self.wake_words:
+            return "unavailable"
+        return None
 
     def _backend_output_ready(self) -> bool:
         """Return true only when backend playback can use the configured output route."""
@@ -3505,6 +3493,11 @@ class VoiceAssistant:
             return None
 
         streaming_wake_active = self._backend_streaming_wake_active()
+        if self.wake_words and not streaming_wake_active:
+            reason = self.backend_wake_word_unavailable_reason or "openWakeWord is not initialized"
+            print(f"Backend wake word is configured but unavailable; microphone capture paused: {reason}", flush=True)
+            time.sleep(1.0)
+            return None
         print(
             f"\n{format_backend_listening_message(self.wake_words, self._backend_wake_word_engine_name())}",
             flush=True,
@@ -3610,20 +3603,13 @@ class VoiceAssistant:
                     except Exception as e:
                         self.backend_wake_word_detector = None
                         self.backend_wake_word_unavailable_reason = str(e)
-                        streaming_wake_active = False
-                        wake_detected = True
-                        pre_roll = []
                         self.vad.reset()
                         print(
-                            "Backend openWakeWord failed during capture; "
-                            f"using generic wake gate: {e}",
+                            "Backend openWakeWord failed during capture; command rejected until wake detection is restored: "
+                            f"{e}",
                             flush=True,
                         )
-                        print(
-                            f"\n{format_backend_listening_message(self.wake_words, self._backend_wake_word_engine_name())}",
-                            flush=True,
-                        )
-                        continue
+                        return None
                     if detection:
                         detected_label, detected_score = detection
                         wake_detected = True
@@ -5966,23 +5952,22 @@ class VoiceAssistant:
                             self.stop_thinking_sound()
                             continue
 
-                        streaming_wake_detected = self.last_backend_streaming_wake_detected
-                        should_process, matched_wake_word, command_text = apply_wake_word(text, self.wake_words)
-                        if not should_process and streaming_wake_detected:
-                            should_process = True
+                        if self.wake_words:
+                            if not self.last_backend_streaming_wake_detected:
+                                print("Backend wake word was configured but no openWakeWord trigger authorized this audio.")
+                                self.stop_thinking_sound()
+                                self.play_rejected_backend_audio(audio_data)
+                                continue
+                            command_text, matched_wake_word = strip_leading_wake_word_if_present(text, self.wake_words)
+                        else:
                             command_text = text.strip()
-                            print("Wake word accepted by backend streaming detector.")
-                        if not should_process:
-                            print("Wake word not detected. Ignoring transcription.")
-                            self.stop_thinking_sound()
-                            self.play_rejected_backend_audio(audio_data)
-                            continue
+                            matched_wake_word = ""
                         if matched_wake_word:
                             print(f"Wake word detected: {matched_wake_word}")
                             if command_text != text:
                                 print(f"Command after wake word: {command_text}")
                             self.start_thinking_sound()
-                        elif streaming_wake_detected:
+                        elif self.last_backend_streaming_wake_detected:
                             print("Command accepted after backend streaming wake detection.")
                             self.start_thinking_sound()
                         text = command_text
@@ -6757,9 +6742,6 @@ async def main():
         current_vad_min_silence_ms = env_int_from_values(values, "VAD_MIN_SILENCE_MS", 650)
         current_vad_speech_pad_ms = env_int_from_values(values, "VAD_SPEECH_PAD_MS", 100)
         current_vad_max_speech_seconds = env_float_from_values(values, "VAD_MAX_SPEECH_SECONDS", 8.0)
-        current_backend_wake_word_mode = normalize_backend_wake_word_mode(
-            values.get("BACKEND_WAKE_WORD_MODE") or "post_stt"
-        )
         current_backend_wake_word_model_paths = (values.get("BACKEND_WAKE_WORD_MODEL_PATHS") or "").strip()
         current_backend_wake_word_model_names = (values.get("BACKEND_WAKE_WORD_MODEL_NAMES") or "").strip()
         current_backend_wake_word_threshold = env_float_from_values(
@@ -6864,7 +6846,6 @@ async def main():
             "selected_vad_min_silence_ms": current_vad_min_silence_ms,
             "selected_vad_speech_pad_ms": current_vad_speech_pad_ms,
             "selected_vad_max_speech_seconds": current_vad_max_speech_seconds,
-            "selected_backend_wake_word_mode": current_backend_wake_word_mode,
             "selected_backend_wake_word_model_paths": current_backend_wake_word_model_paths,
             "selected_backend_wake_word_model_names": current_backend_wake_word_model_names,
             "selected_backend_wake_word_threshold": current_backend_wake_word_threshold,
@@ -6930,7 +6911,6 @@ async def main():
         vad_min_silence_ms: int,
         vad_speech_pad_ms: int,
         vad_max_speech_seconds: float,
-        backend_wake_word_mode: str,
         backend_wake_word_model_paths: str,
         backend_wake_word_model_names: str,
         backend_wake_word_threshold: float,
@@ -6991,7 +6971,6 @@ async def main():
         vad_min_silence_ms = max(100, min(5000, int(vad_min_silence_ms or 650)))
         vad_speech_pad_ms = max(0, min(1000, int(vad_speech_pad_ms or 100)))
         vad_max_speech_seconds = max(1.0, min(30.0, float(vad_max_speech_seconds or 8.0)))
-        backend_wake_word_mode = normalize_backend_wake_word_mode(backend_wake_word_mode)
         backend_wake_word_model_paths = str(backend_wake_word_model_paths or "").strip()
         backend_wake_word_model_names = str(backend_wake_word_model_names or "").strip()
         backend_wake_word_threshold = max(
@@ -7034,8 +7013,6 @@ async def main():
                 float(backend_wake_word_vad_threshold if backend_wake_word_vad_threshold is not None else 0.0),
             ),
         )
-        if backend_wake_word_mode == "openwakeword" and not wake_word:
-            backend_wake_word_mode = "post_stt"
         speaker_recognition_enabled = bool(speaker_recognition_enabled)
         speaker_backend = (speaker_backend or "resemblyzer").strip().lower()
         if speaker_backend not in {"resemblyzer", "speechbrain"}:
@@ -7221,7 +7198,6 @@ async def main():
                 "VAD_MIN_SILENCE_MS": str(vad_min_silence_ms),
                 "VAD_SPEECH_PAD_MS": str(vad_speech_pad_ms),
                 "VAD_MAX_SPEECH_SECONDS": f"{vad_max_speech_seconds:.1f}".rstrip("0").rstrip("."),
-                "BACKEND_WAKE_WORD_MODE": backend_wake_word_mode,
                 "BACKEND_WAKE_WORD_MODEL_PATHS": backend_wake_word_model_paths,
                 "BACKEND_WAKE_WORD_MODEL_NAMES": backend_wake_word_model_names,
                 "BACKEND_WAKE_WORD_THRESHOLD": f"{backend_wake_word_threshold:.2f}".rstrip("0").rstrip("."),
@@ -7257,7 +7233,7 @@ async def main():
                 "BACKEND_AUDIO_MONITOR_VOLUME": f"{backend_audio_monitor_volume:.2f}",
                 **speaker_updates,
             },
-            remove_keys={"WEB_AUDIO_ENABLED"},
+            remove_keys={"WEB_AUDIO_ENABLED", "BACKEND_WAKE_WORD_MODE"},
         )
         values = dict(dotenv_values(env_file))
         mcp_config = load_mcp_config_from_values(values)
@@ -7470,7 +7446,6 @@ async def main():
         vad_min_silence_ms = env_int("VAD_MIN_SILENCE_MS", 650)
         vad_speech_pad_ms = env_int("VAD_SPEECH_PAD_MS", 100)
         vad_max_speech_seconds = env_float("VAD_MAX_SPEECH_SECONDS", 8.0)
-        backend_wake_word_mode = normalize_backend_wake_word_mode(os.getenv("BACKEND_WAKE_WORD_MODE", "post_stt"))
         backend_wake_word_model_paths = parse_env_list(os.getenv("BACKEND_WAKE_WORD_MODEL_PATHS"))
         backend_wake_word_model_names = parse_env_list(os.getenv("BACKEND_WAKE_WORD_MODEL_NAMES"))
         backend_wake_word_threshold = max(
@@ -7566,10 +7541,6 @@ async def main():
         if mcp_prompt_merge_mode not in {"append", "replace"}:
             print(f"Error: MCP_PROMPT_MERGE_MODE must be 'append' or 'replace', got: {mcp_prompt_merge_mode}")
             sys.exit(1)
-        if backend_wake_word_mode == "openwakeword" and not wake_words:
-            print("BACKEND_WAKE_WORD_MODE=openwakeword requires WAKE_WORD; falling back to post_stt.")
-            backend_wake_word_mode = "post_stt"
-
         backend_stt_enabled = stt_input in {"both", "backend"}
         browser_stt_enabled = stt_input in {"both", "browser"}
         backend_tts_active = tts_config.backend_active
@@ -7609,14 +7580,9 @@ async def main():
         if wake_words:
             model_count = len(backend_wake_word_model_paths or backend_wake_word_model_names)
             print(
-                "Using backend wake word mode: "
-                f"{backend_wake_word_mode}"
-                + (
-                    f" ({model_count} model(s), threshold {backend_wake_word_threshold:.2f}, "
-                    f"pre-roll {backend_wake_word_pre_roll_ms} ms)"
-                    if backend_wake_word_mode == "openwakeword"
-                    else ""
-                )
+                "Using backend wake word engine: openWakeWord "
+                f"({model_count} model(s), threshold {backend_wake_word_threshold:.2f}, "
+                f"pre-roll {backend_wake_word_pre_roll_ms} ms)"
             )
         print(f"Using MCP agent memory: {mcp_agent_memory_enabled}")
         print(f"Using MCP agent max steps: {max(5, mcp_agent_max_steps)}")
@@ -7750,7 +7716,6 @@ async def main():
             vad_min_silence_ms=vad_min_silence_ms,
             vad_speech_pad_ms=vad_speech_pad_ms,
             vad_max_speech_seconds=vad_max_speech_seconds,
-            backend_wake_word_mode=backend_wake_word_mode,
             backend_wake_word_model_paths=backend_wake_word_model_paths,
             backend_wake_word_model_names=backend_wake_word_model_names,
             backend_wake_word_threshold=backend_wake_word_threshold,
@@ -8216,7 +8181,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, listening_sound_file, startup_loader_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, backend_wake_word_mode, backend_wake_word_model_paths, backend_wake_word_model_names, backend_wake_word_threshold, backend_wake_word_pre_roll_ms, backend_wake_word_cooldown_ms, backend_wake_word_vad_threshold, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, listening_sound_file, startup_loader_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, backend_wake_word_model_paths, backend_wake_word_model_names, backend_wake_word_threshold, backend_wake_word_pre_roll_ms, backend_wake_word_cooldown_ms, backend_wake_word_vad_threshold, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -8253,7 +8218,6 @@ async def main():
                 vad_min_silence_ms,
                 vad_speech_pad_ms,
                 vad_max_speech_seconds,
-                backend_wake_word_mode,
                 backend_wake_word_model_paths,
                 backend_wake_word_model_names,
                 backend_wake_word_threshold,
