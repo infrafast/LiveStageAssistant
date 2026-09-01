@@ -225,6 +225,8 @@ With wake word enabled, the backend microphone waits for openWakeWord first, the
 
 The web configuration lists `.onnx` files found under `data/` for safer model selection. The text field remains available for advanced paths and stores the comma-separated `BACKEND_WAKE_WORD_MODEL_PATHS` value. macOS metadata files named like `._momo.onnx` are ignored; they can also be removed with `find data/wake_words -name '._*.onnx' -delete`.
 
+Settings -> Config -> User interface can also assign an optional backend WAV cue for wake-word detection, or leave it disabled.
+
 If backend audio monitoring is set to `rejected`, phrases rejected before a valid wake-word command can be replayed through the configured backend output.
 
 For the exhaustive env reference and runtime internals, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

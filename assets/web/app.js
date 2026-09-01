@@ -180,6 +180,9 @@
     const listeningSoundField = document.querySelector("#listening-sound-field");
     const listeningSound = document.querySelector("#listening-sound");
     const listeningSoundPlay = document.querySelector("#listening-sound-play");
+    const wakeDetectedSoundField = document.querySelector("#wake-detected-sound-field");
+    const wakeDetectedSound = document.querySelector("#wake-detected-sound");
+    const wakeDetectedSoundPlay = document.querySelector("#wake-detected-sound-play");
     const startupLoaderSoundField = document.querySelector("#startup-loader-sound-field");
     const startupLoaderSound = document.querySelector("#startup-loader-sound");
     const startupLoaderSoundPlay = document.querySelector("#startup-loader-sound-play");
@@ -2804,6 +2807,12 @@
       listeningSound.title = listeningSoundField.title;
       listeningSoundPlay.title = listeningSoundField.title;
 
+      wakeDetectedSound.disabled = listeningBackendUnavailable;
+      wakeDetectedSoundPlay.disabled = !wakeDetectedSound.value || listeningBackendUnavailable;
+      wakeDetectedSoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "WAKE_DETECTED_SOUND_FILE";
+      wakeDetectedSound.title = wakeDetectedSoundField.title;
+      wakeDetectedSoundPlay.title = wakeDetectedSoundField.title;
+
       const loaderBackendEnabled = output === "backend";
       startupLoaderSound.disabled = !loaderBackendEnabled;
       startupLoaderSoundPlay.disabled = !loaderBackendEnabled || !startupLoaderSound.value || backendOutputUnavailable;
@@ -2945,6 +2954,7 @@
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
         listening_sound_file: listeningSound.value || "",
+        wake_detected_sound_file: wakeDetectedSound.value || "",
         startup_loader_sound_file: startupLoaderSound.value || "",
         command_ack_sound_enabled: commandAckSound.getAttribute("aria-checked") === "true",
         openai_tts_voice: openaiTtsVoice.value || "",
@@ -4570,10 +4580,11 @@
       backendAudioInput.disabled = true;
       browserAudioTest.disabled = true;
       backendAudioTest.disabled = true;
-      backendAudioOutput.disabled = true;
-      thinkingSound.disabled = true;
-      listeningSound.disabled = true;
-      llmSave.disabled = true;
+        backendAudioOutput.disabled = true;
+        thinkingSound.disabled = true;
+        listeningSound.disabled = true;
+        wakeDetectedSound.disabled = true;
+        llmSave.disabled = true;
       llmMessage.textContent = tr("loading_llm_options", "Loading LLM options...");
       try {
         const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
@@ -4752,6 +4763,31 @@
           ));
         }
 
+        wakeDetectedSound.replaceChildren();
+        const selectedWakeDetectedSound = data.selected_wake_detected_sound_file || "";
+        wakeDetectedSound.appendChild(option(
+          tr("wake_detected_sound_disabled", "No wake detected sound"),
+          "",
+          false,
+          !selectedWakeDetectedSound
+        ));
+        for (const sound of sounds) {
+          wakeDetectedSound.appendChild(option(
+            sound.label || sound.id,
+            sound.id,
+            false,
+            sound.id === selectedWakeDetectedSound
+          ));
+        }
+        if (selectedWakeDetectedSound && !sounds.some((sound) => sound.id === selectedWakeDetectedSound)) {
+          wakeDetectedSound.appendChild(option(
+            `${selectedWakeDetectedSound} (${tr("current", "current")})`,
+            selectedWakeDetectedSound,
+            false,
+            true
+          ));
+        }
+
         startupLoaderSound.replaceChildren();
         const selectedStartupLoaderSound = data.selected_startup_loader_sound_file || "";
         startupLoaderSound.appendChild(option(
@@ -4812,6 +4848,7 @@
         backendAudioTest.disabled = !backendAudioCapabilities.input || backendAudioInputField.classList.contains("hidden");
         thinkingSound.disabled = thinkingSound.options.length === 0;
         listeningSound.disabled = listeningSound.options.length === 0;
+        wakeDetectedSound.disabled = wakeDetectedSound.options.length === 0;
         syncAudioSampleControls();
         llmSave.disabled = !llmProvider.value;
         llmOptionsLoading = false;
@@ -5252,12 +5289,21 @@
       stopCurrentAudioSample();
       syncAudioSampleControls();
     });
+    wakeDetectedSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncAudioSampleControls();
+    });
     startupLoaderSound.addEventListener("change", () => {
       stopCurrentAudioSample();
       syncAudioSampleControls();
     });
     thinkingSoundPlay.addEventListener("click", () => toggleAudioSample(thinkingSound, thinkingSoundPlay));
     listeningSoundPlay.addEventListener("click", () => toggleAudioSample(listeningSound, listeningSoundPlay, true));
+    wakeDetectedSoundPlay.addEventListener("click", () => toggleAudioSample(
+      wakeDetectedSound,
+      wakeDetectedSoundPlay,
+      true
+    ));
     startupLoaderSoundPlay.addEventListener("click", () => toggleAudioSample(
       startupLoaderSound,
       startupLoaderSoundPlay,
@@ -5343,6 +5389,7 @@
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
       const listeningSoundFile = listeningSound.value;
+      const wakeDetectedSoundFile = wakeDetectedSound.value;
       const startupLoaderSoundFile = startupLoaderSound.value;
       const commandAckSoundEnabledValue = commandAckSoundEnabled();
       const openAiTtsVoiceValue = openaiTtsVoice.value;
@@ -5398,6 +5445,7 @@
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
             listening_sound_file: listeningSoundFile,
+            wake_detected_sound_file: wakeDetectedSoundFile,
             startup_loader_sound_file: startupLoaderSoundFile,
             command_ack_sound_enabled: commandAckSoundEnabledValue,
             openai_tts_voice: openAiTtsVoiceValue,

@@ -1991,6 +1991,7 @@ class VoiceAssistant:
         elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
         thinking_sound_file: str = "thinking.wav",
         listening_sound_file: str = "",
+        wake_detected_sound_file: str = "",
         startup_loader_sound_enabled: bool = False,
         startup_loader_sound_file: str = "loader.wav",
         command_ack_sound_enabled: bool = False,
@@ -2061,7 +2062,8 @@ class VoiceAssistant:
             web_tts_enabled: Whether browser TTS is the active speech output
             elevenlabs_voice_id: ElevenLabs voice ID (default: Rachel)
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
-            listening_sound_file: Backend WAV cue played once when the assistant returns to listening
+            listening_sound_file: Backend WAV cue played once before direct no-wake listening
+            wake_detected_sound_file: Backend WAV cue played asynchronously when openWakeWord triggers
             command_ack_sound_enabled: Play a short backend chime when a command is accepted
             backend_audio_input_device: Optional PyAudio input index or PipeWire source from BACKEND_AUDIO_INPUT_DEVICE
             backend_audio_input_gain: Software gain applied to backend microphone PCM, 0.5 to 2.0
@@ -2363,6 +2365,13 @@ class VoiceAssistant:
             else None
         )
         self.listening_sound_warning_shown = False
+        self.wake_detected_sound_file = (wake_detected_sound_file or "").strip()
+        self.wake_detected_sound_path = (
+            self._resolve_asset_path(self.wake_detected_sound_file)
+            if self.wake_detected_sound_file
+            else None
+        )
+        self.wake_detected_sound_warning_shown = False
         self.command_ack_sound_enabled = bool(command_ack_sound_enabled)
         self.command_ack_sound_path = self._resolve_command_ack_sound_path()
         self.command_ack_sound_warning_shown = False
@@ -2607,6 +2616,31 @@ class VoiceAssistant:
             if not self.listening_sound_warning_shown:
                 print(f"Could not play listening sound '{self.listening_sound_path}': {e}")
                 self.listening_sound_warning_shown = True
+
+    def play_wake_detected_sound_async(self) -> None:
+        """Play a short backend cue after openWakeWord triggers without pausing capture."""
+        if not self.wake_detected_sound_file:
+            return
+        if not self._backend_output_ready():
+            return
+        if not self.wake_detected_sound_path:
+            if not self.wake_detected_sound_warning_shown:
+                print(
+                    f"Wake-detected sound '{self.wake_detected_sound_file}' not found. "
+                    "Set WAKE_DETECTED_SOUND_FILE to a WAV file or place it in assets/."
+                )
+                self.wake_detected_sound_warning_shown = True
+            return
+
+        def play_once() -> None:
+            try:
+                self.play_wav_file(self.wake_detected_sound_path)
+            except Exception as e:
+                if not self.wake_detected_sound_warning_shown:
+                    print(f"Could not play wake-detected sound '{self.wake_detected_sound_path}': {e}")
+                    self.wake_detected_sound_warning_shown = True
+
+        threading.Thread(target=play_once, name="backend-wake-detected-sound", daemon=True).start()
 
     def start_startup_loader_sound(self) -> None:
         """Loop the startup loader sound through backend output until startup is ready."""
@@ -3742,6 +3776,8 @@ class VoiceAssistant:
                             f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
                             flush=True,
                         )
+                        if not interrupt_capture:
+                            self.play_wake_detected_sound_async()
                     else:
                         continue
 
@@ -6985,6 +7021,7 @@ async def main():
             "thinking.wav" if raw_thinking_sound_file is None else str(raw_thinking_sound_file).strip()
         )
         current_listening_sound_file = (values.get("LISTENING_SOUND_FILE") or "").strip()
+        current_wake_detected_sound_file = (values.get("WAKE_DETECTED_SOUND_FILE") or "").strip()
         current_startup_loader_sound_enabled = env_bool_from_values(values, "STARTUP_LOADER_SOUND_ENABLED", False)
         current_startup_loader_sound_file = (values.get("STARTUP_LOADER_SOUND_FILE") or "loader.wav").strip()
         current_command_ack_sound_enabled = env_bool_from_values(values, "COMMAND_ACK_SOUND_ENABLED", False)
@@ -7130,6 +7167,7 @@ async def main():
             "thinking_sounds": list_wav_asset_options(),
             "selected_thinking_sound_file": current_thinking_sound_file,
             "selected_listening_sound_file": current_listening_sound_file,
+            "selected_wake_detected_sound_file": current_wake_detected_sound_file,
             "selected_startup_loader_sound_file": (
                 current_startup_loader_sound_file if current_startup_loader_sound_enabled else ""
             ),
@@ -7159,6 +7197,7 @@ async def main():
         voice_id: str,
         thinking_sound_file: str,
         listening_sound_file: str,
+        wake_detected_sound_file: str,
         startup_loader_sound_file: str,
         command_ack_sound_enabled: bool,
         openai_tts_voice: str,
@@ -7212,6 +7251,7 @@ async def main():
         voice_id = voice_id.strip()
         thinking_sound_file = thinking_sound_file.strip()
         listening_sound_file = listening_sound_file.strip()
+        wake_detected_sound_file = wake_detected_sound_file.strip()
         startup_loader_sound_file = startup_loader_sound_file.strip()
         command_ack_sound_enabled = bool(command_ack_sound_enabled)
         openai_tts_voice = (openai_tts_voice or "").strip()
@@ -7392,6 +7432,8 @@ async def main():
             raise ValueError(f"thinking sound '{thinking_sound_file}' is not a WAV file in assets/")
         if listening_sound_file and thinking_sound_options and listening_sound_file not in {item["id"] for item in thinking_sound_options}:
             raise ValueError(f"listening sound '{listening_sound_file}' is not a WAV file in assets/")
+        if wake_detected_sound_file and thinking_sound_options and wake_detected_sound_file not in {item["id"] for item in thinking_sound_options}:
+            raise ValueError(f"wake-detected sound '{wake_detected_sound_file}' is not a WAV file in assets/")
         if startup_loader_sound_file and thinking_sound_options and startup_loader_sound_file not in {item["id"] for item in thinking_sound_options}:
             raise ValueError(f"startup loader sound '{startup_loader_sound_file}' is not a WAV file in assets/")
         saved_startup_loader_sound_file = (
@@ -7484,6 +7526,7 @@ async def main():
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
                 "LISTENING_SOUND_FILE": listening_sound_file,
+                "WAKE_DETECTED_SOUND_FILE": wake_detected_sound_file,
                 "STARTUP_LOADER_SOUND_ENABLED": "true" if startup_loader_sound_file else "false",
                 "STARTUP_LOADER_SOUND_FILE": saved_startup_loader_sound_file,
                 "COMMAND_ACK_SOUND_ENABLED": "true" if command_ack_sound_enabled else "false",
@@ -7546,6 +7589,7 @@ async def main():
             "voice_id": voice_id,
             "thinking_sound_file": thinking_sound_file,
             "listening_sound_file": listening_sound_file,
+            "wake_detected_sound_file": wake_detected_sound_file,
             "command_ack_sound_enabled": command_ack_sound_enabled,
             "openai_tts_voice": openai_tts_voice,
             "openai_tts_speed": openai_tts_speed,
@@ -7696,6 +7740,7 @@ async def main():
         voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
         thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
         listening_sound_file = os.getenv("LISTENING_SOUND_FILE", "").strip()
+        wake_detected_sound_file = os.getenv("WAKE_DETECTED_SOUND_FILE", "").strip()
         startup_loader_sound_enabled = env_bool("STARTUP_LOADER_SOUND_ENABLED", False)
         startup_loader_sound_file = os.getenv("STARTUP_LOADER_SOUND_FILE", "loader.wav")
         command_ack_sound_enabled = env_bool("COMMAND_ACK_SOUND_ENABLED", False)
@@ -7821,6 +7866,7 @@ async def main():
         print(f"Using TTS provider: {tts_provider}")
         print(f"Using thinking sound file: {thinking_sound_file}")
         print(f"Using listening sound file: {listening_sound_file or 'disabled'}")
+        print(f"Using wake detected sound file: {wake_detected_sound_file or 'disabled'}")
         print(f"Using command ack sound: {'enabled' if command_ack_sound_enabled else 'disabled'}")
         print(f"Using backend audio input: {backend_audio_input_device or 'default'}")
         print(f"Using backend audio input gain: {backend_audio_input_gain:.2f}x")
@@ -7966,6 +8012,7 @@ async def main():
             elevenlabs_voice_id=voice_id,
             thinking_sound_file=thinking_sound_file,
             listening_sound_file=listening_sound_file,
+            wake_detected_sound_file=wake_detected_sound_file,
             startup_loader_sound_enabled=startup_loader_sound_enabled,
             startup_loader_sound_file=startup_loader_sound_file,
             command_ack_sound_enabled=command_ack_sound_enabled,
@@ -8444,7 +8491,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, listening_sound_file, startup_loader_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, backend_wake_word_model_paths, backend_wake_word_model_names, backend_wake_word_threshold, backend_wake_word_pre_roll_ms, backend_wake_word_cooldown_ms, backend_wake_word_vad_threshold, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, listening_sound_file, wake_detected_sound_file, startup_loader_sound_file, command_ack_sound_enabled, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, backend_wake_word_model_paths, backend_wake_word_model_names, backend_wake_word_threshold, backend_wake_word_pre_roll_ms, backend_wake_word_cooldown_ms, backend_wake_word_vad_threshold, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -8466,6 +8513,7 @@ async def main():
                 voice_id,
                 thinking_sound_file,
                 listening_sound_file,
+                wake_detected_sound_file,
                 startup_loader_sound_file,
                 command_ack_sound_enabled,
                 openai_tts_voice,
