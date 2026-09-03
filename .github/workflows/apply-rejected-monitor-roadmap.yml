@@ -1,0 +1,28 @@
+name: Apply rejected monitor roadmap note
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-rejected-monitor-roadmap.yml'
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply roadmap patch
+        run: python scripts/_patch_rejected_monitor_roadmap.py
+      - name: Verify roadmap note
+        run: |
+          grep -Fq 'Restore the intended `BACKEND_AUDIO_MONITOR_MODE=rejected` behavior' docs/ARCHITECTURE.md
+          grep -Fq 'openWakeWord must remain the only authorization path into `CAPTURE_COMMAND`' docs/ARCHITECTURE.md
+          git diff --check
+      - name: Commit roadmap update and remove temporary helpers
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm scripts/_patch_rejected_monitor_roadmap.py .github/workflows/apply-rejected-monitor-roadmap.yml
+          git add -A
+          git commit -m 'docs: track rejected monitor regression'
+          git push
