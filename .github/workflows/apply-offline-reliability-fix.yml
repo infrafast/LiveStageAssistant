@@ -15,8 +15,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install PortAudio headers
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev
+      - name: Install local audio dependencies
+        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev espeak-ng
       - name: Apply patch
         run: python scripts/_apply_offline_reliability_fix.py
       - name: Install test dependencies
