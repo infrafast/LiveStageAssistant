@@ -818,6 +818,18 @@ SPEAKER_PROFILE_1_ENABLED=false
 
 ---
 
+## Offline Reliability And Auto Profile Switching
+
+The offline runtime remains intentionally cloud-independent: `.env.offline` uses Ollama for the LLM, faster-whisper for STT, pyttsx3 for backend TTS, and local/stdio MCP servers. Auto mode must preserve that contract in both transition directions.
+
+Implemented reliability rules:
+
+- Network-status announcements use the TTS provider from the newly detected profile. In particular, an online-to-offline transition with `TTS_PROVIDER=pyttsx3` renders local speech and plays it through the configured backend output instead of silently skipping the announcement.
+- Runtime profile reloads may defer termination of the outgoing PyAudio object while cleanup completes, but retained instances are released immediately after the replacement assistant has constructed its own audio stack. Repeated online/offline transitions must not accumulate stale PyAudio instances.
+- The Raspberry Pi systemd service uses `TimeoutStopSec=15` with `KillMode=control-group` so a pathological local TTS, Ollama, Whisper, or child MCP shutdown cannot block service stop indefinitely. Normal cleanup still gets the first opportunity to stop TTS and close MCP sessions cleanly.
+
+Regression coverage should keep checking that the offline profile does not require cloud API keys, that local network announcements target the configured backend output, and that deferred reload audio resources are terminated and cleared. Hardware recette should include online -> offline -> online transitions, a complete offline voice command, and `systemctl stop livestageassistant` while local processing/TTS is active.
+
 ## Remaining Wake Word And Audio Validation Work
 
 The wake-word/audio refactor implementation is complete at the code level: `BACKEND_WAKE_WORD_MODE` has been removed from runtime/config, `WAKE_WORD=` disables wake detection, `WAKE_WORD=<value>` requires openWakeWord, backend capture uses the explicit `WAIT_WAKE` / `CAPTURE_COMMAND` / `PROCESSING` / `TTS` state machine, optional voice interruption reuses that state machine, and STT plus speaker recognition run in parallel when speaker recognition is enabled.

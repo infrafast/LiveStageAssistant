@@ -164,6 +164,24 @@ SPEAKER_REASON_USER_MESSAGES = {
     "matched": "profil vocal reconnu",
 }
 RELOAD_AUDIO_GUARD: list[Any] = []
+
+
+def release_reload_audio_guard() -> int:
+    """Terminate PyAudio instances retained only to survive a runtime profile reload."""
+    retained = list(RELOAD_AUDIO_GUARD)
+    RELOAD_AUDIO_GUARD.clear()
+    released = 0
+    for audio in retained:
+        try:
+            audio.terminate()
+            released += 1
+        except Exception as e:
+            print(f"Deferred backend audio termination failed: {e}")
+    if released:
+        print(f"Released {released} deferred backend audio instance(s) after reload.")
+    return released
+
+
 SESSION_LLM_SUMMARY_PROMPT = (
     "Create durable memory for this persisted assistant session.\n"
     "Keep only what should remain useful later: user preferences, future instructions, aliases, mappings, conventions, "
@@ -1769,6 +1787,61 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
         if cloud_provider == "none":
             print(f"Auto network status: {text}")
             return
+
+        if cloud_provider == "pyttsx3":
+            temp_path = None
+            temp_audio = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                    temp_path = temp_file.name
+                TTS_ENGINE.save_to_file(prepare_text_for_tts(text), temp_path)
+                TTS_ENGINE.runAndWait()
+                if not temp_path or not os.path.exists(temp_path) or os.path.getsize(temp_path) <= 0:
+                    raise RuntimeError("pyttsx3 did not render network status audio")
+                with suppress_native_stderr():
+                    temp_audio = pyaudio.PyAudio()
+                output_device_index, output_status, output_detail = resolve_pyaudio_device_index(
+                    temp_audio,
+                    values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
+                    input_device=False,
+                )
+                if output_status in {"invalid", "unavailable"}:
+                    raise RuntimeError(output_detail)
+                pipewire_target = parse_pipewire_id(values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), kind="sink")
+                try:
+                    play_wav_file_backend(
+                        temp_audio,
+                        temp_path,
+                        output_device_index=output_device_index,
+                        pipewire_target=pipewire_target,
+                        volume=backend_tts_volume,
+                        pan=backend_audio_output_pan,
+                    )
+                except Exception:
+                    pcm_bytes = decode_audio_file_to_pcm_bytes(temp_path)
+                    play_pcm_bytes(
+                        temp_audio,
+                        pcm_bytes,
+                        sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
+                        channels=DEFAULT_BACKEND_MP3_CHANNELS,
+                        output_device_index=output_device_index,
+                        pipewire_target=pipewire_target,
+                        volume=backend_tts_volume,
+                        pan=backend_audio_output_pan,
+                    )
+                return
+            except Exception as e:
+                print(f"Auto network status local pyttsx3 TTS failed: {e}")
+                return
+            finally:
+                if temp_audio is not None:
+                    try:
+                        temp_audio.terminate()
+                    except Exception:
+                        pass
+                if temp_path:
+                    with contextlib.suppress(OSError):
+                        os.unlink(temp_path)
 
         if cloud_provider == "elevenlabs":
             elevenlabs_api_key = read_secret_from_env_values(values, "ELEVENLABS_API_KEY")
@@ -8560,6 +8633,7 @@ async def main():
                 reload_event.clear()
                 active_env_file = get_active_env_file()
                 assistant = build_assistant_from_env(active_env_file, reload_event=reload_event, web_monitor=web_monitor)
+                release_reload_audio_guard()
                 reload_complete_message = None
                 if announce_reload_complete:
                     print("Configuration reload complete.")
@@ -8599,6 +8673,7 @@ async def main():
 
             reload_event.clear()
             assistant = build_assistant_from_env(detected_env_file, reload_event=reload_event, web_monitor=web_monitor)
+            release_reload_audio_guard()
             if announce_initial_network_status:
                 assistant.start_startup_loader_sound()
                 auto_monitor.announce_initial_status()

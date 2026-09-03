@@ -17,6 +17,7 @@ ExecStart=/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py 
 Restart=always
 RestartSec=5
 KillMode=control-group
+TimeoutStopSec=15
 StandardOutput=journal
 StandardError=journal
 
