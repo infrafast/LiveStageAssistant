@@ -34,6 +34,13 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def replace_all(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count < 1:
+        raise RuntimeError(f"RV0 cost anchor {label!r} expected at least once, found 0")
+    return text.replace(old, new)
+
+
 def is_instrumented(text: str) -> bool:
     return all(marker in text for marker in MARKERS) and "voice_cost_metrics import RV0_COST_COLLECTOR" in text
 
@@ -47,7 +54,7 @@ def instrument(text: str) -> str:
     text = replace_once(text, LLM_ANCHOR, LLM_REPLACEMENT, "ChatOpenAI callback")
     text = replace_once(text, PROCESS_ANCHOR, PROCESS_REPLACEMENT, "turn token snapshot")
     text = replace_once(text, RESPONSE_ANCHOR, RESPONSE_REPLACEMENT, "turn token delta")
-    text = replace_once(text, STT_ANCHOR, STT_REPLACEMENT, "backend STT duration")
+    text = replace_all(text, STT_ANCHOR, STT_REPLACEMENT, "OpenAI STT duration")
     text = replace_once(text, TTS_ANCHOR, TTS_REPLACEMENT, "OpenAI TTS duration")
     if not is_instrumented(text):
         raise RuntimeError("RV0 cost instrumentation did not reach expected final state")
