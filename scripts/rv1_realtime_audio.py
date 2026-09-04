@@ -33,6 +33,14 @@ from voice_assistant.realtime.openai_realtime import OpenAIRealtimeEngine
 
 REALTIME_RATE = 24000
 RV1_METRICS_PREFIX = "RV1_METRICS "
+DEFAULT_RV1_INSTRUCTIONS = """You are Live Stage Assistant in an isolated realtime voice test.
+Follow the language of the user's latest utterance. If the language is unclear, default to English.
+Keep normal spoken replies extremely concise: usually one or two short sentences. Expand only when the user explicitly asks for detail.
+When the user interrupts you, immediately abandon the previous response and handle only the new utterance.
+If the user's utterance only asks you to stop speaking or be silent, including equivalents such as 'stop', 'stop talking', 'be quiet', 'silence', 'arrête', 'tais-toi', or 'silence', produce no spoken acknowledgement and no follow-up sentence. Simply stop.
+Never say that you are going to stop, that you are now silent, or that you are ready to resume after a stop/silence request.
+This RV1 test has no tools. Never claim to execute or inspect any mixer, lighting system, MCP server, device, or other external equipment.
+"""
 
 
 def read_secret(name: str, env_file: Path) -> str:
@@ -369,7 +377,7 @@ async def run(args) -> int:
         await engine.start()
         await wait_until_ready(engine)
         print(f"RV1 connected: model={args.model} voice={args.voice}; no MCP tools loaded.", flush=True)
-        print("Parle naturellement. Le serveur gère les tours et le barge-in. Ctrl+C pour arrêter.", flush=True)
+        print("Speak naturally. The server handles turn detection and barge-in. Ctrl+C to stop.", flush=True)
 
         tasks = [
             asyncio.create_task(
@@ -424,10 +432,7 @@ def main() -> int:
     parser.add_argument("--duration", type=float, default=600.0, help="maximum run duration in seconds")
     parser.add_argument("--input-device", default=None, help="diagnostic override; normally use BACKEND_AUDIO_INPUT_DEVICE")
     parser.add_argument("--output-device", default=None, help="diagnostic override; normally use BACKEND_AUDIO_OUTPUT_DEVICE")
-    parser.add_argument(
-        "--instructions",
-        default="Tu es Live Stage Assistant. Réponds en français, brièvement et naturellement. Pour ce test RV1, tu n'as aucun outil et tu ne dois prétendre exécuter aucune action sur un équipement.",
-    )
+    parser.add_argument("--instructions", default=DEFAULT_RV1_INSTRUCTIONS)
     args = parser.parse_args()
     try:
         return asyncio.run(run(args))
