@@ -1,9 +1,14 @@
+import asyncio
 import unittest
 
-from voice_assistant.realtime import RealtimeEngine, RealtimeEngineConfig, RealtimeEngineState
+from voice_assistant.realtime.engine import RealtimeEngine, RealtimeEngineConfig, RealtimeEngineState, RealtimeEvent
 
 
 class DummyEngine(RealtimeEngine):
+    def __init__(self, config):
+        super().__init__(config)
+        self.events = asyncio.Queue()
+
     async def start(self):
         self.state = RealtimeEngineState.READY
 
@@ -12,6 +17,12 @@ class DummyEngine(RealtimeEngine):
 
     async def send_audio(self, pcm: bytes):
         return None
+
+    async def commit_audio(self):
+        return None
+
+    async def next_event(self):
+        return await self.events.get()
 
     async def cancel_response(self):
         return None
@@ -29,11 +40,20 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         await engine.stop()
         self.assertEqual(engine.state, RealtimeEngineState.STOPPED)
 
-    def test_config_requires_provider_and_model(self):
+    async def test_provider_neutral_event_contract(self):
+        engine = DummyEngine(RealtimeEngineConfig(provider="test", model="test-model"))
+        await engine.events.put(RealtimeEvent("audio_delta", {"audio": b"abc"}))
+        event = await engine.next_event()
+        self.assertEqual(event.type, "audio_delta")
+        self.assertEqual(event.data["audio"], b"abc")
+
+    def test_config_requires_provider_model_and_voice(self):
         with self.assertRaises(ValueError):
             RealtimeEngineConfig(provider="", model="x")
         with self.assertRaises(ValueError):
             RealtimeEngineConfig(provider="x", model="")
+        with self.assertRaises(ValueError):
+            RealtimeEngineConfig(provider="x", model="y", voice="")
 
 
 if __name__ == "__main__":
