@@ -4,15 +4,17 @@ Status: active design / experimental branch
 
 Branch: `realtime-voice-architecture`
 
-Purpose: track the migration of LiveStageAssistant (LSA) from the current cascaded voice pipeline toward a lower-latency, full-duplex conversational architecture while preserving stage-control safety, local wake-word handling, MCP integration, speaker recognition, and offline fallback.
+Purpose: define and track the migration of LiveStageAssistant (LSA) from the current cascaded voice pipeline toward a lower-latency, full-duplex conversational architecture while preserving stage-control safety, MCP integration, optional local wake-word handling, speaker recognition, GUI configuration and offline fallback.
 
-## 1. Why this branch exists
+This file is the single source of truth for the realtime voice experiment. Keep implementation decisions, milestones and short work-log notes here unless a separate document is genuinely necessary.
 
-The current LSA voice path is robust and modular, but its normal online path is still primarily sequential:
+## 1. Goals
+
+The current online voice path is primarily sequential:
 
 ```text
 microphone
-  -> local wake word (optional)
+  -> optional local wake word
   -> Silero VAD
   -> STT (Whisper API or local faster-whisper)
   -> LLM / MCPAgent
@@ -21,22 +23,32 @@ microphone
   -> speaker
 ```
 
-This design is easy to reason about but adds latency at each boundary and limits natural conversational behavior such as barge-in, overlapping listening/speaking, semantic turn detection, and long-lived audio sessions.
+This architecture is robust and easy to debug, but STT + LLM + TTS boundaries add latency and make natural full-duplex behavior harder.
 
-The goal of this branch is to experimentally evaluate and implement a realtime path without breaking the existing production path.
+The realtime branch must evaluate a faster speech-to-speech path without breaking the existing production path.
 
-## 2. Design principles
+Target improvements:
 
-1. **Do not rewrite LSA wholesale.** Preserve working MCP servers, routing rules, stage-control safeguards, config, web UI, session handling, and offline mode.
-2. **Keep safety-critical and venue-critical functions local.** Wake-word gating, stage tool authorization/routing, device access, and fallback behavior must remain under LSA control.
-3. **Use realtime speech-to-speech only where it produces a real benefit.** Do not remove local components merely because a cloud equivalent exists.
-4. **Provider abstraction is a requirement.** OpenAI Realtime may be the primary target, but the architecture should make room for Gemini Live and a local/offline pipeline.
-5. **Measure every change.** Subjective smoothness matters, but each prototype must log real latency checkpoints.
-6. **Existing pipeline remains rollback path.** Until the realtime path is proven on actual stage hardware, the existing pipeline stays available and selectable.
+- lower end-of-speech to audible-response latency;
+- natural follow-up turns;
+- barge-in / interruption;
+- persistent conversational sessions;
+- tool calling without blocking the audio path unnecessarily;
+- provider abstraction where practical;
+- preserved classic/offline fallback.
 
-## 3. Baseline architecture
+## 2. Non-negotiable design rules
 
-Current production path:
+1. Do not rewrite LSA wholesale.
+2. Preserve XMSeries-MCP and QLCPlus-MCP as the device-control layer.
+3. Realtime providers must not bypass existing LSA/MCP safety and target-resolution rules.
+4. Keep the classic STT -> LLM -> TTS pipeline available as fallback and offline mode.
+5. Wake word is optional in both classic and realtime modes.
+6. The existing GUI/config remains the source of truth for wake-word activation.
+7. Measure latency and reliability before replacing working code.
+8. Python remains the main backend language unless profiling proves a specific hot path needs another language.
+
+## 3. Current architecture
 
 ```text
                             LiveStageAssistant Python backend
@@ -47,8 +59,7 @@ Current production path:
               |                                                     |
               +--------------------------+--------------------------+
                                          |
-                                  openWakeWord
-                                  (when enabled)
+                              openWakeWord (optional)
                                          |
                                     Silero VAD
                                          |
@@ -70,24 +81,22 @@ Current production path:
 Strengths:
 
 - predictable behavior;
-- offline mode already exists;
-- local wake word and speaker recognition;
-- MCP control plane already working;
-- easy provider substitution;
+- local/offline mode already exists;
+- local wake word and speaker recognition already exist;
+- MCP control plane already works;
 - simple debugging boundaries.
 
 Weaknesses:
 
 - cumulative STT + LLM + TTS latency;
-- turn boundaries are primarily VAD/silence based;
+- silence/VAD-driven turn boundaries;
 - interruption requires explicit cancellation logic;
-- speech prosody is lost between STT and TTS;
-- conversational follow-ups still behave like a chain of discrete commands;
-- browser voice path is not a native realtime WebRTC conversation.
+- prosody is lost between STT and TTS;
+- browser audio path is not a native persistent WebRTC conversation.
 
 ## 4. Target architecture
 
-Recommended target is a hybrid architecture:
+Recommended target is hybrid:
 
 ```text
                      LOCAL LSA HOST (Pi / PC)
@@ -95,189 +104,250 @@ Recommended target is a hybrid architecture:
  microphone
      |
      v
- local wake word / activation gate
+ activation policy
      |
-     +-------------------------------+
-                                     |
-                              realtime session
-                                     |
-                                     v
-                         +-------------------------+
-                         | Realtime voice engine   |
-                         | OpenAI Realtime first   |
-                         | provider abstraction    |
-                         +-----------+-------------+
-                                     |
-                           tool/function requests
-                                     |
-                                     v
-                         +-------------------------+
-                         | LSA realtime tool layer |
-                         | validation / routing    |
-                         +-----------+-------------+
-                                     |
-                    +----------------+----------------+
-                    |                                 |
-                    v                                 v
-              XMSeries-MCP                       QLCPlus-MCP
-
-LSA keeps locally:
-- audio device selection and PipeWire/ALSA integration;
-- wake word activation;
-- speaker recognition where useful;
-- MCP tool execution and stage safety rules;
-- online/offline mode switching;
-- fallback cascaded STT -> LLM -> TTS pipeline;
-- observability, logs, config and session control.
+     +-- WAKE_WORD configured -> local openWakeWord gate
+     |
+     +-- WAKE_WORD empty ------> no wake gate
+     |
+     v
+ realtime session / realtime-ready state
+     |
+     v
+ +-------------------------+
+ | Realtime voice engine   |
+ | OpenAI Realtime first   |
+ | provider abstraction    |
+ +-----------+-------------+
+             |
+      tool/function request
+             |
+             v
+ +-------------------------+
+ | LSA realtime tool layer |
+ | validation / routing    |
+ +-----------+-------------+
+             |
+       +-----+-----+
+       |           |
+       v           v
+ XMSeries-MCP   QLCPlus-MCP
 ```
 
-## 5. Conversational session model
+LSA keeps locally:
 
-Wake word should remain local for stage use.
+- audio device selection and PipeWire/ALSA integration;
+- optional wake-word detection;
+- speaker recognition where useful;
+- MCP tool execution and safety rules;
+- online/offline switching;
+- classic pipeline fallback;
+- logs, metrics, configuration and session control.
 
-Proposed behavior:
+## 5. Wake-word policy: optional in every pipeline
+
+The wake word is not a dependency of realtime mode.
+
+The existing `WAKE_WORD` setting remains the single source of truth:
+
+```env
+# Empty = wake word disabled
+WAKE_WORD=
+
+# Non-empty = wake word enabled
+WAKE_WORD=mix
+```
+
+Required combinations:
+
+```text
+classic  + wake ON
+classic  + wake OFF
+realtime + wake ON
+realtime + wake OFF
+```
+
+### Wake word enabled
+
+```text
+WAKE_WORD configured
+        |
+        v
+local openWakeWord
+        |
+        v
+WAIT_WAKE
+        |
+  activation detected
+        |
+        v
+REALTIME_SESSION_ACTIVE
+```
+
+Once the realtime session is active, follow-up turns should not require repeating the wake word until the session closes by inactivity timeout, explicit stop, or another defined condition.
+
+Ambient pre-wake audio must not be sent continuously to a cloud provider solely to detect the wake phrase.
+
+### Wake word disabled
+
+```text
+WAKE_WORD empty
+        |
+        v
+REALTIME_READY / REALTIME_SESSION_ACTIVE
+        |
+        v
+provider/local turn detection
+```
+
+In this mode:
+
+- openWakeWord is not required;
+- `WAIT_WAKE` is not a mandatory state;
+- the exact realtime session-open policy may be persistent or demand-driven, but must not depend on a wake phrase.
+
+### GUI/config requirements
+
+The existing web GUI already exposes the wake-word field and must remain authoritative.
+
+Required behavior:
+
+1. Empty wake-word field means disabled.
+2. Non-empty wake-word field means enabled.
+3. Saving from the GUI writes the same `WAKE_WORD` setting used by classic mode.
+4. Switching `VOICE_PIPELINE` between `classic` and `realtime` must not erase or alter `WAKE_WORD`.
+5. Realtime mode must start normally with `WAKE_WORD=`.
+6. Local openWakeWord model controls are only relevant when a wake word is configured for the backend/local-microphone path.
+7. Status must distinguish `wake word: disabled` from `wake word: unavailable/error`.
+
+Do not introduce a second wake-word enable/disable setting. In particular, the earlier provisional idea `REALTIME_KEEP_WAKE_WORD_LOCAL=true` must not be used as an ON/OFF switch and should be omitted unless a genuine local-vs-remote wake-word choice is implemented later.
+
+## 6. Realtime session model
+
+With wake enabled:
 
 ```text
 WAIT_WAKE
    |
-   | wake word detected
+   | wake detected
    v
 REALTIME_SESSION_ACTIVE
    |
    +-- user speaks
-   +-- assistant can answer while session stays open
-   +-- user can interrupt assistant (barge-in)
-   +-- follow-up utterances do not require repeating wake word
-   +-- MCP actions may execute during the same session
+   +-- assistant answers
+   +-- user may interrupt assistant
+   +-- follow-up turns stay in same session
+   +-- MCP actions may execute
    |
    +-- inactivity timeout / explicit stop / safety condition
    v
 WAIT_WAKE
 ```
 
-The current `WAIT_WAKE -> CAPTURE_COMMAND -> PROCESSING -> TTS` state machine should not be deleted immediately. It should remain the classic/fallback path while a parallel realtime state machine is introduced.
+With wake disabled:
 
-## 6. Candidate realtime stacks
+```text
+REALTIME_READY
+   |
+   | speech / session activation
+   v
+REALTIME_SESSION_ACTIVE
+   |
+   +-- full-duplex conversation
+   +-- barge-in
+   +-- MCP actions
+   |
+   +-- provider/session policy
+   v
+REALTIME_READY
+```
 
-### Option A - OpenAI Realtime / Agents SDK direct
+The current classic state machine remains available during the experiment.
+
+## 7. Candidate realtime stacks
+
+### A. OpenAI Realtime / Agents SDK direct
+
+Use first as the latency reference.
 
 Pros:
 
-- shortest path to low-latency speech-to-speech;
-- persistent realtime session;
+- shortest speech-to-speech path;
+- persistent session;
 - native audio input/output;
 - interruptions and turn handling;
 - function/tool calling;
-- Python and TypeScript ecosystem;
-- browser WebRTC path is available.
+- Python and TypeScript support;
+- browser WebRTC path.
 
 Cons:
 
-- provider-specific implementation details;
+- provider-specific details;
 - cloud dependency;
-- pricing and API behavior must be monitored;
-- some ChatGPT product internals are not exposed as reusable libraries.
+- cost/API behavior must be monitored.
 
-Use case in LSA: primary reference implementation and latency baseline.
+### B. Pipecat + OpenAI Realtime
 
-### Option B - Pipecat + OpenAI Realtime
+Strong long-term candidate if its overhead is small.
 
 Pros:
 
 - Python-first;
-- purpose-built realtime voice pipelines;
+- realtime voice pipeline framework;
 - provider abstraction;
-- can connect OpenAI Realtime, Gemini Live, traditional STT/LLM/TTS and other transports;
-- lowers vendor lock-in;
-- fits LSA's existing Python backend.
+- OpenAI Realtime, Gemini Live and classic STT/LLM/TTS paths can coexist.
 
 Cons:
 
-- another framework and dependency layer;
-- must verify Raspberry Pi footprint and audio integration;
-- possible overlap with LSA's own session/state abstractions.
+- additional dependency/framework;
+- must verify Raspberry Pi CPU/RAM footprint;
+- possible overlap with LSA's own abstractions.
 
-Use case in LSA: likely best long-term orchestration candidate if measurements remain close to direct OpenAI Realtime.
+### C. LiveKit Agents
 
-### Option C - LiveKit Agents
+Reconsider if LSA evolves toward multiple remote participants/endpoints. Likely heavier than necessary for a single rack assistant today.
 
-Pros:
+### D. Gemini Live
 
-- mature WebRTC infrastructure;
-- strong multi-client/session architecture;
-- Python and Node support;
-- built-in voice-agent concepts and turn handling.
+Use as alternate realtime-provider benchmark after the OpenAI path works.
 
-Cons:
+### E. Existing classic pipeline
 
-- heavier than necessary for a single rack assistant;
-- additional infrastructure and conceptual overhead.
-
-Use case in LSA: reconsider if LSA evolves toward multiple remote participants, tablets, phones, FOH clients, or distributed audio endpoints.
-
-### Option D - Gemini Live direct
-
-Pros:
-
-- native realtime audio;
-- automatic VAD / interruption behavior;
-- tool calling;
-- useful comparison against OpenAI Realtime.
-
-Cons:
-
-- second provider-specific implementation;
-- must evaluate French voice quality, latency, MCP bridging, and API stability.
-
-Use case in LSA: alternate realtime provider and benchmark.
-
-### Option E - Existing cascaded pipeline
-
-Keep as:
+Keep for:
 
 - offline mode;
 - emergency fallback;
 - diagnostic baseline;
-- low-cost/non-realtime mode;
-- compatibility path when realtime providers are unavailable.
+- compatibility when realtime is unavailable.
 
-## 7. Language strategy
+## 8. Language strategy
 
 ### Python
 
-Keep Python as the main LSA backend language for now.
+Keep Python as the main backend language.
 
 Reasons:
 
-- current audio/session/MCP orchestration already exists;
-- Pipecat and OpenAI Agents SDK both support Python;
-- replacing Python alone would not remove cloud/network/model latency;
-- lower migration risk;
-- local ML components already integrate naturally.
+- current audio/session/MCP orchestration exists in Python;
+- OpenAI Agents SDK and Pipecat support Python;
+- changing language alone does not remove model/network latency;
+- lower migration risk.
 
 ### TypeScript
 
-Use TypeScript where it adds a concrete advantage:
+Use where it brings a concrete advantage:
 
 - browser-native WebRTC client;
 - OpenAI Realtime browser experiments;
-- existing MCP servers already use Node/TypeScript.
+- existing MCP servers are already Node/TypeScript.
 
 ### Go / Rust
 
-Do not rewrite the application in Go or Rust at this stage.
+Do not rewrite LSA in Go or Rust now.
 
-Potential future use:
+Only consider a small dedicated component later if profiling proves Python is a bottleneck in audio transport, DSP or buffering.
 
-- a tiny dedicated low-latency audio transport process;
-- DSP/audio buffering hot paths if profiling proves Python is the bottleneck;
-- embedded supervisor/service components.
-
-Any rewrite must be justified by profiling data, not architectural fashion.
-
-## 8. Proposed code layout
-
-Initial experimental layout:
+## 9. Proposed experimental code layout
 
 ```text
 voice_assistant/
@@ -294,25 +364,23 @@ voice_assistant/
       gemini_live.py
 ```
 
-The exact paths may change after examining current module boundaries. The principle is to isolate the realtime experiment from the classic path until it is proven.
-
-Possible configuration model:
+Provisional config:
 
 ```env
 VOICE_PIPELINE=classic              # classic | realtime
 REALTIME_PROVIDER=openai            # openai | pipecat-openai | gemini
 REALTIME_SESSION_IDLE_SECONDS=20
 REALTIME_ALLOW_BARGE_IN=true
-REALTIME_KEEP_WAKE_WORD_LOCAL=true
+
+# Existing shared setting; no second realtime-specific wake switch.
+WAKE_WORD=
 ```
 
-These names are provisional and must not be introduced into production config until the prototype stabilizes.
+Do not add production config keys until the prototype stabilizes.
 
-## 9. MCP integration strategy
+## 10. MCP integration
 
-Realtime providers must not bypass LSA's stage-control rules.
-
-Preferred flow:
+Realtime providers must call the existing control plane rather than duplicate mixer/lighting logic.
 
 ```text
 realtime model
@@ -323,81 +391,62 @@ LSA realtime tool adapter
    |
    +-- normalize arguments
    +-- enforce allowed tool set
-   +-- preserve target-name resolution policies
-   +-- call existing MCP client / MCPAgent-compatible layer
+   +-- preserve target-name resolution
+   +-- call existing MCP client/tool layer
    +-- return structured result
    v
 realtime model
 ```
 
-Do not duplicate XMSeries or QLC+ protocol logic inside the realtime provider adapter.
+Important:
 
-The MCP servers remain authoritative for device-specific control.
+- no duplicate XMSeries or QLC+ protocol implementation;
+- protect stage writes from duplicate execution during reconnect/cancel races;
+- distinguish stopping speech from cancelling a pending or already-executed stage action.
 
-## 10. Audio strategy
+## 11. Audio strategy
 
-### Backend/Pi path
+### Backend / Raspberry Pi
 
-Initial prototype should use the existing selected backend microphone/output devices and avoid redesigning PipeWire routing at the same time.
+Initial prototype must reuse the currently selected input/output devices rather than redesign PipeWire routing simultaneously.
 
-Questions to validate:
+Validate:
 
-- direct PCM streaming format expected by each realtime provider;
-- resampling cost and preferred sample rate;
-- frame duration (target small chunks, e.g. tens of milliseconds);
-- output buffering and jitter;
-- echo/feedback suppression on real stage hardware;
-- whether current device abstraction can support simultaneous capture and playback cleanly;
-- whether wake word can keep reading the microphone without fighting the realtime session.
+- PCM format/sample rate required by provider;
+- resampling cost;
+- small audio frame sizes;
+- output buffering/jitter;
+- simultaneous capture/playback;
+- echo/self-listening on actual stage hardware;
+- interaction between optional openWakeWord and an active realtime stream.
 
-### Browser path
+### Browser
 
-A later prototype should test direct browser WebRTC for realtime voice instead of browser-recorded utterances forwarded to Python.
+Later test direct browser WebRTC instead of recording complete utterances and forwarding them to Python.
 
-Security rule: permanent API keys must remain server-side. Browser realtime sessions must use the provider's supported ephemeral/session authorization pattern or an LSA backend handshake.
-
-## 11. Wake word strategy
-
-Keep openWakeWord local by default.
-
-Reasoning:
-
-- prevents ambient stage audio from continuously opening a cloud conversation;
-- limits bandwidth and API usage;
-- gives deterministic local activation;
-- continues working during partial network failure;
-- preserves user expectations around the assistant activation phrase.
-
-Realtime mode should introduce an activation window so the user does not repeat the wake word on every conversational turn.
-
-Need to define:
-
-- inactivity timeout;
-- explicit close phrases;
-- whether tool completion resets/extends timeout;
-- behavior while TTS is playing;
-- behavior after a barge-in;
-- interaction with speaker recognition.
+Permanent API keys remain server-side. Browser realtime sessions must use supported ephemeral/session authorization or an LSA backend handshake.
 
 ## 12. Speaker recognition
 
-Do not remove the current speaker-recognition feature.
-
-However, move it out of the latency-critical path wherever possible.
+Keep speaker recognition, but avoid keeping it unnecessarily in the latency-critical path.
 
 Experiments:
 
-1. identify speaker only immediately after wake activation;
-2. reuse identity during the active conversation session;
-3. run recognition concurrently with initial realtime connection setup;
-4. disable speaker recognition in benchmark mode to quantify its cost.
+1. identify only on activation/first turn;
+2. reuse identity for the active session;
+3. run recognition concurrently with realtime setup when possible;
+4. benchmark with recognition disabled to quantify cost.
+
+Wake-disabled mode must also have a defined speaker-recognition policy; it must not assume a wake event exists.
 
 ## 13. Latency instrumentation
 
-Every prototype must record monotonic timestamps for at least:
+Timestamps must work with or without wake word.
 
 ```text
-T0  wake word detected
+T0  activation reference
+    - wake detected when wake is enabled
+    - first accepted speech/session activation when wake is disabled
 T1  realtime audio streaming begins
 T2  user speech end / turn committed
 T3  first tool request emitted
@@ -408,97 +457,95 @@ T7  first response audio played
 T8  response playback ends
 ```
 
-Derived metrics:
+Track at least:
 
-- activation latency: T1 - T0;
-- end-of-speech to tool request: T3 - T2;
-- MCP execution latency: T5 - T4;
-- end-of-speech to first model audio: T6 - T2;
-- end-of-speech to audible response: T7 - T2;
-- total turn latency;
+- activation latency;
+- end-of-speech -> tool request;
+- MCP execution latency;
+- end-of-speech -> first model audio;
+- end-of-speech -> audible response;
 - interruption stop latency;
 - reconnect latency;
-- failure/fallback count.
+- fallback/failure count;
+- median, p90 and p95 where practical.
 
-Keep percentile summaries where possible: median, p90 and p95.
+## 14. Benchmark scenarios
 
-## 14. Test commands
+Use repeatable commands.
 
-Use a small repeatable benchmark suite rather than random conversations.
+No-tool:
 
-### No-tool conversational tests
+- short greeting with wake enabled;
+- same greeting with wake disabled;
+- normal follow-up turn;
+- interruption while assistant speaks.
 
-- `mix, bonjour`
-- `quelle heure est-il ?` (only if a tool/provider path supports it; otherwise use a static question)
-- short interruption while assistant is speaking.
+XMSeries:
 
-### XMSeries tests
+- read current main level;
+- read named bus/channel;
+- controlled write to a known test target;
+- relative adjustment;
+- follow-up: `monte Anto` -> `de combien ?` -> `de deux dB`.
 
-Start with non-destructive/read-only tools where available, then controlled writes.
+QLC+:
 
-Examples:
-
-- query the current main level;
-- query a named bus/channel;
-- set a known test bus to a controlled value;
-- relative adjustment on a known target;
-- conversational follow-up: `monte Anto` -> `de combien ?` -> `de deux dB`.
-
-### QLC+ tests
-
-- query known widget/state if supported;
-- trigger a safe test virtual-console control;
-- conversational follow-up around a known cue/widget.
+- read known state if available;
+- trigger a safe test control;
+- conversational follow-up around a known widget/cue.
 
 ## 15. Implementation milestones
 
-### M0 - Documentation and branch isolation
+### M0 - Documentation and baseline
 
-- [x] create dedicated branch `realtime-voice-architecture`;
-- [x] create this roadmap/design document;
+- [x] create branch `realtime-voice-architecture`;
+- [x] create this single roadmap/spec document;
+- [x] clarify that wake word is optional in classic and realtime modes;
 - [ ] link this document from the main architecture documentation on this branch;
-- [ ] record baseline latency from the current classic pipeline.
+- [ ] instrument and record classic-pipeline baseline latency.
 
 ### M1 - Minimal OpenAI Realtime spike
 
 Goal: prove audio round trip without MCP.
 
-- [ ] add isolated realtime package;
-- [ ] connect backend microphone to OpenAI Realtime;
-- [ ] stream returned audio to selected backend output;
-- [ ] support cancellation/interruption;
-- [ ] collect latency metrics;
-- [ ] no production-path changes.
+- [ ] isolated realtime package;
+- [ ] backend microphone -> OpenAI Realtime;
+- [ ] returned audio -> selected backend output;
+- [ ] cancellation/interruption;
+- [ ] latency metrics;
+- [ ] verify operation with `WAKE_WORD=`; no production-path changes.
 
 Exit criteria:
 
-- stable 10-minute conversation test;
-- interruption works repeatedly;
+- stable 10-minute conversation;
+- repeated interruption works;
 - measurable improvement over classic pipeline;
 - no audio-device lockups.
 
 ### M2 - One MCP tool
 
-Goal: realtime speech -> one controlled stage tool -> realtime speech response.
+Goal: realtime speech -> one controlled stage tool -> realtime speech.
 
-- [ ] expose one safe/read-only XMSeries tool first;
-- [ ] preserve existing MCP transport/client;
-- [ ] log tool-call timestamps;
-- [ ] add one controlled write test;
-- [ ] verify tool errors are spoken naturally without killing the session.
+- [ ] safe/read-only XMSeries tool first;
+- [ ] existing MCP transport/client preserved;
+- [ ] tool-call timestamps;
+- [ ] controlled write test;
+- [ ] natural tool-error response.
 
 Exit criteria:
 
 - 50 repeated commands without session corruption;
-- no duplicate tool execution;
-- cancellation cannot leave an ambiguous second write queued.
+- no duplicate writes;
+- cancellation/reconnect cannot leave ambiguous queued actions.
 
-### M3 - Local wake word + realtime session lifecycle
+### M3 - Optional wake word + realtime session lifecycle
 
-- [ ] use existing openWakeWord activation;
-- [ ] enter realtime conversation mode after activation;
-- [ ] define inactivity timeout;
-- [ ] return to `WAIT_WAKE` cleanly;
+- [ ] wake-enabled realtime uses existing local openWakeWord;
+- [ ] wake-disabled realtime does not require openWakeWord;
+- [ ] GUI save/reload preserves `WAKE_WORD`;
+- [ ] switching pipeline does not modify `WAKE_WORD`;
+- [ ] define session inactivity/close policy;
+- [ ] return to `WAIT_WAKE` only when wake is enabled;
 - [ ] verify assistant output cannot retrigger wake word;
 - [ ] test barge-in on real speakers/microphone.
 
@@ -506,42 +553,38 @@ Exit criteria:
 
 - [ ] XMSeries tool family;
 - [ ] QLCPlus tool family;
-- [ ] target-resolution and safety policies preserved;
-- [ ] structured error handling;
-- [ ] tool-call concurrency policy;
-- [ ] verification/read-back policy for writes.
+- [ ] target-resolution/safety policies preserved;
+- [ ] structured errors;
+- [ ] concurrency policy;
+- [ ] write verification/read-back policy.
 
 ### M5 - Pipecat comparison
 
-Implement the same benchmark through Pipecat.
-
-- [ ] equivalent OpenAI Realtime path;
-- [ ] measure added latency/CPU/RAM;
+- [ ] equivalent OpenAI Realtime benchmark through Pipecat;
+- [ ] compare latency, CPU and RAM;
 - [ ] compare code complexity;
 - [ ] compare provider portability;
-- [ ] decide direct SDK vs Pipecat for primary architecture.
+- [ ] choose direct SDK or Pipecat based on measurements.
 
-Decision checkpoint: write an ADR before choosing.
+Record the decision in this document.
 
 ### M6 - Alternate realtime provider
 
 - [ ] Gemini Live spike;
-- [ ] run same benchmark suite;
+- [ ] same benchmark suite;
 - [ ] compare French recognition/voice quality;
 - [ ] compare tool-call behavior;
-- [ ] compare session stability and reconnect behavior.
+- [ ] compare stability/reconnect behavior.
 
-### M7 - Browser WebRTC path
+### M7 - Browser WebRTC
 
-- [ ] add experimental browser realtime transport;
-- [ ] use server-mediated ephemeral/session authorization;
+- [ ] experimental browser realtime transport;
+- [ ] server-mediated ephemeral/session authorization;
 - [ ] retain text UI and classic browser path;
-- [ ] test mobile browser behavior;
-- [ ] measure browser->model->browser latency.
+- [ ] mobile-browser test;
+- [ ] latency measurement.
 
 ### M8 - Unified selectable voice pipeline
-
-Only after prior milestones pass:
 
 ```text
 VOICE_PIPELINE=classic | realtime
@@ -549,101 +592,83 @@ VOICE_PIPELINE=classic | realtime
 
 - [ ] runtime provider selection;
 - [ ] automatic fallback to classic path;
-- [ ] UI configuration;
+- [ ] GUI configuration;
 - [ ] health/status indicators;
-- [ ] documentation;
-- [ ] regression tests.
+- [ ] regression tests;
+- [ ] test classic + wake ON;
+- [ ] test classic + wake OFF;
+- [ ] test realtime + wake ON;
+- [ ] test realtime + wake OFF.
 
 ### M9 - Raspberry Pi 5 stage validation
 
-- [ ] CPU/RAM/temperature monitoring;
+- [ ] CPU/RAM/temperature;
 - [ ] network loss/reconnect;
-- [ ] high ambient-noise test;
-- [ ] XR16/X32 MCP test;
+- [ ] high ambient noise;
+- [ ] XR16/X32 MCP;
 - [ ] QLC+ simultaneous activity;
-- [ ] long-running session test;
-- [ ] service restart/recovery test.
+- [ ] long-running session;
+- [ ] service restart/recovery.
 
-## 16. Decision gates
+## 16. Merge gates
 
-Do not merge realtime mode into `main` until all of the following are true:
+Do not merge realtime mode into `main` until:
 
-- existing classic path still works;
+- classic path still works;
+- all four classic/realtime + wake ON/OFF combinations work;
+- wake-disabled realtime does not require openWakeWord models;
+- wake-enabled activation remains deterministic;
+- GUI/config behavior is preserved;
 - no regression in MCP safety or target resolution;
-- wake-word activation remains deterministic;
-- interruption behavior is reliable;
-- cloud/network failure returns safely to a known state;
-- no duplicate tool execution observed under reconnect/cancel conditions;
-- Raspberry Pi resource usage is acceptable;
-- measured latency materially improves the user experience;
+- interruption is reliable;
+- network/provider failure returns to a known safe state;
+- no duplicate tool execution under reconnect/cancel conditions;
+- Raspberry Pi resource use is acceptable;
+- measured latency materially improves user experience;
 - offline mode remains available.
 
-## 17. Risks to watch
+## 17. Main risks
 
-### Tool duplication during reconnect
+### Duplicate tool execution
 
-Realtime sessions and websocket reconnects can replay or race events. Stage writes must be protected against accidental double execution.
+Realtime reconnects can replay or race events. Stage writes must be idempotent or otherwise protected from accidental duplicate execution.
 
-### Barge-in and action semantics
+### Barge-in semantics
 
-Interrupting spoken output must not automatically cancel a stage action that already executed. LSA must distinguish:
-
-- cancel speech playback;
-- cancel model generation;
-- cancel pending tool request;
-- tool already committed/executed.
+Stopping spoken output is not the same as cancelling a stage action. LSA must distinguish playback cancellation, model cancellation, pending tool cancellation and an already-executed tool.
 
 ### Echo / self-listening
 
-Full duplex means the microphone remains active while LSA speaks. Echo handling must be tested on the actual rack audio topology, not only headphones.
+Full duplex must be tested on the actual rack audio topology, not only with headphones.
 
 ### Ambient speech
 
-A stage is hostile to voice detection. Local activation plus a bounded active-session window is safer than permanently open cloud audio.
+With wake enabled, local activation limits unwanted ambient streaming. With wake disabled, more ambient audio may be processed/streamed depending on session policy; the user explicitly chooses that behavior through configuration.
 
-### Provider outage or latency spike
+### Provider outage / latency spike
 
-Realtime must fail closed for stage control and fall back to classic/offline behavior when appropriate.
+Realtime must fail safely and preserve the classic/offline fallback.
 
 ### Cost
 
-Persistent realtime audio sessions can have different cost characteristics from short STT/LLM/TTS calls. Add usage logging before enabling long default session timeouts.
+Persistent realtime audio can cost differently from short STT/LLM/TTS calls. Add usage logging before enabling long default sessions.
 
-## 18. ADRs (Architecture Decision Records)
-
-Major decisions should be recorded under:
-
-```text
-docs/adr/
-```
-
-Suggested ADRs:
-
-- `ADR-001-realtime-provider-abstraction.md`
-- `ADR-002-direct-openai-vs-pipecat.md`
-- `ADR-003-local-wake-word-policy.md`
-- `ADR-004-realtime-tool-idempotency.md`
-- `ADR-005-browser-webrtc-security.md`
-
-Do not create an ADR for every small implementation choice. Use ADRs only when a decision changes long-term architecture or constrains future implementations.
-
-## 19. Work log
-
-Use this section for concise checkpoints so the branch can be resumed at any time.
+## 18. Work log
 
 ### 2026-09-04
 
 - Created branch `realtime-voice-architecture` from `main`.
-- Documented current classic architecture and realtime target.
-- Initial recommendation: evaluate **OpenAI Realtime direct first** as the latency reference, then implement the same benchmark through **Pipecat** before choosing the long-term orchestration layer.
-- Keep **openWakeWord local**, preserve MCP servers and safety logic, preserve existing offline/classic pipeline.
+- Documented current architecture and realtime target.
+- Initial strategy: benchmark OpenAI Realtime direct first, then Pipecat using the same scenarios.
+- Preserve MCP servers, safety logic and classic/offline fallback.
+- Clarified wake-word behavior after review: `WAKE_WORD` is optional and remains controlled by the existing GUI/config in both classic and realtime modes.
+- Consolidated the wake-word policy into this document; no separate ADR is required.
 - No runtime code changed yet.
 
-## 20. Next action
+## 19. Next action
 
-Start M0/M1 with two concrete tasks:
+1. Instrument the classic pipeline to establish baseline latency.
+2. Build a minimal isolated OpenAI Realtime audio spike without MCP.
+3. Verify that the spike runs with `WAKE_WORD=` before adding wake-enabled session gating.
 
-1. instrument the current classic pipeline to establish baseline latency;
-2. build a minimal isolated OpenAI Realtime audio spike with no MCP integration.
-
-Do not modify production voice behavior until those two measurements can be compared.
+Do not modify production voice behavior until the baseline and realtime spike can be compared.
