@@ -59,15 +59,15 @@ def main() -> int:
     print(f"stt: n={len(stt_costs)} audio_mean={mean(stt_seconds):.2f}s avg_usd=${avg_stt:.6f}")
     print(f"llm: n={len(llm_costs)} input={llm_inputs} cached={llm_cached} output={llm_outputs} avg_usd=${avg_llm:.6f}")
     if tts_costs:
-        print(f"tts: n={len(tts_costs)} audio_mean={mean(tts_seconds):.2f}s avg_estimated_usd=${avg_tts:.6f}")
+        print(f"tts_openai: n={len(tts_costs)} audio_mean={mean(tts_seconds):.2f}s avg_estimated_usd=${avg_tts:.6f}")
     else:
-        print("tts: n=0 audio duration unavailable (ffprobe required); TTS cost not estimated")
+        print("tts_openai: n=0 no OpenAI TTS records; current TTS may be ElevenLabs or local")
     if complete_n:
         total = avg_stt + avg_llm + avg_tts
-        print(f"classic_total: representative_n={complete_n} avg_estimated_usd=${total:.6f} per_100≈${total * 100:.4f}")
-        print("note: STT and LLM use measured request usage; TTS is an explicit duration-based estimate because /audio/speech has no per-request usage object.")
+        print(f"classic_total_openai_tts: representative_n={complete_n} avg_estimated_usd=${total:.6f} per_100≈${total * 100:.4f}")
+        print("note: STT and LLM use measured request usage; OpenAI TTS is an explicit duration-based estimate because /audio/speech has no per-request usage object.")
     else:
-        print("classic_total: incomplete component sample")
+        print("classic_total: incomplete component sample; add the active TTS provider usage separately")
     return 0
 
 
