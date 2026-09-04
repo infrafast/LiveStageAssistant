@@ -1,20 +1,16 @@
-"""Provider-neutral realtime engine contract introduced by RV0.
-
-RV0 deliberately contains no OpenAI, Gemini, WebSocket or WebRTC implementation.
-Provider transports start in RV1 and must implement this boundary without altering
-the existing classic or MCP execution paths.
-"""
+"""Provider-neutral realtime engine contract for realtime voice providers."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 
 class RealtimeEngineState(str, Enum):
     STOPPED = "stopped"
+    CONNECTING = "connecting"
     READY = "ready"
     ACTIVE = "active"
     ERROR = "error"
@@ -24,16 +20,29 @@ class RealtimeEngineState(str, Enum):
 class RealtimeEngineConfig:
     provider: str
     model: str
+    voice: str = "marin"
+    instructions: str = "Réponds en français, de façon concise et naturelle."
+    server_vad: bool = True
 
     def __post_init__(self) -> None:
         if not self.provider.strip():
             raise ValueError("realtime provider is required")
         if not self.model.strip():
             raise ValueError("realtime model is required")
+        if not self.voice.strip():
+            raise ValueError("realtime voice is required")
+
+
+@dataclass(frozen=True)
+class RealtimeEvent:
+    """Provider-neutral event emitted by a realtime engine."""
+
+    type: str
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 class RealtimeEngine(ABC):
-    """Minimal lifecycle contract shared by future realtime providers."""
+    """Lifecycle and event contract shared by realtime provider adapters."""
 
     def __init__(self, config: RealtimeEngineConfig) -> None:
         self.config = config
@@ -49,7 +58,11 @@ class RealtimeEngine(ABC):
 
     @abstractmethod
     async def send_audio(self, pcm: bytes) -> None:
-        """Send one backend audio chunk to the active realtime provider."""
+        """Send one 24 kHz mono PCM16 audio chunk to the active provider."""
+
+    @abstractmethod
+    async def next_event(self) -> RealtimeEvent:
+        """Wait for the next provider-neutral realtime event."""
 
     @abstractmethod
     async def cancel_response(self) -> None:
