@@ -119,18 +119,42 @@ npm run build
 
 For service-specific Raspberry Pi instructions, see `raspi_service_pack_stdio/README.md`.
 
-## Docker / Synology
+## Docker / Synology DSM
 
-Build and start the container:
+Docker/Container Manager on Synology DSM 7.x is supported. For a first deployment, start with the web monitor and browser/silent audio output; backend microphone/speaker passthrough can be added later if the NAS exposes usable audio hardware to Docker.
+
+Prepare the mounted configuration folder:
+
+```text
+container/config/
+  .env.infrafast
+  OPENAI_API_KEY.txt
+  ELEVENLABS_API_KEY.txt
+  mcp_servers.infrafast.json
+```
+
+Then build and start the container:
 
 ```bash
 docker compose up --build -d
 docker logs -f live-stage-assistant
 ```
 
-Store API key files in the mounted configuration folder and use the appropriate env profile under `container/config/`.
+The web monitor is normally available at:
 
-For Synology-specific setup, networking and audio passthrough, see `docs/synology-docker.md`.
+```text
+http://NAS_IP:8765
+```
+
+For a first run, keep the container in online mode and use browser TTS unless you specifically need NAS audio passthrough. Persisted chat/session data should use the mounted `/data` area supplied by the compose setup.
+
+If the monitor is exposed on your LAN or NAS, set `WEB_PASSWORD` in the active env profile. Leave it empty only if unauthenticated LAN access is intentional.
+
+The repository includes Docker profiles for different MCP network layouts. Select the profile that matches your deployment from the web config or through `ASSISTANT_ENV_FILE`. HTTP MCP profiles are appropriate when XMSeries-MCP/QLCPlus-MCP already run as reachable services; STDIO profiles are appropriate when the container starts mounted local MCP server scripts itself.
+
+In bridge networking, an MCP or Ollama service running outside the container must be addressed with a reachable LAN/Tailscale/service address, not `127.0.0.1`.
+
+Browser microphone access over a NAS/LAN address may require HTTPS depending on the browser. If backend audio passthrough is unavailable, LSA remains usable through browser audio or text commands.
 
 ## Basic Configuration
 
