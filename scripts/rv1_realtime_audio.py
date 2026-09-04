@@ -25,6 +25,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from voice_assistant.realtime.audio import Pcm16MonoResampler, downmix_pcm16, expand_pcm16_channels
+from voice_assistant.realtime.audio_devices import PipeWireInputStream, PipeWireOutputStream, parse_pipewire_selector
 from voice_assistant.realtime.engine import RealtimeEngineConfig
 from voice_assistant.realtime.metrics import realtime_usage_cost_usd
 from voice_assistant.realtime.openai_realtime import OpenAIRealtimeEngine
@@ -56,7 +57,7 @@ def resolve_device_index(pa: pyaudio.PyAudio, value: str, *, input_device: bool)
     if not value:
         return None
     try:
-        return int(value)
+        return int(value.split(":", 1)[0])
     except ValueError:
         pass
     key = "maxInputChannels" if input_device else "maxOutputChannels"
@@ -140,6 +141,24 @@ def open_output_stream(pa: pyaudio.PyAudio, index: int | None):
     raise RuntimeError("could not open realtime output: " + "; ".join(errors[-4:]))
 
 
+def open_configured_input(pa: pyaudio.PyAudio, selected: str):
+    target = parse_pipewire_selector(selected, kind="source")
+    if target:
+        stream = PipeWireInputStream(target, rate=REALTIME_RATE, channels=1, chunk=480)
+        return stream, REALTIME_RATE, 1, 480, f"PipeWire source {target}"
+    index = resolve_device_index(pa, selected, input_device=True)
+    return open_input_stream(pa, index)
+
+
+def open_configured_output(pa: pyaudio.PyAudio, selected: str):
+    target = parse_pipewire_selector(selected, kind="sink")
+    if target:
+        stream = PipeWireOutputStream(target, rate=REALTIME_RATE, channels=1)
+        return stream, REALTIME_RATE, 1, f"PipeWire sink {target}"
+    index = resolve_device_index(pa, selected, input_device=False)
+    return open_output_stream(pa, index)
+
+
 async def wait_until_ready(engine: OpenAIRealtimeEngine) -> None:
     while True:
         event = await asyncio.wait_for(engine.next_event(), timeout=15.0)
@@ -221,6 +240,7 @@ async def event_loop(
     response_started_at: dict[str, float] = {}
     speech_stop_by_response: dict[str, float] = {}
     first_audio_received: dict[str, float] = {}
+    completed_response_ids: set[str] = set()
     turn_index = 0
 
     while not stop_event.is_set():
@@ -256,6 +276,10 @@ async def event_loop(
                 print(f"Assistant: {text}", flush=True)
         elif event.type == "response_done":
             response_id = str(event.data.get("response_id") or current_response_id)
+            if response_id and response_id in completed_response_ids:
+                continue
+            if response_id:
+                completed_response_ids.add(response_id)
             usage = event.data.get("usage") or {}
             turn_index += 1
             speech_end = speech_stop_by_response.get(response_id)
@@ -325,18 +349,12 @@ async def run(args) -> int:
             pass
 
     try:
-        input_index = resolve_device_index(
-            pa,
-            args.input_device if args.input_device is not None else os.getenv("BACKEND_AUDIO_INPUT_DEVICE", ""),
-            input_device=True,
-        )
-        output_index = resolve_device_index(
-            pa,
-            args.output_device if args.output_device is not None else os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE", ""),
-            input_device=False,
-        )
-        input_stream, input_rate, input_channels, input_frames, input_name = open_input_stream(pa, input_index)
-        output_stream, output_rate, output_channels, output_name = open_output_stream(pa, output_index)
+        input_selected = args.input_device if args.input_device is not None else os.getenv("BACKEND_AUDIO_INPUT_DEVICE", "")
+        output_selected = args.output_device if args.output_device is not None else os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE", "")
+        input_stream, input_rate, input_channels, input_frames, input_name = open_configured_input(pa, input_selected)
+        output_stream, output_rate, output_channels, output_name = open_configured_output(pa, output_selected)
+        print(f"RV1 input selector: {input_selected or '<system default>'}", flush=True)
+        print(f"RV1 output selector: {output_selected or '<system default>'}", flush=True)
         print(f"RV1 input: {input_name} {input_channels}ch/{input_rate}Hz -> PCM16 mono/24000Hz", flush=True)
         print(f"RV1 output: PCM16 mono/24000Hz -> {output_name} {output_channels}ch/{output_rate}Hz", flush=True)
 
@@ -404,8 +422,8 @@ def main() -> int:
     parser.add_argument("--model", default="gpt-realtime-2.1-mini")
     parser.add_argument("--voice", default="marin")
     parser.add_argument("--duration", type=float, default=600.0, help="maximum run duration in seconds")
-    parser.add_argument("--input-device", default=None)
-    parser.add_argument("--output-device", default=None)
+    parser.add_argument("--input-device", default=None, help="diagnostic override; normally use BACKEND_AUDIO_INPUT_DEVICE")
+    parser.add_argument("--output-device", default=None, help="diagnostic override; normally use BACKEND_AUDIO_OUTPUT_DEVICE")
     parser.add_argument(
         "--instructions",
         default="Tu es Live Stage Assistant. Réponds en français, brièvement et naturellement. Pour ce test RV1, tu n'as aucun outil et tu ne dois prétendre exécuter aucune action sur un équipement.",
