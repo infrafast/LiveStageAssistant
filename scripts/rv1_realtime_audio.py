@@ -193,6 +193,7 @@ async def event_loop(engine, output_stream, output_rate: int, output_channels: i
         elif event.type == "response_started":
             response = event.data.get("response") or {}
             current_response_id = str(response.get("id") or "")
+            output_resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
             response_started_at[current_response_id] = now
             if speech_stopped_at is not None:
                 speech_stop_by_response[current_response_id] = speech_stopped_at
@@ -280,6 +281,7 @@ async def run(args) -> int:
     input_stream = output_stream = None
     engine = None
     stop_event = asyncio.Event()
+    tasks: list[asyncio.Task] = []
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -316,22 +318,27 @@ async def run(args) -> int:
         print(f"RV1 connected: model={args.model} voice={args.voice}; no MCP tools loaded.", flush=True)
         print("Parle naturellement. Le serveur gère les tours et le barge-in. Ctrl+C pour arrêter.", flush=True)
 
-        capture_task = asyncio.create_task(
-            capture_loop(engine, input_stream, input_rate, input_channels, input_frames, stop_event),
-            name="rv1-capture",
-        )
-        events_task = asyncio.create_task(
-            event_loop(engine, output_stream, output_rate, output_channels, stop_event),
-            name="rv1-events",
-        )
+        tasks = [
+            asyncio.create_task(
+                capture_loop(engine, input_stream, input_rate, input_channels, input_frames, stop_event),
+                name="rv1-capture",
+            ),
+            asyncio.create_task(
+                event_loop(engine, output_stream, output_rate, output_channels, stop_event),
+                name="rv1-events",
+            ),
+        ]
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=args.duration)
         except asyncio.TimeoutError:
             stop_event.set()
-        await asyncio.gather(capture_task, events_task, return_exceptions=True)
         return 0
     finally:
         stop_event.set()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         if engine is not None:
             await engine.stop()
         for stream in (input_stream, output_stream):
