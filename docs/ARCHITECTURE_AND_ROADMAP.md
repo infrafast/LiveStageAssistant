@@ -2,7 +2,7 @@
 
 This document is the single technical source of truth for LiveStageAssistant architecture, runtime behavior, implementation roadmap, planned improvements, validation work and milestone tracking.
 
-The user-facing installation and usage guide remains [README.md](../README.md). Deployment-specific practical guides remain in [raspi_service_pack_stdio/README.md](../raspi_service_pack_stdio/README.md) and [docs/synology-docker.md](synology-docker.md). Deep technical design, roadmap decisions and implementation tracking belong here unless a separate file is strictly required by the task.
+The user-facing installation and usage guide remains [README.md](../README.md). Deep technical design, roadmap decisions and implementation tracking belong here. Separate documentation is kept only when it is genuinely operational and cannot reasonably be consolidated without harming clarity.
 
 Developer reference: https://deepwiki.com/infrafast/LiveStageAssistant
 
@@ -185,18 +185,82 @@ Auto profile switching must preserve this contract in both directions. Runtime r
 
 Raspberry Pi service shutdown remains bounded so a pathological local component cannot block systemd stop indefinitely.
 
-## 1.9 Docker / Synology notes
+## 1.9 Docker / Synology architecture
 
-Docker packages the Python backend and Node.js support required by local MCP servers.
+Docker packages the Python backend together with Node.js support required by local stdio MCP servers. Synology DSM 7.x uses the same container architecture through Docker/Container Manager; Synology is a deployment target, not a separate application mode.
 
-Key constraints:
+### Container layout and persistence
 
-- backend microphone/speaker access requires host audio passthrough;
-- MCP servers must be reachable from the container;
-- offline mode requires local model caches or reachable local services;
-- stdio MCP servers must be mounted after installation/build.
+The compose setup mounts configuration and persistent data separately:
 
-Detailed deployment procedures stay in the dedicated deployment guides, not here.
+```text
+container/
+  config/
+    .env.infrafast
+    OPENAI_API_KEY.txt
+    ELEVENLABS_API_KEY.txt
+    mcp_servers.infrafast.json
+  data/
+```
+
+`./container/config` is mounted at `/config` and `./container/data` at `/data`. Persisted chat/session state should use a writable path such as `SESSION_CONTEXT_DIR=/data/contexts`. Speaker-recognition data is also expected under persistent `/data` storage.
+
+The image contains the application runtime and bundled web assets. When Compose mounts `./assets:/app/assets:ro`, that host folder must be complete because a partial bind mount hides the corresponding files already present in the image.
+
+The container entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when provided, defaults to `/config/.env.infrafast`, and may otherwise select a mounted `.env*` profile. The assistant itself loads that env file; Docker Compose does not need to inject the whole application configuration through `env_file`.
+
+### Docker profiles
+
+Multiple mounted profile pairs can represent different MCP topologies, for example:
+
+- default remote HTTP MCP endpoints;
+- LAN/local HTTP endpoints;
+- Tailscale HTTP endpoints;
+- mounted local stdio MCP servers.
+
+Only one application env profile is active at a time. The web profile selector can enumerate mounted `.env*` files when manual switching is allowed. Profile names are deployment conveniences; the architectural distinction is HTTP MCP versus local stdio MCP.
+
+### Bridge and host networking
+
+Bridge networking is the default/recommended container shape. The web monitor is published from the container's internal `WEB_MONITOR_PORT`, normally `8765`, to a host/NAS port selected by Compose. `WEB_MONITOR_HOST_PORT` changes the published host port only; it does not change the assistant's internal listener.
+
+In bridge mode:
+
+- `127.0.0.1` refers to the LSA container itself;
+- external MCP servers, Ollama or other services must use a reachable LAN IP, Tailscale IP, Docker service name or other routable address;
+- host audio requires `/dev/snd`/audio-group passthrough and compatible host hardware.
+
+If host networking is intentionally used instead, the Compose `ports` mapping must be removed because published ports do not apply in host mode.
+
+### MCP placement: HTTP versus stdio
+
+When XMSeries-MCP or QLCPlus-MCP runs as a separate HTTP service/container, LSA's MCP config should contain only the streamable HTTP endpoint and optional MCP authentication headers. Mixer/QLC protocol settings such as OSC host, OSC port and protocol belong to the MCP service itself, not to the LSA application env.
+
+When an MCP runs as a local stdio child process, its built checkout must be mounted into the LSA container and its script path plus MCP-specific environment belong in the selected `mcp_servers*.json` entry. This preserves the ownership boundary: LSA controls MCP transport/orchestration, while each MCP owns its device-specific configuration.
+
+Raw LAN/Tailscale addresses normally use `http://` unless the MCP endpoint is genuinely behind TLS. Using `https://` against a plain HTTP service results in TLS/protocol errors.
+
+### MCP admin proxy
+
+The web monitor can expose MCP admin pages either directly or through the LSA backend proxy. Proxy mode is useful when the browser can reach only the NAS/LSA host while that host can reach MCP servers through Tailscale or another private network. In proxy mode, configured bearer headers are applied server-side and are not exposed to the browser.
+
+Local stdio MCP entries have no independent HTTP admin frame. When the UI edits routing metadata such as `assistantOptions.routing`, saving rewrites the active MCP configuration and reloads the assistant; therefore the selected MCP JSON must be writable by the container user.
+
+### Docker/Synology audio and browser constraints
+
+Backend audio exists only when the host exposes compatible audio hardware to the container. `/dev/snd` passthrough does not guarantee that a NAS USB/audio device will work with PyAudio/ALSA. Browser audio or text mode remains the preferred fallback.
+
+Browser microphone capture on a LAN/NAS hostname may require HTTPS because browsers restrict microphone access in insecure contexts. Browser device selection is local to each browser and is not a server-side audio-routing setting.
+
+Backend audio capture auto-selects a channel/rate combination that can actually be opened and resamples internally to the 16 kHz representation used by Silero VAD. This avoids assuming that a NAS/Pi ALSA device accepts a native 16 kHz stream.
+
+Runtime config reloads interrupt active backend capture and must release or defer audio/TTS/MCP resources without blocking the replacement runtime. These reload semantics are part of the general runtime architecture, not Synology-specific behavior.
+
+### Security and first-run posture
+
+A LAN/NAS-exposed web monitor should use `WEB_PASSWORD` unless unauthenticated access is deliberately accepted. Permanent API keys stay in mounted secret text files, not in the image.
+
+The recommended first validation shape is browser/text control with browser or silent TTS. This proves the app, MCP connectivity and API configuration before adding host audio passthrough. Operational commands for creating the Synology project, starting Compose and accessing the monitor live in the user-facing README rather than this architecture section.
 
 ## 1.10 Rack connectivity, Tailscale and remote MCP
 
@@ -717,7 +781,7 @@ Much of this roadmap is already implemented; remaining work is primarily hardwar
 
 1. This file is the default destination for architecture-level plans, future improvements, technical debt that changes architecture, and implementation milestones.
 2. Do not create `*_ROADMAP.md`, `*_ARCHITECTURE.md`, ADR collections or parallel design files for work that can be represented here.
-3. Deployment/runbook documentation may stay separate when it is operational rather than architectural.
+3. Separate operational documentation should be exceptional and kept only when consolidation would make README or this file materially worse.
 4. A milestone is checked `[x]` only after implementation and its required test/validation pass.
 5. When implementation reveals a changed design, update the relevant roadmap subsection before or in the same commit as the code.
 6. Keep milestone identifiers stable once used in conversation, commits or implementation requests.
