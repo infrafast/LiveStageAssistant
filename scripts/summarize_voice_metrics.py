@@ -9,6 +9,10 @@ import re
 import statistics
 import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from voice_assistant.voice_metrics import parse_voice_metrics_line
 
 STT_RE = re.compile(r"STT finished in ([0-9.]+)s\.")
