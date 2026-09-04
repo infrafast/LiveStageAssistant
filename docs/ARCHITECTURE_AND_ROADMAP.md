@@ -198,6 +198,50 @@ Key constraints:
 
 Detailed deployment procedures stay in the dedicated deployment guides, not here.
 
+## 1.10 Rack connectivity, Tailscale and remote MCP
+
+The mobile-rack architecture keeps the MCP servers physically or logically close to the stage hardware. A Raspberry Pi or equivalent rack computer acts as the control gateway; LiveStageAssistant may run on a Synology NAS, PC, Raspberry Pi, container host or another authorized machine.
+
+```text
+                   LiveStageAssistant / remote agent
+                              |
+                    MCP over Streamable HTTP
+                              |
+              +---------------+----------------+
+              |                                |
+       private Tailscale                trusted HTTPS
+       when both nodes can              when an external
+       join the tailnet                 client needs it
+              |                                |
+              +---------------+----------------+
+                              |
+                              v
+                     RACK GATEWAY / PI
+                 +------------+-------------+
+                 |                          |
+          XMSeries-MCP                 QLCPlus-MCP
+          HTTP MCP                     HTTP MCP
+                 |                          |
+            local OSC               local/native QLC+
+                 |                          |
+             mixer                     lighting
+```
+
+Architectural rules:
+
+- Tailscale is the preferred private transport when LSA and the rack gateway can join the same tailnet. It gives remote MCP access without forwarding venue/router ports.
+- Public HTTPS is an alternative, not a requirement. When an MCP must be reachable by a client that cannot join the tailnet, expose only the MCP HTTP surface through trusted TLS and appropriate authentication/access control. A reverse proxy or Tailscale Funnel may provide this transport, but neither is part of the MCP business logic.
+- OSC, DMX/native lighting ports and other device protocols stay on the rack/local network. Do not expose them directly to the public Internet.
+- No NAS subnet routing is required merely to control the rack: LSA talks to the rack MCP endpoint, and the rack MCP server talks locally to the device.
+- MCP server ports, Tailscale addresses, DNS names and rack LAN addresses are deployment values, not architectural constants. The selected `.env` and `MCP_CONFIG` files are the source of truth.
+- The rack remains usable behind venue Wi-Fi, guest networks, 4G/5G routers, phone tethering, Starlink or another upstream connection as long as the chosen private/public MCP transport can establish outbound connectivity.
+
+The repository still carries an explicit `.env.tailscale` profile using `mcp_servers_tailscale.json`. The current configuration demonstrates that private and public transports can coexist: the mixer MCP is addressed through a private Tailscale IP while QLCPlus-MCP is addressed through a trusted HTTPS endpoint. This hybrid topology is valid and is more general than the older assumption that every remote MCP must use Tailscale.
+
+The original rack design used a fixed example topology such as a rack LAN in `192.168.100.0/24` and a mixer at `192.168.100.16`. Such addresses remain useful deployment examples but must not be copied into generic architecture logic. Likewise, XMSeries-MCP OSC port/protocol settings must follow the actual mixer family and MCP configuration rather than a single hard-coded port.
+
+This section supersedes the former `LiveStageAssistant_Architecture_Tailscale_Rack.docx`: its durable design principles are retained here, while old installation commands, fixed addresses and the former “QLC-MCP future” wording are intentionally not preserved as architecture requirements.
+
 ---
 
 # 2. Roadmap System
