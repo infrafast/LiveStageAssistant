@@ -196,11 +196,20 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                 audio = base64.b64decode(event.get("delta") or "", validate=True)
             except Exception:
                 audio = b""
-            return RealtimeEvent("audio_delta", {"audio": audio})
+            return RealtimeEvent(
+                "audio_delta",
+                {"audio": audio, "response_id": str(event.get("response_id") or "")},
+            )
         if event_type == "response.output_audio_transcript.delta":
-            return RealtimeEvent("transcript_delta", {"text": str(event.get("delta") or "")})
+            return RealtimeEvent(
+                "transcript_delta",
+                {"text": str(event.get("delta") or ""), "response_id": str(event.get("response_id") or "")},
+            )
         if event_type == "response.output_audio_transcript.done":
-            return RealtimeEvent("transcript_done", {"text": str(event.get("transcript") or "")})
+            return RealtimeEvent(
+                "transcript_done",
+                {"text": str(event.get("transcript") or ""), "response_id": str(event.get("response_id") or "")},
+            )
         if event_type == "response.done":
             self._response_active = False
             self.state = RealtimeEngineState.READY
@@ -208,6 +217,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             return RealtimeEvent(
                 "response_done",
                 {
+                    "response_id": str(response.get("id") or ""),
                     "status": response.get("status"),
                     "usage": response.get("usage") or {},
                     "response": response,
