@@ -169,15 +169,58 @@ async def capture_loop(engine, stream, source_rate: int, channels: int, frames: 
                 return
 
 
-async def event_loop(engine, output_stream, output_rate: int, output_channels: int, stop_event: asyncio.Event) -> None:
-    output_resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
+async def playback_loop(
+    playback_queue: asyncio.Queue,
+    output_stream,
+    output_rate: int,
+    output_channels: int,
+    interrupted_responses: set[str],
+    first_audio_played: dict[str, float],
+    stop_event: asyncio.Event,
+) -> None:
     current_response_id = ""
-    interrupted_responses: set[str] = set()
+    resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
+    while not stop_event.is_set():
+        response_id, audio = await playback_queue.get()
+        if response_id in interrupted_responses:
+            continue
+        if response_id != current_response_id:
+            current_response_id = response_id
+            resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
+        converted = resampler.process(audio)
+        if not converted:
+            continue
+        converted = expand_pcm16_channels(converted, output_channels)
+        if response_id not in first_audio_played:
+            first_audio_played[response_id] = time.perf_counter()
+        try:
+            await asyncio.to_thread(output_stream.write, converted)
+        except Exception as exc:
+            print(f"RV1 output error: {exc}", flush=True)
+            stop_event.set()
+            return
+
+
+def clear_playback_queue(playback_queue: asyncio.Queue) -> None:
+    while True:
+        try:
+            playback_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return
+
+
+async def event_loop(
+    engine,
+    playback_queue: asyncio.Queue,
+    interrupted_responses: set[str],
+    first_audio_played: dict[str, float],
+    stop_event: asyncio.Event,
+) -> None:
+    current_response_id = ""
     speech_stopped_at: float | None = None
     response_started_at: dict[str, float] = {}
     speech_stop_by_response: dict[str, float] = {}
     first_audio_received: dict[str, float] = {}
-    first_audio_played: dict[str, float] = {}
     turn_index = 0
 
     while not stop_event.is_set():
@@ -187,13 +230,13 @@ async def event_loop(engine, output_stream, output_rate: int, output_channels: i
             print("RV1 speech started", flush=True)
             if current_response_id:
                 interrupted_responses.add(current_response_id)
+                clear_playback_queue(playback_queue)
         elif event.type == "speech_stopped":
             speech_stopped_at = now
             print("RV1 speech stopped", flush=True)
         elif event.type == "response_started":
             response = event.data.get("response") or {}
             current_response_id = str(response.get("id") or "")
-            output_resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
             response_started_at[current_response_id] = now
             if speech_stopped_at is not None:
                 speech_stop_by_response[current_response_id] = speech_stopped_at
@@ -206,18 +249,7 @@ async def event_loop(engine, output_stream, output_rate: int, output_channels: i
                 continue
             if response_id not in first_audio_received:
                 first_audio_received[response_id] = now
-            converted = output_resampler.process(audio)
-            if not converted:
-                continue
-            converted = expand_pcm16_channels(converted, output_channels)
-            if response_id not in first_audio_played:
-                first_audio_played[response_id] = time.perf_counter()
-            try:
-                await asyncio.to_thread(output_stream.write, converted)
-            except Exception as exc:
-                print(f"RV1 output error: {exc}", flush=True)
-                stop_event.set()
-                return
+            await playback_queue.put((response_id, audio))
         elif event.type == "transcript_done":
             text = str(event.data.get("text") or "").strip()
             if text:
@@ -282,6 +314,9 @@ async def run(args) -> int:
     engine = None
     stop_event = asyncio.Event()
     tasks: list[asyncio.Task] = []
+    playback_queue: asyncio.Queue = asyncio.Queue()
+    interrupted_responses: set[str] = set()
+    first_audio_played: dict[str, float] = {}
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -324,8 +359,20 @@ async def run(args) -> int:
                 name="rv1-capture",
             ),
             asyncio.create_task(
-                event_loop(engine, output_stream, output_rate, output_channels, stop_event),
+                event_loop(engine, playback_queue, interrupted_responses, first_audio_played, stop_event),
                 name="rv1-events",
+            ),
+            asyncio.create_task(
+                playback_loop(
+                    playback_queue,
+                    output_stream,
+                    output_rate,
+                    output_channels,
+                    interrupted_responses,
+                    first_audio_played,
+                    stop_event,
+                ),
+                name="rv1-playback",
             ),
         ]
         try:
