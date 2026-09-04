@@ -1,5 +1,5 @@
-"""Provider-neutral realtime voice boundary. Live transports begin in RV1."""
+"""Provider-neutral realtime voice boundary."""
 
-from .engine import RealtimeEngine, RealtimeEngineConfig, RealtimeEngineState
+from .engine import RealtimeEngine, RealtimeEngineConfig, RealtimeEngineState, RealtimeEvent
 
-__all__ = ["RealtimeEngine", "RealtimeEngineConfig", "RealtimeEngineState"]
+__all__ = ["RealtimeEngine", "RealtimeEngineConfig", "RealtimeEngineState", "RealtimeEvent"]
