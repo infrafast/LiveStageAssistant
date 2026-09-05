@@ -8,7 +8,7 @@ It exposes only non-secret configuration values and applies targeted updates via
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .realtime.mcp_config import (
     CanonicalMCPServerConfig,
@@ -17,8 +17,29 @@ from .realtime.mcp_config import (
 )
 
 
-def server_web_payload(server: CanonicalMCPServerConfig) -> dict[str, Any]:
-    """Return the editable, non-secret realtime policy for one MCP server."""
+def _tool_names(values: Sequence[Any] | None) -> list[str]:
+    result: list[str] = []
+    for item in values or ():
+        if isinstance(item, Mapping):
+            text = str(item.get("name") or "").strip()
+        else:
+            text = str(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def server_web_payload(
+    server: CanonicalMCPServerConfig,
+    *,
+    discovered_tools: Sequence[Any] | None = None,
+) -> dict[str, Any]:
+    """Return the editable, non-secret realtime policy for one MCP server.
+
+    ``discovered_tools`` is runtime/UI metadata only. It is never persisted by
+    this module; the canonical JSON stores only ``allowedTools`` when a server
+    is configured in restricted mode.
+    """
     return {
         "name": server.name,
         "native_url": server.native.url,
@@ -26,12 +47,21 @@ def server_web_payload(server: CanonicalMCPServerConfig) -> dict[str, Any]:
         "realtime_transport": server.realtime.transport,
         "permission_mode": server.realtime.permissions.mode,
         "allowed_tools": list(server.realtime.permissions.allowed_tools),
+        "discovered_tools": _tool_names(discovered_tools),
     }
 
 
-def load_web_mcp_policies(path: str | Path) -> list[dict[str, Any]]:
+def load_web_mcp_policies(
+    path: str | Path,
+    *,
+    discovered_tools: Mapping[str, Sequence[Any]] | None = None,
+) -> list[dict[str, Any]]:
     inventory = load_mcp_inventory(path)
-    return [server_web_payload(inventory[name]) for name in sorted(inventory)]
+    catalog = discovered_tools or {}
+    return [
+        server_web_payload(inventory[name], discovered_tools=catalog.get(name))
+        for name in sorted(inventory)
+    ]
 
 
 def update_web_mcp_policy(
