@@ -38,6 +38,7 @@ def _active_env_file_from_snapshot(snapshot: dict[str, Any]) -> Path:
 def _write_env_value(path: Path, key: str, value: str) -> None:
     if not path.is_file():
         raise ValueError(f"active env file not found: {path}")
+    original_mode = path.stat().st_mode & 0o777
     lines = path.read_text(encoding="utf-8").splitlines()
     prefix = f"{key}="
     replaced = False
@@ -61,6 +62,7 @@ def _write_env_value(path: Path, key: str, value: str) -> None:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
         handle.write(text)
         tmp_path = Path(handle.name)
+    os.chmod(tmp_path, original_mode)
     tmp_path.replace(path)
 
 
