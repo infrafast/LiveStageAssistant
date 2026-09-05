@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,7 @@ if str(ROOT) not in sys.path:
 
 from scripts import rv1_realtime_audio as rv1
 from voice_assistant.realtime.engine import RealtimeEngineConfig, RealtimeMCPServer
+from voice_assistant.realtime.mcp_bridge import load_remote_mcp_prompt
 from voice_assistant.realtime.metrics import realtime_usage_cost_usd
 from voice_assistant.realtime.openai_realtime import OpenAIRealtimeEngine
 
@@ -143,6 +145,32 @@ def load_native_server(args, env_file: Path) -> RealtimeMCPServer:
         allowed_tools=allowed_tools,
         require_approval=require_approval,
     )
+
+
+def mcp_prompt_loading_enabled() -> bool:
+    return str(os.getenv("MCP_LOAD_SERVER_PROMPT", "true")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+async def attach_native_mcp_prompt(server: RealtimeMCPServer) -> RealtimeMCPServer:
+    """Preload optional MCP-owned instructions from the same remote MCP endpoint."""
+    if not mcp_prompt_loading_enabled():
+        print("RV2 MCP prompt: disabled by MCP_LOAD_SERVER_PROMPT", flush=True)
+        return server
+    try:
+        prompt = await load_remote_mcp_prompt(
+            server_name=server.label,
+            url=server.url,
+            authorization=server.authorization,
+            headers=server.headers,
+        )
+    except Exception as exc:
+        print(f"RV2 MCP prompt: unavailable ({exc})", flush=True)
+        return server
+    if not prompt:
+        print("RV2 MCP prompt: not exposed by remote MCP", flush=True)
+        return server
+    print(f"RV2 MCP prompt: loaded from remote MCP ({len(prompt)} chars)", flush=True)
+    return replace(server, context_instructions=prompt)
 
 
 def safe_tool_summary(tool: dict) -> dict:
@@ -335,7 +363,7 @@ async def run(args) -> int:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY / OPENAI_API_KEY_FILE is not configured")
 
-    server = load_native_server(args, env_file)
+    server = await attach_native_mcp_prompt(load_native_server(args, env_file))
     print("RV2 mode: native only", flush=True)
     print(f"RV2 MCP server: label={server.label} url={server.url}", flush=True)
     print(f"RV2 MCP auth: {'configured' if server.authorization or server.headers else 'none'}", flush=True)
