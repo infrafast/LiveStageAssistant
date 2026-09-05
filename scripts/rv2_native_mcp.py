@@ -56,8 +56,7 @@ def resolve_path(value: str, env_file: Path) -> Path:
 def expand_mapping(values: dict) -> dict[str, str]:
     result: dict[str, str] = {}
     for key, value in values.items():
-        text = os.path.expandvars(str(value))
-        result[str(key)] = text
+        result[str(key)] = os.path.expandvars(str(value))
     return result
 
 
@@ -73,26 +72,35 @@ def split_authorization(headers: dict[str, str]) -> tuple[str, dict[str, str]]:
     return authorization, clean
 
 
-def load_native_server(args, env_file: Path) -> RealtimeMCPServer:
-    headers: dict[str, str] = {}
-    url = (args.mcp_url or "").strip()
-    label = args.mcp_label.strip() or args.mcp_server.strip()
+def load_config_entry(args, env_file: Path) -> tuple[Path, dict]:
+    config_value = (args.mcp_config or os.getenv("MCP_CONFIG") or "mcp_servers.json").strip()
+    config_path = resolve_path(config_value, env_file)
+    if not config_path.is_file():
+        if args.mcp_url:
+            return config_path, {}
+        raise RuntimeError(f"MCP config not found: {config_path}")
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"could not read MCP config {config_path}: {exc}") from exc
+    servers = payload.get("mcpServers") or {}
+    entry = servers.get(args.mcp_server)
+    if not isinstance(entry, dict):
+        if args.mcp_url:
+            return config_path, {}
+        raise RuntimeError(f"MCP server {args.mcp_server!r} not found in {config_path}")
+    return config_path, entry
 
-    if not url:
-        config_value = (args.mcp_config or os.getenv("MCP_CONFIG") or "mcp_servers.json").strip()
-        config_path = resolve_path(config_value, env_file)
-        try:
-            payload = json.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"could not read MCP config {config_path}: {exc}") from exc
-        servers = payload.get("mcpServers") or {}
-        entry = servers.get(args.mcp_server)
-        if not isinstance(entry, dict):
-            raise RuntimeError(f"MCP server {args.mcp_server!r} not found in {config_path}")
-        url = str(entry.get("url") or "").strip()
-        label = args.mcp_label.strip() or args.mcp_server
-        headers = expand_mapping(entry.get("headers") or {})
+
+def load_native_server(args, env_file: Path) -> RealtimeMCPServer:
+    config_path, entry = load_config_entry(args, env_file)
+    if entry:
         print(f"RV2 MCP config: {config_path}", flush=True)
+
+    configured_url = str(entry.get("url") or "").strip()
+    url = (args.mcp_url or configured_url).strip()
+    label = args.mcp_label.strip() or args.mcp_server.strip()
+    headers = expand_mapping(entry.get("headers") or {})
 
     for raw in args.mcp_header:
         if "=" not in raw:
@@ -301,7 +309,7 @@ async def run(args) -> int:
         raise RuntimeError("OPENAI_API_KEY / OPENAI_API_KEY_FILE is not configured")
 
     server = load_native_server(args, env_file)
-    print(f"RV2 mode: native only", flush=True)
+    print("RV2 mode: native only", flush=True)
     print(f"RV2 MCP server: label={server.label} url={server.url}", flush=True)
     print(f"RV2 MCP auth: {'configured' if server.authorization or server.headers else 'none'}", flush=True)
     print(f"RV2 allowed tools: {list(server.allowed_tools) if server.allowed_tools else '<all discovered>'}", flush=True)
