@@ -34,7 +34,7 @@ class MCPConfigWebTests(unittest.TestCase):
                     "args": ["qlc.js"],
                     "realtime": {
                         "transport": "stdio",
-                        "permissions": {"mode": "restricted", "allowedTools": ["qlc_get_state"]},
+                        "permissions": {"mode": "approval"},
                     },
                 },
             }
@@ -50,60 +50,42 @@ class MCPConfigWebTests(unittest.TestCase):
             self.assertNotIn("headers", mixer)
             self.assertNotIn("Authorization", json.dumps(mixer))
             self.assertNotIn("secret", json.dumps(mixer))
-
-    def test_runtime_tool_catalog_is_exposed_but_not_persisted(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = self._config(Path(tmp))
-            before = path.read_text(encoding="utf-8")
-            policies = load_web_mcp_policies(path, discovered_tools={
-                "mixer": [
-                    {"name": "alpha"},
-                    {"name": "beta"},
-                    {"name": "alpha"},
-                    "gamma",
-                    {"description": "missing name"},
-                ]
-            })
-            mixer = next(item for item in policies if item["name"] == "mixer")
-            self.assertEqual(mixer["discovered_tools"], ["alpha", "beta", "gamma"])
-            self.assertEqual(path.read_text(encoding="utf-8"), before)
+            self.assertNotIn("allowed_tools", mixer)
+            self.assertNotIn("discovered_tools", mixer)
 
     def test_update_preserves_secret_headers_and_unrelated_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._config(Path(tmp))
             result = update_web_mcp_policy(path, "mixer", {
                 "realtime_transport": "native",
-                "permission_mode": "open",
+                "permission_mode": "approval",
                 "native_url": "https://new.example.test/mcp",
-                "allowed_tools": [],
             })
             self.assertEqual(result["realtime_transport"], "native")
+            self.assertEqual(result["permission_mode"], "approval")
             payload = json.loads(path.read_text(encoding="utf-8"))
             mixer = payload["mcpServers"]["mixer"]
             self.assertEqual(mixer["native"]["headers"]["Authorization"], "Bearer secret")
             self.assertEqual(mixer["assistantOptions"], {"routing": "mix"})
             self.assertEqual(payload["mcpServers"]["qlcplus"]["args"], ["qlc.js"])
 
-    def test_restricted_mode_round_trip(self):
+    def test_open_mode_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._config(Path(tmp))
-            result = update_web_mcp_policy(path, "mixer", {
+            result = update_web_mcp_policy(path, "qlcplus", {
                 "realtime_transport": "stdio",
-                "permission_mode": "restricted",
-                "allowed_tools": ["alpha", "beta", "alpha"],
+                "permission_mode": "open",
             })
-            self.assertEqual(result["allowed_tools"], ["alpha", "beta"])
-            self.assertEqual(result["permission_mode"], "restricted")
+            self.assertEqual(result["permission_mode"], "open")
 
-    def test_invalid_allowed_tools_type_is_rejected_before_write(self):
+    def test_restricted_mode_is_rejected_before_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._config(Path(tmp))
             before = path.read_text(encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "allowed_tools"):
+            with self.assertRaisesRegex(ValueError, "open.*approval"):
                 update_web_mcp_policy(path, "mixer", {
                     "realtime_transport": "auto",
                     "permission_mode": "restricted",
-                    "allowed_tools": "alpha",
                 })
             self.assertEqual(path.read_text(encoding="utf-8"), before)
 
