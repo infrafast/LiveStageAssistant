@@ -17,6 +17,15 @@
         "XMS_SPEAKER_MAP": "{\"laurent\":{\"bus\":\"Laurent\",\"channel\":\"Guitar-loran\"},\"thomas\":{\"bus\":\"Laurent\",\"channel\":\"Guitar-loran\"}}",
         "DEBUG": "${DEBUG}"
       },
+      "native": {
+        "url": "https://raspberrypi-1.tail70348.ts.net/xm/mcp"
+      },
+      "realtime": {
+        "transport": "auto",
+        "permissions": {
+          "mode": "open"
+        }
+      },
       "assistantOptions": {
         "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"
       }
@@ -34,6 +43,12 @@
         "QLC_DRY_RUN": "false",
         "LOG_LEVEL": "info",
         "NODE_ENV": "production"
+      },
+      "realtime": {
+        "transport": "stdio",
+        "permissions": {
+          "mode": "open"
+        }
       },
       "assistantOptions": {
         "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
