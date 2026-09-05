@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, Mapping
 
 
@@ -145,6 +147,94 @@ def load_mcp_inventory(path: str | Path) -> dict[str, CanonicalMCPServerConfig]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid JSON in MCP config {config_path}: {exc}") from exc
     return normalize_mcp_inventory(payload)
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
+def update_mcp_realtime_policy(
+    path: str | Path,
+    server_name: str,
+    *,
+    transport: str,
+    permission_mode: str,
+    allowed_tools: list[str] | tuple[str, ...] | None = None,
+    native_url: str | None = None,
+    native_headers: Mapping[str, Any] | None = None,
+) -> CanonicalMCPServerConfig:
+    """Atomically update one MCP server's canonical realtime policy.
+
+    Existing command/args/env/assistantOptions and unrelated server entries are
+    preserved. Native URL/headers are changed only when explicitly supplied.
+    """
+    config_path = Path(path)
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"could not read MCP config {config_path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON in MCP config {config_path}: {exc}") from exc
+
+    root = _mapping(payload, field_name="MCP config")
+    servers = _mapping(root.get("mcpServers"), field_name="mcpServers")
+    if server_name not in servers:
+        raise ValueError(f"MCP server {server_name!r} not found in {config_path}")
+
+    entry = _mapping(servers[server_name], field_name=f"mcpServers.{server_name}")
+    transport_value = str(transport or "").strip().lower()
+    permission_value = str(permission_mode or "").strip().lower()
+    allowed = list(_allowed_tools(allowed_tools))
+
+    candidate = dict(entry)
+    realtime = _mapping(candidate.get("realtime"), field_name=f"mcpServers.{server_name}.realtime")
+    realtime["transport"] = transport_value
+    permissions: dict[str, Any] = {"mode": permission_value}
+    if permission_value == "restricted":
+        permissions["allowedTools"] = allowed
+    realtime["permissions"] = permissions
+    realtime.pop("permission", None)
+    candidate["realtime"] = realtime
+
+    if native_url is not None or native_headers is not None:
+        native = _mapping(candidate.get("native"), field_name=f"mcpServers.{server_name}.native")
+        if native_url is not None:
+            url_value = str(native_url).strip()
+            if url_value:
+                native["url"] = url_value
+            else:
+                native.pop("url", None)
+        if native_headers is not None:
+            headers = _string_mapping(native_headers, field_name=f"mcpServers.{server_name}.native.headers")
+            if headers:
+                native["headers"] = headers
+            else:
+                native.pop("headers", None)
+        if native:
+            candidate["native"] = native
+        else:
+            candidate.pop("native", None)
+
+    normalized = normalize_mcp_server(server_name, candidate)
+    servers[server_name] = candidate
+    root["mcpServers"] = servers
+    _atomic_write_json(config_path, root)
+    return normalized
 
 
 def server_summary(server: CanonicalMCPServerConfig) -> dict[str, Any]:
