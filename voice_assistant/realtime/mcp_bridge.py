@@ -131,6 +131,7 @@ class RealtimeMCPBridge:
         self._tool_targets: dict[str, BridgeToolTarget] = {}
         self._function_tools: tuple[RealtimeFunctionTool, ...] = ()
         self._server_tool_names: dict[str, set[str]] = {}
+        self._server_prompt_text: dict[str, str] = {}
 
     def _config_subset(self) -> dict[str, Any]:
         servers = self.config.get("mcpServers") or {}
@@ -146,23 +147,50 @@ class RealtimeMCPBridge:
     def tool_targets(self) -> dict[str, BridgeToolTarget]:
         return dict(self._tool_targets)
 
+    async def _load_prompt_from_session(self, server_name: str, tool_names: set[str], tool_name: str = "get_agent_prompt") -> str:
+        if tool_name not in tool_names:
+            return ""
+        session = self.client.get_session(server_name)
+        try:
+            result = await session.call_tool(tool_name, {})
+        except Exception:
+            return ""
+        if bool(getattr(result, "isError", False)):
+            return ""
+        return _text_content(result)
+
     async def start(self) -> tuple[RealtimeFunctionTool, ...]:
         used_names: set[str] = set()
         targets: dict[str, BridgeToolTarget] = {}
         functions: list[RealtimeFunctionTool] = []
         server_tool_names: dict[str, set[str]] = {}
+        server_prompt_text: dict[str, str] = {}
+        server_tools: dict[str, list[Any]] = {}
+
         for server_name in self.server_names:
             if server_name not in getattr(self.client, "sessions", {}):
                 await self.client.create_session(server_name)
             session = self.client.get_session(server_name)
-            tools = await session.list_tools()
+            tools = list(await session.list_tools() or [])
+            server_tools[server_name] = tools
+            names = {
+                str(getattr(tool, "name", "") or "").strip()
+                for tool in tools
+                if str(getattr(tool, "name", "") or "").strip()
+            }
+            server_tool_names[server_name] = names
+            if str(os.getenv("MCP_LOAD_SERVER_PROMPT", "true")).strip().lower() not in {"0", "false", "no", "off"}:
+                server_prompt_text[server_name] = await self._load_prompt_from_session(server_name, names)
+            else:
+                server_prompt_text[server_name] = ""
+
+        for server_name, tools in server_tools.items():
             allowed = self.allowed_tools.get(server_name)
-            names: set[str] = set()
-            for tool in tools or []:
+            context_instructions = server_prompt_text.get(server_name, "")
+            for tool in tools:
                 tool_name = str(getattr(tool, "name", "") or "").strip()
                 if not tool_name:
                     continue
-                names.add(tool_name)
                 if allowed is not None and tool_name not in allowed:
                     continue
                 exposed_name = _function_name(server_name, tool_name, used_names)
@@ -176,29 +204,24 @@ class RealtimeMCPBridge:
                             else f"MCP tool {tool_name} on server {server_name}."
                         ),
                         parameters=_schema_from_tool(tool),
+                        context_instructions=context_instructions,
                     )
                 )
                 targets[exposed_name] = BridgeToolTarget(server=server_name, tool=tool_name)
-            server_tool_names[server_name] = names
+
         self._tool_targets = targets
         self._function_tools = tuple(functions)
         self._server_tool_names = server_tool_names
+        self._server_prompt_text = server_prompt_text
         return self._function_tools
 
     async def load_prompt_text(self, server_name: str, tool_name: str = "get_agent_prompt") -> str:
-        """Load optional MCP-owned routing instructions without domain-specific knowledge in LSA."""
+        """Return MCP-owned routing instructions already loaded at bridge startup."""
+        if tool_name == "get_agent_prompt" and server_name in self._server_prompt_text:
+            return self._server_prompt_text[server_name]
         if server_name not in self.server_names:
             return ""
-        if tool_name not in self._server_tool_names.get(server_name, set()):
-            return ""
-        session = self.client.get_session(server_name)
-        try:
-            result = await session.call_tool(tool_name, {})
-        except Exception:
-            return ""
-        if bool(getattr(result, "isError", False)):
-            return ""
-        return _text_content(result)
+        return await self._load_prompt_from_session(server_name, self._server_tool_names.get(server_name, set()), tool_name)
 
     async def execute(self, exposed_name: str, arguments: str | dict[str, Any] | None) -> dict[str, Any]:
         target = self._tool_targets.get(exposed_name)
