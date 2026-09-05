@@ -1,7 +1,16 @@
+import importlib.util
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 
-from scripts.rv2_native_mcp import permission_policy
+ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = ROOT / "scripts" / "rv2_native_mcp.py"
+SPEC = importlib.util.spec_from_file_location("rv2_native_mcp", MODULE_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"could not load {MODULE_PATH}")
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+permission_policy = MODULE.permission_policy
 
 
 class RV2NativeMCPPermissionTests(unittest.TestCase):
