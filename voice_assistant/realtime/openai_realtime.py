@@ -87,6 +87,11 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                         "input": {
                             "format": {"type": "audio/pcm", "rate": 24000},
                             "noise_reduction": {"type": "near_field"},
+                            "transcription": (
+                                {"model": self.config.input_transcription_model}
+                                if self.config.input_transcription_model
+                                else None
+                            ),
                             "turn_detection": (
                                 {
                                     "type": "server_vad",
@@ -214,6 +219,22 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             return RealtimeEvent("speech_started", event)
         if event_type == "input_audio_buffer.speech_stopped":
             return RealtimeEvent("speech_stopped", event)
+        if event_type == "conversation.item.input_audio_transcription.completed":
+            return RealtimeEvent(
+                "user_transcript_done",
+                {
+                    "text": str(event.get("transcript") or ""),
+                    "item_id": str(event.get("item_id") or ""),
+                },
+            )
+        if event_type == "conversation.item.input_audio_transcription.failed":
+            return RealtimeEvent(
+                "user_transcript_error",
+                {
+                    "item_id": str(event.get("item_id") or ""),
+                    "error": event.get("error") or {},
+                },
+            )
         if event_type == "response.created":
             self._response_active = True
             self.state = RealtimeEngineState.ACTIVE
