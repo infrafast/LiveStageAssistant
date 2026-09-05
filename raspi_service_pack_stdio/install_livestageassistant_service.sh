@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_USER="pi"
 APP_DIR="/home/pi/LiveStageAssistant"
 PYTHON_BIN="$APP_DIR/.venv/bin/python"
+ENV_DIR="/etc/livestageassistant"
+ONLINE_ENV="$ENV_DIR/.env.online"
+OFFLINE_ENV="$ENV_DIR/.env.offline"
 
 require_python_stack() {
   if [ ! -x "$PYTHON_BIN" ]; then
@@ -57,30 +60,41 @@ require_node_stack() {
   }
 }
 
+install_env_if_missing() {
+  local source="$1"
+  local target="$2"
+  if [ -f "$target" ]; then
+    echo "Preserving existing $target"
+    return
+  fi
+  sudo cp "$source" "$target"
+  echo "Installed initial $target"
+}
+
 require_python_stack
 require_node_stack
 
 echo "Installing Live Stage Assistant service files..."
 
-sudo install -d -o "$SERVICE_USER" -g "$SERVICE_USER" /etc/livestageassistant
+sudo install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$ENV_DIR"
 sudo loginctl enable-linger "$SERVICE_USER"
-sudo cp "$SCRIPT_DIR/.env.online" /etc/livestageassistant/.env.online
-sudo cp "$SCRIPT_DIR/.env.offline" /etc/livestageassistant/.env.offline
+install_env_if_missing "$SCRIPT_DIR/.env.online" "$ONLINE_ENV"
+install_env_if_missing "$SCRIPT_DIR/.env.offline" "$OFFLINE_ENV"
 sudo cp "$SCRIPT_DIR/livestageassistant.service" /etc/systemd/system/livestageassistant.service
 sudo cp "$SCRIPT_DIR/livestageassistant" /usr/local/bin/livestageassistant
 
-sudo chown -R "$SERVICE_USER:$SERVICE_USER" /etc/livestageassistant
-sudo chmod 755 /etc/livestageassistant
-sudo chmod 644 /etc/livestageassistant/.env.online /etc/livestageassistant/.env.offline
+sudo chown -R "$SERVICE_USER:$SERVICE_USER" "$ENV_DIR"
+sudo chmod 755 "$ENV_DIR"
+sudo chmod 644 "$ONLINE_ENV" "$OFFLINE_ENV"
 sudo chmod 644 /etc/systemd/system/livestageassistant.service
 sudo chmod +x /usr/local/bin/livestageassistant
 
 sudo systemctl daemon-reload
 
 echo
-echo "Installation complete."
+echo "Installation complete. Existing runtime env profiles were preserved."
 echo "Next steps:"
-echo "  1) Check /etc/livestageassistant/.env.online and /etc/livestageassistant/.env.offline"
+echo "  1) Check $ONLINE_ENV and $OFFLINE_ENV"
 echo "  2) Make sure /home/pi/XMSeries-MCP and /home/pi/QLCPlus-MCP exist and are built"
 echo "  3) Run: livestageassistant auto"
 echo "  4) Test locally: livestageassistant health"
