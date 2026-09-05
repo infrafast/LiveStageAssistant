@@ -38,14 +38,10 @@
   }
 
   function findCard(serverName) {
-    const inputs = [...document.querySelectorAll(".mcp-routing-input[data-server], .mcp-server-options-input[data-server]")];
-    const input = inputs.find((item) => item.dataset.server === serverName);
+    const inputs = [...document.querySelectorAll(".mcp-routing-input[data-server-name], .mcp-options-input[data-server-name]")];
+    const input = inputs.find((item) => item.dataset.serverName === serverName);
     if (!input) return null;
-    return input.closest(".mcp-server-card")
-      || input.closest(".service-card")
-      || input.closest(".card")
-      || input.parentElement?.parentElement
-      || null;
+    return input.closest(".mcp-server-card") || null;
   }
 
   function makeField(labelText, control) {
@@ -192,7 +188,6 @@
         lastSignature = signature;
       }
     } catch (_error) {
-      // The main UI already reports snapshot/network failures. Keep this add-on quiet.
     } finally {
       busy = false;
     }
