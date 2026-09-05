@@ -130,8 +130,7 @@ async def wait_native_ready_and_discovery(
             continue
         if event.type == "mcp_event":
             event_type = str(event.data.get("event_type") or "")
-            raw = event.data.get("event") or {}
-            print("RV2 native MCP event " + json.dumps(raw, ensure_ascii=False, separators=(",", ":")), flush=True)
+            native_runner.print_mcp_event(event, {})
             if "mcp_list_tools" in event_type and event_type.endswith(".failed"):
                 return ready, "failed"
             if "mcp_list_tools" in event_type and event_type.endswith(".completed"):
@@ -276,9 +275,8 @@ async def event_loop(
                         request_fallback(state, switch_event, decision, replay=True)
                         session_stop.set()
         elif mode == "native" and event.type == "mcp_event":
-            raw = event.data.get("event") or {}
             event_type = str(event.data.get("event_type") or "")
-            print("RV2 native MCP event " + json.dumps(raw, ensure_ascii=False, separators=(",", ":")), flush=True)
+            native_runner.print_mcp_event(event, call_started)
             if event_type.endswith(".failed") and state.active_native_call is None:
                 decision = classify_auto_fallback(dispatched=False, read_only=None)
                 log_auto_decision(decision, trigger=event_type)
@@ -435,7 +433,7 @@ async def run(args) -> int:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY / OPENAI_API_KEY_FILE is not configured")
 
-    native_server = native_runner.load_native_server(args, env_file)
+    native_server = await native_runner.attach_native_mcp_prompt(native_runner.load_native_server(args, env_file))
     print("RV2 mode: auto (native first, STDIO fallback)", flush=True)
     print(f"RV2 native MCP: label={native_server.label} url={native_server.url}", flush=True)
     print("RV2 bridge startup: deferred until native failure", flush=True)
