@@ -3,9 +3,11 @@
 
   const SNAPSHOT_URL = "/api/snapshot";
   const SAVE_URL = "/api/mcp-realtime-policy";
+  const VOICE_ENGINE_SAVE_URL = "/api/voice-engine";
   const POLL_MS = 2000;
   let busy = false;
   let lastSignature = "";
+  let lastVoiceEngineSignature = "";
 
   function option(label, value, selected) {
     const item = document.createElement("option");
@@ -27,6 +29,22 @@
       if (found) return found;
     }
     return null;
+  }
+
+  function snapshotEnv(snapshot) {
+    if (snapshot?.config?.env && typeof snapshot.config.env === "object") return snapshot.config.env;
+    return {};
+  }
+
+  function voiceEngineState(snapshot) {
+    const env = snapshotEnv(snapshot);
+    const connectivity = String(env.CONNECTIVITY_MODE || "online").trim().toLowerCase();
+    if (connectivity === "offline") {
+      return { connectivity, engine: "local", locked: true };
+    }
+    const configured = String(env.VOICE_ENGINE || "classic").trim().toLowerCase();
+    const engine = configured === "openai-realtime" ? "openai-realtime" : "classic";
+    return { connectivity: "online", engine, locked: false };
   }
 
   function canonicalPolicies(snapshot) {
@@ -69,6 +87,102 @@
     if (!message) return;
     message.textContent = text;
     message.style.color = isError ? "var(--bad, #b3261e)" : "";
+  }
+
+  function setVoiceMessage(section, text, isError = false) {
+    const message = section.querySelector(".rv2d-voice-engine-message");
+    if (!message) return;
+    message.textContent = text;
+    message.style.color = isError ? "var(--bad, #b3261e)" : "";
+  }
+
+  async function saveVoiceEngine(section) {
+    const select = section.querySelector(".rv2d-voice-engine-select");
+    const button = section.querySelector(".rv2d-voice-engine-save");
+    if (!select || !button || button.disabled) return;
+    button.disabled = true;
+    setVoiceMessage(section, "Saving...");
+    try {
+      const response = await fetch(VOICE_ENGINE_SAVE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voice_engine: select.value })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        throw new Error(data?.error?.message || data?.message || response.statusText || `HTTP ${response.status}`);
+      }
+      select.value = data.voice_engine || select.value;
+      setVoiceMessage(section, "Saved. Restart required.");
+      lastVoiceEngineSignature = "";
+    } catch (error) {
+      setVoiceMessage(section, `Save failed: ${error.message || error}`, true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function buildVoiceEngineSection(state) {
+    const section = document.createElement("div");
+    section.className = "rv2d-voice-engine";
+    section.style.cssText = "margin-top:12px;padding-top:12px;border-top:1px solid var(--border,#d7dde5);display:grid;gap:8px;";
+
+    const title = document.createElement("strong");
+    title.textContent = "Voice / AI engine";
+
+    const select = document.createElement("select");
+    select.className = "input rv2d-voice-engine-select";
+    if (state.locked) {
+      select.append(option("Local", "local", "local"));
+      select.disabled = true;
+      select.title = "Offline mode is always fully local.";
+    } else {
+      select.append(
+        option("Classic", "classic", state.engine),
+        option("OpenAI Realtime", "openai-realtime", state.engine)
+      );
+    }
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "small-button rv2d-voice-engine-save";
+    save.textContent = "Save engine";
+    save.disabled = state.locked;
+    save.addEventListener("click", () => saveVoiceEngine(section));
+    const message = document.createElement("span");
+    message.className = "rv2d-voice-engine-message";
+    message.style.cssText = "font-size:12px;opacity:.8;";
+    message.textContent = state.locked
+      ? "Offline profile: local engine only."
+      : "Applies after livestageassistant restart.";
+    actions.append(save, message);
+
+    section.append(title, makeField("Engine", select), actions);
+    return section;
+  }
+
+  function reconcileVoiceEngine(state) {
+    const connectivity = document.querySelector("#connectivity-mode");
+    const host = connectivity?.closest(".field") || connectivity?.parentElement;
+    if (!host) return;
+    let section = host.querySelector(".rv2d-voice-engine");
+    if (!section) {
+      section = buildVoiceEngineSection(state);
+      host.appendChild(section);
+      return;
+    }
+    const select = section.querySelector(".rv2d-voice-engine-select");
+    const save = section.querySelector(".rv2d-voice-engine-save");
+    if (!select || !save) return;
+    const needsLocked = state.locked;
+    const isLocked = select.disabled;
+    if (needsLocked !== isLocked) {
+      section.replaceWith(buildVoiceEngineSection(state));
+      return;
+    }
+    if (document.activeElement !== select) select.value = state.engine;
   }
 
   async function saveSection(section) {
@@ -180,7 +294,13 @@
       if (!response.ok) return;
       const snapshot = await response.json();
       const policies = canonicalPolicies(snapshot);
+      const state = voiceEngineState(snapshot);
       const signature = JSON.stringify(policies);
+      const voiceSignature = JSON.stringify(state);
+      if (voiceSignature !== lastVoiceEngineSignature || !document.querySelector(".rv2d-voice-engine")) {
+        reconcileVoiceEngine(state);
+        lastVoiceEngineSignature = voiceSignature;
+      }
       if (signature !== lastSignature || document.querySelectorAll(".rv2d-mcp-realtime").length < Object.keys(policies).length) {
         reconcile(policies);
         lastSignature = signature;
