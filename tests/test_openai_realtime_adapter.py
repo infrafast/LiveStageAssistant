@@ -215,6 +215,24 @@ class OpenAIRealtimeNativeMCPFollowupTests(unittest.IsolatedAsyncioTestCase):
         engine._ws = FakeWebSocket()
         return engine
 
+    async def test_send_text_creates_user_item_and_response(self):
+        engine = self.make_engine()
+        await engine.send_text("Quel est le niveau ?")
+        self.assertEqual(
+            engine._ws.sent,
+            [
+                {
+                    "type": "conversation.item.create",
+                    "item": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Quel est le niveau ?"}],
+                    },
+                },
+                {"type": "response.create"},
+            ],
+        )
+
     async def test_completed_mcp_call_after_response_done_requests_one_followup(self):
         engine = self.make_engine()
         engine._response_active = False
