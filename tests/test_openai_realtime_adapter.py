@@ -43,6 +43,30 @@ class OpenAIRealtimeAdapterTests(unittest.TestCase):
         self.assertEqual(event.data["usage"], usage)
         self.assertEqual(self.engine.state, RealtimeEngineState.READY)
 
+    def test_native_mcp_defaults_are_permissive(self):
+        server = RealtimeMCPServer(label="mixer", url="https://mixer.example.test/mcp")
+        engine = OpenAIRealtimeEngine(
+            RealtimeEngineConfig(
+                provider="openai",
+                model="gpt-realtime-2.1-mini",
+                mcp_servers=(server,),
+            ),
+            api_key="test-key",
+        )
+        self.assertEqual(server.require_approval, "never")
+        self.assertEqual(server.allowed_tools, ())
+        self.assertEqual(
+            engine._session_tools(),
+            [
+                {
+                    "type": "mcp",
+                    "server_label": "mixer",
+                    "server_url": "https://mixer.example.test/mcp",
+                    "require_approval": "never",
+                }
+            ],
+        )
+
     def test_session_tools_translates_native_mcp_server(self):
         engine = OpenAIRealtimeEngine(
             RealtimeEngineConfig(
@@ -76,6 +100,18 @@ class OpenAIRealtimeAdapterTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_translates_user_input_transcript(self):
+        event = self.engine._translate_event(
+            {
+                "type": "conversation.item.input_audio_transcription.completed",
+                "item_id": "item_user_1",
+                "transcript": "Monte la basse de deux dB.",
+            }
+        )
+        self.assertEqual(event.type, "user_transcript_done")
+        self.assertEqual(event.data["text"], "Monte la basse de deux dB.")
+        self.assertEqual(event.data["item_id"], "item_user_1")
 
     def test_translates_mcp_list_tools_item(self):
         event = self.engine._translate_event(
