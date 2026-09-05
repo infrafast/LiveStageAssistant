@@ -51,6 +51,23 @@ class MCPConfigWebTests(unittest.TestCase):
             self.assertNotIn("Authorization", json.dumps(mixer))
             self.assertNotIn("secret", json.dumps(mixer))
 
+    def test_runtime_tool_catalog_is_exposed_but_not_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._config(Path(tmp))
+            before = path.read_text(encoding="utf-8")
+            policies = load_web_mcp_policies(path, discovered_tools={
+                "mixer": [
+                    {"name": "alpha"},
+                    {"name": "beta"},
+                    {"name": "alpha"},
+                    "gamma",
+                    {"description": "missing name"},
+                ]
+            })
+            mixer = next(item for item in policies if item["name"] == "mixer")
+            self.assertEqual(mixer["discovered_tools"], ["alpha", "beta", "gamma"])
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+
     def test_update_preserves_secret_headers_and_unrelated_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._config(Path(tmp))
