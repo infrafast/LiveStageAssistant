@@ -10,11 +10,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
-from .realtime.mcp_config import (
-    CanonicalMCPServerConfig,
-    load_mcp_inventory,
-    update_mcp_realtime_policy,
-)
+try:
+    from .realtime.mcp_config import (
+        CanonicalMCPServerConfig,
+        load_mcp_inventory,
+        update_mcp_realtime_policy,
+    )
+except ImportError:  # pragma: no cover - direct script fallback
+    from realtime.mcp_config import (
+        CanonicalMCPServerConfig,
+        load_mcp_inventory,
+        update_mcp_realtime_policy,
+    )
 
 
 WEB_PERMISSION_MODES = {"open", "approval"}
