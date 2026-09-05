@@ -1,8 +1,8 @@
 """OpenAI Realtime provider adapter.
 
 This module contains provider transport/protocol code only. Provider-native remote
-MCP servers are translated from the provider-neutral realtime config; no mixer,
-lighting or other domain-specific logic belongs here.
+MCP servers and provider-neutral function tools are translated from realtime
+config; no mixer, lighting or other domain-specific logic belongs here.
 """
 
 from __future__ import annotations
@@ -55,6 +55,15 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             if server.allowed_tools:
                 tool["allowed_tools"] = list(server.allowed_tools)
             tools.append(tool)
+        for function in self.config.function_tools:
+            tools.append(
+                {
+                    "type": "function",
+                    "name": function.name,
+                    "description": function.description,
+                    "parameters": dict(function.parameters),
+                }
+            )
         return tools
 
     async def start(self) -> None:
@@ -85,6 +94,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                     "output_modalities": ["audio"],
                     "instructions": self.config.instructions,
                     "tools": self._session_tools(),
+                    "tool_choice": "auto",
                     "audio": {
                         "input": {
                             "format": {"type": "audio/pcm", "rate": 24000},
@@ -274,6 +284,17 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             self._response_active = True
             self.state = RealtimeEngineState.ACTIVE
             return RealtimeEvent("response_started", {"response": event.get("response") or {}})
+        if event_type == "response.function_call_arguments.done":
+            return RealtimeEvent(
+                "tool_call",
+                {
+                    "call_id": str(event.get("call_id") or ""),
+                    "item_id": str(event.get("item_id") or ""),
+                    "name": str(event.get("name") or ""),
+                    "arguments": str(event.get("arguments") or "{}"),
+                    "response_id": str(event.get("response_id") or ""),
+                },
+            )
         if event_type in {"response.output_item.added", "response.output_item.done"}:
             mcp_event = self._translate_mcp_item(event_type, event)
             if mcp_event is not None:
