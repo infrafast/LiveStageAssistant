@@ -38,6 +38,27 @@ class RealtimeMCPServer:
 
 
 @dataclass(frozen=True)
+class RealtimeFunctionTool:
+    """Provider-neutral function tool exposed to a realtime model.
+
+    RV2B uses this contract for the LSA MCP bridge: MCP tools are discovered by
+    the existing LSA MCP client and represented to the realtime provider as
+    ordinary function tools. The bridge retains the mapping back to the MCP
+    server/tool and owns actual execution.
+    """
+
+    name: str
+    description: str = ""
+    parameters: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("realtime function tool name is required")
+        if not isinstance(self.parameters, dict):
+            raise ValueError("realtime function tool parameters must be a JSON-schema object")
+
+
+@dataclass(frozen=True)
 class RealtimeEngineConfig:
     provider: str
     model: str
@@ -46,6 +67,7 @@ class RealtimeEngineConfig:
     server_vad: bool = True
     input_transcription_model: str = "gpt-4o-mini-transcribe"
     mcp_servers: tuple[RealtimeMCPServer, ...] = ()
+    function_tools: tuple[RealtimeFunctionTool, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.provider.strip():
