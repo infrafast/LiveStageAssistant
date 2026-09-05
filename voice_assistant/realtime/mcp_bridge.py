@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 import re
 from typing import Any
 
@@ -78,6 +79,17 @@ def _function_name(server: str, tool: str, used: set[str]) -> str:
     return candidate
 
 
+def substitute_env_vars(value: Any) -> Any:
+    """Expand ${VAR}/$VAR strings before MCPClient.from_dict, matching Classic."""
+    if isinstance(value, dict):
+        return {str(key): substitute_env_vars(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [substitute_env_vars(item) for item in value]
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    return value
+
+
 class RealtimeMCPBridge:
     """Bridge realtime function calls to existing mcp-use MCP sessions."""
 
@@ -89,6 +101,7 @@ class RealtimeMCPBridge:
         allowed_tools: dict[str, set[str] | tuple[str, ...] | list[str]] | None = None,
         client: MCPClient | None = None,
     ) -> None:
+        config = substitute_env_vars(config)
         servers = config.get("mcpServers") or {}
         if not isinstance(servers, dict):
             raise ValueError("MCP config has no mcpServers object")
