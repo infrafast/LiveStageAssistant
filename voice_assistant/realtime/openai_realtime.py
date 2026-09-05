@@ -52,8 +52,6 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                 tool["headers"] = dict(server.headers)
             if server.allowed_tools:
                 tool["allowed_tools"] = list(server.allowed_tools)
-            if server.description:
-                tool["server_description"] = server.description
             tools.append(tool)
         return tools
 
