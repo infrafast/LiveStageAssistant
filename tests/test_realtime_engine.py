@@ -1,11 +1,13 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
 from voice_assistant.realtime.engine import (
     RealtimeEngine,
     RealtimeEngineConfig,
     RealtimeEngineState,
     RealtimeEvent,
+    RealtimeFunctionTool,
     RealtimeMCPServer,
 )
 
@@ -90,6 +92,25 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
             RealtimeMCPServer(label="mixer", url="")
         with self.assertRaises(ValueError):
             RealtimeMCPServer(label="mixer", url="https://example.test/mcp", require_approval="sometimes")
+
+    def test_config_composes_global_mcp_and_voice_instructions(self):
+        tool = RealtimeFunctionTool(
+            name="mcp__mixer__read",
+            context_instructions="Resolver result family bus must use bus tools.",
+        )
+        with patch.dict("os.environ", {"ASSISTANT_SYSTEM_PROMPT": "Global LSA prompt."}, clear=False):
+            config = RealtimeEngineConfig(
+                provider="test",
+                model="test-model",
+                instructions="Validation runner prompt.",
+                function_tools=(tool,),
+            )
+        self.assertIn("Global LSA prompt.", config.instructions)
+        self.assertIn("Validation runner prompt.", config.instructions)
+        self.assertIn("Resolver result family bus must use bus tools.", config.instructions)
+        self.assertIn("never reinterpret a resolved bus as aux", config.instructions)
+        self.assertIn("Do not offer extra help", config.instructions)
+        self.assertIn("one short confirmation sentence", config.instructions)
 
 
 if __name__ == "__main__":
