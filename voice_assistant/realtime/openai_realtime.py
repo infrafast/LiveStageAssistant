@@ -1,7 +1,8 @@
-"""OpenAI Realtime provider adapter used by RV1.
+"""OpenAI Realtime provider adapter.
 
-This module contains transport/protocol code only. It deliberately has no MCP or
-stage-control logic; provider events are translated into RealtimeEvent objects.
+This module contains provider transport/protocol code only. Provider-native remote
+MCP servers are translated from the provider-neutral realtime config; no mixer,
+lighting or other domain-specific logic belongs here.
 """
 
 from __future__ import annotations
@@ -36,6 +37,26 @@ class OpenAIRealtimeEngine(RealtimeEngine):
         self._events: asyncio.Queue[RealtimeEvent] = asyncio.Queue()
         self._response_active = False
 
+    def _session_tools(self) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        for server in self.config.mcp_servers:
+            tool: dict[str, Any] = {
+                "type": "mcp",
+                "server_label": server.label,
+                "server_url": server.url,
+                "require_approval": server.require_approval,
+            }
+            if server.authorization:
+                tool["authorization"] = server.authorization
+            if server.headers:
+                tool["headers"] = dict(server.headers)
+            if server.allowed_tools:
+                tool["allowed_tools"] = list(server.allowed_tools)
+            if server.description:
+                tool["server_description"] = server.description
+            tools.append(tool)
+        return tools
+
     async def start(self) -> None:
         if self.state != RealtimeEngineState.STOPPED:
             return
@@ -44,7 +65,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             from websockets.asyncio.client import connect
         except ImportError as exc:
             self.state = RealtimeEngineState.ERROR
-            raise RuntimeError("RV1 requires the 'websockets' Python package") from exc
+            raise RuntimeError("Realtime requires the 'websockets' Python package") from exc
 
         url = f"{self.websocket_url}?model={quote(self.config.model, safe='')}"
         self._ws = await connect(
@@ -63,7 +84,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                     "type": "realtime",
                     "output_modalities": ["audio"],
                     "instructions": self.config.instructions,
-                    "tools": [],
+                    "tools": self._session_tools(),
                     "audio": {
                         "input": {
                             "format": {"type": "audio/pcm", "rate": 24000},
@@ -175,6 +196,14 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             if self.state != RealtimeEngineState.STOPPED:
                 await self._events.put(RealtimeEvent("connection_closed", {}))
 
+    def _translate_mcp_item(self, event_type: str, event: dict[str, Any]) -> RealtimeEvent | None:
+        item = event.get("item") or {}
+        item_type = str(item.get("type") or "")
+        if item_type not in {"mcp_list_tools", "mcp_call", "mcp_approval_request"}:
+            return None
+        phase = "added" if event_type.endswith(".added") else "done" if event_type.endswith(".done") else "event"
+        return RealtimeEvent(item_type, {"phase": phase, "item": item, "event": event})
+
     def _translate_event(self, event: dict[str, Any]) -> RealtimeEvent | None:
         event_type = str(event.get("type") or "")
         if event_type == "session.created":
@@ -191,6 +220,10 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             self._response_active = True
             self.state = RealtimeEngineState.ACTIVE
             return RealtimeEvent("response_started", {"response": event.get("response") or {}})
+        if event_type in {"response.output_item.added", "response.output_item.done"}:
+            mcp_event = self._translate_mcp_item(event_type, event)
+            if mcp_event is not None:
+                return mcp_event
         if event_type == "response.output_audio.delta":
             try:
                 audio = base64.b64decode(event.get("delta") or "", validate=True)
@@ -226,4 +259,6 @@ class OpenAIRealtimeEngine(RealtimeEngine):
         if event_type == "error":
             error = event.get("error") or {}
             return RealtimeEvent("provider_error", {"error": error})
+        if "mcp" in event_type:
+            return RealtimeEvent("mcp_event", {"event_type": event_type, "event": event})
         return None
