@@ -1,0 +1,5566 @@
+    const i18nPayload = window.LSA_I18N_PAYLOAD || { locale: "fr", messages: {}, available_locales: [] };
+    const i18nMessages = i18nPayload.messages || {};
+    function tr(key, fallback = "") {
+      return Object.prototype.hasOwnProperty.call(i18nMessages, key) ? i18nMessages[key] : fallback;
+    }
+    function trf(key, fallback, values = {}) {
+      return tr(key, fallback).replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name) => (
+        Object.prototype.hasOwnProperty.call(values, name) ? values[name] : match
+      ));
+    }
+    function applyI18n(root = document) {
+      for (const element of root.querySelectorAll("[data-i18n]")) {
+        element.textContent = tr(element.dataset.i18n, element.textContent);
+      }
+      for (const element of root.querySelectorAll("[data-i18n-title]")) {
+        element.title = tr(element.dataset.i18nTitle, element.title);
+      }
+      for (const element of root.querySelectorAll("[data-i18n-aria-label]")) {
+        element.setAttribute("aria-label", tr(element.dataset.i18nAriaLabel, element.getAttribute("aria-label") || ""));
+      }
+      for (const element of root.querySelectorAll("[data-i18n-placeholder]")) {
+        element.placeholder = tr(element.dataset.i18nPlaceholder, element.placeholder);
+      }
+    }
+
+    const stateEl = document.querySelector("#state");
+    const configEl = document.querySelector("#config");
+    const logsEl = document.querySelector("#logs");
+    const sttPromptEl = document.querySelector("#stt-prompt");
+    const assistantSystemPromptEl = document.querySelector("#assistant-system-prompt");
+    const promptEl = document.querySelector("#prompt");
+    const metaEl = document.querySelector("#meta");
+    const messagesEl = document.querySelector("#messages");
+    const chatPanel = document.querySelector("#chat-panel");
+    const vncUrl = document.querySelector("#vnc-url");
+    const vncViewOnly = document.querySelector("#vnc-view-only");
+    const vncConnect = document.querySelector("#vnc-connect");
+    const vncFrame = document.querySelector("#vnc-frame");
+    const vncStatus = document.querySelector("#vnc-status");
+    const toastOverlay = document.querySelector("#toast-overlay");
+    const toastPanel = document.querySelector("#toast-panel");
+    const toastTitle = document.querySelector("#toast-title");
+    const toastDetail = document.querySelector("#toast-detail");
+    const toastOk = document.querySelector("#toast-ok");
+    const sessionList = document.querySelector("#session-list");
+    const sessionNew = document.querySelector("#session-new");
+    const injectForm = document.querySelector("#inject-form");
+    const commandField = document.querySelector("#command-field");
+    const soundwave = document.querySelector("#soundwave");
+    const injectCommand = document.querySelector("#inject-command");
+    const composerAttach = document.querySelector("#composer-attach");
+    const composerFile = document.querySelector("#composer-file");
+    const injectStop = document.querySelector("#inject-stop");
+    const webConversation = document.querySelector("#web-conversation");
+    const webMic = document.querySelector("#web-mic");
+    const composerSpeaker = document.querySelector("#composer-speaker");
+    const settingsOpen = document.querySelector("#settings-open");
+    const settingsClose = document.querySelector("#settings-close");
+    const settingsOverlay = document.querySelector("#settings-overlay");
+    const sessionLoading = document.querySelector("#session-loading");
+    const sessionLoadingTitle = document.querySelector("#session-loading-title");
+    const sessionLoadingDetail = document.querySelector("#session-loading-detail");
+    const sessionSummaryPopover = document.querySelector("#session-summary-popover");
+    const tabs = Array.from(document.querySelectorAll(".tab"));
+    const panels = Array.from(document.querySelectorAll(".tab-panel"));
+	    const llmProvider = document.querySelector("#llm-provider");
+	    const llmModel = document.querySelector("#llm-model");
+	    const sessionContextSize = document.querySelector("#session-context-size");
+    const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
+    const mcpAgentMaxSteps = document.querySelector("#mcp-agent-max-steps");
+    const mcpAgentMaxStepsLabel = document.querySelector("#mcp-agent-max-steps-label");
+    const mcpToolRoutingInputs = Array.from(document.querySelectorAll('input[name="mcp-tool-routing"]'));
+    const interruptConversationInputs = Array.from(document.querySelectorAll('input[name="interrupt-conversation"]'));
+    const envProfile = document.querySelector("#env-profile");
+    const connectivityAutoBadge = document.querySelector("#connectivity-auto-badge");
+    const connectivityModeInputs = Array.from(document.querySelectorAll('input[name="connectivity-mode"]'));
+    const cloudAudioControls = Array.from(document.querySelectorAll(".cloud-audio-control"));
+    const offlineAudioSummary = document.querySelector("#offline-audio-summary");
+	    const wakeWord = document.querySelector("#wake-word");
+    const cloudTtsProvider = document.querySelector("#cloud-tts-provider");
+    const ttsOutputInputs = Array.from(document.querySelectorAll('input[name="tts-output"]'));
+    const sttInputInputs = Array.from(document.querySelectorAll('input[name="stt-input"]'));
+    const elevenlabsVoiceField = document.querySelector("#elevenlabs-voice-field");
+    const elevenlabsVoice = document.querySelector("#elevenlabs-voice");
+    const openaiTtsVoiceField = document.querySelector("#openai-tts-voice-field");
+    const openaiTtsVoice = document.querySelector("#openai-tts-voice");
+    const ttsSpeedField = document.querySelector("#tts-speed-field");
+    const openaiTtsSpeed = document.querySelector("#openai-tts-speed");
+    const openaiTtsSpeedLabel = document.querySelector("#openai-tts-speed-label");
+    const webTtsVolumeField = document.querySelector("#web-tts-volume-field");
+    const webTtsVolume = document.querySelector("#web-tts-volume");
+    const webTtsVolumeLabel = document.querySelector("#web-tts-volume-label");
+    const backendTtsVolumeField = document.querySelector("#backend-tts-volume-field");
+    const backendTtsVolume = document.querySelector("#backend-tts-volume");
+    const backendTtsVolumeLabel = document.querySelector("#backend-tts-volume-label");
+    const ttsTestField = document.querySelector("#tts-test-field");
+    const ttsTest = document.querySelector("#tts-test");
+    const vadSpeechThreshold = document.querySelector("#vad-speech-threshold");
+    const vadSpeechThresholdLabel = document.querySelector("#vad-speech-threshold-label");
+    const vadNegativeThreshold = document.querySelector("#vad-negative-threshold");
+    const vadNegativeThresholdLabel = document.querySelector("#vad-negative-threshold-label");
+    const vadMinSpeechMs = document.querySelector("#vad-min-speech-ms");
+    const vadMinSpeechMsLabel = document.querySelector("#vad-min-speech-ms-label");
+    const vadMinSilenceMs = document.querySelector("#vad-min-silence-ms");
+    const vadMinSilenceMsLabel = document.querySelector("#vad-min-silence-ms-label");
+    const vadSpeechPadMs = document.querySelector("#vad-speech-pad-ms");
+    const vadSpeechPadMsLabel = document.querySelector("#vad-speech-pad-ms-label");
+    const vadMaxSpeechSeconds = document.querySelector("#vad-max-speech-seconds");
+    const vadMaxSpeechSecondsLabel = document.querySelector("#vad-max-speech-seconds-label");
+    const backendWakeWordGroup = document.querySelector("#backend-wake-word-group");
+    const backendWakeWordModelSelect = document.querySelector("#backend-wake-word-model-select");
+    const backendWakeWordModelPaths = document.querySelector("#backend-wake-word-model-paths");
+    const backendWakeWordModelNames = document.querySelector("#backend-wake-word-model-names");
+    const backendWakeWordThreshold = document.querySelector("#backend-wake-word-threshold");
+    const backendWakeWordThresholdLabel = document.querySelector("#backend-wake-word-threshold-label");
+    const backendWakeWordPreRollMs = document.querySelector("#backend-wake-word-pre-roll-ms");
+    const backendWakeWordPreRollMsLabel = document.querySelector("#backend-wake-word-pre-roll-ms-label");
+    const backendWakeWordCooldownMs = document.querySelector("#backend-wake-word-cooldown-ms");
+    const backendWakeWordCooldownMsLabel = document.querySelector("#backend-wake-word-cooldown-ms-label");
+    const backendWakeWordVadThreshold = document.querySelector("#backend-wake-word-vad-threshold");
+    const backendWakeWordVadThresholdLabel = document.querySelector("#backend-wake-word-vad-threshold-label");
+    const vadPresetButtons = Array.from(document.querySelectorAll(".vad-preset"));
+    const speakerRecognitionGroup = document.querySelector("#speaker-recognition-group");
+    const speakerRecognitionInputs = Array.from(document.querySelectorAll('input[name="speaker-recognition"]'));
+    const speakerBackend = document.querySelector("#speaker-backend");
+    const speakerThreshold = document.querySelector("#speaker-threshold");
+    const speakerThresholdLabel = document.querySelector("#speaker-threshold-label");
+    const speakerMargin = document.querySelector("#speaker-margin");
+    const speakerMarginLabel = document.querySelector("#speaker-margin-label");
+    const speakerProfileGrid = document.querySelector("#speaker-profile-grid");
+    const vadControls = [
+      vadSpeechThreshold,
+      vadNegativeThreshold,
+      vadMinSpeechMs,
+      vadMinSilenceMs,
+      vadSpeechPadMs,
+      vadMaxSpeechSeconds
+    ];
+    const backendWakeWordControls = [
+      backendWakeWordModelSelect,
+      backendWakeWordModelPaths,
+      backendWakeWordModelNames,
+      backendWakeWordThreshold,
+      backendWakeWordPreRollMs,
+      backendWakeWordCooldownMs,
+      backendWakeWordVadThreshold
+    ];
+    const cloudApiDetails = document.querySelector("#cloud-api-details");
+    const cloudApiRefresh = document.querySelector("#cloud-api-refresh");
+    const cloudApiGrid = document.querySelector("#cloud-api-grid");
+    const mcpServerGrid = document.querySelector("#mcp-server-grid");
+    const mcpAdminRouteInputs = Array.from(document.querySelectorAll('input[name="mcp-admin-route"]'));
+    const browserAudioInputField = document.querySelector("#browser-audio-input-field");
+    const browserAudioInput = document.querySelector("#browser-audio-input");
+    const browserAudioTest = document.querySelector("#browser-audio-test");
+    const browserAudioMeter = document.querySelector("#browser-audio-meter .vu-fill");
+    const browserAudioOutputField = document.querySelector("#browser-audio-output-field");
+    const browserAudioOutput = document.querySelector("#browser-audio-output");
+    const browserAudioRefresh = document.querySelector("#browser-audio-refresh");
+    const backendAudioInputField = document.querySelector("#backend-audio-input-field");
+    const backendAudioInput = document.querySelector("#backend-audio-input");
+    const backendAudioTest = document.querySelector("#backend-audio-test");
+    const backendAudioInputGainField = document.querySelector("#backend-audio-input-gain-field");
+    const backendAudioInputGain = document.querySelector("#backend-audio-input-gain");
+    const backendAudioInputGainLabel = document.querySelector("#backend-audio-input-gain-label");
+    const backendAudioOutputField = document.querySelector("#backend-audio-output-field");
+    const backendAudioOutput = document.querySelector("#backend-audio-output");
+    const backendAudioMonitorModeField = document.querySelector("#backend-audio-monitor-mode-field");
+    const backendAudioMonitorModeInputs = Array.from(document.querySelectorAll('input[name="backend-audio-monitor-mode"]'));
+    const backendAudioMonitorVolumeField = document.querySelector("#backend-audio-monitor-volume-field");
+    const backendAudioMonitorVolume = document.querySelector("#backend-audio-monitor-volume");
+    const backendAudioMonitorVolumeLabel = document.querySelector("#backend-audio-monitor-volume-label");
+    const backendAudioOutputPanField = document.querySelector("#backend-audio-output-pan-field");
+    const backendAudioOutputPan = document.querySelector("#backend-audio-output-pan");
+    const backendAudioOutputPanLabel = document.querySelector("#backend-audio-output-pan-label");
+    const sttLanguage = document.querySelector("#stt-language");
+    const thinkingSoundField = document.querySelector("#thinking-sound-field");
+    const thinkingSound = document.querySelector("#thinking-sound");
+    const thinkingSoundPlay = document.querySelector("#thinking-sound-play");
+    const listeningSoundField = document.querySelector("#listening-sound-field");
+    const listeningSound = document.querySelector("#listening-sound");
+    const listeningSoundPlay = document.querySelector("#listening-sound-play");
+    const wakeDetectedSoundField = document.querySelector("#wake-detected-sound-field");
+    const wakeDetectedSound = document.querySelector("#wake-detected-sound");
+    const wakeDetectedSoundPlay = document.querySelector("#wake-detected-sound-play");
+    const startupLoaderSoundField = document.querySelector("#startup-loader-sound-field");
+    const startupLoaderSound = document.querySelector("#startup-loader-sound");
+    const startupLoaderSoundPlay = document.querySelector("#startup-loader-sound-play");
+    const commandAckSoundField = document.querySelector("#command-ack-sound-field");
+    const commandAckSound = document.querySelector("#command-ack-sound");
+    const commandAckSoundPlay = document.querySelector("#command-ack-sound-play");
+    const llmSave = document.querySelector("#llm-save");
+    const llmMessage = document.querySelector("#llm-message");
+    const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
+    const speakerEmbeddingPreparationMessage = window.LSA_SPEAKER_EMBEDDING_PREPARATION_MESSAGE || "";
+    const composerTextUploadMaxBytes = 64 * 1024;
+    const composerAudioUploadMaxBytes = 20 * 1024 * 1024;
+    applyI18n();
+    const vadPresets = {
+      "quick-word": {
+        vadSpeechThreshold: 0.42,
+        vadNegativeThreshold: 0.25,
+        vadMinSpeechMs: 80,
+        vadMinSilenceMs: 450,
+        vadSpeechPadMs: 120,
+        vadMaxSpeechSeconds: 6
+      },
+      "noise-filter": {
+        vadSpeechThreshold: 0.62,
+        vadNegativeThreshold: 0.42,
+        vadMinSpeechMs: 180,
+        vadMinSilenceMs: 700,
+        vadSpeechPadMs: 100,
+        vadMaxSpeechSeconds: 8
+      },
+      "slow-soft": {
+        vadSpeechThreshold: 0.38,
+        vadNegativeThreshold: 0.22,
+        vadMinSpeechMs: 120,
+        vadMinSilenceMs: 1600,
+        vadSpeechPadMs: 180,
+        vadMaxSpeechSeconds: 12
+      }
+    };
+    let llmControlsInitialized = false;
+    let llmOptionsLoading = false;
+    let envProfilesLoading = false;
+    let activeEnvProfile = "";
+    let envProfileSwitchingEnabled = false;
+    let connectivityLocked = false;
+    let configBaseline = "";
+    let speakerRecognitionUnavailableReason = "";
+    let speakerRecognitionEnvEnabled = false;
+    let speakerRecognitionRuntimeEnabled = false;
+    let speakerProfileChoices = [];
+    let environmentLoadingActive = false;
+    let profileLoadingActive = false;
+    let vncConnectTimer = null;
+    let vncUrlDirty = false;
+    let currentVncFrameUrl = "";
+    let currentSnapshotEnvFile = "";
+    let metaErrorUntil = 0;
+    let lastServerMessages = [];
+    let pendingCommandMessages = [];
+    let localNoticeMessages = [];
+    let fileUploadPending = false;
+    let composerLocked = false;
+    let cancelRequestInFlight = false;
+    let interruptConversationEnabled = false;
+    let openSessionMenuId = "";
+    let openSessionSummaryId = "";
+    let sessionSummaryPinned = false;
+    let sessionSummaryHoverTimer = null;
+    let sessionSummaryAnchor = null;
+    let sessionSummaryHoverId = "";
+    let sessionSummaryCache = new Map();
+    let lastPointer = { x: -1, y: -1 };
+    let webAudio = { enabled: false, stt_enabled: false, audio_file_stt_enabled: false, tts_enabled: false, tts_output: "silent" };
+    let mediaRecorder = null;
+    let mediaStream = null;
+    let recordedChunks = [];
+    let isRecording = false;
+    let recordingTimer = null;
+    let recordingAudioContext = null;
+    let recordingAnalyser = null;
+    let recordingVad = null;
+    let recordingMonitorId = null;
+    let recordingSpeechDetected = false;
+    let recordingStartedAt = 0;
+    const speakerCaptureMaxSeconds = 10;
+    const speakerCaptureMinSeconds = 3;
+    let speakerCapture = null;
+    let currentSpeakerSample = null;
+    let soundwaveAnimationId = null;
+    let soundwaveStartedAt = 0;
+    let conversationEnabled = false;
+    let conversationRecorder = null;
+    let conversationStream = null;
+    let conversationAudioContext = null;
+    let conversationAnalyser = null;
+    let conversationVad = null;
+    let conversationChunks = [];
+    let conversationMonitorId = null;
+    let conversationSpeechDetected = false;
+    let conversationRestartTimer = null;
+    let conversationDiscard = false;
+    let conversationStopStreamAfterSegment = false;
+    let messagesHydrated = false;
+    let lastObservedAssistantMessageKey = "";
+    let webTtsPlaying = false;
+    let webTtsAudioContext = null;
+    let webTtsUnlocked = false;
+    let pendingWebTtsMessage = null;
+    let selectedBrowserAudioInput = window.localStorage.getItem("browser-audio-input") || "";
+    let selectedBrowserAudioOutput = window.localStorage.getItem("browser-audio-output") || "";
+    let backendAudioCapabilities = { input: false, output: false };
+    let browserAudioCapabilities = { input: false, output: typeof Audio !== "undefined", outputSelection: false };
+    let browserAudioTestStream = null;
+    let browserAudioTestContext = null;
+    let browserAudioTestAnalyser = null;
+    let browserAudioTestAnimationId = null;
+    let backendAudioDiagnostic = null;
+    let cloudApiLoaded = false;
+    let cloudApiLoading = false;
+    let mcpServersSignature = "";
+    let lastMcpServers = [];
+    let currentWebTtsSource = null;
+    let currentWebTtsAudio = null;
+    let thinkingAudio = null;
+    let thinkingAudioUrl = "";
+    let commandAckSoundUrl = "";
+    let thinkingAudioPlaying = false;
+    let currentAudioSample = null;
+    let audioSampleRequestId = 0;
+    let audioTranscriptionPending = false;
+    let audioTranscriptionMayPlayThinking = false;
+    let lastBrowserCommandAckAt = 0;
+    let ortModulePromise = null;
+    let sileroSessionPromise = null;
+
+    function setMeta(text, mode = "normal", holdMs = 0) {
+      metaEl.textContent = text;
+      metaEl.classList.toggle("error", mode === "error");
+      metaErrorUntil = mode === "error" && holdMs > 0 ? Date.now() + holdMs : 0;
+    }
+
+    async function fetchJsonOrThrow(response) {
+      const contentType = response.headers.get("content-type") || "";
+      const body = contentType.includes("application/json")
+        ? await response.json().catch(() => ({}))
+        : { error: { message: await response.text() } };
+      if (response.ok) return body;
+      const error = body && body.error ? body.error : {};
+      const message = error.message || body.message || response.statusText || `HTTP ${response.status}`;
+      const thrown = new Error(message);
+      thrown.code = error.code || "";
+      thrown.status = response.status;
+      throw thrown;
+    }
+
+    function conciseVoiceInputError(error) {
+      const text = String(error && error.message ? error.message : error || "");
+      if ((error && error.status === 429) || (error && error.code === "insufficient_quota") || text.includes("insufficient_quota")) {
+        return tr(
+          "voice_input_error_quota",
+          "Voice transcription failed: OpenAI quota exceeded. Check billing/quota or switch to local STT."
+        );
+      }
+      return trf("voice_input_error_generic", "Voice input failed: {error}", { error: text || "unknown error" });
+    }
+
+    let toastTimer = null;
+
+    function hideToast() {
+      window.clearTimeout(toastTimer);
+      toastOverlay.classList.remove("open");
+      toastOverlay.setAttribute("aria-hidden", "true");
+    }
+
+    function showToast(title, detail = "", mode = "ok", holdMs = 5000) {
+      window.clearTimeout(toastTimer);
+      toastTitle.textContent = title;
+      toastDetail.textContent = detail;
+      toastPanel.classList.toggle("ok", mode !== "error");
+      toastPanel.classList.toggle("error", mode === "error");
+      toastOverlay.classList.add("open");
+      toastOverlay.setAttribute("aria-hidden", "false");
+      if (holdMs > 0) {
+        toastTimer = window.setTimeout(hideToast, holdMs);
+      }
+    }
+
+    function conciseClientTtsError(error) {
+      const raw = String(error && error.message ? error.message : error || "").trim();
+      const lowered = raw.toLowerCase();
+      try {
+        const parsed = JSON.parse(raw);
+        const payload = parsed.error || parsed;
+        if (payload && payload.message) return String(payload.message);
+      } catch (_) {}
+      if (
+        lowered.includes("quota_exceeded") ||
+        lowered.includes("insufficient_quota") ||
+        lowered.includes("exceeds your quota") ||
+        lowered.includes("0 credits remaining")
+      ) {
+        return "Plus de crédit TTS disponible.";
+      }
+      if (
+        lowered.includes("invalid_api_key") ||
+        lowered.includes("invalid api key") ||
+        lowered.includes("unauthorized") ||
+        lowered.includes("status_code: 401") ||
+        lowered.includes("status code: 401")
+      ) {
+        return "Clé API TTS invalide ou refusée.";
+      }
+      if (
+        lowered.includes("rate_limit") ||
+        lowered.includes("rate limit") ||
+        lowered.includes("too many requests") ||
+        lowered.includes("status_code: 429") ||
+        lowered.includes("status code: 429")
+      ) {
+        return "Limite TTS atteinte, réessaie dans un moment.";
+      }
+      if (lowered.includes("credit") || lowered.includes("billing") || lowered.includes("payment")) {
+        return "Problème de crédit ou facturation TTS.";
+      }
+      const text = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      return text ? `Erreur TTS web: ${text.slice(0, 140)}` : "Erreur TTS web.";
+    }
+
+    function formatNumber(value) {
+      if (value === null || value === undefined || value === "") return "n/a";
+      const number = Number(value);
+      if (!Number.isFinite(number)) return String(value);
+      return new Intl.NumberFormat(undefined).format(number);
+    }
+
+    function formatCurrency(value, currency = "usd") {
+      const number = Number(value || 0);
+      if (!Number.isFinite(number)) return "n/a";
+      try {
+        return new Intl.NumberFormat(undefined, { style: "currency", currency: String(currency || "usd").toUpperCase() }).format(number);
+      } catch (_) {
+        return `${number.toFixed(2)} ${String(currency || "usd").toUpperCase()}`;
+      }
+    }
+
+    function cloudApiCard(provider, item) {
+      const status = item && item.status ? item.status : "unknown";
+      const statusClass = status === "ok" ? "ok" : status === "missing" || status === "unavailable" ? "warn" : "bad";
+      const lines = Array.isArray(item && item.lines) ? item.lines : [];
+      const maskedKey = item && item.masked_key ? item.masked_key : "non configurée";
+      return `
+        <div class="cloud-api-card">
+          <div class="cloud-api-title">
+            <span>${escapeHtml(provider)}</span>
+            <span class="cloud-api-status ${statusClass}">${escapeHtml(status)}</span>
+          </div>
+          <div class="cloud-api-key">Key: ${escapeHtml(maskedKey)}</div>
+          ${lines.map((line) => `<div class="cloud-api-line">${escapeHtml(line)}</div>`).join("")}
+        </div>
+      `;
+    }
+
+    function renderCloudApiStatus(data) {
+      const openai = data.openai || {};
+      const elevenlabs = data.elevenlabs || {};
+      const openaiLines = Array.isArray(openai.lines) ? openai.lines.slice() : [];
+      if (openai.cost_7d) {
+        openaiLines.unshift(`Coût 7 jours: ${formatCurrency(openai.cost_7d.value, openai.cost_7d.currency)}`);
+      }
+      const elevenLines = Array.isArray(elevenlabs.lines) ? elevenlabs.lines.slice() : [];
+      if (elevenlabs.characters) {
+        elevenLines.unshift(
+          `Caractères restants: ${formatNumber(elevenlabs.characters.remaining)} / ${formatNumber(elevenlabs.characters.limit)}`
+        );
+        elevenLines.unshift(`Caractères utilisés: ${formatNumber(elevenlabs.characters.used)}`);
+      }
+      cloudApiGrid.innerHTML = [
+        cloudApiCard("OpenAI", { ...openai, lines: openaiLines }),
+        cloudApiCard("ElevenLabs", { ...elevenlabs, lines: elevenLines })
+      ].join("");
+    }
+
+    async function loadCloudApiStatus(force = false) {
+      if (cloudApiLoading || (!force && cloudApiLoaded)) return;
+      cloudApiLoading = true;
+      cloudApiRefresh.disabled = true;
+      cloudApiGrid.innerHTML = '<div class="cloud-api-line">Chargement...</div>';
+      try {
+        const response = await fetch("/api/cloud-api-status", { cache: "no-store" });
+        const text = await response.text();
+        if (!response.ok) throw new Error(text);
+        renderCloudApiStatus(JSON.parse(text));
+        cloudApiLoaded = true;
+      } catch (error) {
+        cloudApiGrid.innerHTML = `<div class="cloud-api-line">${escapeHtml(`Cloud API unavailable: ${error}`)}</div>`;
+      } finally {
+        cloudApiLoading = false;
+        cloudApiRefresh.disabled = false;
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function selectedMcpAdminRoute() {
+      const checked = mcpAdminRouteInputs.find((input) => input.checked);
+      return checked && checked.value === "direct" ? "direct" : "proxy";
+    }
+
+    function setSelectedMcpAdminRoute(value) {
+      const normalized = value === "direct" ? "direct" : "proxy";
+      for (const input of mcpAdminRouteInputs) {
+        input.checked = input.value === normalized;
+      }
+    }
+
+    function mcpServerAdminUrl(server, route) {
+      if (route === "direct") return server.admin_url || "";
+      return server.proxy_admin_url || server.admin_url || "";
+    }
+
+    function mcpServerRouteDetail(route) {
+      if (route === "direct") {
+        return "Direct mode loads the MCP server from this browser. Use it only when this device can reach that address.";
+      }
+      return "HTTP proxy mode loads the MCP admin page through LiveStageAssistant, so only the backend needs access.";
+    }
+
+    function renderMcpServers(servers) {
+      const items = Array.isArray(servers) ? servers : [];
+      lastMcpServers = items;
+      const route = selectedMcpAdminRoute();
+      const signature = JSON.stringify(items.map((item) => [
+        item.name || "",
+        item.type || "",
+        item.admin_url || "",
+        item.proxy_admin_url || "",
+        Boolean(item.embeddable),
+        Boolean(item.auth_required),
+        item.routing || "",
+        JSON.stringify(item.env_options || {}),
+        item.detail || ""
+      ])) + "|" + route;
+      if (signature === mcpServersSignature) return;
+      mcpServersSignature = signature;
+      mcpServerGrid.replaceChildren();
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "mcp-server-empty";
+        empty.textContent = "No MCP servers loaded from the active config.";
+        mcpServerGrid.append(empty);
+        return;
+      }
+
+      for (const server of items) {
+        const card = document.createElement("div");
+        card.className = "mcp-server-card";
+
+        const head = document.createElement("div");
+        head.className = "mcp-server-head";
+
+        const title = document.createElement("div");
+        title.className = "mcp-server-title";
+        const name = document.createElement("div");
+        name.className = "mcp-server-name";
+        name.textContent = server.name || "MCP server";
+        const url = document.createElement("div");
+        url.className = "mcp-server-url";
+        url.textContent = server.admin_url || server.detail || "No browser admin URL";
+        title.append(name, url);
+
+        const actions = document.createElement("div");
+        actions.className = "mcp-server-actions";
+        const badge = document.createElement("span");
+        badge.className = "inline-badge";
+        badge.textContent = server.auth_required ? "Auth" : (server.type || "MCP");
+        actions.append(badge);
+        const selectedUrl = mcpServerAdminUrl(server, route);
+        if (selectedUrl) {
+          const open = document.createElement("a");
+          open.className = "mcp-server-open";
+          open.href = selectedUrl;
+          open.target = "_blank";
+          open.rel = "noreferrer";
+          open.textContent = route === "direct" ? "Open direct" : "Open via proxy";
+          actions.append(open);
+        }
+        const alternateUrl = route === "direct" ? server.proxy_admin_url : server.admin_url;
+        if (alternateUrl && alternateUrl !== selectedUrl) {
+          const alternate = document.createElement("a");
+          alternate.className = "mcp-server-open";
+          alternate.href = alternateUrl;
+          alternate.target = "_blank";
+          alternate.rel = "noreferrer";
+          alternate.textContent = route === "direct" ? "Proxy" : "Direct";
+          actions.append(alternate);
+        }
+
+        head.append(title, actions);
+        card.append(head);
+
+        const routingBox = document.createElement("div");
+        routingBox.className = "mcp-routing-box";
+        const routingDisabled = !selectedMcpToolRoutingEnabled();
+        const routingDisabledReason = "Tool Routing is Off. Enable Config -> IA model -> Tool Routing to edit routing words.";
+        routingBox.classList.toggle("disabled", routingDisabled);
+        routingBox.title = routingDisabled ? routingDisabledReason : "";
+        const routingLabel = document.createElement("label");
+        routingLabel.textContent = "Routing words";
+        routingLabel.title = "assistantOptions.routing";
+        const routingRow = document.createElement("div");
+        routingRow.className = "mcp-routing-row";
+        const routingInput = document.createElement("textarea");
+        routingInput.className = "mcp-routing-input";
+        routingInput.dataset.serverName = server.name || "";
+        routingInput.value = server.routing || "";
+        routingInput.placeholder = "mixer,mix,volume,bus";
+        routingInput.spellcheck = false;
+        routingInput.disabled = routingDisabled;
+        routingInput.title = routingDisabled ? routingDisabledReason : "assistantOptions.routing";
+        const routingSave = document.createElement("button");
+        routingSave.className = "mcp-routing-save";
+        routingSave.type = "button";
+        routingSave.textContent = "Save";
+        routingSave.disabled = routingDisabled;
+        routingSave.title = routingDisabled ? routingDisabledReason : "Save routing words";
+        const routingMessage = document.createElement("div");
+        routingMessage.className = "mcp-routing-message";
+        routingMessage.textContent = routingDisabled
+          ? "Tool Routing is Off; enable it to edit these words."
+          : "Comma-separated words; max 10 per server, no duplicates.";
+        routingSave.addEventListener("click", () => saveMcpRouting(routingMessage));
+        routingRow.append(routingInput, routingSave);
+        routingBox.append(routingLabel, routingRow, routingMessage);
+        card.append(routingBox);
+
+        const hasEnvOptions = server.env_options && Object.keys(server.env_options).length > 0;
+        const isStdioServer = !server.admin_url && String(server.type || "stdio") === "stdio";
+        if (hasEnvOptions || isStdioServer) {
+          const optionsBox = document.createElement("div");
+          optionsBox.className = "mcp-routing-box";
+          const optionsLabel = document.createElement("label");
+          optionsLabel.textContent = "Server env options";
+          optionsLabel.title = "mcpServers.<server>.env";
+          const optionsRow = document.createElement("div");
+          optionsRow.className = "mcp-routing-row";
+          const optionsInput = document.createElement("textarea");
+          optionsInput.className = "mcp-options-input";
+          optionsInput.dataset.serverName = server.name || "";
+          optionsInput.value = JSON.stringify(server.env_options || {}, null, 2);
+          optionsInput.placeholder = '{\\n  "XMS_SPEAKER_MAP": {\\n    "laurent": { "bus": "Laurent", "channel": "Talk Laurent" }\\n  }\\n}';
+          optionsInput.spellcheck = false;
+          optionsInput.title = "JSON object saved into mcpServers.<server>.env. Nested objects are stored as compact JSON strings.";
+          const optionsSave = document.createElement("button");
+          optionsSave.className = "mcp-routing-save";
+          optionsSave.type = "button";
+          optionsSave.textContent = "Save";
+          optionsSave.title = "Save MCP server env options";
+          const optionsMessage = document.createElement("div");
+          optionsMessage.className = "mcp-routing-message";
+          optionsMessage.textContent = "Advanced JSON env options; saved to the active MCP config.";
+          optionsSave.addEventListener("click", () => saveMcpServerOptions(optionsMessage));
+          optionsRow.append(optionsInput, optionsSave);
+          optionsBox.append(optionsLabel, optionsRow, optionsMessage);
+          card.append(optionsBox);
+        }
+
+        if (server.embeddable && selectedUrl) {
+          const placeholder = document.createElement("div");
+          placeholder.className = "mcp-server-placeholder";
+
+          const note = document.createElement("div");
+          note.className = "detail";
+          note.textContent = mcpServerRouteDetail(route);
+
+          const load = document.createElement("button");
+          load.className = "mcp-server-load";
+          load.type = "button";
+          load.textContent = "Load frame";
+          load.addEventListener("click", () => {
+            const frame = document.createElement("iframe");
+            frame.className = "mcp-server-frame";
+            frame.title = `${server.name || "MCP server"} admin`;
+            frame.referrerPolicy = "no-referrer";
+            frame.src = selectedUrl;
+            placeholder.replaceWith(frame);
+          });
+
+          placeholder.append(note, load);
+          card.append(placeholder);
+        } else {
+          const empty = document.createElement("div");
+          empty.className = "mcp-server-empty";
+          empty.textContent = server.detail || "This MCP server does not expose a browser page.";
+          card.append(empty);
+        }
+
+        mcpServerGrid.append(card);
+      }
+    }
+
+    async function saveMcpRouting(messageEl) {
+      if (!selectedMcpToolRoutingEnabled()) {
+        if (messageEl) messageEl.textContent = "Tool Routing is Off; enable it to edit routing words.";
+        return;
+      }
+      const routing = {};
+      for (const input of mcpServerGrid.querySelectorAll(".mcp-routing-input")) {
+        const name = input.dataset.serverName || "";
+        if (name) routing[name] = input.value || "";
+      }
+      if (messageEl) messageEl.textContent = tr("saving", "Saving...");
+      try {
+        const response = await fetch("/api/mcp-routing", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ routing })
+        });
+        const data = await fetchJsonOrThrow(response);
+        if (messageEl) messageEl.textContent = data.message || "Routing saved.";
+        setEnvironmentLoading(true);
+        mcpServersSignature = "";
+        await refresh();
+      } catch (error) {
+        if (messageEl) messageEl.textContent = trf("save_failed", "Save failed: {error}", { error });
+      }
+    }
+
+    async function saveMcpServerOptions(messageEl) {
+      const options = {};
+      for (const input of mcpServerGrid.querySelectorAll(".mcp-options-input")) {
+        const name = input.dataset.serverName || "";
+        if (!name) continue;
+        try {
+          const parsed = JSON.parse(input.value || "{}");
+          if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+            throw new Error("expected a JSON object");
+          }
+          options[name] = parsed;
+        } catch (error) {
+          if (messageEl) messageEl.textContent = `Invalid JSON for ${name}: ${error.message || error}`;
+          return;
+        }
+      }
+      if (messageEl) messageEl.textContent = tr("saving", "Saving...");
+      try {
+        const response = await fetch("/api/mcp-server-options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ options })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        if (messageEl) messageEl.textContent = data.message || "MCP server options saved.";
+        setEnvironmentLoading(true);
+        mcpServersSignature = "";
+        await refresh();
+      } catch (error) {
+        if (messageEl) messageEl.textContent = trf("save_failed", "Save failed: {error}", { error });
+      }
+    }
+
+    function syncMcpRoutingEditors() {
+      const disabled = !selectedMcpToolRoutingEnabled();
+      const reason = "Tool Routing is Off. Enable Config -> IA model -> Tool Routing to edit routing words.";
+      for (const box of mcpServerGrid.querySelectorAll(".mcp-routing-box")) {
+        box.classList.toggle("disabled", disabled);
+        box.title = disabled ? reason : "";
+      }
+      for (const input of mcpServerGrid.querySelectorAll(".mcp-routing-input")) {
+        input.disabled = disabled;
+        input.title = disabled ? reason : "assistantOptions.routing";
+      }
+      for (const button of mcpServerGrid.querySelectorAll(".mcp-routing-save")) {
+        button.disabled = disabled;
+        button.title = disabled ? reason : "Save routing words";
+      }
+      for (const message of mcpServerGrid.querySelectorAll(".mcp-routing-message")) {
+        message.textContent = disabled
+          ? "Tool Routing is Off; enable it to edit these words."
+          : "Comma-separated words; max 10 per server, no duplicates.";
+      }
+    }
+
+    function isStopCommand(value) {
+      const normalized = String(value || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\\u0300-\\u036f]/g, "")
+        .replace(/[^\\w'-]+/g, " ")
+        .trim();
+      if (!normalized) return false;
+      const stopWords = new Set(["stop", "stoppe", "stope", "arrete", "arreter", "annule", "annuler", "cancel"]);
+      return normalized.split(/\\s+/).some((word) => stopWords.has(word));
+    }
+
+    function setVncStatus(value) {
+      const status = value || "hors ligne";
+      vncStatus.textContent = status;
+      vncStatus.classList.toggle("online", status.startsWith("connecté") || status.startsWith("Connecté"));
+      vncStatus.classList.toggle("offline", status.startsWith("hors ligne"));
+    }
+
+    function noVncUrlFromInput(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "";
+      const lowerRaw = raw.toLowerCase();
+      if (lowerRaw.startsWith("http://") || lowerRaw.startsWith("https://")) return raw;
+
+      const parsed = new URL(lowerRaw.startsWith("vnc:") ? `http:${raw.slice(4)}` : raw);
+      const params = new URLSearchParams();
+      params.set("host", parsed.hostname);
+      params.set("port", parsed.port || "5900");
+      params.set("autoconnect", "1");
+      params.set("resize", "scale");
+      params.set("viewOnly", vncViewOnly.checked ? "1" : "0");
+      const password = parsed.searchParams.get("password") || "ronron";
+      if (password) params.set("password", password);
+      return `/vnc.html?${params.toString()}`;
+    }
+
+    async function saveRemoteScreenUrl() {
+      const nextUrl = vncUrl.value.trim();
+      const response = await fetch("/api/remote-screen-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vnc_url: nextUrl, view_only: Boolean(vncViewOnly.checked) })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      vncUrlDirty = false;
+      return response.json();
+    }
+
+    function disconnectVnc(status = "hors ligne") {
+      window.clearTimeout(vncConnectTimer);
+      currentVncFrameUrl = "";
+      vncFrame.src = "about:blank";
+      setVncStatus(status);
+    }
+
+    async function connectVnc({ save = false, force = false } = {}) {
+      let frameUrl = "";
+      try {
+        if (save) await saveRemoteScreenUrl();
+        frameUrl = noVncUrlFromInput(vncUrl.value);
+      } catch (error) {
+        setVncStatus("hors ligne");
+        metaEl.textContent = `VNC URL error: ${error}`;
+        return;
+      }
+      if (!frameUrl) {
+        setVncStatus("hors ligne");
+        return;
+      }
+      if (!force && frameUrl === currentVncFrameUrl && vncFrame.src) {
+        return;
+      }
+      setVncStatus("connexion...");
+      window.clearTimeout(vncConnectTimer);
+      vncConnectTimer = window.setTimeout(() => setVncStatus("hors ligne"), 5000);
+      try {
+        const targetUrl = new URL(frameUrl, window.location.href);
+        if (targetUrl.origin === window.location.origin) {
+          const response = await fetch(targetUrl.href, { method: "GET", cache: "no-store" });
+          if (!response.ok) {
+            window.clearTimeout(vncConnectTimer);
+            setVncStatus("hors ligne");
+            metaEl.textContent = `noVNC indisponible: ${targetUrl.pathname}`;
+            return;
+          }
+        }
+      } catch (error) {
+        window.clearTimeout(vncConnectTimer);
+        setVncStatus("hors ligne");
+        metaEl.textContent = `noVNC indisponible: ${error}`;
+        return;
+      }
+      if (currentVncFrameUrl && (force || currentVncFrameUrl !== frameUrl)) {
+        vncFrame.src = "about:blank";
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+      currentVncFrameUrl = frameUrl;
+      vncFrame.src = frameUrl;
+    }
+
+    function ledClass(status) {
+      const value = String(status || "unknown").toLowerCase();
+      if (["online", "initialized", "ready", "ok", "configured"].includes(value)) return "ok";
+      if (["initializing", "reload", "unknown", "warning"].includes(value)) return "warn";
+      if (["offline", "error", "failed"].includes(value)) return "bad";
+      return "idle";
+    }
+
+    function tile(title, status, detail) {
+      return `<div class="tile">
+        <div class="tile-title"><span class="led ${ledClass(status)}"></span><span>${escapeHtml(title)}</span></div>
+        <div>${escapeHtml(status || "unknown")}</div>
+        <div class="detail">${escapeHtml(detail || "")}</div>
+      </div>`;
+    }
+
+    function messageBubble(message) {
+      const role = message.role === "user" ? "user" : "assistant";
+      const pending = message.pending ? " pending" : "";
+      const contextIncluded = message.context_included ? " context-included" : "";
+      return `<div class="message-row ${role}${pending}${contextIncluded}">
+        <div class="bubble">${escapeHtml(message.text)}</div>
+      </div>`;
+    }
+
+    function assistantMessageKey(message) {
+      if (!message) return "";
+      return `${String(message.id ?? "")}:${String(message.created_at ?? "")}`;
+    }
+
+    function showLocalAssistantMessage(text) {
+      const cleaned = String(text || "").trim();
+      if (!cleaned) return;
+      localNoticeMessages = [{
+        id: `local-file-${Date.now()}`,
+        role: "assistant",
+        text: cleaned,
+        pending: false,
+        sentAt: Date.now()
+      }];
+      renderMessages(lastServerMessages, false);
+    }
+
+    function hasPendingCommandMessages() {
+      return pendingCommandMessages.some((message) => message.pending);
+    }
+
+    function canHoverSessionSummary() {
+      return window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    }
+
+    function sessionSummaryForId(sessionId) {
+      return String(sessionSummaryCache.get(sessionId) || "").trim();
+    }
+
+    function clearSessionSummaryHoverTimer() {
+      if (sessionSummaryHoverTimer) {
+        window.clearTimeout(sessionSummaryHoverTimer);
+        sessionSummaryHoverTimer = null;
+      }
+    }
+
+    function setSessionSummaryButtonsExpanded(sessionId, expanded) {
+      for (const button of sessionList.querySelectorAll(".session-summary-button")) {
+        const row = button.closest(".session-row");
+        button.setAttribute("aria-expanded", expanded && row?.dataset.sessionId === sessionId ? "true" : "false");
+      }
+    }
+
+    function placeSessionSummaryPopover(anchorRect) {
+      if (!anchorRect) return;
+      const compact = window.matchMedia("(max-width: 720px), (hover: none), (pointer: coarse)").matches;
+      const gap = 8;
+      const margin = 12;
+      const rect = sessionSummaryPopover.getBoundingClientRect();
+      let left = compact ? anchorRect.left : anchorRect.right + gap;
+      let top = compact ? anchorRect.bottom + gap : anchorRect.top;
+      left = Math.max(margin, Math.min(left, window.innerWidth - rect.width - margin));
+      top = Math.max(margin, Math.min(top, window.innerHeight - rect.height - margin));
+      sessionSummaryPopover.style.left = `${left}px`;
+      sessionSummaryPopover.style.top = `${top}px`;
+    }
+
+    function openSessionSummary(sessionId, anchorElement, { pinned = false } = {}) {
+      const summary = sessionSummaryForId(sessionId);
+      if (!summary || !anchorElement) return;
+      closeSessionMenus();
+      clearSessionSummaryHoverTimer();
+      if (openSessionSummaryId === sessionId && sessionSummaryPopover.classList.contains("open")) {
+        sessionSummaryPinned = sessionSummaryPinned || Boolean(pinned);
+        sessionSummaryPopover.textContent = summary;
+        setSessionSummaryButtonsExpanded(sessionId, true);
+        return;
+      }
+      openSessionSummaryId = sessionId;
+      sessionSummaryPinned = Boolean(pinned);
+      sessionSummaryHoverId = "";
+      const rect = anchorElement.getBoundingClientRect();
+      sessionSummaryAnchor = {
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom
+      };
+      sessionSummaryPopover.textContent = summary;
+      sessionSummaryPopover.classList.add("open");
+      placeSessionSummaryPopover(sessionSummaryAnchor);
+      setSessionSummaryButtonsExpanded(sessionId, true);
+    }
+
+    function closeSessionSummary() {
+      clearSessionSummaryHoverTimer();
+      openSessionSummaryId = "";
+      sessionSummaryPinned = false;
+      sessionSummaryAnchor = null;
+      sessionSummaryHoverId = "";
+      sessionSummaryPopover.classList.remove("open");
+      sessionSummaryPopover.textContent = "";
+      sessionSummaryPopover.style.left = "";
+      sessionSummaryPopover.style.top = "";
+      setSessionSummaryButtonsExpanded("", false);
+    }
+
+    function pointerIsOnSessionSummaryTarget(sessionId) {
+      if (lastPointer.x < 0 || lastPointer.y < 0) return false;
+      const target = document.elementFromPoint(lastPointer.x, lastPointer.y);
+      if (!target) return false;
+      if (target.closest("#session-summary-popover")) return true;
+      const row = target.closest(".session-row");
+      return row?.dataset.sessionId === sessionId;
+    }
+
+    function scheduleSessionSummary(sessionId) {
+      if (openSessionSummaryId === sessionId && sessionSummaryPopover.classList.contains("open")) {
+        return;
+      }
+      clearSessionSummaryHoverTimer();
+      sessionSummaryHoverId = sessionId;
+      sessionSummaryHoverTimer = window.setTimeout(() => {
+        if (openSessionSummaryId === sessionId && sessionSummaryPopover.classList.contains("open")) return;
+        const row = Array.from(sessionList.querySelectorAll(".session-row"))
+          .find((candidate) => candidate.dataset.sessionId === sessionId);
+        if (!row || !pointerIsOnSessionSummaryTarget(sessionId)) return;
+        openSessionSummary(sessionId, row);
+      }, 650);
+    }
+
+    function closeSessionSummaryAfterPointerCheck(sessionId) {
+      window.setTimeout(() => {
+        if (
+          (openSessionSummaryId === sessionId || sessionSummaryHoverId === sessionId) &&
+          !pointerIsOnSessionSummaryTarget(sessionId)
+        ) {
+          closeSessionSummary();
+        }
+      }, 80);
+    }
+
+    function syncOpenSessionSummaryAfterRender() {
+      if (openSessionSummaryId && !sessionSummaryForId(openSessionSummaryId)) {
+        closeSessionSummary();
+        return;
+      }
+      if (openSessionSummaryId) {
+        sessionSummaryPopover.textContent = sessionSummaryForId(openSessionSummaryId);
+        setSessionSummaryButtonsExpanded(openSessionSummaryId, true);
+        if (!sessionSummaryPinned && !pointerIsOnSessionSummaryTarget(openSessionSummaryId)) {
+          closeSessionSummary();
+        }
+      }
+    }
+
+    function sessionButton(session, activeId) {
+      const active = session.id === activeId ? " active" : "";
+      const menuOpen = session.id === openSessionMenuId ? " menu-open" : "";
+      const llmSummary = String(session.llm_summary || "").trim();
+      const hasSummary = Boolean(llmSummary);
+      const summaryClass = hasSummary ? " has-summary" : "";
+      const summaryButton = hasSummary
+        ? `<button class="session-summary-button" type="button" title="Afficher le llm_summary" aria-label="Afficher le llm_summary" aria-expanded="${session.id === openSessionSummaryId ? "true" : "false"}">i</button>`
+        : "";
+      const summaryTime = Number(session.llm_summary_updated_at || 0);
+      const summaryLabel = summaryTime
+        ? new Date(summaryTime * 1000).toLocaleString("fr-FR")
+        : "No summary";
+      return `<div class="session-row${active}${menuOpen}${summaryClass}" data-session-id="${escapeHtml(session.id)}" data-session-title="${escapeHtml(session.title || "Untitled session")}">
+        <button class="session-main" type="button">
+          <span class="session-title">${escapeHtml(session.title || "Untitled session")}</span>
+          <span class="session-meta">${escapeHtml(summaryLabel)}</span>
+        </button>
+        <button class="session-menu-button" type="button" title="Session actions" aria-label="Session actions">...</button>
+        ${summaryButton}
+        <div class="session-menu">
+          <button class="session-menu-action" type="button" data-session-action="rename">Rename</button>
+          <button class="session-menu-action" type="button" data-session-action="clear">Clear conversation</button>
+          <button class="session-menu-action" type="button" data-session-action="save-context">Save context</button>
+          <button class="session-menu-action danger" type="button" data-session-action="delete">Delete</button>
+        </div>
+      </div>`;
+    }
+
+    function renderSessions(sessionContext) {
+      const context = sessionContext || {};
+      const sessions = context.sessions || [];
+      const activeId = context.active_id || "";
+      sessionSummaryCache = new Map(
+        sessions
+          .map((session) => [String(session.id || ""), String(session.llm_summary || "").trim()])
+          .filter(([sessionId, summary]) => sessionId && summary)
+      );
+      if (sessions.length === 0) {
+        openSessionMenuId = "";
+        closeSessionSummary();
+        sessionList.innerHTML = `<div class="session-meta">No session</div>`;
+        return;
+      }
+      if (openSessionMenuId && !sessions.some((session) => session.id === openSessionMenuId)) {
+        openSessionMenuId = "";
+      }
+      if (openSessionSummaryId && !sessions.some((session) => session.id === openSessionSummaryId)) {
+        closeSessionSummary();
+      }
+      sessionList.innerHTML = sessions.map((session) => sessionButton(session, activeId)).join("");
+      syncOpenSessionSummaryAfterRender();
+    }
+
+    function syncSessionContextSizeLabel() {
+      const value = Number(sessionContextSize.value || 0);
+      sessionContextSizeLabel.textContent = value === 0 ? "Off" : String(value);
+    }
+
+    function syncMcpAgentMaxStepsLabel() {
+      mcpAgentMaxStepsLabel.textContent = String(mcpAgentMaxSteps.value || 20);
+    }
+
+    function setSessionContextSize(value) {
+      const nextValue = Math.max(0, Math.min(12000, Number(value || 0)));
+      sessionContextSize.value = String(nextValue);
+      syncSessionContextSizeLabel();
+    }
+
+    function setMcpAgentMaxSteps(value) {
+      const nextValue = Math.max(5, Math.min(60, Number(value || 20)));
+      mcpAgentMaxSteps.value = String(Math.round(nextValue));
+      syncMcpAgentMaxStepsLabel();
+    }
+
+    function summaryLineForMessage(message) {
+      const role = message.role === "user" ? "User" : "Assistant";
+      const text = String(message.text || "").replace(/\\s+/g, " ").trim();
+      return text ? `${role}: ${text}` : "";
+    }
+
+    function contextIncludedMessageIds(messages, maxChars) {
+      const limit = Math.max(0, Math.min(12000, Number(maxChars || 0)));
+      const included = new Set();
+      if (limit === 0) return included;
+
+      let candidates = [...(messages || [])];
+      if (candidates.length > 0 && candidates[candidates.length - 1].role === "user") {
+        candidates = candidates.slice(0, -1);
+      }
+
+      let total = 0;
+      const selected = [];
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const message = candidates[index];
+        const line = summaryLineForMessage(message);
+        if (!line) continue;
+        let lineLength = line.length + 1;
+        if (selected.length > 0 && total + lineLength > limit) break;
+        selected.push(message.id);
+        if (lineLength > limit) lineLength = limit + 1;
+        total += lineLength;
+      }
+
+      for (const id of selected) included.add(String(id));
+      return included;
+    }
+
+    function withContextPreview(messages) {
+      const includedIds = contextIncludedMessageIds(messages, sessionContextSize.value);
+      return (messages || []).map((message) => ({
+        ...message,
+        context_included: includedIds.has(String(message.id))
+      }));
+    }
+
+    function thinkingBubble() {
+      return `<div class="message-row assistant pending" aria-live="polite" aria-label="Assistant is thinking">
+        <div class="bubble">
+          <div class="thinking-bubble">
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+            <span class="thinking-dot"></span>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function setComposerLocked(locked) {
+      const wasLocked = composerLocked;
+      composerLocked = Boolean(locked);
+      injectForm.classList.toggle("busy", composerLocked);
+      injectStop.classList.toggle("visible", composerLocked);
+      injectStop.disabled = !composerLocked || cancelRequestInFlight;
+      webConversation.disabled = !webAudio.stt_enabled;
+      webMic.disabled = (composerLocked && !interruptConversationEnabled) || !webAudio.stt_enabled || isRecording || conversationEnabled;
+      composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
+      injectCommand.placeholder = composerLocked ? "Assistant is thinking..." : "Message";
+      updateConversationButton();
+      if (wasLocked && !composerLocked && !settingsOverlay.classList.contains("open")) {
+        window.setTimeout(() => injectCommand.focus({ preventScroll: true }), 0);
+      }
+      syncComposerSpeakerControl();
+    }
+
+    function browserSttDisabledReason(kind = "conversation") {
+      if (webAudio.stt_enabled) return "";
+      const sttInput = String(webAudio.stt_input || "").toLowerCase();
+      const isVoiceInput = kind === "voice";
+      if (!["browser", "both"].includes(sttInput)) {
+        return isVoiceInput
+          ? tr("voice_input_disabled_stt_input", "Micro navigateur indisponible : Entrée STT est réglée sur Backend ou Silent. Choisis Browser ou Both.")
+          : tr("conversation_disabled_stt_input", "Mode conversation indisponible : Entrée STT est réglée sur Backend ou Silent. Choisis Browser ou Both.");
+      }
+      if (browserAudioCapabilities.input === false) {
+        return isVoiceInput
+          ? tr("voice_input_disabled_browser_audio", "Micro navigateur indisponible : le navigateur ne peut pas accéder au micro.")
+          : tr("conversation_disabled_browser_audio", "Mode conversation indisponible : le navigateur ne peut pas accéder au micro.");
+      }
+      return isVoiceInput
+        ? tr("voice_input_disabled_openai", "Micro navigateur indisponible : configure une clé OpenAI pour le STT navigateur.")
+        : tr("conversation_disabled_openai", "Mode conversation indisponible : configure une clé OpenAI pour le STT navigateur.");
+    }
+
+    function setRecording(recording) {
+      isRecording = Boolean(recording);
+      webMic.classList.toggle("recording", isRecording);
+      webMic.innerHTML = isRecording ? "&#9632;" : "🎙️";
+      const disabledReason = browserSttDisabledReason("voice");
+      webMic.title = disabledReason || (isRecording ? "Stop recording" : "Voice input");
+      webMic.setAttribute("aria-label", webMic.title);
+      webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
+      injectCommand.placeholder = isRecording ? "Recording..." : (composerLocked ? "Assistant is thinking..." : "Message");
+    }
+
+    function updateConversationButton() {
+      webConversation.classList.toggle("active", conversationEnabled);
+      const disabledReason = browserSttDisabledReason("conversation");
+      webConversation.title = disabledReason || (conversationEnabled ? "Stop conversation mode" : "Conversation mode");
+      webConversation.setAttribute("aria-label", conversationEnabled ? "Stop conversation mode" : "Conversation mode");
+      webConversation.disabled = !webAudio.stt_enabled;
+      webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      webMic.title = browserSttDisabledReason("voice") || (isRecording ? "Stop recording" : "Voice input");
+      webMic.setAttribute("aria-label", webMic.title);
+      composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
+    }
+
+    function clearRecordingTimer() {
+      if (recordingTimer) {
+        window.clearTimeout(recordingTimer);
+        recordingTimer = null;
+      }
+    }
+
+    function vadSettings() {
+      const speechThreshold = Number(webAudio.vad_speech_threshold || 0.5);
+      const negativeThreshold = Number(webAudio.vad_negative_threshold || Math.max(0.01, speechThreshold - 0.15));
+      return {
+        speechThreshold,
+        negativeThreshold,
+        minSpeechMs: Math.max(0, Number(webAudio.vad_min_speech_ms || 120)),
+        minSilenceMs: Math.max(100, Number(webAudio.vad_min_silence_ms || 650)),
+        maxSpeechMs: Math.max(1000, Number(webAudio.vad_max_speech_seconds || 8) * 1000)
+      };
+    }
+
+    async function loadOrtModule() {
+      if (!ortModulePromise) {
+        ortModulePromise = import(webAudio.vad_ort_url || "/assets/web/static/vendor/onnxruntime-web/ort.wasm.min.mjs").then((module) => {
+          const ort = module.default || module;
+          ort.env.wasm.wasmPaths = webAudio.vad_ort_wasm_path || "/assets/web/static/vendor/onnxruntime-web/";
+          ort.env.wasm.numThreads = 2;
+          return ort;
+        });
+      }
+      return ortModulePromise;
+    }
+
+    async function loadSileroSession() {
+      if (!sileroSessionPromise) {
+        sileroSessionPromise = loadOrtModule().then((ort) =>
+          ort.InferenceSession.create(webAudio.vad_model_url || "/assets/web/static/vendor/silero-vad/silero_vad_v6.onnx", {
+            executionProviders: ["wasm"]
+          })
+        );
+      }
+      return sileroSessionPromise;
+    }
+
+    function resampleTo16k(input, sourceRate) {
+      if (!sourceRate || Math.abs(sourceRate - 16000) < 1) return Array.from(input);
+      const ratio = sourceRate / 16000;
+      const length = Math.max(1, Math.floor(input.length / ratio));
+      const output = new Float32Array(length);
+      for (let i = 0; i < length; i += 1) {
+        const position = i * ratio;
+        const left = Math.floor(position);
+        const right = Math.min(input.length - 1, left + 1);
+        const weight = position - left;
+        output[i] = input[left] * (1 - weight) + input[right] * weight;
+      }
+      return output;
+    }
+
+    class BrowserSileroVad {
+      constructor({ onStart, onEnd, onIdle }) {
+        this.onStart = onStart;
+        this.onEnd = onEnd;
+        this.onIdle = onIdle;
+        this.settings = vadSettings();
+        this.windowSamples = 512;
+        this.contextSamples = 64;
+        this.pending = [];
+        this.context = new Float32Array(this.contextSamples);
+        this.h = new Float32Array(128);
+        this.c = new Float32Array(128);
+        this.processing = false;
+        this.active = true;
+        this.speechDetected = false;
+        this.candidateMs = 0;
+        this.silenceMs = 0;
+        this.startedAt = Date.now();
+        this.processor = null;
+        this.source = null;
+      }
+
+      async attach(audioContext, source) {
+        this.ort = await loadOrtModule();
+        this.session = await loadSileroSession();
+        this.processor = audioContext.createScriptProcessor(2048, 1, 1);
+        this.processor.onaudioprocess = (event) => {
+          event.outputBuffer.getChannelData(0).fill(0);
+          this.push(event.inputBuffer.getChannelData(0), audioContext.sampleRate);
+        };
+        this.source = source;
+        source.connect(this.processor);
+        this.processor.connect(audioContext.destination);
+      }
+
+      close() {
+        this.active = false;
+        if (this.source && this.processor) {
+          try {
+            this.source.disconnect(this.processor);
+          } catch (error) {}
+        }
+        if (this.processor) {
+          this.processor.disconnect();
+          this.processor.onaudioprocess = null;
+        }
+        this.processor = null;
+        this.source = null;
+      }
+
+      push(input, sourceRate) {
+        if (!this.active) return;
+        for (const sample of resampleTo16k(input, sourceRate)) this.pending.push(sample);
+        this.processQueue();
+      }
+
+      async processQueue() {
+        if (this.processing || !this.session || !this.ort) return;
+        this.processing = true;
+        try {
+          while (this.active && this.pending.length >= this.windowSamples) {
+            const windowSamples = this.pending.splice(0, this.windowSamples);
+            const modelInput = new Float32Array(this.windowSamples + this.contextSamples);
+            modelInput.set(this.context, 0);
+            modelInput.set(windowSamples, this.contextSamples);
+            const results = await this.session.run({
+              input: new this.ort.Tensor("float32", modelInput, [1, this.windowSamples + this.contextSamples]),
+              h: new this.ort.Tensor("float32", this.h, [1, 1, 128]),
+              c: new this.ort.Tensor("float32", this.c, [1, 1, 128])
+            });
+            const probability = Number(results.speech_probs.data[0] || 0);
+            this.h = new Float32Array(results.hn.data);
+            this.c = new Float32Array(results.cn.data);
+            this.context = Float32Array.from(windowSamples.slice(-this.contextSamples));
+            this.update(probability);
+          }
+        } finally {
+          this.processing = false;
+        }
+      }
+
+      update(probability) {
+        const chunkMs = this.windowSamples / 16000 * 1000;
+        if (probability >= this.settings.speechThreshold) {
+          this.candidateMs += chunkMs;
+          this.silenceMs = 0;
+          if (!this.speechDetected && this.candidateMs >= this.settings.minSpeechMs) {
+            this.speechDetected = true;
+            if (this.onStart) this.onStart();
+          }
+        } else if (this.speechDetected && probability < this.settings.negativeThreshold) {
+          this.silenceMs += chunkMs;
+          if (this.silenceMs >= this.settings.minSilenceMs && this.onEnd) this.onEnd();
+        } else if (!this.speechDetected) {
+          this.candidateMs = 0;
+        }
+        if (this.speechDetected && Date.now() - this.startedAt >= this.settings.maxSpeechMs && this.onEnd) {
+          this.onEnd();
+        } else if (!this.speechDetected && Date.now() - this.startedAt >= 25000 && this.onIdle) {
+          this.onIdle();
+        }
+      }
+    }
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const result = String(reader.result || "");
+          resolve(result.includes(",") ? result.split(",").pop() : result);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    function writeAscii(view, offset, text) {
+      for (let index = 0; index < text.length; index += 1) {
+        view.setUint8(offset + index, text.charCodeAt(index));
+      }
+    }
+
+    function monoSamplesFromAudioBuffer(audioBuffer) {
+      const length = audioBuffer.length;
+      const channels = Math.max(1, audioBuffer.numberOfChannels || 1);
+      const samples = new Float32Array(length);
+      for (let channel = 0; channel < channels; channel += 1) {
+        const channelData = audioBuffer.getChannelData(channel);
+        for (let index = 0; index < length; index += 1) {
+          samples[index] += channelData[index] / channels;
+        }
+      }
+      return samples;
+    }
+
+    function audioStats(samples) {
+      if (!samples || samples.length === 0) return { rms: 0, peak: 0 };
+      let sum = 0;
+      let peak = 0;
+      for (const sample of samples) {
+        const absolute = Math.abs(sample);
+        peak = Math.max(peak, absolute);
+        sum += sample * sample;
+      }
+      return { rms: Math.sqrt(sum / samples.length), peak };
+    }
+
+    function encodePcm16Wav(samples, sampleRate) {
+      const bytesPerSample = 2;
+      const dataLength = samples.length * bytesPerSample;
+      const buffer = new ArrayBuffer(44 + dataLength);
+      const view = new DataView(buffer);
+      writeAscii(view, 0, "RIFF");
+      view.setUint32(4, 36 + dataLength, true);
+      writeAscii(view, 8, "WAVE");
+      writeAscii(view, 12, "fmt ");
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * bytesPerSample, true);
+      view.setUint16(32, bytesPerSample, true);
+      view.setUint16(34, 16, true);
+      writeAscii(view, 36, "data");
+      view.setUint32(40, dataLength, true);
+      let offset = 44;
+      for (const sample of samples) {
+        const clamped = Math.max(-1, Math.min(1, sample));
+        view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+        offset += bytesPerSample;
+      }
+      return new Blob([buffer], { type: "audio/wav" });
+    }
+
+    async function recordedBlobToValidatedWav(blob, thresholds = {}) {
+      if (!blob || blob.size === 0) {
+        throw new Error(tr("speaker_capture_error_empty", "No audio was captured."));
+      }
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) {
+        throw new Error(tr("speaker_capture_error_browser", "Audio capture is not supported by this browser."));
+      }
+      const arrayBuffer = await blob.arrayBuffer();
+      const audioContext = new AudioContextClass();
+      try {
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+        if (audioBuffer.duration < speakerCaptureMinSeconds) {
+          throw new Error(trf("speaker_capture_error_short", "Sample too short: record at least {seconds} seconds.", {
+            seconds: speakerCaptureMinSeconds
+          }));
+        }
+        const samples = monoSamplesFromAudioBuffer(audioBuffer);
+        const stats = audioStats(samples);
+        const minimumRms = Number(thresholds.minimumRms ?? 0.008);
+        const minimumPeak = Number(thresholds.minimumPeak ?? 0.03);
+        if (stats.rms < minimumRms || stats.peak < minimumPeak) {
+          throw new Error(tr("speaker_capture_error_silence", "Sample is too silent."));
+        }
+        return {
+          blob: encodePcm16Wav(samples, Math.round(audioBuffer.sampleRate || 48000)),
+          duration: audioBuffer.duration,
+          rms: stats.rms,
+          peak: stats.peak
+        };
+      } finally {
+        audioContext.close().catch(() => {});
+      }
+    }
+
+    function browserAudioConstraints() {
+      if (!selectedBrowserAudioInput) return { audio: true };
+      return { audio: { deviceId: { exact: selectedBrowserAudioInput } } };
+    }
+
+    function supportsBrowserAudioOutputSelection() {
+      return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
+    }
+
+    async function applyBrowserAudioOutput(audio) {
+      if (!audio || !selectedBrowserAudioOutput || typeof audio.setSinkId !== "function") return;
+      await audio.setSinkId(selectedBrowserAudioOutput);
+    }
+
+    function setVuMeter(fill, level) {
+      if (!fill) return;
+      const normalized = Math.max(0, Math.min(1, Number(level || 0)));
+      fill.style.height = `${Math.round(normalized * 100)}%`;
+    }
+
+    function stopBrowserAudioTest() {
+      window.cancelAnimationFrame(browserAudioTestAnimationId);
+      browserAudioTestAnimationId = null;
+      if (browserAudioTestStream) {
+        for (const track of browserAudioTestStream.getTracks()) track.stop();
+      }
+      browserAudioTestStream = null;
+      if (browserAudioTestContext) {
+        browserAudioTestContext.close().catch(() => {});
+      }
+      browserAudioTestContext = null;
+      browserAudioTestAnalyser = null;
+      browserAudioTest.textContent = "Test";
+      setVuMeter(browserAudioMeter, 0);
+    }
+
+    async function startBrowserAudioTest() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+      closeBackendAudioDiagnostic();
+      try {
+        browserAudioTestStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        browserAudioTestContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = browserAudioTestContext.createMediaStreamSource(browserAudioTestStream);
+        browserAudioTestAnalyser = browserAudioTestContext.createAnalyser();
+        browserAudioTestAnalyser.fftSize = 1024;
+        source.connect(browserAudioTestAnalyser);
+        const data = new Uint8Array(browserAudioTestAnalyser.fftSize);
+        browserAudioTest.textContent = "Stop";
+        const tick = () => {
+          if (!browserAudioTestAnalyser) return;
+          browserAudioTestAnalyser.getByteTimeDomainData(data);
+          let sum = 0;
+          let peak = 0;
+          for (const value of data) {
+            const centered = (value - 128) / 128;
+            sum += centered * centered;
+            peak = Math.max(peak, Math.abs(centered));
+          }
+          const rms = Math.sqrt(sum / data.length);
+          setVuMeter(browserAudioMeter, Math.max(rms * 4, peak * 0.75));
+          browserAudioTestAnimationId = window.requestAnimationFrame(tick);
+        };
+        tick();
+      } catch (error) {
+        stopBrowserAudioTest();
+        metaEl.textContent = `browser audio test unavailable: ${error}`;
+      }
+    }
+
+    function toggleBrowserAudioTest() {
+      if (browserAudioTestStream) stopBrowserAudioTest();
+      else startBrowserAudioTest();
+    }
+
+    function backendDiagnosticIssueText(issue) {
+      const messages = {
+        good: tr("backend_audio_diagnostic_good", "Speech was detected at a suitable level."),
+        no_signal: tr("backend_audio_diagnostic_no_signal", "No usable audio signal was received from the microphone."),
+        no_speech: tr("backend_audio_diagnostic_no_speech", "Audio was received, but the reference voice detector did not identify enough speech."),
+        very_low: tr("backend_audio_diagnostic_very_low", "The voice level is much too low for reliable processing."),
+        low: tr("backend_audio_diagnostic_low", "The voice level is low and may reduce recognition quality."),
+        high: tr("backend_audio_diagnostic_high", "The voice level is too high and leaves little headroom."),
+        clipping: tr("backend_audio_diagnostic_clipping", "Some peaks are close to saturation."),
+        severe_clipping: tr("backend_audio_diagnostic_severe_clipping", "The signal is heavily saturated and distorted."),
+        noisy: tr("backend_audio_diagnostic_noisy", "The voice is too close to the background-noise level.")
+      };
+      return messages[issue] || issue;
+    }
+
+    function createBackendAudioDiagnosticDialog() {
+      const overlay = document.createElement("div");
+      overlay.className = "speaker-capture-overlay open";
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("aria-modal", "true");
+
+      const panel = document.createElement("div");
+      panel.className = "speaker-capture-panel backend-audio-diagnostic-panel";
+      const title = document.createElement("div");
+      title.className = "speaker-capture-title";
+      title.textContent = tr("backend_audio_diagnostic_title", "Backend microphone diagnostic");
+      const instructions = document.createElement("p");
+      instructions.className = "speaker-capture-instructions";
+      instructions.textContent = tr(
+        "backend_audio_diagnostic_instructions",
+        "Stay silent for one second, then say: This is a microphone test for the voice assistant."
+      );
+      const status = document.createElement("div");
+      status.className = "speaker-capture-status";
+      status.dataset.mode = "recording";
+      const report = document.createElement("div");
+      report.className = "backend-audio-diagnostic-report";
+      report.hidden = true;
+      const audio = document.createElement("audio");
+      audio.className = "speaker-capture-preview";
+      audio.controls = true;
+      audio.hidden = true;
+      const actions = document.createElement("div");
+      actions.className = "speaker-capture-actions";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "small-button";
+      retry.textContent = tr("retry", "Retry");
+      retry.hidden = true;
+      retry.addEventListener("click", () => {
+        closeBackendAudioDiagnostic();
+        startBackendAudioDiagnostic();
+      });
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "small-button";
+      close.textContent = tr("close", "Close");
+      close.addEventListener("click", closeBackendAudioDiagnostic);
+      actions.append(retry, close);
+      panel.append(title, instructions, status, report, audio, actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      return { overlay, status, report, audio, retry };
+    }
+
+    function closeBackendAudioDiagnostic() {
+      if (!backendAudioDiagnostic) return;
+      backendAudioDiagnostic.closed = true;
+      if (backendAudioDiagnostic.countdownTimer) window.clearInterval(backendAudioDiagnostic.countdownTimer);
+      if (backendAudioDiagnostic.dialog?.overlay) backendAudioDiagnostic.dialog.overlay.remove();
+      if (!backendAudioDiagnostic.running) backendAudioDiagnostic = null;
+    }
+
+    function renderBackendAudioDiagnostic(dialog, data) {
+      const verdict = ["green", "orange", "red"].includes(data.verdict) ? data.verdict : "red";
+      const verdictLabels = {
+        green: tr("backend_audio_diagnostic_result_green", "Microphone level suitable"),
+        orange: tr("backend_audio_diagnostic_result_orange", "Microphone usable, adjustment recommended"),
+        red: tr("backend_audio_diagnostic_result_red", "Microphone input unsuitable")
+      };
+      dialog.status.textContent = verdictLabels[verdict];
+      dialog.status.dataset.mode = verdict;
+      dialog.report.dataset.verdict = verdict;
+      dialog.report.replaceChildren();
+
+      const hardwareTitle = document.createElement("strong");
+      hardwareTitle.className = "backend-audio-diagnostic-hardware-title";
+      hardwareTitle.textContent = tr("backend_audio_diagnostic_hardware", "Hardware diagnostic");
+      const issueList = document.createElement("ul");
+      issueList.className = "backend-audio-diagnostic-issues";
+      for (const issue of data.issues || []) {
+        const item = document.createElement("li");
+        item.textContent = backendDiagnosticIssueText(issue);
+        issueList.appendChild(item);
+      }
+
+      const configuredVad = data.configured_vad || {};
+      const vadReport = document.createElement("div");
+      vadReport.className = "backend-audio-diagnostic-vad";
+      const vadTitle = document.createElement("strong");
+      vadTitle.textContent = tr("backend_audio_diagnostic_configured_vad", "Configured VAD");
+      const vadStatus = document.createElement("span");
+      if (!configuredVad.evaluable) {
+        vadReport.dataset.status = "unavailable";
+        vadStatus.textContent = tr(
+          "backend_audio_diagnostic_vad_unavailable",
+          "Not evaluated because no usable microphone signal was available."
+        );
+      } else if (configuredVad.accepted) {
+        vadReport.dataset.status = "accepted";
+        vadStatus.textContent = tr(
+          "backend_audio_diagnostic_vad_accepted",
+          "The active VAD settings accept the voice in this recording."
+        );
+      } else {
+        vadReport.dataset.status = "rejected";
+        vadStatus.textContent = tr(
+          "backend_audio_diagnostic_vad_rejected",
+          "The microphone signal was analyzed, but the active VAD settings would reject this voice."
+        );
+      }
+      const vadParameters = document.createElement("small");
+      vadParameters.textContent = trf(
+        "backend_audio_diagnostic_vad_parameters",
+        "Active threshold: {threshold}; minimum continuous speech: {duration} ms; detected: {detected} s.",
+        {
+          threshold: configuredVad.threshold ?? "-",
+          duration: configuredVad.min_speech_ms ?? "-",
+          detected: configuredVad.continuous_speech_duration_seconds ?? 0
+        }
+      );
+      vadReport.append(vadTitle, vadStatus, vadParameters);
+
+      const metrics = data.metrics || {};
+      const metricLines = [
+        trf("backend_audio_diagnostic_device", "Device: {value}", { value: data.device || "-" }),
+        trf("backend_audio_diagnostic_input_gain", "Applied input gain: {value}×", { value: Number(data.input_gain ?? 1).toFixed(2) }),
+        trf("backend_audio_diagnostic_speech_duration", "Speech detected: {value} s", { value: metrics.speech_duration_seconds ?? 0 }),
+        trf("backend_audio_diagnostic_continuous_speech", "Longest continuous speech: {value} s", { value: metrics.continuous_speech_duration_seconds ?? 0 }),
+        trf("backend_audio_diagnostic_voice_level", "Voice level: {value} dBFS", { value: metrics.speech_rms_dbfs ?? "-" }),
+        trf("backend_audio_diagnostic_peak", "Peak: {value} dBFS", { value: metrics.peak_dbfs ?? "-" }),
+        trf("backend_audio_diagnostic_noise", "Background noise: {value} dBFS", { value: metrics.noise_rms_dbfs ?? "-" }),
+        trf("backend_audio_diagnostic_snr", "Signal-to-noise ratio: {value} dB", { value: metrics.snr_db ?? "-" }),
+        trf("backend_audio_diagnostic_clipping_metric", "Clipped samples: {value}%", { value: metrics.clipping_percent ?? 0 }),
+        trf("backend_audio_diagnostic_vad", "Maximum voice probability: {value}", { value: metrics.vad_probability ?? 0 })
+      ];
+      const metricGrid = document.createElement("div");
+      metricGrid.className = "backend-audio-diagnostic-metrics";
+      for (const line of metricLines) {
+        const item = document.createElement("span");
+        item.textContent = line;
+        metricGrid.appendChild(item);
+      }
+      dialog.report.append(hardwareTitle, issueList, vadReport, metricGrid);
+      dialog.report.hidden = false;
+      if (data.audio_data_url) {
+        dialog.audio.src = data.audio_data_url;
+        dialog.audio.hidden = false;
+      }
+      dialog.retry.hidden = false;
+    }
+
+    async function startBackendAudioDiagnostic() {
+      if (backendAudioDiagnostic?.running) return;
+      stopBrowserAudioTest();
+      const dialog = createBackendAudioDiagnosticDialog();
+      const state = {
+        dialog,
+        running: true,
+        closed: false,
+        startedAt: Date.now(),
+        countdownTimer: null
+      };
+      backendAudioDiagnostic = state;
+      backendAudioTest.disabled = true;
+      const updateCountdown = () => {
+        const elapsed = Math.floor((Date.now() - state.startedAt) / 1000);
+        const remaining = Math.max(0, 7 - elapsed);
+        dialog.status.textContent = trf(
+          "backend_audio_diagnostic_recording",
+          "Backend recording in progress... {seconds}s remaining.",
+          { seconds: remaining }
+        );
+      };
+      updateCountdown();
+      state.countdownTimer = window.setInterval(updateCountdown, 250);
+      try {
+        const response = await fetch("/api/backend-audio-diagnostic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            device: backendAudioInput.value || "",
+            input_gain: Number(backendAudioInputGain.value || 1)
+          })
+        });
+        const text = await response.text();
+        let data = {};
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (_error) {
+          throw new Error(text || tr("backend_audio_diagnostic_error", "Backend microphone diagnostic failed."));
+        }
+        if (!response.ok || data.ok === false) {
+          const message = data.error?.message || data.detail || text;
+          throw new Error(message || tr("backend_audio_diagnostic_error", "Backend microphone diagnostic failed."));
+        }
+        if (!state.closed) renderBackendAudioDiagnostic(dialog, data);
+      } catch (error) {
+        if (!state.closed) {
+          dialog.status.textContent = trf(
+            "backend_audio_diagnostic_error_detail",
+            "Backend microphone diagnostic failed: {error}",
+            { error: String(error.message || error) }
+          );
+          dialog.status.dataset.mode = "error";
+          dialog.retry.hidden = false;
+        }
+      } finally {
+        if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+        state.countdownTimer = null;
+        state.running = false;
+        syncAudioDeviceVisibility();
+        if (state.closed && backendAudioDiagnostic === state) backendAudioDiagnostic = null;
+      }
+    }
+
+    function toggleBackendAudioTest() {
+      startBackendAudioDiagnostic();
+    }
+
+    async function loadBrowserAudioDevices(requestPermission = false) {
+      browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
+      browserAudioOutput.replaceChildren(option("Default browser output", "", false, !selectedBrowserAudioOutput));
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        browserAudioCapabilities = { input: false, output: typeof Audio !== "undefined", outputSelection: false };
+        browserAudioInput.replaceChildren(option("Browser devices unavailable", "", true, true));
+        browserAudioOutput.replaceChildren(option("Browser devices unavailable", "", true, true));
+        browserAudioInput.disabled = true;
+        browserAudioOutput.disabled = true;
+        browserAudioRefresh.disabled = true;
+        syncAudioCapabilityControls();
+        return;
+      }
+
+      let permissionStream = null;
+      if (requestPermission && navigator.mediaDevices.getUserMedia) {
+        try {
+          permissionStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        } catch (error) {
+          metaEl.textContent = `browser audio devices unavailable: ${error}`;
+        } finally {
+          if (permissionStream) {
+            for (const track of permissionStream.getTracks()) track.stop();
+          }
+        }
+      }
+
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputs = devices.filter((device) => device.kind === "audioinput");
+        const outputs = devices.filter((device) => device.kind === "audiooutput");
+        const canSelectOutput = supportsBrowserAudioOutputSelection();
+        browserAudioCapabilities = {
+          input: inputs.length > 0,
+          output: typeof Audio !== "undefined",
+          outputSelection: canSelectOutput && outputs.length > 0
+        };
+
+        browserAudioInput.replaceChildren(option("Default browser input", "", false, !selectedBrowserAudioInput));
+        inputs.forEach((device, index) => {
+          const label = device.label || `Microphone ${index + 1}`;
+          browserAudioInput.appendChild(option(label, device.deviceId, false, device.deviceId === selectedBrowserAudioInput));
+        });
+        if (selectedBrowserAudioInput && ![...browserAudioInput.options].some((item) => item.value === selectedBrowserAudioInput)) {
+          browserAudioInput.appendChild(option(`${selectedBrowserAudioInput} (current unavailable)`, selectedBrowserAudioInput, false, true));
+        }
+
+        if (!canSelectOutput) {
+          browserAudioOutput.replaceChildren(option("Output selection unsupported", "", true, true));
+        } else {
+          browserAudioOutput.replaceChildren(option("Default browser output", "", false, !selectedBrowserAudioOutput));
+          outputs.forEach((device, index) => {
+            const label = device.label || `Speaker ${index + 1}`;
+            browserAudioOutput.appendChild(option(label, device.deviceId, false, device.deviceId === selectedBrowserAudioOutput));
+          });
+          if (selectedBrowserAudioOutput && ![...browserAudioOutput.options].some((item) => item.value === selectedBrowserAudioOutput)) {
+            browserAudioOutput.appendChild(option(`${selectedBrowserAudioOutput} (current unavailable)`, selectedBrowserAudioOutput, false, true));
+          }
+        }
+
+        browserAudioInput.disabled = inputs.length === 0;
+        browserAudioOutput.disabled = !canSelectOutput || browserAudioOutput.options.length === 0;
+        browserAudioRefresh.disabled = false;
+        syncAudioCapabilityControls();
+      } catch (error) {
+        browserAudioCapabilities = { input: false, output: typeof Audio !== "undefined", outputSelection: false };
+        browserAudioInput.replaceChildren(option("Could not list devices", "", true, true));
+        browserAudioOutput.replaceChildren(option("Could not list devices", "", true, true));
+        browserAudioInput.disabled = true;
+        browserAudioOutput.disabled = true;
+        syncAudioCapabilityControls();
+        metaEl.textContent = `browser audio devices unavailable: ${error}`;
+      }
+    }
+
+    function base64ToArrayBuffer(base64) {
+      const binary = window.atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      return bytes.buffer;
+    }
+
+    async function unlockWebTtsAudio() {
+      if (!webAudio.tts_enabled || webTtsUnlocked) return;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      try {
+        if (!webTtsAudioContext) webTtsAudioContext = new AudioContextClass();
+        if (webTtsAudioContext.state === "suspended") await webTtsAudioContext.resume();
+        const buffer = webTtsAudioContext.createBuffer(1, 1, 22050);
+        const source = webTtsAudioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(webTtsAudioContext.destination);
+        source.start(0);
+        webTtsUnlocked = webTtsAudioContext.state === "running";
+      } catch (error) {
+        webTtsUnlocked = false;
+      }
+    }
+
+    async function unlockWebTtsAudioFromUserGesture() {
+      await unlockWebTtsAudio();
+      if (!webTtsUnlocked || !pendingWebTtsMessage) return;
+      const message = pendingWebTtsMessage;
+      pendingWebTtsMessage = null;
+      playBrowserCommandAckSound();
+      playWebTts(message.text || "");
+    }
+
+    function deferWebTtsUntilUserGesture(message) {
+      pendingWebTtsMessage = message;
+      setMeta("Audio navigateur bloqué: clique dans la page pour activer le TTS.", "warn", 15000);
+    }
+
+    async function ensureWebAudioContext() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return null;
+      if (!webTtsAudioContext) webTtsAudioContext = new AudioContextClass();
+      if (webTtsAudioContext.state === "suspended") {
+        try {
+          await webTtsAudioContext.resume();
+        } catch (error) {
+          return null;
+        }
+      }
+      return webTtsAudioContext.state === "running" ? webTtsAudioContext : null;
+    }
+
+    async function playBrowserCommandAckSound() {
+      if (!commandAckSoundUrl || !webAudio.tts_enabled || webAudio.tts_output !== "browser") return;
+      const nowMs = Date.now();
+      if (nowMs - lastBrowserCommandAckAt < 900) return;
+      lastBrowserCommandAckAt = nowMs;
+      try {
+        const audio = new Audio(commandAckSoundUrl);
+        audio.preload = "auto";
+        audio.volume = Math.max(0, Math.min(1, Number(webAudio.tts_volume ?? 1)));
+        await applyBrowserAudioOutput(audio);
+        await audio.play();
+      } catch (error) {}
+    }
+
+    async function playWebTtsBuffer(audioBase64, volume = null) {
+      if (!webTtsAudioContext || webTtsAudioContext.state !== "running") return false;
+      try {
+        const arrayBuffer = base64ToArrayBuffer(audioBase64);
+        const audioBuffer = await webTtsAudioContext.decodeAudioData(arrayBuffer.slice(0));
+        const source = webTtsAudioContext.createBufferSource();
+        const gain = webTtsAudioContext.createGain();
+        source.buffer = audioBuffer;
+        source.playbackRate.value = 1;
+        gain.gain.value = Math.max(0, Math.min(1, Number(volume ?? webAudio.tts_volume ?? 1)));
+        source.connect(gain);
+        gain.connect(webTtsAudioContext.destination);
+        currentWebTtsSource = source;
+        stopThinkingAudio();
+        await new Promise((resolve, reject) => {
+          source.addEventListener("ended", resolve, { once: true });
+          try {
+            source.start(0);
+          } catch (error) {
+            reject(error);
+          }
+        });
+        return true;
+      } catch (error) {
+        currentWebTtsSource = null;
+        return false;
+      }
+    }
+
+    async function playWebTtsElement(audioBase64, mimeType, volume = null) {
+      const arrayBuffer = base64ToArrayBuffer(audioBase64);
+      const blob = new Blob([arrayBuffer], { type: mimeType || "audio/mpeg" });
+      const objectUrl = URL.createObjectURL(blob);
+      const audio = new Audio(objectUrl);
+      currentWebTtsAudio = audio;
+      audio.playbackRate = Math.max(0.6, Math.min(1.8, Number(webAudio.tts_speed || 1)));
+      audio.volume = Math.max(0, Math.min(1, Number(volume ?? webAudio.tts_volume ?? 1)));
+      audio.preservesPitch = true;
+      audio.mozPreservesPitch = true;
+      audio.webkitPreservesPitch = true;
+      await applyBrowserAudioOutput(audio);
+      try {
+        await new Promise((resolve, reject) => {
+          audio.addEventListener("ended", resolve, { once: true });
+          audio.addEventListener("error", reject, { once: true });
+          audio.play()
+            .then(() => stopThinkingAudio())
+            .catch(reject);
+        });
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+
+    function stopMediaStream() {
+      stopSoundwave();
+      clearRecordingTimer();
+      if (recordingMonitorId) {
+        window.cancelAnimationFrame(recordingMonitorId);
+        recordingMonitorId = null;
+      }
+      if (recordingVad) {
+        recordingVad.close();
+        recordingVad = null;
+      }
+      if (recordingAudioContext) {
+        recordingAudioContext.close().catch(() => {});
+        recordingAudioContext = null;
+      }
+      if (mediaStream) {
+        for (const track of mediaStream.getTracks()) {
+          track.stop();
+        }
+      }
+      mediaStream = null;
+      recordingAnalyser = null;
+    }
+
+    function analyserRms(analyser) {
+      if (!analyser) return 0;
+      const data = new Uint8Array(analyser.fftSize);
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const value of data) {
+        const centered = (value - 128) / 128;
+        sum += centered * centered;
+      }
+      return Math.sqrt(sum / data.length);
+    }
+
+    function activeSoundwaveAnalyser() {
+      if (isRecording && recordingAnalyser) return recordingAnalyser;
+      if (
+        conversationEnabled &&
+        conversationRecorder &&
+        conversationRecorder.state !== "inactive" &&
+        conversationAnalyser
+      ) {
+        return conversationAnalyser;
+      }
+      return null;
+    }
+
+    function resizeSoundwaveCanvas() {
+      const rect = soundwave.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.floor(rect.width * scale));
+      const height = Math.max(1, Math.floor(rect.height * scale));
+      if (soundwave.width !== width || soundwave.height !== height) {
+        soundwave.width = width;
+        soundwave.height = height;
+      }
+      return { width, height, scale };
+    }
+
+    function drawSoundwave() {
+      if (!soundwaveAnimationId) return;
+      const ctx = soundwave.getContext("2d");
+      if (!ctx) return;
+
+      const { width, height, scale } = resizeSoundwaveCanvas();
+      const cssWidth = width / scale;
+      const cssHeight = height / scale;
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+      const time = (Date.now() - soundwaveStartedAt) / 1000;
+      const centerY = cssHeight / 2;
+      const padding = 10;
+      const usableWidth = Math.max(1, cssWidth - padding * 2);
+      const analyser = activeSoundwaveAnalyser();
+      const samples = analyser ? new Uint8Array(analyser.fftSize) : null;
+      if (analyser && samples) analyser.getByteTimeDomainData(samples);
+
+      const gradient = ctx.createLinearGradient(padding, 0, cssWidth - padding, 0);
+      gradient.addColorStop(0, "rgba(16, 185, 129, 0.25)");
+      gradient.addColorStop(0.5, "rgba(59, 130, 246, 0.85)");
+      gradient.addColorStop(1, "rgba(16, 185, 129, 0.25)");
+      ctx.lineWidth = 2.4;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = gradient;
+      ctx.beginPath();
+
+      const points = 96;
+      for (let point = 0; point < points; point += 1) {
+        const ratio = point / (points - 1);
+        const x = padding + ratio * usableWidth;
+        let normalized = Math.sin(ratio * Math.PI * 8 + time * 4.5) * 0.12;
+        if (samples) {
+          const sampleIndex = Math.min(samples.length - 1, Math.floor(ratio * samples.length));
+          normalized = (samples[sampleIndex] - 128) / 128;
+        }
+        const envelope = Math.sin(ratio * Math.PI);
+        const y = centerY + normalized * envelope * cssHeight * 0.42;
+        if (point === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+
+      soundwaveAnimationId = window.requestAnimationFrame(drawSoundwave);
+    }
+
+    function startSoundwave() {
+      commandField.classList.add("soundwave-active");
+      soundwaveStartedAt = Date.now();
+      if (soundwaveAnimationId) window.cancelAnimationFrame(soundwaveAnimationId);
+      soundwaveAnimationId = window.requestAnimationFrame(drawSoundwave);
+    }
+
+    function stopSoundwave() {
+      commandField.classList.remove("soundwave-active");
+      if (soundwaveAnimationId) {
+        window.cancelAnimationFrame(soundwaveAnimationId);
+        soundwaveAnimationId = null;
+      }
+      const ctx = soundwave.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, soundwave.width, soundwave.height);
+    }
+
+    async function requestSilentCancel() {
+      stopWebTts();
+      if (cancelRequestInFlight) return;
+      cancelRequestInFlight = true;
+      try {
+        const response = await fetch("/api/cancel-command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        if (!response.ok) throw new Error(await response.text());
+      } finally {
+        cancelRequestInFlight = false;
+      }
+    }
+
+    function activeSpeakerProfilesFromConfig() {
+      return collectSpeakerProfiles()
+        .filter((profile) => profile.enabled && profile.name)
+        .map((profile) => ({ name: profile.name }));
+    }
+
+    function applySpeakerSampleState(sampleWrap, sample) {
+      if (!sampleWrap) return;
+      const sampleReady = Boolean(sample && sample.ready);
+      const embeddingReady = Boolean(sample && sample.embedding_ready);
+      sampleWrap.classList.toggle("ready", embeddingReady);
+      sampleWrap.classList.toggle("pending", sampleReady && !embeddingReady);
+      sampleWrap.title = embeddingReady && sample.embedding_path
+        ? sample.embedding_path
+        : sampleReady
+        ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
+        : (sample?.wav_path || sample?.filename || "");
+      const playButton = sampleWrap.querySelector('[data-role="play-sample"]');
+      if (playButton) {
+        playButton.disabled = !sampleReady;
+        playButton.title = sampleReady
+          ? tr("speaker_sample_play", "Lire ce sample")
+          : tr("speaker_sample_play_unavailable", "Aucun WAV disponible pour ce sample");
+      }
+    }
+
+    function composerSpeakerDisabledReason() {
+      if (!speakerRecognitionEnvEnabled) return "Speaker recognition is disabled in the active config.";
+      if (!speakerRecognitionRuntimeEnabled) return speakerRecognitionUnavailableReason || "Speaker recognition backend is unavailable.";
+      if (speakerProfileChoices.length === 0) return "No active speaker profile is configured.";
+      return "";
+    }
+
+    function syncComposerSpeakerControl() {
+      const previousValue = composerSpeaker.value || window.localStorage.getItem("lsaComposerSpeaker") || "auto";
+      composerSpeaker.replaceChildren();
+      composerSpeaker.appendChild(option("Auto detect", "auto", false, previousValue === "auto"));
+      composerSpeaker.appendChild(option("Unknown", "unknown", false, previousValue === "unknown"));
+      for (const profile of speakerProfileChoices) {
+        composerSpeaker.appendChild(option(profile.name, `profile:${profile.name}`, false, previousValue === `profile:${profile.name}`));
+      }
+      if (![...composerSpeaker.options].some((item) => item.value === previousValue)) {
+        composerSpeaker.value = "auto";
+        window.localStorage.setItem("lsaComposerSpeaker", "auto");
+      } else {
+        composerSpeaker.value = previousValue;
+      }
+      const disabledReason = composerSpeakerDisabledReason();
+      composerSpeaker.disabled = Boolean(disabledReason);
+      composerSpeaker.title = disabledReason || "Speaker profile for browser commands";
+    }
+
+    function forcedComposerSpeakerPayload() {
+      if (composerSpeaker.disabled) return null;
+      const selected = composerSpeaker.value || "auto";
+      if (selected === "auto") return null;
+      if (selected === "unknown") {
+        return {
+          speaker: "unknown",
+          speaker_confidence: 0,
+          speaker_backend: "none",
+          speaker_context_explicit: true
+        };
+      }
+      if (selected.startsWith("profile:")) {
+        const speaker = selected.slice("profile:".length).trim();
+        if (speaker) {
+          return {
+            speaker,
+            speaker_confidence: 1,
+            speaker_backend: "none",
+            speaker_context_explicit: true
+          };
+        }
+      }
+      return null;
+    }
+
+    function speakerPayloadForSubmit(options = {}) {
+      const forcedSpeaker = forcedComposerSpeakerPayload();
+      if (forcedSpeaker) return forcedSpeaker;
+      return {
+        speaker: options.speaker || "unknown",
+        speaker_confidence: Number(options.speakerConfidence || 0),
+        speaker_backend: options.speakerBackend || "none",
+        speaker_context_explicit: Boolean(options.speakerContextExplicit),
+        speaker_second_confidence: Number(options.speakerSecondConfidence || 0),
+        speaker_reason: options.speakerReason || "",
+        speaker_candidates: Array.isArray(options.speakerCandidates) ? options.speakerCandidates : []
+      };
+    }
+
+    async function submitCommand(command, options = {}) {
+      const cleanedCommand = command.trim();
+      if (!cleanedCommand) return;
+      const shouldInterrupt = Boolean(options.interrupt) && interruptConversationEnabled && (composerLocked || webTtsPlaying);
+      if (composerLocked && !shouldInterrupt && !options.allowWhenLocked) return;
+      if (shouldInterrupt) {
+        await requestSilentCancel();
+      }
+
+      localNoticeMessages = [];
+      pendingCommandMessages.push({
+        id: `pending-${Date.now()}`,
+        role: "user",
+        text: cleanedCommand,
+        pending: true,
+        sentAt: Date.now()
+      });
+      setComposerLocked(true);
+      renderMessages(lastServerMessages, true);
+      try {
+        const speakerPayload = speakerPayloadForSubmit(options);
+        const response = await fetch("/api/inject-command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            command: cleanedCommand,
+            speaker: speakerPayload.speaker,
+            speaker_confidence: speakerPayload.speaker_confidence,
+            speaker_backend: speakerPayload.speaker_backend,
+            speaker_context_explicit: speakerPayload.speaker_context_explicit,
+            speaker_second_confidence: speakerPayload.speaker_second_confidence,
+            speaker_reason: speakerPayload.speaker_reason,
+            speaker_candidates: speakerPayload.speaker_candidates
+          })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        injectCommand.value = "";
+        autoSizeComposer();
+        await refresh();
+      } catch (error) {
+        pendingCommandMessages = pendingCommandMessages.filter((message) => message.text !== cleanedCommand);
+        setComposerLocked(false);
+        renderMessages(lastServerMessages, false);
+        metaEl.textContent = `inject failed: ${error}`;
+      }
+    }
+
+    async function submitComposerCommand() {
+      await unlockWebTtsAudio();
+      if (composerLocked && interruptConversationEnabled) {
+        const command = injectCommand.value.trim();
+        if (command) {
+          await submitCommand(command, { interrupt: true });
+          return;
+        }
+      }
+      if (composerLocked) {
+        await cancelCommand();
+        return;
+      }
+      const command = injectCommand.value.trim();
+      if (!command) return;
+      if (isStopCommand(command)) {
+        await cancelCommand(true);
+        injectCommand.value = "";
+        autoSizeComposer();
+        return;
+      }
+      await submitCommand(command, { interrupt: interruptConversationEnabled });
+    }
+
+    function fileLooksLikeText(file) {
+      const name = String(file.name || "").toLowerCase();
+      const type = String(file.type || "").toLowerCase();
+      return type.startsWith("text/") || name.endsWith(".txt") || name.endsWith(".md");
+    }
+
+    function fileLooksLikeWav(file) {
+      const name = String(file.name || "").toLowerCase();
+      const type = String(file.type || "").toLowerCase();
+      return type.includes("wav") || name.endsWith(".wav");
+    }
+
+    async function handleComposerFile(file) {
+      if (!file) return;
+      localNoticeMessages = [];
+      fileUploadPending = true;
+      renderMessages(lastServerMessages, true);
+      try {
+        if (fileLooksLikeText(file)) {
+          if (file.size > composerTextUploadMaxBytes) {
+            showLocalAssistantMessage("Ce fichier texte est trop lourd pour être chargé ici.");
+            setMeta("text file too large: max 64 KB", "error", 5000);
+            return;
+          }
+          const text = await file.text();
+          injectCommand.value = text.trim();
+          autoSizeComposer();
+          injectCommand.focus({ preventScroll: true });
+          setMeta(`loaded text file: ${file.name}`);
+          return;
+        }
+
+        if (fileLooksLikeWav(file)) {
+          if (file.size > composerAudioUploadMaxBytes) {
+            showLocalAssistantMessage("Ce fichier audio est trop lourd pour être transcrit ici.");
+            setMeta("WAV file too large: max 20 MB", "error", 5000);
+            return;
+          }
+          if (!webAudio.audio_file_stt_enabled) {
+            showLocalAssistantMessage("Je ne peux pas transcrire ce fichier audio avec la configuration actuelle.");
+            setMeta(tr("audio_file_stt_unavailable", "Transcription fichier audio indisponible avec la configuration actuelle"), "error", 5000);
+            return;
+          }
+          await handleRecordedAudio(file, { applyWakeWord: true, fileUpload: true });
+          return;
+        }
+        showLocalAssistantMessage("Je ne peux pas utiliser ce type de fichier ici. Utilise un fichier WAV ou un fichier texte.");
+        setMeta("unsupported file type: use WAV audio or TXT text", "error", 5000);
+      } catch (error) {
+        showLocalAssistantMessage("Je n'ai pas pu lire ce fichier.");
+        setMeta(`file upload failed: ${error.message || error}`, "error", 7000);
+      } finally {
+        fileUploadPending = false;
+        if (!composerLocked && !hasPendingCommandMessages() && webAudio.tts_output === "browser") stopThinkingAudio();
+        renderMessages(lastServerMessages, composerLocked || hasPendingCommandMessages());
+      }
+    }
+
+    async function handleRecordedAudio(blob, options = {}) {
+      if (!blob || blob.size === 0) return;
+      webMic.disabled = true;
+      injectCommand.placeholder = "Transcribing...";
+      audioTranscriptionPending = true;
+      audioTranscriptionMayPlayThinking = !(options.applyWakeWord && webAudio.wake_word_enabled);
+      if (audioTranscriptionMayPlayThinking && webAudio.tts_enabled && webAudio.tts_output === "browser") {
+        startThinkingAudio();
+      }
+      try {
+        const audioBase64 = await blobToBase64(blob);
+        const response = await fetch("/api/web-transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            audio_base64: audioBase64,
+            mime_type: blob.type || "audio/webm",
+            apply_wake_word: Boolean(options.applyWakeWord),
+            wake_word_mode: options.applyWakeWord ? "require" : "ignore"
+          })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        if (data.accepted === false) {
+          if (options.fileUpload) {
+            showLocalAssistantMessage(data.message === "Wake word not detected."
+              ? "Je n'ai pas détecté le mot de réveil dans ce fichier audio."
+              : "Je n'ai pas détecté de commande exploitable dans ce fichier audio.");
+          }
+          metaEl.textContent = data.message || "voice ignored";
+          if (options.conversation) scheduleConversationRestart();
+          return;
+        }
+        const text = String(data.command_text || data.text || "").trim();
+        if (text) {
+          if (!options.conversation && !options.fileUpload) {
+            injectCommand.value = text;
+            autoSizeComposer();
+          }
+          const forcedSpeaker = forcedComposerSpeakerPayload();
+          await submitCommand(text, {
+            allowWhenLocked: Boolean(options.fileUpload),
+            interrupt: Boolean(options.conversation),
+            speaker: forcedSpeaker ? forcedSpeaker.speaker : (data.speaker || "unknown"),
+            speakerConfidence: forcedSpeaker ? forcedSpeaker.speaker_confidence : (data.speaker_confidence || 0),
+            speakerBackend: forcedSpeaker ? forcedSpeaker.speaker_backend : (data.speaker_backend || "none"),
+            speakerContextExplicit: forcedSpeaker ? forcedSpeaker.speaker_context_explicit : false,
+            speakerSecondConfidence: forcedSpeaker ? 0 : (data.speaker_second_confidence || 0),
+            speakerReason: forcedSpeaker ? "injected" : (data.speaker_reason || ""),
+            speakerCandidates: forcedSpeaker ? [] : (data.speaker_candidates || [])
+          });
+        } else {
+          if (options.fileUpload) {
+            showLocalAssistantMessage("Je n'ai pas détecté de commande exploitable dans ce fichier audio.");
+          }
+          if (options.conversation) scheduleConversationRestart();
+        }
+      } catch (error) {
+        if (options.fileUpload) {
+          showLocalAssistantMessage("Je n'ai pas pu transcrire ce fichier audio.");
+        }
+        setMeta(conciseVoiceInputError(error), "error", 15000);
+      } finally {
+        audioTranscriptionPending = false;
+        audioTranscriptionMayPlayThinking = false;
+        if (!composerLocked && !hasPendingCommandMessages()) stopThinkingAudio();
+        setRecording(false);
+      }
+    }
+
+    async function startWebRecording() {
+      if (!webAudio.stt_enabled || isRecording) return;
+      if (composerLocked && !interruptConversationEnabled) return;
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+        metaEl.textContent = "voice input unavailable in this browser";
+        return;
+      }
+
+      try {
+        recordedChunks = [];
+        recordingSpeechDetected = false;
+        recordingStartedAt = Date.now();
+        mediaStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+        loadBrowserAudioDevices(false);
+        if (AudioContextClass) {
+          recordingAudioContext = new AudioContextClass();
+          const source = recordingAudioContext.createMediaStreamSource(mediaStream);
+          recordingAnalyser = recordingAudioContext.createAnalyser();
+          recordingAnalyser.fftSize = 2048;
+          source.connect(recordingAnalyser);
+          recordingVad = new BrowserSileroVad({
+            onStart: () => {
+              recordingSpeechDetected = true;
+            },
+            onEnd: () => stopWebRecording(),
+            onIdle: () => stopWebRecording()
+          });
+          await recordingVad.attach(recordingAudioContext, source);
+        }
+        mediaRecorder = new MediaRecorder(mediaStream);
+        mediaRecorder.addEventListener("dataavailable", (event) => {
+          if (event.data && event.data.size > 0) recordedChunks.push(event.data);
+        });
+        mediaRecorder.addEventListener("stop", () => {
+          const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+          const hadRecordingAnalyser = Boolean(recordingAnalyser);
+          stopMediaStream();
+          if (hadRecordingAnalyser && !recordingSpeechDetected) {
+            injectCommand.placeholder = "Message";
+            setRecording(false);
+            metaEl.textContent = "voice ignored: not enough speech";
+            return;
+          }
+          injectCommand.placeholder = "Transcribing...";
+          handleRecordedAudio(blob);
+        });
+        mediaRecorder.start();
+        setRecording(true);
+        startSoundwave();
+        const maxRecordingMs = Math.max(1000, Number(webAudio.vad_max_speech_seconds || 8) * 1000 + 1000);
+        recordingTimer = window.setTimeout(() => stopWebRecording(), maxRecordingMs);
+      } catch (error) {
+        stopMediaStream();
+        setRecording(false);
+        metaEl.textContent = `microphone unavailable: ${error}`;
+      }
+    }
+
+    function stopWebRecording() {
+      if (recordingVad) {
+        recordingVad.close();
+        recordingVad = null;
+      }
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        clearRecordingTimer();
+        webMic.disabled = true;
+        mediaRecorder.stop();
+      }
+    }
+
+    function clearConversationRestartTimer() {
+      if (conversationRestartTimer) {
+        window.clearTimeout(conversationRestartTimer);
+        conversationRestartTimer = null;
+      }
+    }
+
+    function stopConversationMonitor() {
+      if (conversationMonitorId) {
+        window.cancelAnimationFrame(conversationMonitorId);
+        conversationMonitorId = null;
+      }
+    }
+
+    function stopConversationStream() {
+      stopConversationMonitor();
+      stopSoundwave();
+      if (conversationVad) {
+        conversationVad.close();
+        conversationVad = null;
+      }
+      if (conversationAudioContext) {
+        conversationAudioContext.close().catch(() => {});
+        conversationAudioContext = null;
+      }
+      if (conversationStream) {
+        for (const track of conversationStream.getTracks()) {
+          track.stop();
+        }
+      }
+      conversationStream = null;
+      conversationAnalyser = null;
+      conversationRecorder = null;
+    }
+
+    function stopConversationSegment() {
+      stopConversationMonitor();
+      stopSoundwave();
+      if (conversationVad) {
+        conversationVad.close();
+        conversationVad = null;
+      }
+      conversationRecorder = null;
+    }
+
+    function stopConversationRecording(discard = false, closeStream = false) {
+      conversationDiscard = discard;
+      conversationStopStreamAfterSegment = Boolean(closeStream);
+      if (conversationVad) {
+        conversationVad.close();
+        conversationVad = null;
+      }
+      if (conversationRecorder && conversationRecorder.state !== "inactive") {
+        conversationRecorder.stop();
+      } else {
+        if (conversationStopStreamAfterSegment) stopConversationStream();
+        else stopConversationSegment();
+        conversationStopStreamAfterSegment = false;
+      }
+    }
+
+    async function attachConversationVad() {
+      if (!conversationAudioContext || !conversationStream || conversationVad) return;
+      const source = conversationAudioContext.createMediaStreamSource(conversationStream);
+      conversationVad = new BrowserSileroVad({
+        onStart: () => {
+          conversationSpeechDetected = true;
+        },
+        onEnd: () => stopConversationRecording(false),
+        onIdle: () => stopConversationRecording(true)
+      });
+      await conversationVad.attach(conversationAudioContext, source);
+    }
+
+    async function ensureConversationMicrophone() {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder || !AudioContextClass) {
+        throw new Error("conversation mode unavailable in this browser");
+      }
+
+      const hasLiveStream = conversationStream
+        && conversationStream.getAudioTracks().some((track) => track.readyState === "live");
+      if (hasLiveStream && conversationAudioContext && conversationAnalyser) {
+        if (conversationAudioContext.state === "suspended") {
+          await conversationAudioContext.resume();
+        }
+        await attachConversationVad();
+        return;
+      }
+
+      stopConversationStream();
+      conversationStream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+      loadBrowserAudioDevices(false);
+      conversationAudioContext = new AudioContextClass();
+      const source = conversationAudioContext.createMediaStreamSource(conversationStream);
+      conversationAnalyser = conversationAudioContext.createAnalyser();
+      conversationAnalyser.fftSize = 2048;
+      source.connect(conversationAnalyser);
+      await attachConversationVad();
+    }
+
+    async function startConversationListening() {
+      if (!conversationEnabled || !webAudio.stt_enabled || conversationRecorder) return;
+      if ((composerLocked || webTtsPlaying) && !interruptConversationEnabled) return;
+
+      try {
+        await ensureConversationMicrophone();
+        conversationChunks = [];
+        conversationSpeechDetected = false;
+        conversationDiscard = false;
+        conversationStopStreamAfterSegment = false;
+        conversationRecorder = new MediaRecorder(conversationStream);
+        conversationRecorder.addEventListener("dataavailable", (event) => {
+          if (event.data && event.data.size > 0) conversationChunks.push(event.data);
+        });
+        conversationRecorder.addEventListener("stop", () => {
+          const shouldDiscard = conversationDiscard || !conversationSpeechDetected;
+          const blob = new Blob(conversationChunks, { type: conversationRecorder.mimeType || "audio/webm" });
+          const shouldCloseStream = conversationStopStreamAfterSegment;
+          if (shouldCloseStream) stopConversationStream();
+          else stopConversationSegment();
+          conversationStopStreamAfterSegment = false;
+          if (shouldCloseStream) return;
+          if (!shouldDiscard) {
+            handleRecordedAudio(blob, { applyWakeWord: true, conversation: true }).finally(() => {
+              scheduleConversationRestart();
+            });
+          } else {
+            scheduleConversationRestart();
+          }
+        });
+        conversationRecorder.start();
+        startSoundwave();
+        metaEl.textContent = "conversation listening...";
+      } catch (error) {
+        stopConversationStream();
+        metaEl.textContent = `conversation microphone unavailable: ${error}`;
+        conversationEnabled = false;
+        updateConversationButton();
+      }
+    }
+
+    function scheduleConversationRestart(delayMs = 250) {
+      clearConversationRestartTimer();
+      if (!conversationEnabled) return;
+      if ((composerLocked || webTtsPlaying) && !interruptConversationEnabled) return;
+      conversationRestartTimer = window.setTimeout(() => startConversationListening(), delayMs);
+    }
+
+    function setConversationEnabled(enabled) {
+      conversationEnabled = Boolean(enabled);
+      updateConversationButton();
+      if (conversationEnabled) {
+        if (isRecording) stopWebRecording();
+        scheduleConversationRestart(0);
+      } else {
+        clearConversationRestartTimer();
+        stopConversationRecording(true, true);
+        stopConversationStream();
+      }
+    }
+
+    async function playWebTts(text, options = {}) {
+      const force = options.force === true;
+      if ((!force && !webAudio.tts_enabled) || !text) return;
+      try {
+        webTtsPlaying = true;
+        const payload = { text };
+        if (options.provider) payload.provider = options.provider;
+        if (options.model) payload.model = options.model;
+        if (options.voice) payload.voice = options.voice;
+        if (options.speed) payload.speed = options.speed;
+        const response = await fetch("/api/web-tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) {
+          const responseText = await response.text();
+          throw new Error(responseText);
+        }
+        const data = await response.json();
+        if (!data.audio_base64 || !data.mime_type) return;
+        try {
+          await playWebTtsElement(data.audio_base64, data.mime_type, options.volume);
+        } catch (audioElementError) {
+          const playedWithContext = await playWebTtsBuffer(data.audio_base64, options.volume);
+          if (!playedWithContext) throw audioElementError;
+        }
+      } catch (error) {
+        setMeta(conciseClientTtsError(error), "error", 12000);
+        if (force) throw error;
+      } finally {
+        currentWebTtsSource = null;
+        currentWebTtsAudio = null;
+        webTtsPlaying = false;
+        scheduleConversationRestart(250);
+      }
+    }
+
+    function stopWebTts() {
+      if (currentWebTtsSource) {
+        try {
+          currentWebTtsSource.stop(0);
+        } catch (error) {}
+        currentWebTtsSource = null;
+      }
+      if (currentWebTtsAudio) {
+        const audio = currentWebTtsAudio;
+        currentWebTtsAudio.pause();
+        currentWebTtsAudio.currentTime = 0;
+        currentWebTtsAudio = null;
+        audio.dispatchEvent(new Event("ended"));
+      }
+      webTtsPlaying = false;
+    }
+
+    async function startThinkingAudio() {
+      if (!webAudio.tts_enabled || webAudio.tts_output !== "browser" || !thinkingAudioUrl || thinkingAudioPlaying) return;
+      try {
+        if (!thinkingAudio || thinkingAudio.src !== new URL(thinkingAudioUrl, window.location.href).href) {
+          thinkingAudio = new Audio(thinkingAudioUrl);
+          thinkingAudio.loop = true;
+        }
+        thinkingAudio.volume = Math.max(0, Math.min(1, Number(webAudio.tts_volume ?? 1)));
+        await applyBrowserAudioOutput(thinkingAudio);
+        thinkingAudioPlaying = true;
+        thinkingAudio.currentTime = 0;
+        await thinkingAudio.play();
+      } catch (error) {
+        thinkingAudioPlaying = false;
+      }
+    }
+
+    function stopThinkingAudio() {
+      if (!thinkingAudio) {
+        thinkingAudioPlaying = false;
+        return;
+      }
+      thinkingAudio.pause();
+      thinkingAudio.currentTime = 0;
+      thinkingAudioPlaying = false;
+    }
+
+    function setAudioSampleButtonPlaying(button, playing) {
+      if (!button) return;
+      button.classList.toggle("enabled", playing);
+      button.setAttribute("aria-pressed", playing ? "true" : "false");
+      button.innerHTML = playing ? "&#9632;" : "&#9654;";
+      if (playing) {
+        button.title = tr("stop", "Stop");
+        button.setAttribute("aria-label", tr("stop", "Stop"));
+      } else {
+        button.title = tr(button.dataset.i18nTitle, "Play sample");
+        button.setAttribute("aria-label", tr(button.dataset.i18nAriaLabel, "Play sample"));
+      }
+    }
+
+    function stopCurrentAudioSample() {
+      audioSampleRequestId += 1;
+      const sample = currentAudioSample;
+      if (!sample) return;
+      currentAudioSample = null;
+      setAudioSampleButtonPlaying(sample.button, false);
+      if (sample.audio) {
+        sample.audio.pause();
+        sample.audio.currentTime = 0;
+      }
+      if (sample.output === "backend") {
+        const stopBackendSample = () => fetch("/api/backend-audio-sample", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "stop", filename: sample.filename })
+          }).catch(() => {});
+        if (sample.backendStart) sample.backendStart.then(stopBackendSample, stopBackendSample);
+        else stopBackendSample();
+      }
+    }
+
+    function syncAudioSampleControls() {
+      const output = selectedTtsOutput();
+      const backendOutputUnavailable = output === "backend" && !backendAudioCapabilities.output;
+      const silentReason = tr("audio_sample_silent", "Audio preview is unavailable when TTS Output is Silent.");
+      const backendOnlyReason = tr(
+        "startup_loader_backend_only",
+        "The startup loader sound is available only when TTS Output is Backend."
+      );
+      const backendUnavailableReason = tr("backend_audio_output_unavailable", "No backend audio output is available.");
+
+      thinkingSoundPlay.disabled = !thinkingSound.value || output === "silent" || backendOutputUnavailable;
+      thinkingSoundField.title = output === "silent"
+        ? silentReason
+        : (backendOutputUnavailable ? backendUnavailableReason : "THINKING_SOUND_FILE");
+      thinkingSoundPlay.title = thinkingSoundField.title;
+
+      const listeningBackendUnavailable = !backendAudioCapabilities.output;
+      listeningSound.disabled = listeningBackendUnavailable;
+      listeningSoundPlay.disabled = !listeningSound.value || listeningBackendUnavailable;
+      listeningSoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "LISTENING_SOUND_FILE";
+      listeningSound.title = listeningSoundField.title;
+      listeningSoundPlay.title = listeningSoundField.title;
+
+      wakeDetectedSound.disabled = listeningBackendUnavailable;
+      wakeDetectedSoundPlay.disabled = !wakeDetectedSound.value || listeningBackendUnavailable;
+      wakeDetectedSoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "WAKE_DETECTED_SOUND_FILE";
+      wakeDetectedSound.title = wakeDetectedSoundField.title;
+      wakeDetectedSoundPlay.title = wakeDetectedSoundField.title;
+
+      const loaderBackendEnabled = output === "backend";
+      startupLoaderSound.disabled = !loaderBackendEnabled;
+      startupLoaderSoundPlay.disabled = !loaderBackendEnabled || !startupLoaderSound.value || backendOutputUnavailable;
+      startupLoaderSoundField.title = !loaderBackendEnabled
+        ? backendOnlyReason
+        : (backendOutputUnavailable ? backendUnavailableReason : "STARTUP_LOADER_SOUND_FILE");
+      startupLoaderSound.title = startupLoaderSoundField.title;
+      startupLoaderSoundPlay.title = startupLoaderSoundField.title;
+    }
+
+    async function toggleAudioSample(select, button, backendOnly = false) {
+      const filename = String(select.value || "").trim();
+      const output = backendOnly ? "backend" : selectedTtsOutput();
+      if (!filename || (!backendOnly && output === "silent")) return;
+
+      if (currentAudioSample && currentAudioSample.button === button) {
+        stopCurrentAudioSample();
+        llmMessage.textContent = tr("audio_sample_stopped", "Audio sample stopped.");
+        syncAudioSampleControls();
+        return;
+      }
+
+      stopCurrentAudioSample();
+      const requestId = audioSampleRequestId;
+      const sample = { button, filename, output, audio: null, backendStart: null };
+      currentAudioSample = sample;
+      setAudioSampleButtonPlaying(button, true);
+      llmMessage.textContent = tr("audio_sample_playing", "Playing audio sample...");
+      try {
+        if (output === "browser") {
+          await unlockWebTtsAudio();
+          const audio = new Audio(`/assets/${filename}`);
+          if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
+          sample.audio = audio;
+          audio.loop = true;
+          audio.volume = Math.max(0, Math.min(1, Number(webTtsVolume.value || 1)));
+          await applyBrowserAudioOutput(audio);
+          if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
+          await audio.play();
+        } else {
+          sample.backendStart = fetch("/api/backend-audio-sample", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "start",
+              filename,
+              output_device: backendAudioOutput.value || "",
+              volume: Number(backendTtsVolume.value || 1),
+              pan: Number(backendAudioOutputPan.value || 0)
+            })
+          });
+          const response = await sample.backendStart;
+          await fetchJsonOrThrow(response);
+        }
+      } catch (error) {
+        if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
+        if (currentAudioSample === sample) stopCurrentAudioSample();
+        llmMessage.textContent = trf("audio_sample_failed", "Audio playback failed: {error}", {
+          error: String(error.message || error)
+        });
+        syncAudioSampleControls();
+      }
+    }
+
+    async function cancelCommand(force = false) {
+      stopWebTts();
+      if ((!force && !composerLocked) || cancelRequestInFlight) return;
+      cancelRequestInFlight = true;
+      injectStop.disabled = true;
+      injectCommand.placeholder = "Cancelling...";
+      try {
+        const response = await fetch("/api/cancel-command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        if (!response.ok) throw new Error(await response.text());
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `cancel failed: ${error}`;
+      } finally {
+        cancelRequestInFlight = false;
+        setComposerLocked(composerLocked);
+      }
+    }
+
+    function renderMessages(serverMessages, showThinking = false) {
+      const knownUserMessages = (serverMessages || []).filter((message) => message.role === "user");
+      pendingCommandMessages = pendingCommandMessages.filter((pending) => {
+        return !knownUserMessages.some((message) => {
+          const serverTime = Number(message.created_at || 0) * 1000;
+          return message.text === pending.text && serverTime >= pending.sentAt - 1000;
+        });
+      });
+
+      const rows = [...withContextPreview(serverMessages || []), ...pendingCommandMessages, ...localNoticeMessages];
+      const shouldStick = chatPanel.scrollTop + chatPanel.clientHeight >= chatPanel.scrollHeight - 24;
+      if (rows.length === 0) {
+        messagesEl.innerHTML = `<div class="empty-state">Live Stage Assistant</div>`;
+      } else {
+        messagesEl.innerHTML = rows.map(messageBubble).join("") + (showThinking ? thinkingBubble() : "");
+      }
+      if (shouldStick) {
+        chatPanel.scrollTop = chatPanel.scrollHeight;
+      }
+    }
+
+    function option(label, value, disabled, selected) {
+      const opt = document.createElement("option");
+      opt.textContent = label;
+      opt.value = value;
+      opt.disabled = Boolean(disabled);
+      opt.selected = Boolean(selected);
+      return opt;
+    }
+
+    function configSignature() {
+      return JSON.stringify({
+        env_profile: activeEnvProfile,
+        connectivity_mode: selectedConnectivityMode(),
+        provider: llmProvider.value || "",
+        model: llmModel.value || "",
+        session_context_size: Number(sessionContextSize.value || 0),
+        mcp_agent_max_steps: Number(mcpAgentMaxSteps.value || 20),
+        mcp_tool_routing_enabled: selectedMcpToolRoutingEnabled(),
+        interrupt_conversation_enabled: selectedInterruptConversationEnabled(),
+        wake_word: wakeWord.value.trim(),
+        stt_prompt: sttPromptEl.value.trim(),
+        system_prompt: assistantSystemPromptEl.value.trim(),
+        cloud_tts_provider: cloudTtsProvider.value || "",
+        tts_output: selectedTtsOutput(),
+        stt_input: selectedSttInput(),
+        backend_audio_input_device: backendAudioInput.value || "",
+        backend_audio_input_gain: Number(backendAudioInputGain.value || 1),
+        backend_audio_output_device: backendAudioOutput.value || "",
+        backend_audio_output_pan: Number(backendAudioOutputPan.value || 0),
+        backend_audio_monitor_mode: selectedBackendAudioMonitorMode(),
+        backend_audio_monitor_volume: Number(backendAudioMonitorVolume.value || 1),
+        voice_id: elevenlabsVoice.value || "",
+        thinking_sound_file: thinkingSound.value || "",
+        listening_sound_file: listeningSound.value || "",
+        wake_detected_sound_file: wakeDetectedSound.value || "",
+        startup_loader_sound_file: startupLoaderSound.value || "",
+        command_ack_sound_file: commandAckSound.value || "",
+        openai_tts_voice: openaiTtsVoice.value || "",
+        openai_tts_speed: Number(openaiTtsSpeed.value || 1),
+        web_tts_volume: Number(webTtsVolume.value || 1),
+        backend_tts_volume: Number(backendTtsVolume.value || 1),
+        vad_speech_threshold: Number(vadSpeechThreshold.value || 0.5),
+        vad_negative_threshold: Number(vadNegativeThreshold.value || 0.35),
+        vad_min_speech_ms: Number(vadMinSpeechMs.value || 120),
+        vad_min_silence_ms: Number(vadMinSilenceMs.value || 650),
+        vad_speech_pad_ms: Number(vadSpeechPadMs.value || 100),
+        vad_max_speech_seconds: Number(vadMaxSpeechSeconds.value || 8),
+        backend_wake_word_model_paths: backendWakeWordModelPaths.value.trim(),
+        backend_wake_word_model_names: backendWakeWordModelNames.value.trim(),
+        backend_wake_word_threshold: Number(backendWakeWordThreshold.value || 0.5),
+        backend_wake_word_pre_roll_ms: Number(backendWakeWordPreRollMs.value || 1600),
+        backend_wake_word_cooldown_ms: Number(backendWakeWordCooldownMs.value || 1200),
+        backend_wake_word_vad_threshold: Number(backendWakeWordVadThreshold.value || 0),
+        speaker_recognition_enabled: selectedSpeakerRecognitionEnabled(),
+        speaker_backend: speakerBackend.value || "resemblyzer",
+        speaker_threshold: Number(speakerThreshold.value || 0.75),
+        speaker_margin: Number(speakerMargin.value || 0.10),
+        speaker_profiles: collectSpeakerProfiles()
+      });
+    }
+
+    function selectedInterruptConversationEnabled() {
+      const selected = interruptConversationInputs.find((input) => input.checked);
+      return selected ? selected.value === "on" : false;
+    }
+
+    function markConfigClean() {
+      configBaseline = configSignature();
+    }
+
+    function hasUnsavedConfigChanges() {
+      return Boolean(configBaseline) && configSignature() !== configBaseline;
+    }
+
+    async function loadEnvProfiles() {
+      if (envProfilesLoading) return false;
+      envProfilesLoading = true;
+      let profileChanged = false;
+      try {
+        const response = await fetch("/api/env-profiles", { cache: "no-store" });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        const current = data.current || "";
+        profileChanged = Boolean(activeEnvProfile) && current && current !== activeEnvProfile;
+        activeEnvProfile = current;
+        envProfile.replaceChildren();
+        for (const profile of data.profiles || []) {
+          envProfile.appendChild(option(profile.label || profile.id, profile.id, false, profile.id === current || profile.selected));
+        }
+        if (current && envProfile.value !== current) {
+          envProfile.value = current;
+        }
+        envProfileSwitchingEnabled = data.switching_enabled !== false;
+        connectivityLocked = data.connectivity_locked === true;
+        connectivityAutoBadge.classList.toggle("hidden", data.auto_mode !== true);
+        envProfile.disabled = !envProfileSwitchingEnabled || envProfile.options.length <= 1;
+        if (data.message && !llmMessage.textContent) {
+          llmMessage.textContent = data.message;
+        }
+      } catch (error) {
+        envProfile.replaceChildren(option("Env profiles unavailable", "", true, true));
+        envProfile.disabled = true;
+        connectivityAutoBadge.classList.add("hidden");
+        llmMessage.textContent = `Env profiles unavailable: ${error}`;
+      } finally {
+        envProfilesLoading = false;
+      }
+      return profileChanged;
+    }
+
+    async function switchEnvProfile(nextEnvProfile) {
+      if (!nextEnvProfile || nextEnvProfile === activeEnvProfile) {
+        envProfile.value = activeEnvProfile;
+        return;
+      }
+      if (hasUnsavedConfigChanges()) {
+        const confirmed = window.confirm("Unsaved config changes will be discarded. Switch env profile anyway?");
+        if (!confirmed) {
+          envProfile.value = activeEnvProfile;
+          return;
+        }
+      }
+
+      envProfile.disabled = true;
+      llmSave.disabled = true;
+      stopBrowserAudioTest();
+      closeBackendAudioDiagnostic();
+      setEnvironmentLoading(true);
+      disconnectVnc("reconnexion VNC...");
+      llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
+      try {
+        const response = await fetch("/api/env-profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ env_file: nextEnvProfile })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        activeEnvProfile = data.env_file || nextEnvProfile;
+        llmControlsInitialized = false;
+        configBaseline = "";
+        llmMessage.textContent = data.message || "Env profile switched.";
+        await loadEnvProfiles();
+        await loadLlmOptions("", "");
+        markConfigClean();
+        await refresh();
+      } catch (error) {
+        setEnvironmentLoading(false);
+        envProfile.value = activeEnvProfile;
+        llmMessage.textContent = `Env switch failed: ${error}`;
+        connectVnc({ force: true });
+      } finally {
+        envProfile.disabled = !envProfileSwitchingEnabled || envProfile.options.length <= 1;
+        llmSave.disabled = !llmProvider.value;
+      }
+    }
+
+    function syncOpenAiSpeedLabel() {
+      openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
+    }
+
+    function syncTtsVolumeLabels() {
+      webTtsVolumeLabel.textContent = `${Math.round(Number(webTtsVolume.value || 1) * 100)}%`;
+      backendTtsVolumeLabel.textContent = `${Math.round(Number(backendTtsVolume.value || 1) * 100)}%`;
+    }
+
+    function syncBackendAudioMonitorVolumeLabel() {
+      backendAudioMonitorVolumeLabel.textContent = `${Math.round(Number(backendAudioMonitorVolume.value || 1) * 100)}%`;
+    }
+
+    function syncBackendAudioOutputPanLabel() {
+      const value = Number(backendAudioOutputPan.value || 0);
+      if (Math.abs(value) < 0.025) {
+        backendAudioOutputPanLabel.textContent = "Centre";
+      } else if (value < 0) {
+        backendAudioOutputPanLabel.textContent = `Gauche ${Math.round(Math.abs(value) * 100)}%`;
+      } else {
+        backendAudioOutputPanLabel.textContent = `Droite ${Math.round(value * 100)}%`;
+      }
+    }
+
+    function selectedBackendAudioMonitorMode() {
+      const checked = backendAudioMonitorModeInputs.find((input) => input.checked);
+      return checked ? checked.value : "off";
+    }
+
+    function setSelectedBackendAudioMonitorMode(value) {
+      const nextValue = ["rejected", "passthrough", "off"].includes(value) ? value : "off";
+      for (const input of backendAudioMonitorModeInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function envFlag(value, fallback = false) {
+      if (typeof value === "boolean") return value;
+      if (value === null || value === undefined) return fallback;
+      const normalized = String(value).trim().toLowerCase();
+      if (["1", "true", "yes", "on"].includes(normalized)) return true;
+      if (["0", "false", "no", "off"].includes(normalized)) return false;
+      return fallback;
+    }
+
+    function syncVadLabels() {
+      vadSpeechThresholdLabel.textContent = Number(vadSpeechThreshold.value || 0.5).toFixed(2);
+      vadNegativeThresholdLabel.textContent = Number(vadNegativeThreshold.value || 0.35).toFixed(2);
+      vadMinSpeechMsLabel.textContent = `${Number(vadMinSpeechMs.value || 120)} ms`;
+      vadMinSilenceMsLabel.textContent = `${Number(vadMinSilenceMs.value || 650)} ms`;
+      vadSpeechPadMsLabel.textContent = `${Number(vadSpeechPadMs.value || 100)} ms`;
+      vadMaxSpeechSecondsLabel.textContent = `${Number(vadMaxSpeechSeconds.value || 8).toFixed(1)} s`;
+    }
+
+    function syncBackendWakeWordLabels() {
+      backendWakeWordThresholdLabel.textContent = Number(backendWakeWordThreshold.value || 0.5).toFixed(2);
+      backendWakeWordPreRollMsLabel.textContent = `${Number(backendWakeWordPreRollMs.value || 1600)} ms`;
+      backendWakeWordCooldownMsLabel.textContent = `${Number(backendWakeWordCooldownMs.value || 1200)} ms`;
+      const vadValue = Number(backendWakeWordVadThreshold.value || 0);
+      backendWakeWordVadThresholdLabel.textContent = vadValue > 0 ? vadValue.toFixed(2) : "Off";
+    }
+
+    function splitModelPaths(value) {
+      return String(value || "")
+        .split(/[,;|]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    function selectedWakeWordModelPaths() {
+      return Array.from(backendWakeWordModelSelect.selectedOptions || []).map((item) => item.value).filter(Boolean);
+    }
+
+    function syncWakeWordModelTextFromSelect() {
+      const selected = selectedWakeWordModelPaths();
+      const known = new Set(Array.from(backendWakeWordModelSelect.options || []).map((item) => item.value));
+      const manual = splitModelPaths(backendWakeWordModelPaths.value).filter((item) => !known.has(item));
+      backendWakeWordModelPaths.value = [...selected, ...manual].join(",");
+    }
+
+    function syncWakeWordModelSelectFromText() {
+      const selected = new Set(splitModelPaths(backendWakeWordModelPaths.value));
+      for (const opt of backendWakeWordModelSelect.options || []) {
+        opt.selected = Boolean(opt.value) && selected.has(opt.value);
+      }
+    }
+
+    function setWakeWordModelFiles(files, selectedPathsText) {
+      const selected = new Set(splitModelPaths(selectedPathsText));
+      backendWakeWordModelSelect.replaceChildren();
+      for (const item of files || []) {
+        const id = item.id || "";
+        if (!id) continue;
+        backendWakeWordModelSelect.appendChild(option(item.label || id, id, false, selected.has(id)));
+      }
+      if (backendWakeWordModelSelect.options.length === 0) {
+        backendWakeWordModelSelect.appendChild(option("Aucun fichier .onnx trouvé dans data/", "", true, true));
+      }
+    }
+
+    function syncBackendWakeWordControls() {
+      const active = Boolean(wakeWord.value.trim());
+      const reason = active ? "" : tr("backend_wake_word_disabled_hint", "Active only when a wake word is configured.");
+      for (const control of backendWakeWordControls) {
+        control.disabled = !active;
+        control.title = active ? "" : reason;
+      }
+      if (backendWakeWordGroup) {
+        backendWakeWordGroup.title = active ? "" : reason;
+      }
+      syncBackendWakeWordLabels();
+    }
+
+    function setVadControls(data) {
+      vadSpeechThreshold.value = String(data.selected_vad_speech_threshold ?? 0.5);
+      vadNegativeThreshold.value = String(data.selected_vad_negative_threshold ?? 0.35);
+      vadMinSpeechMs.value = String(data.selected_vad_min_speech_ms ?? 120);
+      vadMinSilenceMs.value = String(data.selected_vad_min_silence_ms ?? 650);
+      vadSpeechPadMs.value = String(data.selected_vad_speech_pad_ms ?? 100);
+      vadMaxSpeechSeconds.value = String(data.selected_vad_max_speech_seconds ?? 8);
+      const selectedModelPaths = data.selected_backend_wake_word_model_paths || "";
+      backendWakeWordModelPaths.value = selectedModelPaths;
+      setWakeWordModelFiles(data.wake_word_model_files || [], selectedModelPaths);
+      backendWakeWordModelNames.value = data.selected_backend_wake_word_model_names || "";
+      backendWakeWordThreshold.value = String(data.selected_backend_wake_word_threshold ?? 0.5);
+      backendWakeWordPreRollMs.value = String(data.selected_backend_wake_word_pre_roll_ms ?? 1600);
+      backendWakeWordCooldownMs.value = String(data.selected_backend_wake_word_cooldown_ms ?? 1200);
+      backendWakeWordVadThreshold.value = String(data.selected_backend_wake_word_vad_threshold ?? 0);
+      syncVadLabels();
+      syncBackendWakeWordLabels();
+    }
+
+    function selectedSpeakerRecognitionEnabled() {
+      if (speakerRecognitionUnavailableReason) {
+        return speakerRecognitionEnvEnabled;
+      }
+      const selected = speakerRecognitionInputs.find((input) => input.checked);
+      return selected ? selected.value === "on" : false;
+    }
+
+    function setSpeakerRecognitionEnabled(enabled) {
+      speakerRecognitionInputs.forEach((input) => {
+        input.checked = enabled ? input.value === "on" : input.value === "off";
+      });
+    }
+
+    function speakerRuntimeUnavailableReason(data) {
+      const runtime = data.speaker_recognition_runtime || {};
+      if (runtime.requested && !runtime.enabled && runtime.unavailable_reason) {
+        return `Speaker recognition unavailable: ${runtime.unavailable_reason}`;
+      }
+      return "";
+    }
+
+    function setSpeakerControlsDisabled(disabled, reason = "") {
+      if (speakerRecognitionGroup) {
+        speakerRecognitionGroup.classList.toggle("disabled", disabled);
+        speakerRecognitionGroup.title = disabled ? reason : "";
+      }
+      const controls = [
+        ...speakerRecognitionInputs,
+        speakerBackend,
+        speakerThreshold,
+        speakerMargin,
+        ...speakerProfileGrid.querySelectorAll(
+          'input, button:not([data-role="delete-profile"]):not([data-role="play-sample"])'
+        )
+      ];
+      for (const control of controls) {
+        control.disabled = Boolean(disabled);
+        control.title = disabled ? reason : "";
+        const label = control.closest("label");
+        if (label) label.title = disabled ? reason : "";
+      }
+    }
+
+    function syncSpeakerLabels() {
+      speakerThresholdLabel.textContent = Number(speakerThreshold.value || 0.75).toFixed(2);
+      speakerMarginLabel.textContent = Number(speakerMargin.value || 0.10).toFixed(2);
+    }
+
+    function renderSpeakerProfiles(profiles) {
+      speakerProfileGrid.replaceChildren();
+      const rows = profiles && profiles.length ? profiles : Array.from({ length: 5 }, (_, index) => ({ index: index + 1 }));
+      for (let index = 1; index <= 5; index += 1) {
+        const profile = rows.find((item) => Number(item.index) === index) || { index };
+        const row = document.createElement("div");
+        row.className = "speaker-profile-row";
+        row.dataset.index = String(index);
+
+        const nameWrap = document.createElement("div");
+        nameWrap.className = "speaker-profile-name";
+        const name = document.createElement("input");
+        name.type = "text";
+        name.placeholder = `speaker ${index}`;
+        name.value = profile.name || `speaker_${index}`;
+        name.dataset.role = "name";
+        name.addEventListener("input", () => {
+          speakerProfileChoices = activeSpeakerProfilesFromConfig();
+          syncComposerSpeakerControl();
+        });
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "speaker-profile-delete";
+        deleteButton.dataset.role = "delete-profile";
+        deleteButton.textContent = "\u{1F5D1}";
+        deleteButton.title = tr("speaker_profile_delete", "Supprimer le profil vocal");
+        deleteButton.setAttribute("aria-label", tr("speaker_profile_delete", "Supprimer le profil vocal"));
+        deleteButton.addEventListener("click", () => deleteSpeakerProfile(row));
+        nameWrap.append(name, deleteButton);
+
+        const uploadWrap = document.createElement("div");
+        uploadWrap.className = "speaker-upload";
+        const samples = Array.isArray(profile.samples) && profile.samples.length
+          ? profile.samples
+          : Array.from({ length: 3 }, (_, sampleOffset) => ({
+              index: sampleOffset + 1,
+              filename: `profil${index}_${sampleOffset + 1}.wav`,
+              ready: false
+            }));
+        for (let sampleIndex = 1; sampleIndex <= 3; sampleIndex += 1) {
+          const sample = samples.find((item) => Number(item.index) === sampleIndex) || { index: sampleIndex };
+          const sampleWrap = document.createElement("div");
+          sampleWrap.className = "speaker-sample";
+          applySpeakerSampleState(sampleWrap, {
+            ...sample,
+            wav_path: sample.wav_path || `data/speaker_profiles/profil${index}_${sampleIndex}.wav`
+          });
+          const led = document.createElement("span");
+          led.className = "speaker-sample-led";
+          led.setAttribute("aria-hidden", "true");
+          const file = document.createElement("input");
+          file.type = "file";
+          file.accept = ".wav,audio/wav,audio/x-wav";
+          file.dataset.role = "file";
+          file.dataset.sampleIndex = String(sampleIndex);
+          file.setAttribute("aria-label", trf("speaker_sample_upload", "Sample {index}", { index: sampleIndex }));
+          file.addEventListener("change", () => {
+            if (file.files && file.files[0]) uploadSpeakerProfile(row, sampleIndex);
+          });
+          const capture = document.createElement("button");
+          capture.type = "button";
+          capture.className = "speaker-capture-button";
+          capture.dataset.role = "capture";
+          capture.dataset.sampleIndex = String(sampleIndex);
+          capture.title = tr("speaker_capture_button", "Capture from microphone");
+          capture.setAttribute("aria-label", tr("speaker_capture_button", "Capture from microphone"));
+          capture.textContent = "🎙️";
+          capture.addEventListener("click", () => startSpeakerSampleCapture(row, sampleIndex));
+          const play = document.createElement("button");
+          play.type = "button";
+          play.className = "speaker-sample-play";
+          play.dataset.role = "play-sample";
+          play.dataset.sampleIndex = String(sampleIndex);
+          play.textContent = "\u25B6";
+          play.setAttribute("aria-label", tr("speaker_sample_play", "Lire ce sample"));
+          play.addEventListener("click", () => playSpeakerProfileSample(row, sampleIndex, play));
+          sampleWrap.append(led, file, capture, play);
+          applySpeakerSampleState(sampleWrap, sample);
+          uploadWrap.append(sampleWrap);
+        }
+
+        const enabledLabel = document.createElement("label");
+        const enabled = document.createElement("input");
+        enabled.type = "checkbox";
+        enabled.checked = Boolean(profile.enabled);
+        enabled.dataset.role = "enabled";
+        enabled.addEventListener("change", () => {
+          speakerProfileChoices = activeSpeakerProfilesFromConfig();
+          syncComposerSpeakerControl();
+        });
+        enabledLabel.appendChild(enabled);
+        enabledLabel.append(" actif");
+
+        const status = document.createElement("span");
+        status.className = "speaker-status";
+        status.textContent = profile.status || tr("speaker_samples_missing", "0/3 embeddings");
+
+        const path = document.createElement("span");
+        path.className = "speaker-path";
+        path.dataset.role = "path";
+        path.title = profile.embedding_ready && profile.embedding_path ? profile.embedding_path : "";
+        const hasSample = Array.isArray(profile.samples) && profile.samples.some((sample) => sample.ready);
+        path.textContent = profile.embedding_ready
+          ? tr("speaker_voiceprint_ready", "empreinte vocale calculée")
+          : hasSample
+          ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
+          : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
+
+        row.append(nameWrap, uploadWrap, enabledLabel, status, path);
+        speakerProfileGrid.appendChild(row);
+      }
+      syncSpeakerProfileSampleControls();
+    }
+
+    function syncBackendAudioInputGainLabel() {
+      const gain = Number(backendAudioInputGain.value || 1);
+      const decibels = 20 * Math.log10(Math.max(gain, 0.001));
+      const dbLabel = Math.abs(decibels) < 0.05 ? "0 dB" : `${decibels > 0 ? "+" : ""}${decibels.toFixed(1)} dB`;
+      backendAudioInputGainLabel.textContent = `${gain.toFixed(2)}× (${dbLabel})`;
+    }
+
+    function syncSpeakerProfileSampleControls() {
+      const output = selectedTtsOutput();
+      const outputAvailable = output !== "silent"
+        && (output !== "backend" || backendAudioCapabilities.output)
+        && (output !== "browser" || browserAudioCapabilities.output);
+      const unavailableReason = output === "silent"
+        ? tr("speaker_sample_silent", "La lecture est désactivée lorsque TTS Output est sur Silent.")
+        : output === "backend" && !backendAudioCapabilities.output
+        ? tr("backend_audio_output_unavailable", "Aucune sortie audio backend n'est disponible.")
+        : output === "browser" && !browserAudioCapabilities.output
+        ? tr("browser_audio_output_unavailable", "Aucune sortie audio navigateur n'est disponible.")
+        : "";
+      for (const button of speakerProfileGrid.querySelectorAll(".speaker-sample-play")) {
+        const sampleWrap = button.closest(".speaker-sample");
+        const sampleReady = sampleWrap?.classList.contains("ready") || sampleWrap?.classList.contains("pending");
+        button.disabled = button === currentSpeakerSample?.button || !sampleReady || !outputAvailable;
+        button.title = unavailableReason || tr("speaker_sample_play", "Lire ce sample");
+      }
+    }
+
+    function stopCurrentSpeakerSample() {
+      const sample = currentSpeakerSample;
+      if (!sample) return;
+      currentSpeakerSample = null;
+      if (sample.audio) {
+        sample.audio.pause();
+        sample.audio.currentTime = 0;
+      }
+      sample.button?.classList.remove("playing");
+      sample.finish?.();
+    }
+
+    async function playSpeakerProfileSample(row, sampleIndex, button) {
+      if (!row || !button || button.disabled) return;
+      const output = selectedTtsOutput();
+      if (output === "silent") return;
+      stopCurrentSpeakerSample();
+      const playback = { button, audio: null, finish: null };
+      currentSpeakerSample = playback;
+      button.disabled = true;
+      button.classList.add("playing");
+      try {
+        const response = await fetch("/api/speaker-profile-sample", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: output === "browser" ? "browser" : "play",
+            profile_index: Number(row.dataset.index || 0),
+            sample_index: sampleIndex,
+            output_device: backendAudioOutput.value || "",
+            volume: output === "browser"
+              ? Number(webTtsVolume.value || 1)
+              : Number(backendTtsVolume.value || 1),
+            pan: Number(backendAudioOutputPan.value || 0)
+          })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error?.message || data.message || response.statusText);
+        }
+        if (currentSpeakerSample !== playback) return;
+        if (output === "browser") {
+          await unlockWebTtsAudio();
+          if (currentSpeakerSample !== playback) return;
+          const arrayBuffer = base64ToArrayBuffer(data.audio_base64 || "");
+          const blob = new Blob([arrayBuffer], { type: data.mime_type || "audio/wav" });
+          const objectUrl = URL.createObjectURL(blob);
+          const audio = new Audio(objectUrl);
+          playback.audio = audio;
+          audio.volume = Math.max(0, Math.min(1, Number(webTtsVolume.value || 1)));
+          await applyBrowserAudioOutput(audio);
+          if (currentSpeakerSample !== playback) return;
+          try {
+            await new Promise((resolve, reject) => {
+              playback.finish = resolve;
+              audio.addEventListener("ended", resolve, { once: true });
+              audio.addEventListener("error", reject, { once: true });
+              audio.play().catch(reject);
+            });
+          } finally {
+            URL.revokeObjectURL(objectUrl);
+          }
+        }
+      } catch (error) {
+        const status = row.querySelector(".speaker-status");
+        if (status) {
+          status.textContent = trf("speaker_sample_play_failed", "Lecture impossible : {error}", {
+            error: String(error.message || error)
+          });
+        }
+      } finally {
+        if (currentSpeakerSample === playback) currentSpeakerSample = null;
+        button.classList.remove("playing");
+        syncSpeakerProfileSampleControls();
+      }
+    }
+
+    async function deleteSpeakerProfile(row) {
+      if (!row) return;
+      const profileIndex = Number(row.dataset.index || 0);
+      const profileName = row.querySelector('[data-role="name"]')?.value.trim() || `speaker_${profileIndex}`;
+      const confirmed = window.confirm(trf(
+        "speaker_profile_delete_confirm",
+        "Supprimer tous les WAV et toutes les empreintes du profil {name} ?",
+        { name: profileName }
+      ));
+      if (!confirmed) return;
+
+      const deleteButton = row.querySelector('[data-role="delete-profile"]');
+      const status = row.querySelector(".speaker-status");
+      if (deleteButton) deleteButton.disabled = true;
+      if (status) status.textContent = tr("speaker_profile_deleting", "suppression...");
+      try {
+        const response = await fetch("/api/speaker-profile-delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profile_index: profileIndex })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error?.message || data.message || response.statusText);
+        }
+        for (const sample of data.samples || []) {
+          const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);
+          if (input) input.value = "";
+          applySpeakerSampleState(input ? input.closest(".speaker-sample") : null, sample);
+        }
+        const path = row.querySelector('[data-role="path"]');
+        if (path) {
+          path.textContent = tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
+          path.title = "";
+        }
+        const enabled = row.querySelector('[data-role="enabled"]');
+        if (enabled) enabled.checked = false;
+        speakerProfileChoices = activeSpeakerProfilesFromConfig();
+        syncComposerSpeakerControl();
+        if (status) status.textContent = tr("speaker_profile_deleted", "Profil vocal supprimé");
+      } catch (error) {
+        if (status) {
+          status.textContent = trf("speaker_profile_delete_failed", "Suppression impossible : {error}", {
+            error: String(error.message || error)
+          });
+        }
+      } finally {
+        if (deleteButton) deleteButton.disabled = false;
+      }
+    }
+
+    function applySpeakerProfileStatuses(profiles) {
+      if (!Array.isArray(profiles)) return;
+      for (const profile of profiles) {
+        const row = speakerProfileGrid.querySelector(`.speaker-profile-row[data-index="${profile.index}"]`);
+        if (!row) continue;
+        const status = row.querySelector(".speaker-status");
+        if (status) status.textContent = profile.status || status.textContent;
+        const path = row.querySelector('[data-role="path"]');
+        if (path) {
+          const hasSample = Array.isArray(profile.samples) && profile.samples.some((sample) => sample.ready);
+          path.textContent = profile.embedding_ready
+            ? tr("speaker_voiceprint_ready", "empreinte vocale calculée")
+            : hasSample
+            ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
+            : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
+          path.title = profile.embedding_ready && profile.embedding_path ? profile.embedding_path : "";
+        }
+        for (const sample of profile.samples || []) {
+          const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);
+          applySpeakerSampleState(input ? input.closest(".speaker-sample") : null, sample);
+        }
+      }
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener("load", () => resolve(String(reader.result || "")));
+        reader.addEventListener("error", () => reject(reader.error || new Error("File read failed")));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function speakerCaptureFilename(row, sampleIndex) {
+      return `profil${Number(row.dataset.index || 0)}_${sampleIndex}.wav`;
+    }
+
+    function speakerCaptureSourcesForSttInput() {
+      const sttInput = selectedSttInput();
+      const sources = [];
+      if (["browser", "both"].includes(sttInput) && browserAudioCapabilities.input) sources.push("browser");
+      if (["backend", "both"].includes(sttInput) && backendAudioCapabilities.input) sources.push("backend");
+      return sources;
+    }
+
+    function syncSpeakerCaptureButtons() {
+      const sources = speakerCaptureSourcesForSttInput();
+      const unavailable = Boolean(speakerRecognitionUnavailableReason) || sources.length === 0;
+      const reason = speakerRecognitionUnavailableReason || tr(
+        "speaker_capture_source_unavailable",
+        "No microphone is available for the selected STT Input."
+      );
+      for (const button of speakerProfileGrid.querySelectorAll('[data-role="capture"]')) {
+        button.disabled = unavailable;
+        button.title = unavailable ? reason : tr("speaker_capture_button", "Capture from microphone");
+      }
+    }
+
+    function createSpeakerCaptureDialog(sources) {
+      const overlay = document.createElement("div");
+      overlay.className = "speaker-capture-overlay";
+      overlay.setAttribute("role", "dialog");
+      overlay.setAttribute("aria-modal", "true");
+
+      const panel = document.createElement("div");
+      panel.className = "speaker-capture-panel";
+
+      const title = document.createElement("div");
+      title.className = "speaker-capture-title";
+      title.textContent = tr("speaker_capture_title", "Microphone sample capture");
+
+      const instructions = document.createElement("p");
+      instructions.className = "speaker-capture-instructions";
+      instructions.textContent = tr(
+        "speaker_capture_instructions",
+        "Say a phrase of about 10 seconds, for example: this is a real-use voice sample for my speaker profile."
+      );
+
+      const status = document.createElement("div");
+      status.className = "speaker-capture-status";
+
+      const sourceField = document.createElement("label");
+      sourceField.className = "field speaker-capture-source";
+      const sourceLabel = document.createElement("span");
+      sourceLabel.textContent = tr("speaker_capture_source", "Capture source");
+      const sourceSelect = document.createElement("select");
+      for (const source of sources) {
+        sourceSelect.appendChild(option(
+          source === "backend"
+            ? tr("speaker_capture_source_backend", "Backend microphone")
+            : tr("speaker_capture_source_browser", "Browser microphone"),
+          source,
+          false,
+          source === "backend"
+        ));
+      }
+      sourceField.append(sourceLabel, sourceSelect);
+      sourceField.hidden = sources.length < 2;
+
+      const audio = document.createElement("audio");
+      audio.className = "speaker-capture-preview";
+      audio.controls = true;
+      audio.hidden = true;
+
+      const actions = document.createElement("div");
+      actions.className = "speaker-capture-actions";
+
+      const start = document.createElement("button");
+      start.type = "button";
+      start.className = "small-button";
+      start.textContent = tr("speaker_capture_start", "Start");
+      start.hidden = sources.length < 2;
+      start.addEventListener("click", () => beginSpeakerSampleCapture());
+
+      const stop = document.createElement("button");
+      stop.type = "button";
+      stop.className = "small-button";
+      stop.textContent = tr("speaker_capture_stop", "Stop");
+      stop.disabled = true;
+      stop.addEventListener("click", () => stopSpeakerSampleCapture());
+
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "small-button";
+      retry.textContent = tr("speaker_capture_retry", "Retake");
+      retry.disabled = true;
+      retry.addEventListener("click", () => {
+        const state = speakerCapture;
+        if (!state) return;
+        const row = state.row;
+        const sampleIndex = state.sampleIndex;
+        closeSpeakerCaptureDialog();
+        startSpeakerSampleCapture(row, sampleIndex);
+      });
+
+      const validate = document.createElement("button");
+      validate.type = "button";
+      validate.className = "small-button";
+      validate.textContent = tr("speaker_capture_validate", "Validate");
+      validate.disabled = true;
+      validate.addEventListener("click", async () => {
+        const state = speakerCapture;
+        if (!state || !state.wavBlob) return;
+        const row = state.row;
+        const sampleIndex = state.sampleIndex;
+        const wavBlob = state.wavBlob;
+        const filename = speakerCaptureFilename(row, sampleIndex);
+        closeSpeakerCaptureDialog();
+        await uploadSpeakerProfileBlob(row, sampleIndex, wavBlob, filename);
+      });
+
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "small-button";
+      cancel.textContent = tr("close", "Close");
+      cancel.addEventListener("click", () => closeSpeakerCaptureDialog());
+
+      actions.append(start, stop, retry, validate, cancel);
+      panel.append(title, sourceField, instructions, status, audio, actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      return { overlay, status, audio, sourceField, sourceSelect, start, stop, retry, validate };
+    }
+
+    function setSpeakerCaptureStatus(text, mode = "") {
+      if (!speakerCapture?.dialog) return;
+      speakerCapture.dialog.status.textContent = text;
+      speakerCapture.dialog.status.dataset.mode = mode;
+    }
+
+    function updateSpeakerCaptureCountdown() {
+      if (!speakerCapture || !speakerCapture.recording) return;
+      const elapsedSeconds = Math.floor((Date.now() - speakerCapture.startedAt) / 1000);
+      const remainingSeconds = Math.max(0, speakerCaptureMaxSeconds - elapsedSeconds);
+      setSpeakerCaptureStatus(
+        trf("speaker_capture_countdown", "Recording... {seconds}s remaining.", { seconds: remainingSeconds }),
+        "recording"
+      );
+    }
+
+    function closeSpeakerCaptureDialog() {
+      if (!speakerCapture) return;
+      const state = speakerCapture;
+      if (speakerCapture.timer) window.clearTimeout(speakerCapture.timer);
+      if (speakerCapture.countdownTimer) window.clearInterval(speakerCapture.countdownTimer);
+      if (speakerCapture.recorder && speakerCapture.recorder.state !== "inactive") {
+        speakerCapture.discard = true;
+        speakerCapture.recorder.stop();
+      }
+      if (state.source === "backend" && state.recording) {
+        state.discard = true;
+        fetch("/api/backend-speaker-capture/stop", { method: "POST" }).catch(() => {});
+      }
+      if (speakerCapture.stream) {
+        for (const track of speakerCapture.stream.getTracks()) track.stop();
+      }
+      if (speakerCapture.objectUrl) URL.revokeObjectURL(speakerCapture.objectUrl);
+      if (speakerCapture.dialog?.overlay) speakerCapture.dialog.overlay.remove();
+      speakerCapture = null;
+    }
+
+    function stopSpeakerSampleCapture() {
+      if (!speakerCapture || !speakerCapture.recording) return;
+      if (speakerCapture.timer) window.clearTimeout(speakerCapture.timer);
+      if (speakerCapture.countdownTimer) window.clearInterval(speakerCapture.countdownTimer);
+      speakerCapture.dialog.stop.disabled = true;
+      setSpeakerCaptureStatus(tr("speaker_capture_processing", "Preparing preview..."), "processing");
+      if (speakerCapture.source === "backend") {
+        fetch("/api/backend-speaker-capture/stop", { method: "POST" }).catch(() => {});
+      } else if (speakerCapture.recorder && speakerCapture.recorder.state !== "inactive") {
+        speakerCapture.recorder.stop();
+      }
+    }
+
+    function base64AudioBlob(value, type = "audio/wav") {
+      const binary = window.atob(String(value || ""));
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+      return new Blob([bytes], { type });
+    }
+
+    async function prepareSpeakerCapturePreview(state, sourceBlob) {
+      // Backend capture matches the hardware diagnostic's no-signal gate;
+      // browser capture keeps its stricter local microphone quality gate.
+      const thresholds = state.source === "backend"
+        ? { minimumRms: 0.001, minimumPeak: 0.005 }
+        : { minimumRms: 0.008, minimumPeak: 0.03 };
+      const wav = await recordedBlobToValidatedWav(sourceBlob, thresholds);
+      if (speakerCapture !== state || state.discard) return;
+      state.wavBlob = wav.blob;
+      state.objectUrl = URL.createObjectURL(wav.blob);
+      state.dialog.audio.src = state.objectUrl;
+      state.dialog.audio.hidden = false;
+      state.dialog.retry.disabled = false;
+      state.dialog.validate.disabled = false;
+      state.dialog.stop.disabled = true;
+      setSpeakerCaptureStatus(
+        trf("speaker_capture_preview", "Preview ready ({seconds}s). Listen, then validate or retake.", {
+          seconds: Math.round(wav.duration)
+        }),
+        "ready"
+      );
+    }
+
+    function startSpeakerCaptureTimers(state) {
+      state.startedAt = Date.now();
+      state.recording = true;
+      state.dialog.stop.disabled = false;
+      setSpeakerCaptureStatus(
+        trf("speaker_capture_countdown", "Recording... {seconds}s remaining.", { seconds: speakerCaptureMaxSeconds }),
+        "recording"
+      );
+      state.countdownTimer = window.setInterval(updateSpeakerCaptureCountdown, 250);
+      state.timer = window.setTimeout(stopSpeakerSampleCapture, speakerCaptureMaxSeconds * 1000);
+    }
+
+    async function beginBrowserSpeakerSampleCapture(state) {
+      if (!window.isSecureContext) {
+        throw new Error(tr("speaker_capture_error_https", "Microphone capture requires HTTPS or localhost."));
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+        throw new Error(tr("speaker_capture_error_browser", "Audio capture is not supported by this browser."));
+      }
+      setSpeakerCaptureStatus(tr("speaker_capture_requesting", "Requesting microphone access..."));
+      const stream = await navigator.mediaDevices.getUserMedia(browserAudioConstraints());
+      loadBrowserAudioDevices(false);
+      const recorder = new MediaRecorder(stream);
+      state.stream = stream;
+      state.recorder = recorder;
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data && event.data.size > 0 && speakerCapture === state) state.chunks.push(event.data);
+      });
+      recorder.addEventListener("stop", async () => {
+        state.recording = false;
+        if (state.stream) {
+          for (const track of state.stream.getTracks()) track.stop();
+          state.stream = null;
+        }
+        if (speakerCapture !== state || state.discard) return;
+        try {
+          await prepareSpeakerCapturePreview(
+            state,
+            new Blob(state.chunks, { type: recorder.mimeType || "audio/webm" })
+          );
+        } catch (error) {
+          if (speakerCapture !== state) return;
+          state.dialog.retry.disabled = false;
+          setSpeakerCaptureStatus(String(error.message || error), "error");
+        }
+      });
+      recorder.start();
+      startSpeakerCaptureTimers(state);
+    }
+
+    async function beginBackendSpeakerSampleCapture(state) {
+      startSpeakerCaptureTimers(state);
+      const response = await fetch("/api/backend-speaker-capture", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device: backendAudioInput.value || "",
+          duration_seconds: speakerCaptureMaxSeconds
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      state.recording = false;
+      if (state.timer) window.clearTimeout(state.timer);
+      if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+      if (speakerCapture !== state || state.discard) return;
+      if (!response.ok || !data.ok || !data.audio_base64) {
+        throw new Error(data.error?.message || data.message || response.statusText || "Backend capture failed");
+      }
+      await prepareSpeakerCapturePreview(state, base64AudioBlob(data.audio_base64));
+    }
+
+    async function beginSpeakerSampleCapture() {
+      const state = speakerCapture;
+      if (!state || state.recording) return;
+      state.source = state.dialog.sourceSelect.value || state.sources[0] || "";
+      if (!state.source) return;
+      state.dialog.sourceSelect.disabled = true;
+      state.dialog.start.disabled = true;
+      try {
+        if (state.source === "backend") await beginBackendSpeakerSampleCapture(state);
+        else await beginBrowserSpeakerSampleCapture(state);
+      } catch (error) {
+        if (speakerCapture !== state) return;
+        state.recording = false;
+        if (state.timer) window.clearTimeout(state.timer);
+        if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+        state.dialog.stop.disabled = true;
+        state.dialog.retry.disabled = false;
+        const message = error && (error.name === "NotAllowedError" || error.name === "SecurityError")
+          ? tr("speaker_capture_error_permission", "Microphone permission was refused.")
+          : trf("speaker_capture_error_generic", "Microphone capture failed: {error}", { error: String(error.message || error) });
+        const status = state.row.querySelector(".speaker-status");
+        if (status) status.textContent = message;
+        setSpeakerCaptureStatus(message, "error");
+      }
+    }
+
+    function startSpeakerSampleCapture(row, sampleIndex) {
+      if (speakerCapture) return;
+      const sources = speakerCaptureSourcesForSttInput();
+      if (!sources.length) {
+        const status = row.querySelector(".speaker-status");
+        if (status) status.textContent = tr("speaker_capture_source_unavailable", "No microphone is available for the selected STT Input.");
+        return;
+      }
+
+      const dialog = createSpeakerCaptureDialog(sources);
+      speakerCapture = {
+        row,
+        sampleIndex,
+        sources,
+        source: sources.length === 1 ? sources[0] : "",
+        dialog,
+        chunks: [],
+        stream: null,
+        recorder: null,
+        timer: null,
+        countdownTimer: null,
+        startedAt: Date.now(),
+        recording: false,
+        discard: false,
+        wavBlob: null,
+        objectUrl: ""
+      };
+      dialog.overlay.classList.add("open");
+      if (sources.length > 1) {
+        setSpeakerCaptureStatus(tr("speaker_capture_choose_source", "Choose the microphone, then start capture."));
+      } else {
+        dialog.sourceSelect.value = sources[0];
+        beginSpeakerSampleCapture();
+      }
+    }
+
+    async function uploadSpeakerProfileBlob(row, sampleIndex, blob, filename) {
+      const nameInput = row.querySelector('[data-role="name"]');
+      const pathLabel = row.querySelector('[data-role="path"]');
+      const fileInput = row.querySelector(`[data-role="file"][data-sample-index="${sampleIndex}"]`);
+      const enabledInput = row.querySelector('[data-role="enabled"]');
+      const status = row.querySelector(".speaker-status");
+      const profileName = nameInput.value.trim();
+      if (!profileName) {
+        status.textContent = tr("speaker_name_required", "name required");
+        return;
+      }
+      if (!blob || blob.size === 0) {
+        status.textContent = tr("speaker_capture_error_empty", "No audio was captured.");
+        return;
+      }
+      status.textContent = tr("speaker_embedding_progress", "embedding...");
+      const sampleWrap = fileInput ? fileInput.closest(".speaker-sample") : null;
+      applySpeakerSampleState(sampleWrap, {
+        index: sampleIndex,
+        ready: true,
+        embedding_ready: false,
+        filename
+      });
+      setProfileLoading(true, tr("preparing_voice_profile", "Préparation du profil vocal"), speakerEmbeddingPreparationMessage);
+      if (webAudio.tts_enabled && webAudio.tts_output === "browser") {
+        playWebTts(speakerEmbeddingPreparationMessage);
+      }
+      try {
+        const dataUrl = await readFileAsDataUrl(blob);
+        const response = await fetch("/api/speaker-profile-upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            profile_name: profileName,
+            profile_index: Number(row.dataset.index || 0),
+            sample_index: sampleIndex,
+            filename,
+            audio_base64: dataUrl
+          })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error?.message || data.message || response.statusText || "Upload failed");
+        }
+        if (pathLabel) {
+          const hasSample = Boolean(data.samples_available)
+            || (Array.isArray(data.samples) && data.samples.some((sample) => sample.ready));
+          pathLabel.textContent = data.embedding_ready
+            ? tr("speaker_voiceprint_ready", "empreinte vocale calculée")
+            : hasSample
+            ? tr("speaker_voiceprint_pending", "empreinte vocale à calculer")
+            : tr("speaker_voiceprint_unavailable", "empreinte vocale indisponible");
+          pathLabel.title = data.embedding_ready && data.embedding_path ? data.embedding_path : "";
+        }
+        for (const sample of data.samples || []) {
+          const input = row.querySelector(`[data-role="file"][data-sample-index="${sample.index}"]`);
+          applySpeakerSampleState(input ? input.closest(".speaker-sample") : null, sample);
+        }
+        enabledInput.checked = true;
+        speakerProfileChoices = activeSpeakerProfilesFromConfig();
+        syncComposerSpeakerControl();
+        status.textContent = data.status || data.embedding_status || "ready";
+        if (fileInput) fileInput.value = "";
+        const generated = String(data.embedding_status || "").toLowerCase().includes("ready");
+        const completionTitle = generated
+          ? tr("speaker_profile_done", "Empreinte vocale calculée")
+          : tr("speaker_profile_file_saved", "Fichier profil sauvegardé");
+        const completionDetail = generated
+          ? trf("speaker_profile_ready_detail", "Profil {index} utilisable: {path}", {
+              index: row.dataset.index || "",
+              path: data.embedding_path || ""
+            })
+          : trf("speaker_profile_pending_detail", "{status} Le WAV est sauvegardé.", {
+              status: data.embedding_status || tr("speaker_embedding_not_generated", "Embedding non généré pour l'instant.")
+            });
+        setProfileLoading(
+          true,
+          completionTitle,
+          completionDetail,
+          "done"
+        );
+        if (generated && webAudio.tts_enabled && webAudio.tts_output === "browser") {
+          playWebTts(completionTitle);
+        }
+        window.setTimeout(() => setProfileLoading(false), 1400);
+      } catch (error) {
+        status.textContent = tr("speaker_upload_failed", "upload failed");
+        setProfileLoading(
+          true,
+          tr("profile_generation_error", "Erreur génération profil"),
+          String(error.message || error),
+          "error"
+        );
+        window.setTimeout(() => setProfileLoading(false), 2600);
+      }
+    }
+
+    async function uploadSpeakerProfile(row, sampleIndex) {
+      const fileInput = row.querySelector(`[data-role="file"][data-sample-index="${sampleIndex}"]`);
+      const status = row.querySelector(".speaker-status");
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        status.textContent = tr("speaker_choose_wav", "choose wav");
+        return;
+      }
+      if (!file.name.toLowerCase().endsWith(".wav")) {
+        status.textContent = tr("speaker_wav_only", "wav only");
+        return;
+      }
+      await uploadSpeakerProfileBlob(row, sampleIndex, file, file.name);
+    }
+
+    function collectSpeakerProfiles() {
+      return Array.from(speakerProfileGrid.querySelectorAll(".speaker-profile-row")).map((row) => ({
+        index: Number(row.dataset.index || 0),
+        name: row.querySelector('[data-role="name"]').value.trim(),
+        enabled: row.querySelector('[data-role="enabled"]').checked
+      }));
+    }
+
+    function setSpeakerControls(data) {
+      const unavailableReason = speakerRuntimeUnavailableReason(data);
+      const runtime = data.speaker_recognition_runtime || {};
+      speakerRecognitionEnvEnabled = Boolean(data.selected_speaker_recognition_enabled);
+      speakerRecognitionRuntimeEnabled = Boolean(runtime.enabled);
+      speakerRecognitionUnavailableReason = unavailableReason;
+      setSpeakerRecognitionEnabled(unavailableReason ? false : speakerRecognitionEnvEnabled);
+      speakerBackend.value = data.selected_speaker_backend || "resemblyzer";
+      speakerThreshold.value = String(data.selected_speaker_threshold ?? 0.75);
+      speakerMargin.value = String(data.selected_speaker_margin ?? 0.10);
+      renderSpeakerProfiles(data.speaker_profiles || []);
+      speakerProfileChoices = activeSpeakerProfilesFromConfig();
+      syncComposerSpeakerControl();
+      setSpeakerControlsDisabled(Boolean(unavailableReason), unavailableReason);
+      syncSpeakerCaptureButtons();
+      syncSpeakerLabels();
+    }
+
+    function applyVadPreset(name) {
+      const preset = vadPresets[name];
+      if (!preset) return;
+      vadSpeechThreshold.value = String(preset.vadSpeechThreshold);
+      vadNegativeThreshold.value = String(preset.vadNegativeThreshold);
+      vadMinSpeechMs.value = String(preset.vadMinSpeechMs);
+      vadMinSilenceMs.value = String(preset.vadMinSilenceMs);
+      vadSpeechPadMs.value = String(preset.vadSpeechPadMs);
+      vadMaxSpeechSeconds.value = String(preset.vadMaxSpeechSeconds);
+      syncVadLabels();
+      llmMessage.textContent = tr("stt_example_applied", "STT example applied. Save to persist.");
+    }
+
+    async function testSelectedTtsVoice() {
+      const provider = cloudTtsProvider.value || "none";
+      if (!["openai", "elevenlabs"].includes(provider)) return;
+      const voice = provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value;
+      const speed = Number(openaiTtsSpeed.value || 1);
+      const volume = Number(webTtsVolume.value || 1);
+      const backendVolume = Number(backendTtsVolume.value || 1);
+      const backendPan = Number(backendAudioOutputPan.value || 0);
+      const output = selectedTtsOutput();
+      ttsTest.disabled = true;
+      llmMessage.textContent = tr("testing_voice", "Testing voice...");
+      try {
+        if (output === "backend") {
+          const response = await fetch("/api/backend-tts-test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text: ttsTestPhrase,
+              provider,
+              model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+              voice,
+              speed,
+              volume: backendVolume,
+              pan: backendPan,
+              output_device: backendAudioOutput.value || ""
+            })
+          });
+          if (!response.ok) {
+            const text = await response.text();
+            try {
+              const data = JSON.parse(text);
+              throw new Error(data.error?.message || text);
+            } catch (parseError) {
+              if (parseError instanceof SyntaxError) throw new Error(text);
+              throw parseError;
+            }
+          }
+        } else if (output === "browser") {
+          await playWebTts(ttsTestPhrase, {
+            force: true,
+            provider,
+            model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+            voice,
+            speed,
+            volume
+          });
+        } else {
+          throw new Error("TTS Output is Silent");
+        }
+        llmMessage.textContent = tr("voice_test_played", "Voice test played.");
+      } catch (error) {
+        llmMessage.textContent = trf("voice_test_failed", "Voice test failed: {error}", { error });
+      } finally {
+        syncTtsProviderControls();
+      }
+    }
+
+    function syncAudioDeviceVisibility() {
+      const output = selectedTtsOutput();
+      const sttInput = selectedSttInput();
+      syncBackendAudioMonitorControls();
+      const backendOutputNeeded = output === "backend" || selectedBackendAudioMonitorMode() !== "off";
+      browserAudioInputField.classList.toggle("hidden", !["both", "browser"].includes(sttInput));
+      backendAudioInputField.classList.toggle("hidden", !["both", "backend"].includes(sttInput));
+      backendAudioInputGainField.classList.toggle("hidden", !["both", "backend"].includes(sttInput));
+      browserAudioOutputField.classList.toggle("hidden", output !== "browser");
+      backendAudioOutputField.classList.toggle("hidden", !backendOutputNeeded);
+      backendAudioOutputPanField.classList.toggle("hidden", !backendOutputNeeded);
+      if (browserAudioInputField.classList.contains("hidden") && browserAudioTestStream) stopBrowserAudioTest();
+      if (backendAudioInputField.classList.contains("hidden")) closeBackendAudioDiagnostic();
+      browserAudioTest.disabled = browserAudioInputField.classList.contains("hidden") || !browserAudioCapabilities.input;
+      backendAudioTest.disabled = backendAudioInputField.classList.contains("hidden")
+        || !backendAudioCapabilities.input
+        || Boolean(backendAudioDiagnostic?.running);
+	      backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
+      backendAudioOutputPanField.title = backendAudioOutputPan.disabled
+        ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif"
+        : "BACKEND_AUDIO_OUTPUT_PAN";
+      syncCommandAckSoundControls();
+      syncAudioSampleControls();
+      syncSpeakerCaptureButtons();
+    }
+
+    function backendAudioMonitorModeAvailable(value) {
+      if (value === "off") return true;
+      if (!backendAudioCapabilities.input || !backendAudioCapabilities.output) return false;
+      if (value === "rejected" && !wakeWord.value.trim()) return false;
+      return value === "rejected" || value === "passthrough";
+    }
+
+    function backendAudioMonitorModeReason(value) {
+      if (value === "off") return "";
+      if (!backendAudioCapabilities.input || !backendAudioCapabilities.output) {
+        return "BACKEND_AUDIO_MONITOR_MODE nécessite une entrée et une sortie audio backend disponibles.";
+      }
+      if (value === "rejected" && !wakeWord.value.trim()) {
+        return "BACKEND_AUDIO_MONITOR_MODE=rejected nécessite un wake word actif.";
+      }
+      return "";
+    }
+
+    function syncBackendAudioMonitorControls() {
+      for (const input of backendAudioMonitorModeInputs) {
+        setSegmentOptionEnabled(input, backendAudioMonitorModeAvailable(input.value), backendAudioMonitorModeReason(input.value));
+      }
+      if (!backendAudioMonitorModeAvailable(selectedBackendAudioMonitorMode())) {
+        setSelectedBackendAudioMonitorMode("off");
+      }
+      const mode = selectedBackendAudioMonitorMode();
+      const enabled = mode !== "off" && backendAudioMonitorModeAvailable(mode);
+      backendAudioMonitorVolume.disabled = !enabled;
+      backendAudioMonitorModeField.title = backendAudioCapabilities.input && backendAudioCapabilities.output
+        ? "BACKEND_AUDIO_MONITOR_MODE"
+        : "BACKEND_AUDIO_MONITOR_MODE - nécessite une entrée et une sortie backend disponibles";
+      backendAudioMonitorVolumeField.title = enabled
+        ? "BACKEND_AUDIO_MONITOR_VOLUME"
+        : "BACKEND_AUDIO_MONITOR_VOLUME - actif seulement avec Rejected ou Pass through";
+    }
+
+    function syncCommandAckSoundControls() {
+      const output = selectedTtsOutput();
+      const browserUnavailable = output === "browser" && !browserAudioCapabilities.output;
+      const backendUnavailable = output === "backend" && !backendAudioCapabilities.output;
+      const disabled = output === "silent" || browserUnavailable || backendUnavailable;
+      const reason = output === "silent"
+        ? "COMMAND_ACK_SOUND_FILE - sortie TTS silencieuse"
+        : browserUnavailable
+          ? "COMMAND_ACK_SOUND_FILE - sortie audio navigateur indisponible"
+          : backendUnavailable
+            ? "COMMAND_ACK_SOUND_FILE - sortie audio backend indisponible"
+            : "COMMAND_ACK_SOUND_FILE";
+      commandAckSound.disabled = disabled;
+      commandAckSoundPlay.disabled = disabled || !commandAckSound.value;
+      commandAckSoundField.title = reason;
+      commandAckSound.title = reason;
+      commandAckSoundPlay.title = disabled
+        ? reason
+        : commandAckSound.value
+          ? tr("play_audio_sample", "Play sample")
+          : tr("command_ack_sound_disabled", "No command acknowledgement sound");
+    }
+
+    function setSegmentOptionEnabled(input, enabled, reason = "") {
+      const label = input.closest("label");
+      if (label) {
+        label.classList.remove("hidden");
+        label.title = enabled ? "" : reason;
+      }
+      input.disabled = !enabled;
+      input.title = enabled ? "" : reason;
+    }
+
+    function sttInputAvailable(value) {
+      if (value === "silent") return true;
+      if (value === "browser") return browserAudioCapabilities.input;
+      if (value === "backend") return backendAudioCapabilities.input;
+      if (value === "both") return browserAudioCapabilities.input && backendAudioCapabilities.input;
+      return false;
+    }
+
+    function sttInputUnavailableReason(value) {
+      const offline = selectedConnectivityMode() === "offline";
+      if (offline && value === "browser") return "Le mode offline utilise uniquement l'entrée micro backend.";
+      if (offline && value === "both") return "Le mode offline ne combine pas micro navigateur et micro backend.";
+      if (value === "browser") return "Aucun micro navigateur n'est disponible. Autorise le micro puis clique Refresh, ou ouvre l'app en HTTPS/localhost.";
+      if (value === "backend") return "Aucune entrée audio backend n'est détectée par PyAudio.";
+      if (value === "both") return "Both nécessite à la fois un micro navigateur et une entrée audio backend.";
+      return "";
+    }
+
+    function firstAvailableSttInput(preferred) {
+      if (sttInputAvailable(preferred)) return preferred;
+      const fallbacks = preferred === "both"
+        ? ["browser", "backend", "silent"]
+        : ["both", "browser", "backend", "silent"];
+      return fallbacks.find(sttInputAvailable) || "silent";
+    }
+
+    function ttsOutputAvailable(value) {
+      if (value === "silent") return true;
+      if (value === "browser") return browserAudioCapabilities.output;
+      if (value === "backend") return backendAudioCapabilities.output;
+      return false;
+    }
+
+    function ttsOutputUnavailableReason(value) {
+      const offline = selectedConnectivityMode() === "offline";
+      const provider = cloudTtsProvider.value || "none";
+      if (offline && value === "browser") return "Le mode offline force la sortie locale backend ou Silent.";
+      if (!offline && provider === "none" && value !== "silent") return "Sélectionne un fournisseur TTS cloud pour activer cette sortie.";
+      if (value === "backend") return "Aucune sortie audio backend n'est détectée par PyAudio.";
+      if (value === "browser") return "Le navigateur ne permet pas la lecture audio.";
+      return "";
+    }
+
+    function firstAvailableTtsOutput(preferred) {
+      if (ttsOutputAvailable(preferred)) return preferred;
+      const fallbacks = preferred === "browser"
+        ? ["backend", "silent"]
+        : ["browser", "silent"];
+      return fallbacks.find(ttsOutputAvailable) || "silent";
+    }
+
+    function syncAudioCapabilityControls() {
+      const offline = selectedConnectivityMode() === "offline";
+      const provider = cloudTtsProvider.value || "none";
+      const forceSilentTts = !offline && provider === "none";
+      for (const input of sttInputInputs) {
+        const enabled = sttInputAvailable(input.value) && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionEnabled(input, enabled, sttInputUnavailableReason(input.value));
+      }
+      setSelectedSttInput(offline ? firstAvailableSttInput("backend") : firstAvailableSttInput(selectedSttInput()));
+
+      for (const input of ttsOutputInputs) {
+        const enabled = ttsOutputAvailable(input.value)
+          && (!forceSilentTts || input.value === "silent")
+          && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionEnabled(input, enabled, ttsOutputUnavailableReason(input.value));
+      }
+      setSelectedTtsOutput(
+        offline ? (ttsOutputAvailable("backend") ? "backend" : "silent")
+          : (forceSilentTts ? "silent" : firstAvailableTtsOutput(selectedTtsOutput()))
+      );
+      syncBackendWakeWordControls();
+      syncAudioDeviceVisibility();
+    }
+
+    function selectedSttInput() {
+      const checked = sttInputInputs.find((input) => input.checked);
+      return checked ? checked.value : "both";
+    }
+
+    function setSelectedSttInput(value) {
+      const nextValue = ["both", "browser", "backend", "silent"].includes(value) ? value : "both";
+      for (const input of sttInputInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function syncSttInputControls() {
+      const offline = selectedConnectivityMode() === "offline";
+      if (offline) {
+        setSelectedSttInput(firstAvailableSttInput("backend"));
+      }
+      for (const input of sttInputInputs) {
+        const enabled = sttInputAvailable(input.value) && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionEnabled(input, enabled, sttInputUnavailableReason(input.value));
+      }
+      if (!sttInputAvailable(selectedSttInput())) {
+        setSelectedSttInput(firstAvailableSttInput(selectedSttInput()));
+      }
+      syncAudioDeviceVisibility();
+      syncBackendWakeWordControls();
+    }
+
+	    function syncTtsProviderControls() {
+      const connectivityMode = selectedConnectivityMode();
+      const offline = connectivityMode === "offline";
+	      const provider = cloudTtsProvider.value || "none";
+	      const output = selectedTtsOutput();
+	      const forceSilent = !offline && provider === "none";
+      for (const element of cloudAudioControls) element.classList.toggle("hidden", offline);
+      offlineAudioSummary.classList.toggle("hidden", !offline);
+	      for (const input of ttsOutputInputs) {
+        const enabled = ttsOutputAvailable(input.value)
+          && (!forceSilent || input.value === "silent")
+          && (!offline || input.value === "backend" || input.value === "silent");
+        setSegmentOptionEnabled(input, enabled, ttsOutputUnavailableReason(input.value));
+	        input.checked = offline
+          ? input.value === (ttsOutputAvailable("backend") ? "backend" : "silent")
+          : (forceSilent ? input.value === "silent" : input.value === firstAvailableTtsOutput(output));
+	      }
+	      elevenlabsVoiceField.classList.toggle("hidden", offline || provider !== "elevenlabs");
+	      openaiTtsVoiceField.classList.toggle("hidden", offline || provider !== "openai");
+	      ttsSpeedField.classList.toggle("hidden", offline || provider === "none");
+	      ttsTestField.classList.toggle("hidden", offline || provider === "none");
+	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
+	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
+	      openaiTtsSpeed.disabled = offline || provider === "none";
+      webTtsVolume.disabled = offline || provider === "none" || selectedTtsOutput() !== "browser";
+      backendTtsVolume.disabled = selectedTtsOutput() !== "backend";
+      backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
+      webTtsVolumeField.title = webTtsVolume.disabled ? "WEB_TTS_VOLUME - actif seulement avec TTS Output Browser" : "WEB_TTS_VOLUME";
+      backendTtsVolumeField.title = backendTtsVolume.disabled ? "BACKEND_TTS_VOLUME - actif seulement avec TTS Output Backend" : "BACKEND_TTS_VOLUME";
+      backendAudioOutputPanField.title = backendAudioOutputPan.disabled ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif" : "BACKEND_AUDIO_OUTPUT_PAN";
+      ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
+      syncAudioSampleControls();
+      syncSpeakerProfileSampleControls();
+      syncAudioDeviceVisibility();
+	    }
+
+    function selectedConnectivityMode() {
+      const checked = connectivityModeInputs.find((input) => input.checked);
+      return checked ? checked.value : "online";
+    }
+
+    function setSelectedConnectivityMode(value) {
+      const nextValue = value === "offline" ? "offline" : "online";
+      for (const input of connectivityModeInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function selectedMcpToolRoutingEnabled() {
+      const checked = mcpToolRoutingInputs.find((input) => input.checked);
+      return checked ? checked.value === "true" : false;
+    }
+
+    function setSelectedMcpToolRoutingEnabled(enabled) {
+      const nextValue = enabled ? "true" : "false";
+      for (const input of mcpToolRoutingInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function setSelectedInterruptConversationEnabled(enabled) {
+      const nextValue = enabled ? "on" : "off";
+      for (const input of interruptConversationInputs) {
+        input.checked = input.value === nextValue;
+      }
+    }
+
+    function syncConnectivityLock() {
+      for (const input of connectivityModeInputs) {
+        input.disabled = connectivityLocked;
+      }
+    }
+
+    function syncConnectivityControls() {
+      if (selectedConnectivityMode() === "offline") {
+        if ([...llmProvider.options].some((option) => option.value === "ollama")) {
+          llmProvider.value = "ollama";
+        }
+        if ([...cloudTtsProvider.options].some((option) => option.value === "none")) {
+          cloudTtsProvider.value = "none";
+        }
+        setSelectedTtsOutput(ttsOutputAvailable("backend") ? "backend" : "silent");
+        setSelectedSttInput(firstAvailableSttInput("backend"));
+      }
+      syncConnectivityLock();
+      syncSttInputControls();
+      syncTtsProviderControls();
+    }
+
+    function selectedTtsOutput() {
+      const checked = ttsOutputInputs.find((input) => input.checked);
+      return checked ? checked.value : "silent";
+    }
+
+    function setSelectedTtsOutput(value) {
+      const nextValue = value || "silent";
+      for (const input of ttsOutputInputs) {
+        input.checked = input.value === nextValue;
+      }
+      syncAudioDeviceVisibility();
+    }
+
+    function autoSizeComposer() {
+      injectCommand.style.height = "0px";
+      injectCommand.style.height = `${Math.min(injectCommand.scrollHeight, 160)}px`;
+    }
+
+    function setSettingsOpen(open) {
+      settingsOverlay.classList.toggle("open", open);
+      settingsOverlay.setAttribute("aria-hidden", open ? "false" : "true");
+      if (open) settingsClose.focus();
+      else settingsOpen.focus();
+    }
+
+    function setLoadingOverlay(loading, title = tr("loading", "Loading"), detail = "Preparing persisted context summary", mode = "loading") {
+      sessionLoading.classList.toggle("open", Boolean(loading));
+      sessionLoading.classList.toggle("done", mode === "done");
+      sessionLoading.classList.toggle("error", mode === "error");
+      sessionLoading.setAttribute("aria-hidden", loading ? "false" : "true");
+      sessionLoadingTitle.textContent = title;
+      sessionLoadingDetail.textContent = detail;
+    }
+
+    function setEnvironmentLoading(loading, title = tr("environment_refresh", "rafraichissement de l'environnement")) {
+      environmentLoadingActive = Boolean(loading);
+      setLoadingOverlay(environmentLoadingActive, title, tr("applying_config", "Application de la nouvelle configuration"));
+    }
+
+    function setProfileLoading(loading, title = tr("preparing_voice_profile", "Préparation du profil vocal"), detail = speakerEmbeddingPreparationMessage, mode = "loading") {
+      profileLoadingActive = Boolean(loading);
+      if (environmentLoadingActive && !loading) return;
+      setLoadingOverlay(loading, title, detail, mode);
+    }
+
+    function setSessionLoading(loading, title = "Loading session") {
+      sessionNew.disabled = Boolean(loading);
+      for (const button of sessionList.querySelectorAll(".session-main, .session-menu-button, .session-summary-button, .session-menu-action")) {
+        button.disabled = Boolean(loading);
+      }
+      if ((environmentLoadingActive || profileLoadingActive) && !loading) return;
+      setLoadingOverlay(loading, title);
+    }
+
+    function closeSessionMenus() {
+      openSessionMenuId = "";
+      for (const row of sessionList.querySelectorAll(".session-row.menu-open")) {
+        row.classList.remove("menu-open");
+      }
+    }
+
+    async function renameSession(sessionId, currentTitle) {
+      const title = window.prompt(tr("rename_session", "Rename session"), currentTitle || tr("untitled_session", "Untitled session"));
+      if (title === null) return;
+      const cleanedTitle = title.trim();
+      if (!cleanedTitle) return;
+      setSessionLoading(true, tr("renaming_session", "Renaming session"));
+      try {
+        const response = await fetch("/api/session-context/rename", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId, title: cleanedTitle })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `session rename failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+
+    async function deleteSession(sessionId, currentTitle) {
+      const confirmed = window.confirm(`Delete session "${currentTitle || "Untitled session"}"?`);
+      if (!confirmed) return;
+      setSessionLoading(true, "Deleting session");
+      try {
+        const response = await fetch("/api/session-context/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        pendingCommandMessages = [];
+        localNoticeMessages = [];
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `session delete failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+
+    async function clearSessionConversation(sessionId, currentTitle) {
+      const confirmed = window.confirm(
+        `Clear visible conversation for "${currentTitle || "Untitled session"}"? The LLM summary will be kept.`
+      );
+      if (!confirmed) return;
+      setSessionLoading(true, "Clearing conversation");
+      try {
+        const response = await fetch("/api/session-context/clear", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        pendingCommandMessages = [];
+        localNoticeMessages = [];
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `session clear failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+
+    async function saveSessionContext(sessionId, currentTitle) {
+      setSessionLoading(true, "Saving context");
+      try {
+        const response = await fetch("/api/session-context/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        await refresh();
+        metaEl.textContent = `context saved for ${currentTitle || "Untitled session"}`;
+      } catch (error) {
+        metaEl.textContent = `context save failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    }
+
+    function activateTab(tabId) {
+      for (const tab of tabs) {
+        const active = tab.id === tabId;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+      }
+      for (const panel of panels) {
+        panel.classList.toggle("active", panel.getAttribute("aria-labelledby") === tabId);
+      }
+    }
+
+	    async function loadLlmOptions(provider, preferredModel, connectivityOverride = "") {
+      if (llmOptionsLoading) return false;
+      const shouldMarkClean = !connectivityOverride;
+      llmOptionsLoading = true;
+	      llmProvider.disabled = true;
+	      llmModel.disabled = true;
+      for (const input of connectivityModeInputs) input.disabled = true;
+	        sessionContextSize.disabled = true;
+      for (const input of mcpToolRoutingInputs) input.disabled = true;
+      for (const input of interruptConversationInputs) input.disabled = true;
+      wakeWord.disabled = true;
+      sttPromptEl.disabled = true;
+      sttLanguage.disabled = true;
+      assistantSystemPromptEl.disabled = true;
+      cloudTtsProvider.disabled = true;
+      for (const input of ttsOutputInputs) input.disabled = true;
+      for (const input of sttInputInputs) input.disabled = true;
+      elevenlabsVoice.disabled = true;
+      openaiTtsVoice.disabled = true;
+      openaiTtsSpeed.disabled = true;
+      webTtsVolume.disabled = true;
+      backendTtsVolume.disabled = true;
+      backendAudioMonitorVolume.disabled = true;
+      for (const input of backendAudioMonitorModeInputs) input.disabled = true;
+      backendAudioOutputPan.disabled = true;
+      commandAckSound.disabled = true;
+      commandAckSoundPlay.disabled = true;
+      ttsTest.disabled = true;
+      for (const control of vadControls) control.disabled = true;
+      for (const control of backendWakeWordControls) control.disabled = true;
+      for (const button of vadPresetButtons) button.disabled = true;
+      setSpeakerControlsDisabled(true, "Loading speaker recognition options...");
+      backendAudioInput.disabled = true;
+      browserAudioTest.disabled = true;
+      backendAudioTest.disabled = true;
+        backendAudioOutput.disabled = true;
+        thinkingSound.disabled = true;
+        listeningSound.disabled = true;
+        wakeDetectedSound.disabled = true;
+        commandAckSound.disabled = true;
+        commandAckSoundPlay.disabled = true;
+        llmSave.disabled = true;
+      llmMessage.textContent = tr("loading_llm_options", "Loading LLM options...");
+      try {
+        const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+        const response = await fetch(`/api/llm-options${suffix}`, { cache: "no-store" });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+
+	        const selectedProvider = data.provider || provider || "";
+        setSelectedConnectivityMode(connectivityOverride || data.selected_connectivity_mode || "online");
+	        llmProvider.replaceChildren();
+        for (const item of data.providers || []) {
+          const label = item.available === false && item.reason
+            ? `${item.label || item.id} (${item.reason})`
+            : (item.label || item.id);
+          llmProvider.appendChild(option(label, item.id, item.available === false, item.id === selectedProvider));
+        }
+        if (selectedProvider && llmProvider.value !== selectedProvider) {
+          llmProvider.value = selectedProvider;
+        }
+        setSessionContextSize(data.selected_session_context_size || 0);
+        setMcpAgentMaxSteps(data.selected_mcp_agent_max_steps || 20);
+        setSelectedMcpToolRoutingEnabled(Boolean(data.selected_mcp_tool_routing_enabled));
+        setSelectedInterruptConversationEnabled(Boolean(data.selected_interrupt_conversation_enabled));
+        interruptConversationEnabled = selectedInterruptConversationEnabled();
+        wakeWord.value = data.selected_wake_word || "";
+        sttPromptEl.value = data.selected_stt_prompt || "";
+        assistantSystemPromptEl.value = data.selected_system_prompt || "";
+
+        cloudTtsProvider.replaceChildren();
+        const selectedCloudTtsProvider = data.selected_cloud_tts_provider || "";
+        for (const item of data.cloud_tts_providers || []) {
+          cloudTtsProvider.appendChild(option(item.label || item.id, item.id, false, item.id === selectedCloudTtsProvider));
+        }
+        if (selectedCloudTtsProvider && cloudTtsProvider.value !== selectedCloudTtsProvider) {
+          cloudTtsProvider.value = selectedCloudTtsProvider;
+        }
+        setSelectedTtsOutput(data.selected_tts_output || "silent");
+        setSelectedSttInput(data.selected_stt_input || "both");
+        sttLanguage.replaceChildren();
+        const selectedSttLanguage = data.selected_stt_language || i18nPayload.locale || "fr";
+        const locales = data.available_locales || i18nPayload.available_locales || [];
+        for (const locale of locales) {
+          sttLanguage.appendChild(option(locale.label || locale.id, locale.id, false, locale.id === selectedSttLanguage));
+        }
+        if (selectedSttLanguage && sttLanguage.value !== selectedSttLanguage) {
+          sttLanguage.value = selectedSttLanguage;
+        }
+
+        llmModel.replaceChildren();
+        const selectedModel = preferredModel || data.selected_model || "";
+        const models = data.models || [];
+        if (models.length === 0) {
+          llmModel.appendChild(option(tr("no_model_available", "No model available"), "", true, true));
+        } else {
+          for (const model of models) {
+            llmModel.appendChild(option(model.label || model.id, model.id, false, model.id === selectedModel));
+          }
+          if (selectedModel && !models.some((model) => model.id === selectedModel)) {
+            llmModel.appendChild(option(`${selectedModel} (${tr("current", "current")})`, selectedModel, false, true));
+          }
+        }
+
+        elevenlabsVoice.replaceChildren();
+        const selectedVoiceId = data.selected_voice_id || "";
+        const voices = data.voices || [];
+        if (voices.length === 0) {
+          elevenlabsVoice.appendChild(option(tr("no_voice_available", "No voice available"), "", true, true));
+        } else {
+          for (const voice of voices) {
+            elevenlabsVoice.appendChild(option(voice.label || voice.id, voice.id, false, voice.id === selectedVoiceId));
+          }
+          if (selectedVoiceId && !voices.some((voice) => voice.id === selectedVoiceId)) {
+            elevenlabsVoice.appendChild(option(`${selectedVoiceId} (${tr("current", "current")})`, selectedVoiceId, false, true));
+          }
+        }
+
+        openaiTtsVoice.replaceChildren();
+        const selectedOpenAiTtsVoice = data.selected_openai_tts_voice || "";
+        const openAiVoices = data.openai_tts_voices || [];
+        if (openAiVoices.length === 0) {
+          openaiTtsVoice.appendChild(option(tr("no_voice_available", "No voice available"), "", true, true));
+        } else {
+          for (const voice of openAiVoices) {
+            openaiTtsVoice.appendChild(option(voice.label || voice.id, voice.id, false, voice.id === selectedOpenAiTtsVoice));
+          }
+          if (selectedOpenAiTtsVoice && !openAiVoices.some((voice) => voice.id === selectedOpenAiTtsVoice)) {
+            openaiTtsVoice.appendChild(option(`${selectedOpenAiTtsVoice} (${tr("current", "current")})`, selectedOpenAiTtsVoice, false, true));
+          }
+        }
+	        openaiTtsSpeed.value = String(data.selected_openai_tts_speed || 1.0);
+	        webTtsVolume.value = String(data.selected_web_tts_volume ?? 1.0);
+	        backendTtsVolume.value = String(data.selected_backend_tts_volume ?? 1.0);
+	        setSelectedBackendAudioMonitorMode(data.selected_backend_audio_monitor_mode || "off");
+	        backendAudioMonitorVolume.value = String(data.selected_backend_audio_monitor_volume ?? 1.0);
+	        backendAudioInputGain.value = String(data.selected_backend_audio_input_gain ?? 1.0);
+	        backendAudioOutputPan.value = String(data.selected_backend_audio_output_pan ?? 0.0);
+	        syncOpenAiSpeedLabel();
+        syncTtsVolumeLabels();
+        syncBackendAudioMonitorVolumeLabel();
+        syncBackendAudioInputGainLabel();
+        syncBackendAudioOutputPanLabel();
+        setVadControls(data);
+        setSpeakerControls(data);
+
+        backendAudioInput.replaceChildren();
+        backendAudioCapabilities.input = Array.isArray(data.backend_audio_inputs) && data.backend_audio_inputs.length > 0;
+        const selectedBackendAudioInput = data.selected_backend_audio_input_device || "";
+        backendAudioInput.appendChild(option(backendAudioCapabilities.input ? "Default input" : "No backend input", "", !backendAudioCapabilities.input, !selectedBackendAudioInput));
+        for (const device of data.backend_audio_inputs || []) {
+          const unavailable = device.available === false;
+          const baseLabel = device.label || device.id;
+          const label = `${device.default ? `${baseLabel} (default)` : baseLabel}${unavailable ? " (non sélectionnable)" : ""}`;
+          const opt = option(label, device.id, unavailable, device.id === selectedBackendAudioInput);
+          if (device.reason) opt.title = device.reason;
+          backendAudioInput.appendChild(opt);
+        }
+        if (selectedBackendAudioInput && ![...backendAudioInput.options].some((item) => item.value === selectedBackendAudioInput)) {
+          backendAudioInput.options[0].textContent = `Default input (current unavailable: ${selectedBackendAudioInput})`;
+          backendAudioInput.value = "";
+        }
+
+        backendAudioOutput.replaceChildren();
+        backendAudioCapabilities.output = Array.isArray(data.backend_audio_outputs) && data.backend_audio_outputs.length > 0;
+        const selectedBackendAudioOutput = data.selected_backend_audio_output_device || "";
+        backendAudioOutput.appendChild(option(backendAudioCapabilities.output ? "Default output" : "No backend output", "", !backendAudioCapabilities.output, !selectedBackendAudioOutput));
+        for (const device of data.backend_audio_outputs || []) {
+          const label = device.default ? `${device.label || device.id} (default)` : (device.label || device.id);
+          backendAudioOutput.appendChild(option(label, device.id, false, device.id === selectedBackendAudioOutput));
+        }
+        if (selectedBackendAudioOutput && ![...backendAudioOutput.options].some((item) => item.value === selectedBackendAudioOutput)) {
+          backendAudioOutput.options[0].textContent = `Default output (current unavailable: ${selectedBackendAudioOutput})`;
+          backendAudioOutput.value = "";
+        }
+        syncConnectivityControls();
+
+        thinkingSound.replaceChildren();
+        const selectedThinkingSound = data.selected_thinking_sound_file || "";
+        const sounds = data.thinking_sounds || [];
+        thinkingSound.appendChild(option(tr("thinking_sound_disabled", "No thinking sound"), "", false, !selectedThinkingSound));
+        if (sounds.length === 0) {
+          if (selectedThinkingSound) {
+            thinkingSound.appendChild(option(`${selectedThinkingSound} (${tr("current", "current")})`, selectedThinkingSound, false, true));
+          }
+        } else {
+          for (const sound of sounds) {
+            thinkingSound.appendChild(option(sound.label || sound.id, sound.id, false, sound.id === selectedThinkingSound));
+          }
+          if (selectedThinkingSound && !sounds.some((sound) => sound.id === selectedThinkingSound)) {
+            thinkingSound.appendChild(option(`${selectedThinkingSound} (${tr("current", "current")})`, selectedThinkingSound, false, true));
+          }
+        }
+
+        listeningSound.replaceChildren();
+        const selectedListeningSound = data.selected_listening_sound_file || "";
+        listeningSound.appendChild(option(
+          tr("listening_sound_disabled", "No listening sound"),
+          "",
+          false,
+          !selectedListeningSound
+        ));
+        for (const sound of sounds) {
+          listeningSound.appendChild(option(
+            sound.label || sound.id,
+            sound.id,
+            false,
+            sound.id === selectedListeningSound
+          ));
+        }
+        if (selectedListeningSound && !sounds.some((sound) => sound.id === selectedListeningSound)) {
+          listeningSound.appendChild(option(
+            `${selectedListeningSound} (${tr("current", "current")})`,
+            selectedListeningSound,
+            false,
+            true
+          ));
+        }
+
+        wakeDetectedSound.replaceChildren();
+        const selectedWakeDetectedSound = data.selected_wake_detected_sound_file || "";
+        wakeDetectedSound.appendChild(option(
+          tr("wake_detected_sound_disabled", "No wake detected sound"),
+          "",
+          false,
+          !selectedWakeDetectedSound
+        ));
+        for (const sound of sounds) {
+          wakeDetectedSound.appendChild(option(
+            sound.label || sound.id,
+            sound.id,
+            false,
+            sound.id === selectedWakeDetectedSound
+          ));
+        }
+        if (selectedWakeDetectedSound && !sounds.some((sound) => sound.id === selectedWakeDetectedSound)) {
+          wakeDetectedSound.appendChild(option(
+            `${selectedWakeDetectedSound} (${tr("current", "current")})`,
+            selectedWakeDetectedSound,
+            false,
+            true
+          ));
+        }
+
+        startupLoaderSound.replaceChildren();
+        const selectedStartupLoaderSound = data.selected_startup_loader_sound_file || "";
+        startupLoaderSound.appendChild(option(
+          tr("startup_loader_sound_disabled", "No startup loader sound"),
+          "",
+          false,
+          !selectedStartupLoaderSound
+        ));
+        for (const sound of sounds) {
+          startupLoaderSound.appendChild(option(
+            sound.label || sound.id,
+            sound.id,
+            false,
+            sound.id === selectedStartupLoaderSound
+          ));
+        }
+        if (selectedStartupLoaderSound && !sounds.some((sound) => sound.id === selectedStartupLoaderSound)) {
+          startupLoaderSound.appendChild(option(
+            `${selectedStartupLoaderSound} (${tr("current", "current")})`,
+            selectedStartupLoaderSound,
+            false,
+            true
+          ));
+        }
+
+        commandAckSound.replaceChildren();
+        const selectedCommandAckSound = data.selected_command_ack_sound_file || "";
+        commandAckSound.appendChild(option(
+          tr("command_ack_sound_disabled", "No command acknowledgement sound"),
+          "",
+          false,
+          !selectedCommandAckSound
+        ));
+        for (const sound of sounds) {
+          commandAckSound.appendChild(option(
+            sound.label || sound.id,
+            sound.id,
+            false,
+            sound.id === selectedCommandAckSound
+          ));
+        }
+        if (selectedCommandAckSound && !sounds.some((sound) => sound.id === selectedCommandAckSound)) {
+          commandAckSound.appendChild(option(
+            `${selectedCommandAckSound} (${tr("current", "current")})`,
+            selectedCommandAckSound,
+            false,
+            true
+          ));
+        }
+        syncAudioSampleControls();
+
+        llmMessage.textContent = data.message || "";
+        if (shouldMarkClean) {
+          markConfigClean();
+        }
+      } catch (error) {
+        llmMessage.textContent = `LLM options unavailable: ${error}`;
+      } finally {
+	        llmProvider.disabled = false;
+	        llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
+        for (const input of connectivityModeInputs) input.disabled = connectivityLocked;
+	        sessionContextSize.disabled = false;
+        for (const input of mcpToolRoutingInputs) input.disabled = false;
+        for (const input of interruptConversationInputs) input.disabled = false;
+        wakeWord.disabled = false;
+        sttPromptEl.disabled = false;
+        sttLanguage.disabled = sttLanguage.options.length === 0 || !sttLanguage.value;
+        assistantSystemPromptEl.disabled = false;
+        cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
+        for (const input of ttsOutputInputs) input.disabled = false;
+        for (const input of sttInputInputs) input.disabled = false;
+        for (const control of vadControls) control.disabled = false;
+        for (const button of vadPresetButtons) button.disabled = false;
+        setSpeakerControlsDisabled(Boolean(speakerRecognitionUnavailableReason), speakerRecognitionUnavailableReason);
+	        syncConnectivityControls();
+        syncBackendWakeWordControls();
+        backendAudioInput.disabled = !backendAudioCapabilities.input || backendAudioInput.options.length === 0;
+        backendAudioOutput.disabled = !backendAudioCapabilities.output || backendAudioOutput.options.length === 0;
+        syncBackendAudioMonitorControls();
+        syncCommandAckSoundControls();
+        backendAudioOutputPan.disabled = !backendAudioCapabilities.output || backendAudioOutputPanField.classList.contains("hidden");
+        browserAudioTest.disabled = !browserAudioCapabilities.input || browserAudioInputField.classList.contains("hidden");
+        backendAudioTest.disabled = !backendAudioCapabilities.input || backendAudioInputField.classList.contains("hidden");
+        thinkingSound.disabled = thinkingSound.options.length === 0;
+        listeningSound.disabled = listeningSound.options.length === 0;
+        wakeDetectedSound.disabled = wakeDetectedSound.options.length === 0;
+        commandAckSound.disabled = commandAckSound.options.length === 0;
+        syncCommandAckSoundControls();
+        syncAudioSampleControls();
+        llmSave.disabled = !llmProvider.value;
+        llmOptionsLoading = false;
+      }
+      return true;
+    }
+
+    async function syncLlmControls(data) {
+      if (llmControlsInitialized) return;
+      const env = (data.config && data.config.env) || {};
+      const provider = String(env.LLM_PROVIDER || "openai").toLowerCase();
+      const model = String(env.OPENAI_MODEL || "");
+      const loaded = await loadLlmOptions(provider, model);
+      if (loaded !== false) {
+        llmControlsInitialized = true;
+      }
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch("/api/snapshot", { cache: "no-store" });
+        const data = await response.json();
+        const snapshotEnv = (data.config && data.config.env) || {};
+        if (Object.prototype.hasOwnProperty.call(snapshotEnv, "SPEAKER_RECOGNITION_ENABLED")) {
+          speakerRecognitionEnvEnabled = envFlag(snapshotEnv.SPEAKER_RECOGNITION_ENABLED, speakerRecognitionEnvEnabled);
+          syncComposerSpeakerControl();
+        }
+        const previousBusy = composerLocked;
+        const snapshotEnvFile = data.env_file || "";
+        const snapshotEnvChanged = Boolean(currentSnapshotEnvFile) && snapshotEnvFile && snapshotEnvFile !== currentSnapshotEnvFile;
+        if (snapshotEnvFile) {
+          currentSnapshotEnvFile = snapshotEnvFile;
+        }
+        const services = data.services || {};
+        const rows = [
+          tile("Internet", data.internet, data.mode === "auto" ? "auto profile detection" : "fixed profile"),
+          tile("Profile", data.mode, data.env_file || ""),
+          ...Object.entries(services).map(([name, service]) => tile(name, service.status, service.detail))
+        ];
+        stateEl.innerHTML = rows.join("");
+        configEl.value = data.config_text || "";
+        renderMcpServers(data.mcp_servers || []);
+        syncMcpRoutingEditors();
+        const remoteScreen = data.remote_screen || {};
+        if (!vncUrlDirty && snapshotEnvChanged && currentVncFrameUrl) {
+          disconnectVnc("reconnexion VNC...");
+        }
+        if (!vncUrlDirty && remoteScreen.vnc_url) {
+          const remoteScreenUrlChanged = vncUrl.value !== remoteScreen.vnc_url;
+          if (remoteScreenUrlChanged) {
+            vncUrl.value = remoteScreen.vnc_url;
+          }
+          if (typeof remoteScreen.view_only === "boolean" && vncViewOnly.checked !== remoteScreen.view_only) {
+            vncViewOnly.checked = remoteScreen.view_only;
+          }
+          let remoteScreenFrameUrl = "";
+          try {
+            remoteScreenFrameUrl = noVncUrlFromInput(remoteScreen.vnc_url);
+          } catch (error) {
+            remoteScreenFrameUrl = "";
+          }
+          if (remoteScreenFrameUrl && (remoteScreenUrlChanged || snapshotEnvChanged || !currentVncFrameUrl)) {
+            await connectVnc({ force: true });
+          }
+        }
+        const environmentLoading = data.environment_loading || {};
+        setEnvironmentLoading(
+          Boolean(environmentLoading.active),
+          environmentLoading.title || tr("environment_refresh", "rafraichissement de l'environnement")
+        );
+        const envProfileChanged = await loadEnvProfiles();
+        if (envProfileChanged) {
+          llmControlsInitialized = false;
+          configBaseline = "";
+          cloudApiLoaded = false;
+        }
+        await syncLlmControls(data);
+        promptEl.value = data.prompt || "";
+        renderSessions(data.session_context || {});
+        if (!settingsOverlay.classList.contains("open")) {
+          setSessionContextSize(data.session_context_size || 0);
+        }
+        const shouldStick = logsEl.scrollTop + logsEl.clientHeight >= logsEl.scrollHeight - 8;
+        logsEl.value = data.logs || "";
+        if (shouldStick) logsEl.scrollTop = logsEl.scrollHeight;
+        webAudio = data.web_audio || { enabled: false, stt_enabled: false, audio_file_stt_enabled: false, tts_enabled: false, tts_output: "silent" };
+        interruptConversationEnabled = Boolean(webAudio.interrupt_conversation_enabled);
+        thinkingAudioUrl = data.thinking_sound_url || "";
+        commandAckSoundUrl = data.command_ack_sound_url || "";
+        if (!webAudio.stt_enabled && conversationEnabled) {
+          setConversationEnabled(false);
+        }
+        const runtimeSpeaker = (data.runtime || {}).speaker_recognition || {};
+        if (Object.keys(runtimeSpeaker).length > 0) {
+          speakerRecognitionRuntimeEnabled = Boolean(runtimeSpeaker.enabled);
+          speakerRecognitionUnavailableReason = runtimeSpeaker.requested && !runtimeSpeaker.enabled && runtimeSpeaker.unavailable_reason
+            ? `Speaker recognition unavailable: ${runtimeSpeaker.unavailable_reason}`
+            : "";
+          syncComposerSpeakerControl();
+        }
+        applySpeakerProfileStatuses((data.runtime || {}).speaker_profiles || []);
+        updateConversationButton();
+        lastServerMessages = data.messages || [];
+        const serverBusy = Boolean(data.assistant_busy);
+        const showThinking = serverBusy || hasPendingCommandMessages() || fileUploadPending;
+        const playThinking = serverBusy || hasPendingCommandMessages() || (
+          audioTranscriptionPending && audioTranscriptionMayPlayThinking
+        );
+        const latestAssistantMessage = [...lastServerMessages].reverse().find((message) => message.role === "assistant");
+        const latestAssistantMessageKey = assistantMessageKey(latestAssistantMessage);
+        const isNewAssistantMessage = Boolean(
+          messagesHydrated &&
+          latestAssistantMessageKey &&
+          latestAssistantMessageKey !== lastObservedAssistantMessageKey
+        );
+        const latestAssistantMessageAgeMs = latestAssistantMessage && latestAssistantMessage.created_at
+          ? Date.now() - Number(latestAssistantMessage.created_at) * 1000
+          : Infinity;
+        const shouldSpeakLatestAssistant = latestAssistantMessage && isNewAssistantMessage && (
+          previousBusy || (latestAssistantMessage.speak === true && latestAssistantMessageAgeMs < 30000)
+        );
+        const willSpeakLatestAssistant = Boolean(
+          shouldSpeakLatestAssistant &&
+          webAudio.tts_enabled &&
+          latestAssistantMessage
+        );
+        if (webAudio.tts_enabled && webAudio.tts_output === "browser" && (playThinking || willSpeakLatestAssistant)) startThinkingAudio();
+        else stopThinkingAudio();
+        setComposerLocked(showThinking);
+        renderMessages(lastServerMessages, showThinking);
+        lastObservedAssistantMessageKey = latestAssistantMessageKey;
+        messagesHydrated = true;
+        if (
+          willSpeakLatestAssistant
+        ) {
+          if (!webTtsUnlocked) {
+            deferWebTtsUntilUserGesture(latestAssistantMessage);
+          } else {
+            if (!(latestAssistantMessage.speak === true && showThinking)) {
+              playBrowserCommandAckSound();
+            }
+            playWebTts(latestAssistantMessage.text || "");
+          }
+        } else if (previousBusy && !showThinking && conversationEnabled) {
+          const delay = interruptConversationEnabled
+            ? 250
+            : webAudio.tts_blocked_by_backend && latestAssistantMessage
+            ? Math.min(10000, 1200 + String(latestAssistantMessage.text || "").length * 55)
+            : 250;
+          scheduleConversationRestart(delay);
+        }
+        const updated = data.updated_at ? new Date(data.updated_at * 1000).toLocaleTimeString() : "unknown";
+        if (Date.now() >= metaErrorUntil) {
+          setMeta(`updated ${updated} · uptime ${data.uptime_seconds || 0}s`);
+        }
+      } catch (error) {
+        setMeta(`disconnected: ${error}`, "error", 5000);
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 1500);
+
+    toastOk.addEventListener("click", hideToast);
+    toastOverlay.addEventListener("click", (event) => {
+      if (event.target === toastOverlay) hideToast();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && toastOverlay.classList.contains("open")) {
+        hideToast();
+      }
+    });
+
+    vncUrl.addEventListener("input", () => {
+      vncUrlDirty = true;
+    });
+    vncViewOnly.addEventListener("change", () => {
+      if (currentVncFrameUrl) {
+        disconnectVnc("reconnexion VNC...");
+        connectVnc({ force: true, save: true });
+      } else {
+        saveRemoteScreenUrl().catch((error) => {
+          console.warn("Could not save VNC view-only option", error);
+        });
+      }
+    });
+    vncConnect.addEventListener("click", () => connectVnc({ save: true }));
+    vncUrl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        connectVnc({ save: true });
+      }
+    });
+    vncFrame.addEventListener("load", () => {
+      if (currentVncFrameUrl) {
+        setVncStatus("connexion...");
+      }
+    });
+    vncFrame.addEventListener("error", () => {
+      window.clearTimeout(vncConnectTimer);
+      setVncStatus("hors ligne");
+    });
+    window.addEventListener("message", (event) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data || {};
+      if (data.type !== "lsa-vnc-status") return;
+      window.clearTimeout(vncConnectTimer);
+      setVncStatus(String(data.text || (data.connected ? "connecté" : "hors ligne")));
+    });
+
+    injectCommand.addEventListener("input", autoSizeComposer);
+    composerSpeaker.addEventListener("change", () => {
+      window.localStorage.setItem("lsaComposerSpeaker", composerSpeaker.value || "auto");
+    });
+    composerAttach.addEventListener("click", () => {
+      composerFile.click();
+    });
+    composerFile.addEventListener("change", async () => {
+      const file = composerFile.files && composerFile.files[0];
+      composerFile.value = "";
+      try {
+        await handleComposerFile(file);
+      } catch (error) {
+        setMeta(`file upload failed: ${error.message || error}`, "error", 7000);
+      }
+    });
+    injectCommand.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        submitComposerCommand();
+      }
+    });
+
+    injectCommand.addEventListener("beforeinput", (event) => {
+      if (event.inputType === "insertLineBreak" && !event.shiftKey) {
+        event.preventDefault();
+        submitComposerCommand();
+      }
+    });
+
+    injectForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await submitComposerCommand();
+    });
+
+    injectStop.addEventListener("click", async () => {
+      await unlockWebTtsAudio();
+      await cancelCommand();
+    });
+
+    webMic.addEventListener("click", async () => {
+      await unlockWebTtsAudio();
+      if (isRecording) {
+        stopWebRecording();
+      } else {
+        await startWebRecording();
+      }
+    });
+
+    webConversation.addEventListener("click", async () => {
+      await unlockWebTtsAudio();
+      setConversationEnabled(!conversationEnabled);
+    });
+
+    document.addEventListener("mousemove", (event) => {
+      lastPointer = { x: event.clientX, y: event.clientY };
+    });
+
+    sessionNew.addEventListener("click", async () => {
+      setSessionLoading(true, "Creating session");
+      try {
+        const response = await fetch("/api/session-context/new", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+        if (!response.ok) throw new Error(await response.text());
+        pendingCommandMessages = [];
+        localNoticeMessages = [];
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `new session failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    });
+
+    sessionList.addEventListener("mouseover", (event) => {
+      if (!canHoverSessionSummary()) return;
+      lastPointer = { x: event.clientX, y: event.clientY };
+      const row = event.target.closest(".session-row.has-summary");
+      if (!row || row.contains(event.relatedTarget)) return;
+      const sessionId = row.dataset.sessionId || "";
+      if (!sessionId) return;
+      scheduleSessionSummary(sessionId);
+    });
+
+    sessionList.addEventListener("mouseout", (event) => {
+      if (!canHoverSessionSummary()) return;
+      lastPointer = { x: event.clientX, y: event.clientY };
+      const row = event.target.closest(".session-row.has-summary");
+      if (!row || row.contains(event.relatedTarget)) return;
+      if (openSessionSummaryId === row.dataset.sessionId || sessionSummaryHoverId === row.dataset.sessionId) {
+        closeSessionSummaryAfterPointerCheck(row.dataset.sessionId);
+      }
+    });
+
+    sessionList.addEventListener("click", async (event) => {
+      const actionButton = event.target.closest(".session-menu-action");
+      const menuButton = event.target.closest(".session-menu-button");
+      const summaryButton = event.target.closest(".session-summary-button");
+      const mainButton = event.target.closest(".session-main");
+      const row = event.target.closest(".session-row");
+      if (!row || composerLocked) return;
+      const sessionId = row.dataset.sessionId;
+      if (!sessionId) return;
+
+      if (actionButton) {
+        const action = actionButton.dataset.sessionAction;
+        const title = row.dataset.sessionTitle || "Untitled session";
+        closeSessionMenus();
+        closeSessionSummary();
+        if (action === "rename") {
+          await renameSession(sessionId, title);
+        } else if (action === "clear") {
+          await clearSessionConversation(sessionId, title);
+        } else if (action === "save-context") {
+          await saveSessionContext(sessionId, title);
+        } else if (action === "delete") {
+          await deleteSession(sessionId, title);
+        }
+        return;
+      }
+
+      if (menuButton) {
+        const wasOpen = row.classList.contains("menu-open");
+        closeSessionMenus();
+        closeSessionSummary();
+        if (!wasOpen) {
+          openSessionMenuId = sessionId;
+          row.classList.add("menu-open");
+        }
+        return;
+      }
+
+      if (summaryButton) {
+        const wasOpen = openSessionSummaryId === sessionId && sessionSummaryPinned;
+        closeSessionSummary();
+        if (!wasOpen) openSessionSummary(sessionId, row, { pinned: true });
+        return;
+      }
+
+      if (!mainButton) return;
+      closeSessionMenus();
+      closeSessionSummary();
+      setSessionLoading(true, "Loading session");
+      try {
+        const response = await fetch("/api/session-context/select", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: sessionId })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        pendingCommandMessages = [];
+        localNoticeMessages = [];
+        await refresh();
+      } catch (error) {
+        metaEl.textContent = `session switch failed: ${error}`;
+      } finally {
+        setSessionLoading(false);
+      }
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest(".session-row") && !event.target.closest("#session-summary-popover")) {
+        closeSessionMenus();
+        closeSessionSummary();
+      }
+    });
+    document.addEventListener("pointerdown", () => {
+      unlockWebTtsAudioFromUserGesture();
+    }, { capture: true });
+    document.addEventListener("keydown", () => {
+      unlockWebTtsAudioFromUserGesture();
+    }, { capture: true });
+    sessionList.addEventListener("scroll", () => closeSessionSummary());
+    window.addEventListener("resize", () => {
+      if (openSessionSummaryId && sessionSummaryAnchor) {
+        placeSessionSummaryPopover(sessionSummaryAnchor);
+      }
+    });
+
+    settingsOpen.addEventListener("click", () => setSettingsOpen(true));
+    settingsClose.addEventListener("click", () => setSettingsOpen(false));
+    settingsOverlay.addEventListener("click", (event) => {
+      if (event.target === settingsOverlay) setSettingsOpen(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && settingsOverlay.classList.contains("open")) {
+        setSettingsOpen(false);
+      }
+    });
+    for (const tab of tabs) {
+      tab.addEventListener("click", () => activateTab(tab.id));
+    }
+
+	    llmProvider.addEventListener("change", () => {
+	      loadLlmOptions(llmProvider.value, "", selectedConnectivityMode());
+	    });
+
+    for (const input of connectivityModeInputs) {
+      input.addEventListener("change", () => {
+        const mode = selectedConnectivityMode();
+        loadLlmOptions(mode === "offline" ? "ollama" : "openai", "", mode);
+      });
+    }
+
+    envProfile.addEventListener("change", () => {
+      cloudApiLoaded = false;
+      switchEnvProfile(envProfile.value);
+    });
+
+	    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
+    elevenlabsVoice.addEventListener("change", syncTtsProviderControls);
+    openaiTtsVoice.addEventListener("change", syncTtsProviderControls);
+    for (const input of ttsOutputInputs) {
+      input.addEventListener("change", () => {
+        stopCurrentAudioSample();
+        stopCurrentSpeakerSample();
+        syncTtsProviderControls();
+      });
+    }
+    thinkingSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncAudioSampleControls();
+    });
+    listeningSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncAudioSampleControls();
+    });
+    wakeDetectedSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncAudioSampleControls();
+    });
+    startupLoaderSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncAudioSampleControls();
+    });
+    thinkingSoundPlay.addEventListener("click", () => toggleAudioSample(thinkingSound, thinkingSoundPlay));
+    listeningSoundPlay.addEventListener("click", () => toggleAudioSample(listeningSound, listeningSoundPlay, true));
+    wakeDetectedSoundPlay.addEventListener("click", () => toggleAudioSample(
+      wakeDetectedSound,
+      wakeDetectedSoundPlay,
+      true
+    ));
+    startupLoaderSoundPlay.addEventListener("click", () => toggleAudioSample(
+      startupLoaderSound,
+      startupLoaderSoundPlay,
+      true
+    ));
+    for (const input of sttInputInputs) {
+      input.addEventListener("change", syncSttInputControls);
+    }
+    browserAudioInput.addEventListener("change", () => {
+      stopBrowserAudioTest();
+      selectedBrowserAudioInput = browserAudioInput.value;
+      window.localStorage.setItem("browser-audio-input", selectedBrowserAudioInput);
+      if (conversationEnabled) {
+        stopConversationRecording(true, true);
+        scheduleConversationRestart(0);
+      }
+    });
+    browserAudioTest.addEventListener("click", toggleBrowserAudioTest);
+    backendAudioInput.addEventListener("change", closeBackendAudioDiagnostic);
+    backendAudioTest.addEventListener("click", toggleBackendAudioTest);
+    browserAudioOutput.addEventListener("change", async () => {
+      selectedBrowserAudioOutput = browserAudioOutput.value;
+      window.localStorage.setItem("browser-audio-output", selectedBrowserAudioOutput);
+      try {
+        await applyBrowserAudioOutput(thinkingAudio);
+        await applyBrowserAudioOutput(currentWebTtsAudio);
+        await applyBrowserAudioOutput(currentSpeakerSample?.audio);
+      } catch (error) {
+        metaEl.textContent = `browser audio output unavailable: ${error}`;
+      }
+    });
+    browserAudioRefresh.addEventListener("click", () => loadBrowserAudioDevices(true));
+    sessionContextSize.addEventListener("input", () => {
+      syncSessionContextSizeLabel();
+      renderMessages(lastServerMessages, composerLocked || hasPendingCommandMessages());
+    });
+    mcpAgentMaxSteps.addEventListener("input", syncMcpAgentMaxStepsLabel);
+    for (const input of mcpToolRoutingInputs) {
+      input.addEventListener("change", syncMcpRoutingEditors);
+    }
+    setSelectedMcpAdminRoute(window.localStorage.getItem("mcp-admin-route") || "proxy");
+    for (const input of mcpAdminRouteInputs) {
+      input.addEventListener("change", () => {
+        const route = selectedMcpAdminRoute();
+        window.localStorage.setItem("mcp-admin-route", route);
+        mcpServersSignature = "";
+        renderMcpServers(lastMcpServers);
+      });
+    }
+    for (const input of interruptConversationInputs) {
+      input.addEventListener("change", () => {
+        interruptConversationEnabled = selectedInterruptConversationEnabled();
+      });
+    }
+    speakerThreshold.addEventListener("input", syncSpeakerLabels);
+    speakerMargin.addEventListener("input", syncSpeakerLabels);
+    cloudApiDetails.addEventListener("toggle", () => {
+      if (cloudApiDetails.open) loadCloudApiStatus();
+    });
+    cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
+
+    llmSave.addEventListener("click", async () => {
+      const provider = llmProvider.value;
+      const model = llmModel.value;
+      const sessionContextSizeValue = Number(sessionContextSize.value || 0);
+      const mcpAgentMaxStepsValue = Number(mcpAgentMaxSteps.value || 20);
+      const mcpToolRoutingEnabled = selectedMcpToolRoutingEnabled();
+      const interruptConversation = selectedInterruptConversationEnabled();
+      const wakeWordValue = wakeWord.value.trim();
+	      const sttPromptValue = sttPromptEl.value.trim();
+	      const systemPromptValue = assistantSystemPromptEl.value.trim();
+      const connectivityModeValue = selectedConnectivityMode();
+      const cloudTtsProviderValue = cloudTtsProvider.value;
+      const ttsOutputValue = selectedTtsOutput();
+      const sttInputValue = selectedSttInput();
+      const sttLanguageValue = sttLanguage.value || i18nPayload.locale || "fr";
+      const backendAudioInputDevice = backendAudioInput.value;
+      const backendAudioInputGainValue = Number(backendAudioInputGain.value || 1);
+      const backendAudioOutputDevice = backendAudioOutput.value;
+      const backendAudioOutputPanValue = Number(backendAudioOutputPan.value || 0);
+      const backendAudioMonitorModeValue = selectedBackendAudioMonitorMode();
+      const backendAudioMonitorVolumeValue = Number(backendAudioMonitorVolume.value || 1);
+      const voiceId = elevenlabsVoice.value;
+      const thinkingSoundFile = thinkingSound.value;
+      const listeningSoundFile = listeningSound.value;
+      const wakeDetectedSoundFile = wakeDetectedSound.value;
+      const startupLoaderSoundFile = startupLoaderSound.value;
+      const commandAckSoundFile = commandAckSound.value;
+      const openAiTtsVoiceValue = openaiTtsVoice.value;
+      const openAiTtsSpeedValue = Number(openaiTtsSpeed.value || 1);
+      const webTtsVolumeValue = Number(webTtsVolume.value || 1);
+      const backendTtsVolumeValue = Number(backendTtsVolume.value || 1);
+      const vadSpeechThresholdValue = Number(vadSpeechThreshold.value || 0.5);
+      const vadNegativeThresholdValue = Number(vadNegativeThreshold.value || 0.35);
+      const vadMinSpeechMsValue = Number(vadMinSpeechMs.value || 120);
+      const vadMinSilenceMsValue = Number(vadMinSilenceMs.value || 650);
+      const vadSpeechPadMsValue = Number(vadSpeechPadMs.value || 100);
+      const vadMaxSpeechSecondsValue = Number(vadMaxSpeechSeconds.value || 8);
+      const backendWakeWordModelPathsValue = backendWakeWordModelPaths.value.trim();
+      const backendWakeWordModelNamesValue = backendWakeWordModelNames.value.trim();
+      const backendWakeWordThresholdValue = Number(backendWakeWordThreshold.value || 0.5);
+      const backendWakeWordPreRollMsValue = Number(backendWakeWordPreRollMs.value || 1600);
+      const backendWakeWordCooldownMsValue = Number(backendWakeWordCooldownMs.value || 1200);
+      const backendWakeWordVadThresholdValue = Number(backendWakeWordVadThreshold.value || 0);
+      const speakerRecognitionEnabledValue = selectedSpeakerRecognitionEnabled();
+      const speakerBackendValue = speakerBackend.value || "resemblyzer";
+      const speakerThresholdValue = Number(speakerThreshold.value || 0.75);
+      const speakerMarginValue = Number(speakerMargin.value || 0.10);
+      const speakerProfilesValue = collectSpeakerProfiles();
+      if (!provider) return;
+
+      llmSave.disabled = true;
+      llmMessage.textContent = tr("saving", "Saving...");
+      try {
+        const response = await fetch("/api/llm-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider,
+            model,
+            session_context_size: sessionContextSizeValue,
+            mcp_agent_max_steps: mcpAgentMaxStepsValue,
+            mcp_tool_routing_enabled: mcpToolRoutingEnabled,
+            interrupt_conversation_enabled: interruptConversation,
+            connectivity_mode: connectivityModeValue,
+            cloud_tts_provider: cloudTtsProviderValue,
+            tts_output: ttsOutputValue,
+            stt_input: sttInputValue,
+            stt_language: sttLanguageValue,
+            backend_audio_input_device: backendAudioInputDevice,
+            backend_audio_input_gain: backendAudioInputGainValue,
+            backend_audio_output_device: backendAudioOutputDevice,
+            backend_audio_output_pan: backendAudioOutputPanValue,
+            backend_audio_monitor_mode: backendAudioMonitorModeValue,
+            backend_audio_monitor_volume: backendAudioMonitorVolumeValue,
+            wake_word: wakeWordValue,
+            stt_prompt: sttPromptValue,
+            system_prompt: systemPromptValue,
+            voice_id: voiceId,
+            thinking_sound_file: thinkingSoundFile,
+            listening_sound_file: listeningSoundFile,
+            wake_detected_sound_file: wakeDetectedSoundFile,
+            startup_loader_sound_file: startupLoaderSoundFile,
+            command_ack_sound_file: commandAckSoundFile,
+            openai_tts_voice: openAiTtsVoiceValue,
+            openai_tts_speed: openAiTtsSpeedValue,
+            web_tts_volume: webTtsVolumeValue,
+            backend_tts_volume: backendTtsVolumeValue,
+            vad_speech_threshold: vadSpeechThresholdValue,
+            vad_negative_threshold: vadNegativeThresholdValue,
+            vad_min_speech_ms: vadMinSpeechMsValue,
+            vad_min_silence_ms: vadMinSilenceMsValue,
+            vad_speech_pad_ms: vadSpeechPadMsValue,
+            vad_max_speech_seconds: vadMaxSpeechSecondsValue,
+            backend_wake_word_model_paths: backendWakeWordModelPathsValue,
+            backend_wake_word_model_names: backendWakeWordModelNamesValue,
+            backend_wake_word_threshold: backendWakeWordThresholdValue,
+            backend_wake_word_pre_roll_ms: backendWakeWordPreRollMsValue,
+            backend_wake_word_cooldown_ms: backendWakeWordCooldownMsValue,
+            backend_wake_word_vad_threshold: backendWakeWordVadThresholdValue,
+            speaker_recognition_enabled: speakerRecognitionEnabledValue,
+            speaker_backend: speakerBackendValue,
+            speaker_threshold: speakerThresholdValue,
+            speaker_margin: speakerMarginValue,
+            speaker_profiles: speakerProfilesValue
+          })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        llmMessage.textContent = data.message || tr("saved", "Saved.");
+        cloudApiLoaded = false;
+        setEnvironmentLoading(true);
+        markConfigClean();
+        llmControlsInitialized = false;
+        if ((data.stt_language || sttLanguageValue) !== i18nPayload.locale) {
+          window.setTimeout(() => window.location.reload(), 250);
+          return;
+        }
+        await refresh();
+      } catch (error) {
+        setEnvironmentLoading(false);
+        llmMessage.textContent = trf("save_failed", "Save failed: {error}", { error });
+      } finally {
+        llmSave.disabled = !llmProvider.value;
+      }
+    });
+
+    openaiTtsSpeed.addEventListener("input", syncOpenAiSpeedLabel);
+    webTtsVolume.addEventListener("input", syncTtsVolumeLabels);
+    backendTtsVolume.addEventListener("input", syncTtsVolumeLabels);
+    backendAudioMonitorVolume.addEventListener("input", syncBackendAudioMonitorVolumeLabel);
+    backendAudioInputGain.addEventListener("input", syncBackendAudioInputGainLabel);
+    for (const input of backendAudioMonitorModeInputs) {
+      input.addEventListener("change", () => {
+        syncBackendAudioMonitorControls();
+        syncAudioDeviceVisibility();
+      });
+    }
+    backendAudioOutputPan.addEventListener("input", syncBackendAudioOutputPanLabel);
+    commandAckSound.addEventListener("change", () => {
+      stopCurrentAudioSample();
+      syncCommandAckSoundControls();
+    });
+    commandAckSoundPlay.addEventListener("click", () => toggleAudioSample(commandAckSound, commandAckSoundPlay));
+    wakeWord.addEventListener("input", () => {
+      syncBackendAudioMonitorControls();
+      syncBackendWakeWordControls();
+      syncAudioDeviceVisibility();
+    });
+    for (const control of vadControls) {
+      control.addEventListener("input", syncVadLabels);
+    }
+    backendWakeWordModelSelect.addEventListener("change", syncWakeWordModelTextFromSelect);
+    backendWakeWordModelPaths.addEventListener("input", syncWakeWordModelSelectFromText);
+    for (const control of backendWakeWordControls) {
+      control.addEventListener("input", syncBackendWakeWordLabels);
+    }
+    for (const button of vadPresetButtons) {
+      button.addEventListener("click", () => applyVadPreset(button.dataset.vadPreset || ""));
+    }
+    ttsTest.addEventListener("click", testSelectedTtsVoice);
+    loadBrowserAudioDevices(false);
