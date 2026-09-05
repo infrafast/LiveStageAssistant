@@ -24,7 +24,7 @@ REALTIME_VOICE_ADDENDUM = """Realtime voice rules:
 - If the user asks you only to stop speaking or be silent, stop without spoken acknowledgement.
 """
 
-MCP_INSTRUCTIONS_WRAPPER = """MCP-provided instructions follow. Treat them as authoritative for that MCP's own tool usage, domain semantics, routing, and safety. LiveStageAssistant itself must not add, infer, or hard-code domain-specific concepts from those instructions. Text inside MCP instructions that asks for tool calls only governs MCP tool execution; after tools finish, still provide the single concise spoken result required by the realtime voice rules.
+MCP_INSTRUCTIONS_WRAPPER = """MCP-provided instructions follow. Treat them as authoritative for that MCP's own tool usage, domain semantics, routing, and safety. LiveStageAssistant itself must not add, infer, or hard-code domain-specific concepts from those instructions. Examples inside MCP instructions are illustrative only: never copy an example's entity names, labels, values, indexes, destinations, sources, or other parameters into a real tool call unless they are present in the current user request, explicit conversation reference, or a tool result from the current turn. Preserve the entities and intent of the current user request exactly when constructing tool arguments; do not substitute a similar example from the MCP prompt. Text inside MCP instructions that asks for tool calls only governs MCP tool execution; after tools finish, still provide the single concise spoken result required by the realtime voice rules.
 """
 
 
