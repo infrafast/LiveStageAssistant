@@ -73,7 +73,6 @@ class OpenAIRealtimeAdapterTests(unittest.TestCase):
                     "authorization": "secret-token",
                     "headers": {"X-Test": "value"},
                     "allowed_tools": ["read_main", "read_channel"],
-                    "server_description": "Stage mixer MCP",
                 }
             ],
         )
