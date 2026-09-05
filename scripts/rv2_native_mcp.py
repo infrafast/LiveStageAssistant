@@ -3,8 +3,11 @@
 
 This runner is intentionally native-only: OpenAI Realtime talks directly to one
 remote HTTPS MCP server. It never starts or falls back to the LSA STDIO bridge.
-Use --discover-only first; that mode requires approval for every MCP call so no
-stage-control tool can execute accidentally while tool discovery is inspected.
+
+Live/default behavior is permissive: all MCP tools are exposed with no approval
+requirement. Optional diagnostic permission modes mirror the future per-MCP GUI
+policy: open, approval, restricted. --discover-only remains a safe diagnostic
+mode that blocks execution by requiring approval while the runner never approves.
 """
 
 from __future__ import annotations
@@ -35,8 +38,8 @@ RV2_METRICS_PREFIX = "RV2_METRICS "
 DEFAULT_INSTRUCTIONS = """You are Live Stage Assistant in the RV2A native remote MCP validation.
 Follow the language of the user's latest utterance. If unclear, default to English.
 Keep spoken replies concise unless the user explicitly asks for detail.
-Use only the remote MCP server and tools exposed in this session. Never invent a tool result.
-Never claim an external action succeeded unless the MCP result confirms it.
+Use the remote MCP server and tools exposed in this session whenever needed.
+Never invent a tool result and never claim an external action succeeded unless the MCP result confirms it.
 When interrupted, abandon the previous response and handle only the new utterance.
 If the user only asks you to stop speaking or be silent, stop without a spoken acknowledgement.
 """
@@ -54,10 +57,7 @@ def resolve_path(value: str, env_file: Path) -> Path:
 
 
 def expand_mapping(values: dict) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for key, value in values.items():
-        result[str(key)] = os.path.expandvars(str(value))
-    return result
+    return {str(key): os.path.expandvars(str(value)) for key, value in values.items()}
 
 
 def split_authorization(headers: dict[str, str]) -> tuple[str, dict[str, str]]:
@@ -92,6 +92,19 @@ def load_config_entry(args, env_file: Path) -> tuple[Path, dict]:
     return config_path, entry
 
 
+def permission_policy(args) -> tuple[tuple[str, ...], str]:
+    if args.discover_only:
+        return (), "always"
+    if args.permission_mode == "open":
+        return (), "never"
+    if args.permission_mode == "approval":
+        return (), "always"
+    allowed = tuple(dict.fromkeys(tool.strip() for tool in args.allow_tool if tool.strip()))
+    if not allowed:
+        raise RuntimeError("permission mode 'restricted' requires at least one --allow-tool")
+    return allowed, "never"
+
+
 def load_native_server(args, env_file: Path) -> RealtimeMCPServer:
     config_path, entry = load_config_entry(args, env_file)
     if entry:
@@ -120,14 +133,14 @@ def load_native_server(args, env_file: Path) -> RealtimeMCPServer:
         if not authorization:
             raise RuntimeError(f"environment variable {args.mcp_authorization_env!r} is empty")
 
+    allowed_tools, require_approval = permission_policy(args)
     return RealtimeMCPServer(
         label=label,
         url=url,
         authorization=authorization,
         headers=headers,
-        allowed_tools=tuple(args.allow_tool),
-        require_approval="always" if args.discover_only else "never",
-        description="LiveStageAssistant RV2A native remote MCP validation server",
+        allowed_tools=allowed_tools,
+        require_approval=require_approval,
     )
 
 
@@ -162,6 +175,7 @@ def print_mcp_event(event, call_started: dict[str, float]) -> None:
             flush=True,
         )
         return
+
     if event.type == "mcp_call":
         call_id = str(item.get("id") or item.get("call_id") or "")
         now = time.perf_counter()
@@ -178,6 +192,7 @@ def print_mcp_event(event, call_started: dict[str, float]) -> None:
                     "server_label": item.get("server_label"),
                     "name": item.get("name"),
                     "arguments": item.get("arguments"),
+                    "output": item.get("output"),
                     "approval_request_id": item.get("approval_request_id"),
                     "error": item.get("error"),
                     "duration_ms": elapsed,
@@ -188,9 +203,10 @@ def print_mcp_event(event, call_started: dict[str, float]) -> None:
             flush=True,
         )
         return
+
     if event.type == "mcp_approval_request":
         print(
-            "RV2 MCP approval blocked "
+            "RV2 MCP approval requested "
             + json.dumps(
                 {
                     "phase": phase,
@@ -205,7 +221,9 @@ def print_mcp_event(event, call_started: dict[str, float]) -> None:
             flush=True,
         )
         return
-    print(f"RV2 MCP event: {event.data}", flush=True)
+
+    raw = event.data.get("event") or event.data
+    print("RV2 MCP event " + json.dumps(raw, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
 async def wait_until_ready(engine: OpenAIRealtimeEngine) -> None:
@@ -240,6 +258,12 @@ async def event_loop(engine, playback_queue, interrupted_responses, first_audio_
         elif event.type == "speech_stopped":
             speech_stopped_at = now
             print("RV2 speech stopped", flush=True)
+        elif event.type == "user_transcript_done":
+            text = str(event.data.get("text") or "").strip()
+            if text:
+                print(f"Utilisateur: {text}", flush=True)
+        elif event.type == "user_transcript_error":
+            print("RV2 user transcription error: " + json.dumps(event.data, ensure_ascii=False), flush=True)
         elif event.type == "response_started":
             response = event.data.get("response") or {}
             current_response_id = str(response.get("id") or "")
@@ -312,6 +336,7 @@ async def run(args) -> int:
     print("RV2 mode: native only", flush=True)
     print(f"RV2 MCP server: label={server.label} url={server.url}", flush=True)
     print(f"RV2 MCP auth: {'configured' if server.authorization or server.headers else 'none'}", flush=True)
+    print(f"RV2 permission mode: {'discovery' if args.discover_only else args.permission_mode}", flush=True)
     print(f"RV2 allowed tools: {list(server.allowed_tools) if server.allowed_tools else '<all discovered>'}", flush=True)
     print(f"RV2 approval: {server.require_approval}", flush=True)
 
@@ -353,8 +378,12 @@ async def run(args) -> int:
         if args.discover_only:
             print("Discovery-only safety is active: every MCP call requires approval and this runner never approves calls.", flush=True)
             print("Ask which tools are available, but do not request an equipment action. Ctrl+C to stop.", flush=True)
+        elif args.permission_mode == "open":
+            print("Live permission policy: all discovered MCP tools are available without per-call approval.", flush=True)
+        elif args.permission_mode == "approval":
+            print("Approval policy active: MCP calls require approval; this validation runner does not auto-approve them.", flush=True)
         else:
-            print("Only the explicitly allowed native MCP tools should be used. Ctrl+C to stop.", flush=True)
+            print("Restricted policy active: only the explicitly allowed MCP tools are available.", flush=True)
 
         tasks = [
             asyncio.create_task(rv1.capture_loop(engine, input_stream, input_rate, input_channels, input_frames, stop_event), name="rv2-capture"),
@@ -389,20 +418,19 @@ def main() -> int:
     parser.add_argument("--env-file", default=".env.online")
     parser.add_argument("--model", default="gpt-realtime-2.1-mini")
     parser.add_argument("--voice", default="marin")
-    parser.add_argument("--duration", type=float, default=120.0)
+    parser.add_argument("--duration", type=float, default=180.0)
     parser.add_argument("--mcp-config", default=None, help="MCP config override; normally use MCP_CONFIG from the env profile")
     parser.add_argument("--mcp-server", default="mixer", help="server key in MCP_CONFIG")
     parser.add_argument("--mcp-label", default="", help="provider-facing label override")
     parser.add_argument("--mcp-url", default="", help="native HTTPS diagnostic override, e.g. the Funnel /mcp URL")
     parser.add_argument("--mcp-header", action="append", default=[], help="extra remote MCP header NAME=VALUE; repeatable")
     parser.add_argument("--mcp-authorization-env", default="", help="read native MCP authorization token from this environment variable")
-    parser.add_argument("--allow-tool", action="append", default=[], help="allow exactly this MCP tool; repeatable")
-    parser.add_argument("--discover-only", action="store_true", help="require approval for every MCP call; runner never approves")
+    parser.add_argument("--permission-mode", choices=("open", "approval", "restricted"), default="open", help="per-MCP permission policy; open is the live default")
+    parser.add_argument("--allow-tool", action="append", default=[], help="tool allow-list entry for --permission-mode restricted; repeatable")
+    parser.add_argument("--discover-only", action="store_true", help="safe discovery mode: require approval for every MCP call; runner never approves")
     parser.add_argument("--input-device", default=None, help="diagnostic override; normally use BACKEND_AUDIO_INPUT_DEVICE")
     parser.add_argument("--output-device", default=None, help="diagnostic override; normally use BACKEND_AUDIO_OUTPUT_DEVICE")
     args = parser.parse_args()
-    if not args.discover_only and not args.allow_tool:
-        parser.error("non-discovery RV2A requires at least one --allow-tool for safety")
     try:
         return asyncio.run(run(args))
     except KeyboardInterrupt:
