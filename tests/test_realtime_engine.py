@@ -111,6 +111,9 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(mcp_instructions, config.instructions)
         self.assertIn("MCP-provided instructions follow", config.instructions)
         self.assertIn("must not add, infer, or hard-code domain-specific concepts", config.instructions)
+        self.assertIn("Examples inside MCP instructions are illustrative only", config.instructions)
+        self.assertIn("never copy an example's entity names, labels, values, indexes, destinations, sources", config.instructions)
+        self.assertIn("Preserve the entities and intent of the current user request exactly", config.instructions)
         self.assertIn("Do not offer extra help", config.instructions)
         self.assertIn("one short confirmation sentence", config.instructions)
 
@@ -131,6 +134,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(native_instructions, config.instructions)
         self.assertIn("Global LSA prompt.", config.instructions)
         self.assertIn("Native validation prompt.", config.instructions)
+        self.assertIn("Examples inside MCP instructions are illustrative only", config.instructions)
         self.assertIn("one short confirmation sentence", config.instructions)
 
 
