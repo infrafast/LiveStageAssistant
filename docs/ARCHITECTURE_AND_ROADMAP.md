@@ -169,7 +169,7 @@ This section is the authoritative implementation backlog for architecture-level 
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with write/QLC validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C auto native-first fallback is implemented and awaiting Pi5 validation.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with write/QLC validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C auto native-first path and prompt parity are validated with `gpt-realtime-2.1`; the final forced HTTPS-down -> STDIO fallback retest remains pending.
 
 **Goal:** add a selectable low-latency full-duplex realtime voice path alongside the existing classic STT -> LLM -> TTS path, without decommissioning classic, while preserving MCP transport flexibility, wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -449,11 +449,11 @@ This milestone implements and validates `native` semantics first. No STDIO fallb
 - [x] measure native MCP first-call/execution/final-response latency;
 - [x] validate production permission default: all tools available, `require_approval=never`;
 - [~] on native failure, fail clearly and do **not** attempt STDIO in this mode;
-- [ ] perform a controlled XMSeries write after read-only validation;
+- [x] perform a controlled XMSeries write after read-only validation;
 - [ ] validate QLCPlus-MCP as a second fixture without QLC-specific realtime logic;
 - [~] record native MCP metrics and failure modes.
 
-Validation note: Pi5 tests on 2026-09-05 connected `gpt-realtime-2.1-mini` to XMSeries through `https://raspberrypi-1.tail70348.ts.net/xm/mcp`, discovered the remote MCP, executed `osc_get_mixer_status` without approval, received the real XR16/XR16RACKLIVE result and produced a single follow-up spoken answer after the native tool completed. Representative native MCP execution was about 0.85 s and first useful post-tool playback about 1.87 s after user speech end in the captured validation turn.
+Validation note: Pi5 tests on 2026-09-05 connected both `gpt-realtime-2.1-mini` and `gpt-realtime-2.1` to XMSeries through `https://raspberrypi-1.tail70348.ts.net/xm/mcp`. The remote MCP prompt was loaded into realtime session instructions, provider-native tool discovery completed, live XR16 reads succeeded, and controlled bus-fader writes succeeded. `gpt-realtime-2.1` followed the MCP routing prompt reliably across repeated `retour de Claude` writes, while the mini model showed materially weaker multi-tool prompt adherence and is not the functional reference for complex MCP routing.
 
 Exit: native-only realtime MCP is reliable for repeated read operations and controlled writes through authenticated HTTPS/Funnel, with no hidden bridge fallback and no domain-specific realtime code.
 
@@ -482,6 +482,8 @@ This milestone implements the fixed `auto` semantics: native first, STDIO fallba
 
 - [~] apply `auto` independently per MCP server; single-server validation runner implemented, canonical per-server config wiring remains RV2D;
 - [x] attempt native remote MCP first and keep the STDIO bridge stopped while native is healthy;
+- [x] load the MCP-owned prompt for the native path before session start, using MCP prompt discovery with generic fallback compatibility, without adding domain logic to LSA;
+- [x] preserve MCP-owned prompt context on the STDIO/bridge path;
 - [x] on clear pre-dispatch native failure, initialize and switch to the LSA STDIO/bridge path;
 - [x] allow read-only fallback after native dispatch when MCP metadata explicitly marks the tool `readOnlyHint=true`;
 - [x] allow write fallback only when non-execution of the native write is explicitly established by policy input;
@@ -489,11 +491,14 @@ This milestone implements the fixed `auto` semantics: native first, STDIO fallba
 - [~] retain the same per-server permission policy across native -> STDIO fallback; open/restricted are wired, approval completion remains RV2D;
 - [x] log native attempt, failure classification, fallback decision and selected transport;
 - [x] add metrics identifying native/stdio execution in auto mode;
+- [x] suppress low-value native MCP argument delta events from normal logs while retaining completed JSON arguments, tool name, output/error and duration;
 - [~] test network/discovery failure before dispatch, authentication rejection, explicit tool rejection, timeout before/after dispatch and ambiguous response-loss cases; unit policy coverage is implemented, Pi fault validation pending;
 - [~] prove no duplicate control writes occur during fallback; ambiguous mutation replay is blocked by unit policy and Pi fault validation remains pending;
 - [~] compare native versus STDIO on equivalent read-only operations for latency/correctness; separate Pi measurements exist, direct auto-session comparison pending;
 - [ ] compare classic versus realtime tool selection/arguments on a representative corpus;
 - [ ] prove another arbitrary MCP can be used without modifying the realtime engine/provider adapter.
+
+Validation note: on Pi5, AUTO with HTTPS healthy stayed provider-native and never started the bridge. With `gpt-realtime-2.1`, repeated `retour de Claude` commands resolved `Claude` in the MCP-defined bus family, used the resolved bus index in the following write, and produced concise confirmations. Earlier `gpt-realtime-2.1-mini` runs showed materially weaker multi-tool adherence even though the MCP prompt was demonstrably loaded and readable; the full model is therefore the current functional reference for RV2C validation. A final forced HTTPS-down -> STDIO fallback retest with the full model remains required before closing RV2C.
 
 Implementation note: `scripts/rv2_auto_mcp.py` starts provider-native MCP first and deliberately defers creation/session startup of `RealtimeMCPBridge` until a fallback decision is made. Safe fallback can replay the last provider transcription through the new provider-neutral `send_text()` contract after switching sessions. Post-dispatch mutation/unknown failures return `fallback=false` unless a future signal explicitly proves non-execution.
 
@@ -519,6 +524,25 @@ This milestone aligns `.env`, MCP JSON, runtime and GUI with the validated nativ
 - [ ] document configuration examples in `.env.example`/README as appropriate without creating another source of truth.
 
 Exit: `.env`, MCP JSON, runtime and GUI expose one coherent configuration model with independent transport and permission controls for every MCP server.
+
+#### RV2E - Realtime MCP latency and tool-call efficiency
+
+Goal: reduce end-to-end latency of realtime MCP turns without encoding domain-specific shortcuts in LSA.
+
+Observed baseline: Pi5 AUTO/native tests with `gpt-realtime-2.1` produced correct repeated control writes, but the model frequently called an additional status/health tool before the target-resolution/write sequence. On representative turns this contributed to final spoken-response latency of roughly 7-10 seconds, far above the no-tools RV1 baseline.
+
+- [ ] establish a representative MCP command corpus and measure T2->T4, T4->T6 and T2->T8 separately;
+- [ ] quantify redundant/non-essential tool calls per turn and their latency/cost contribution;
+- [ ] compare `gpt-realtime-2.1` and future suitable realtime models on tool-selection quality, latency and cost before choosing a production default;
+- [ ] determine whether redundant calls originate from MCP prompt ordering, tool descriptions/schema, provider-native MCP behavior, model behavior or session/tool-result sequencing;
+- [ ] optimize prompt/schema/tool metadata only at the correct ownership layer: MCP-owned domain semantics stay in the MCP, realtime-medium behavior stays in LSA;
+- [ ] keep LSA MCP-agnostic: never hard-code tool names or domain-specific skip rules merely to reduce latency;
+- [ ] avoid speculative tool-result caching for current live state unless the owning MCP explicitly exposes safe cache/freshness semantics;
+- [ ] verify that latency optimizations do not reduce target-resolution safety, write verification, fallback safety or interruption behavior;
+- [ ] benchmark native versus STDIO/bridge after optimization using equivalent commands;
+- [ ] define acceptable production latency targets from measured Pi5 evidence and record p50/p95.
+
+Exit: representative realtime MCP commands perform only the tools required by the owning MCP policy, with materially reduced p50/p95 spoken-response latency and no loss of safety or domain neutrality.
 
 ### RV3 - Optional wake word and realtime session lifecycle
 
@@ -719,8 +743,9 @@ Do not merge realtime runtime code into `main` until optional wake behavior, MCP
 
 1. **RV0 — complete.**
 2. **RV1 — complete.**
-3. **RV2A — partially validated:** native XMSeries discovery/read/final follow-up is validated; complete native controlled-write and QLCPlus fixture validation before closing RV2A.
+3. **RV2A — partially validated:** native XMSeries discovery/read and controlled writes are validated with `gpt-realtime-2.1`; QLCPlus fixture validation remains before closing RV2A.
 4. **RV2B — validated:** realtime function tools execute through the existing LSA MCP client/STDIO path with native MCP disabled; Pi5 read and controlled write are validated.
-5. **RV2C — implementation ready for Pi validation:** validate native success with bridge never started, then force a clear native pre-dispatch discovery failure and verify automatic STDIO fallback; preserve no-replay behavior for ambiguous writes.
+5. **RV2C — final fallback retest:** keep `gpt-realtime-2.1` as the functional reference, force a clear native pre-dispatch discovery failure by making the HTTPS endpoint unavailable, verify automatic STDIO fallback, then execute an equivalent named-target write through the bridge. Preserve no-replay behavior for ambiguous writes.
 6. **RV2D:** reconcile `.env`, canonical MCP JSON and GUI. Add per-MCP transport dropdown (`auto/native/stdio`) and per-MCP permission dropdown (`Open` default / `Require approval` / `Restricted tools`).
-7. Continue to RV3 only after RV2A/RV2B/RV2C/RV2D semantics, migration and safety are validated.
+7. **RV2E — latency/tool efficiency:** after RV2 transport semantics are stable, eliminate non-essential tool calls and reduce realtime MCP p50/p95 without adding MCP/domain-specific shortcuts to LSA.
+8. Continue to RV3 only after RV2A/RV2B/RV2C/RV2D semantics, migration and safety are validated; RV2E may proceed in parallel once transport correctness is frozen.
