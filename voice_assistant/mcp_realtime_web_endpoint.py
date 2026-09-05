@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .mcp_config_web import update_web_mcp_policy
+try:
+    from .mcp_config_web import update_web_mcp_policy
+except ImportError:  # pragma: no cover - direct script fallback
+    from mcp_config_web import update_web_mcp_policy
 
 
 def mcp_config_path_from_snapshot(snapshot: Mapping[str, Any]) -> Path:
