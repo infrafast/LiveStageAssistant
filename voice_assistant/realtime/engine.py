@@ -106,6 +106,10 @@ class RealtimeEngine(ABC):
         """Send one 24 kHz mono PCM16 audio chunk to the active provider."""
 
     @abstractmethod
+    async def send_text(self, text: str, *, create_response: bool = True) -> None:
+        """Inject one user text turn, optionally asking the provider to respond."""
+
+    @abstractmethod
     async def commit_audio(self) -> None:
         """Commit buffered input audio when provider-side turn detection is disabled."""
 
