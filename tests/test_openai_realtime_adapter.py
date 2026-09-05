@@ -2,7 +2,13 @@ import base64
 import json
 import unittest
 
-from voice_assistant.realtime.engine import RealtimeEngineConfig, RealtimeEngineState, RealtimeEvent, RealtimeMCPServer
+from voice_assistant.realtime.engine import (
+    RealtimeEngineConfig,
+    RealtimeEngineState,
+    RealtimeEvent,
+    RealtimeFunctionTool,
+    RealtimeMCPServer,
+)
 from voice_assistant.realtime.openai_realtime import OpenAIRealtimeEngine
 
 
@@ -101,6 +107,51 @@ class OpenAIRealtimeAdapterTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_session_tools_translates_bridge_functions_without_native_mcp(self):
+        engine = OpenAIRealtimeEngine(
+            RealtimeEngineConfig(
+                provider="openai",
+                model="gpt-realtime-2.1-mini",
+                function_tools=(
+                    RealtimeFunctionTool(
+                        name="mcp__mixer__read_main",
+                        description="Read main level",
+                        parameters={"type": "object", "properties": {}},
+                    ),
+                ),
+            ),
+            api_key="test-key",
+        )
+        self.assertEqual(
+            engine._session_tools(),
+            [
+                {
+                    "type": "function",
+                    "name": "mcp__mixer__read_main",
+                    "description": "Read main level",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        )
+        self.assertFalse(any(tool.get("type") == "mcp" for tool in engine._session_tools()))
+
+    def test_translates_function_call_arguments_done(self):
+        event = self.engine._translate_event(
+            {
+                "type": "response.function_call_arguments.done",
+                "response_id": "resp_bridge",
+                "item_id": "item_bridge",
+                "call_id": "call_123",
+                "name": "mcp__mixer__read_main",
+                "arguments": "{\"target\":\"main\"}",
+            }
+        )
+        self.assertEqual(event.type, "tool_call")
+        self.assertEqual(event.data["call_id"], "call_123")
+        self.assertEqual(event.data["name"], "mcp__mixer__read_main")
+        self.assertEqual(event.data["arguments"], "{\"target\":\"main\"}")
+        self.assertEqual(event.data["response_id"], "resp_bridge")
 
     def test_translates_user_input_transcript(self):
         event = self.engine._translate_event(
