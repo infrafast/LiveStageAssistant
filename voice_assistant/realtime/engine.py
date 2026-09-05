@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from .prompts import compose_realtime_instructions
+
 
 class RealtimeEngineState(str, Enum):
     STOPPED = "stopped"
@@ -77,6 +79,18 @@ class RealtimeEngineConfig:
             raise ValueError("realtime model is required")
         if not self.voice.strip():
             raise ValueError("realtime voice is required")
+        unique_contexts: list[str] = []
+        seen: set[str] = set()
+        for tool in self.function_tools:
+            context = str(tool.context_instructions or "").strip()
+            if context and context not in seen:
+                unique_contexts.append(context)
+                seen.add(context)
+        object.__setattr__(
+            self,
+            "instructions",
+            compose_realtime_instructions(self.instructions, "\n\n".join(unique_contexts)),
+        )
 
 
 @dataclass(frozen=True)
