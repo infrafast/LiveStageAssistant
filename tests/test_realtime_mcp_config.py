@@ -45,7 +45,7 @@ class RealtimeMCPConfigTests(unittest.TestCase):
                 },
                 "realtime": {
                     "transport": "auto",
-                    "permissions": {"mode": "restricted", "allowedTools": ["read", "write", "read"]},
+                    "permissions": {"mode": "approval"},
                 },
             },
         )
@@ -54,8 +54,8 @@ class RealtimeMCPConfigTests(unittest.TestCase):
         self.assertNotIn("realtime", server.local_entry)
         self.assertEqual(server.native.url, "https://example.test/mcp")
         self.assertEqual(server.realtime.transport, "auto")
-        self.assertEqual(server.realtime.permissions.mode, "restricted")
-        self.assertEqual(server.realtime.permissions.allowed_tools, ("read", "write"))
+        self.assertEqual(server.realtime.permissions.mode, "approval")
+        self.assertEqual(server.realtime.permissions.allowed_tools, ())
 
     def test_legacy_https_url_is_accepted_as_native_compatibility(self):
         server = normalize_mcp_server(
@@ -82,11 +82,11 @@ class RealtimeMCPConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_mcp_server("service-a", {"realtime": {"transport": "magic"}})
 
-    def test_restricted_requires_allowed_tools(self):
+    def test_restricted_permission_is_rejected(self):
         with self.assertRaises(ValueError):
             normalize_mcp_server(
                 "service-a",
-                {"realtime": {"permissions": {"mode": "restricted"}}},
+                {"realtime": {"permissions": {"mode": "restricted", "allowedTools": ["read"]}}},
             )
 
     def test_inventory_loader_reads_file_without_mutation(self):
