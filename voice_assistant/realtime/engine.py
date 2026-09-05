@@ -17,12 +17,34 @@ class RealtimeEngineState(str, Enum):
 
 
 @dataclass(frozen=True)
+class RealtimeMCPServer:
+    """Provider-neutral description of one provider-native remote MCP server."""
+
+    label: str
+    url: str
+    authorization: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    allowed_tools: tuple[str, ...] = ()
+    require_approval: str = "never"
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("realtime MCP server label is required")
+        if not self.url.strip():
+            raise ValueError("realtime MCP server URL is required")
+        if self.require_approval not in {"always", "never"}:
+            raise ValueError("realtime MCP require_approval must be 'always' or 'never'")
+
+
+@dataclass(frozen=True)
 class RealtimeEngineConfig:
     provider: str
     model: str
     voice: str = "marin"
-    instructions: str = "Réponds en français, de façon concise et naturelle."
+    instructions: str = "Respond naturally and concisely in the user's language. Default to English when unclear."
     server_vad: bool = True
+    mcp_servers: tuple[RealtimeMCPServer, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.provider.strip():
@@ -74,4 +96,4 @@ class RealtimeEngine(ABC):
 
     @abstractmethod
     async def submit_tool_result(self, call_id: str, result: Any) -> None:
-        """Return an existing LSA tool-path result to the provider session."""
+        """Return an existing LSA bridge/tool-path result to the provider session."""
