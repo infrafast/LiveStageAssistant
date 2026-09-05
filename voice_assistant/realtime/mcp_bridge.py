@@ -90,6 +90,17 @@ def substitute_env_vars(value: Any) -> Any:
     return value
 
 
+def _text_content(result: Any) -> str:
+    parts: list[str] = []
+    for item in getattr(result, "content", []) or []:
+        text = getattr(item, "text", None)
+        if text is None and isinstance(item, dict):
+            text = item.get("text")
+        if text:
+            parts.append(str(text).strip())
+    return "\n".join(part for part in parts if part).strip()
+
+
 class RealtimeMCPBridge:
     """Bridge realtime function calls to existing mcp-use MCP sessions."""
 
@@ -119,6 +130,7 @@ class RealtimeMCPBridge:
         self._owns_client = client is None
         self._tool_targets: dict[str, BridgeToolTarget] = {}
         self._function_tools: tuple[RealtimeFunctionTool, ...] = ()
+        self._server_tool_names: dict[str, set[str]] = {}
 
     def _config_subset(self) -> dict[str, Any]:
         servers = self.config.get("mcpServers") or {}
@@ -138,15 +150,20 @@ class RealtimeMCPBridge:
         used_names: set[str] = set()
         targets: dict[str, BridgeToolTarget] = {}
         functions: list[RealtimeFunctionTool] = []
+        server_tool_names: dict[str, set[str]] = {}
         for server_name in self.server_names:
             if server_name not in getattr(self.client, "sessions", {}):
                 await self.client.create_session(server_name)
             session = self.client.get_session(server_name)
             tools = await session.list_tools()
             allowed = self.allowed_tools.get(server_name)
+            names: set[str] = set()
             for tool in tools or []:
                 tool_name = str(getattr(tool, "name", "") or "").strip()
-                if not tool_name or (allowed is not None and tool_name not in allowed):
+                if not tool_name:
+                    continue
+                names.add(tool_name)
+                if allowed is not None and tool_name not in allowed:
                     continue
                 exposed_name = _function_name(server_name, tool_name, used_names)
                 description = str(getattr(tool, "description", "") or "").strip()
@@ -162,9 +179,26 @@ class RealtimeMCPBridge:
                     )
                 )
                 targets[exposed_name] = BridgeToolTarget(server=server_name, tool=tool_name)
+            server_tool_names[server_name] = names
         self._tool_targets = targets
         self._function_tools = tuple(functions)
+        self._server_tool_names = server_tool_names
         return self._function_tools
+
+    async def load_prompt_text(self, server_name: str, tool_name: str = "get_agent_prompt") -> str:
+        """Load optional MCP-owned routing instructions without domain-specific knowledge in LSA."""
+        if server_name not in self.server_names:
+            return ""
+        if tool_name not in self._server_tool_names.get(server_name, set()):
+            return ""
+        session = self.client.get_session(server_name)
+        try:
+            result = await session.call_tool(tool_name, {})
+        except Exception:
+            return ""
+        if bool(getattr(result, "isError", False)):
+            return ""
+        return _text_content(result)
 
     async def execute(self, exposed_name: str, arguments: str | dict[str, Any] | None) -> dict[str, Any]:
         target = self._tool_targets.get(exposed_name)
