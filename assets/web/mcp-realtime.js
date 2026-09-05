@@ -15,17 +15,29 @@
     return item;
   }
 
+  function findMcpServers(value, depth = 0, seen = new Set()) {
+    if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) return null;
+    seen.add(value);
+    if (value.mcpServers && typeof value.mcpServers === "object" && !Array.isArray(value.mcpServers)) {
+      return value.mcpServers;
+    }
+    for (const child of Object.values(value)) {
+      if (!child || typeof child !== "object") continue;
+      const found = findMcpServers(child, depth + 1, seen);
+      if (found) return found;
+    }
+    return null;
+  }
+
   function canonicalPolicies(snapshot) {
-    const servers = snapshot?.config?.mcp?.mcpServers;
-    if (!servers || typeof servers !== "object" || Array.isArray(servers)) return {};
+    const servers = findMcpServers(snapshot);
+    if (!servers) return {};
     const result = {};
     for (const [name, raw] of Object.entries(servers)) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
       const native = raw.native && typeof raw.native === "object" ? raw.native : {};
       const realtime = raw.realtime && typeof raw.realtime === "object" ? raw.realtime : {};
-      const permissions = realtime.permissions && typeof realtime.permissions === "object"
-        ? realtime.permissions
-        : {};
+      const permissions = realtime.permissions && typeof realtime.permissions === "object" ? realtime.permissions : {};
       const legacyPermission = typeof realtime.permission === "string" ? realtime.permission : "";
       const permission = String(permissions.mode || legacyPermission || "open").toLowerCase();
       result[name] = {
@@ -40,8 +52,7 @@
   function findCard(serverName) {
     const inputs = [...document.querySelectorAll(".mcp-routing-input[data-server-name], .mcp-options-input[data-server-name]")];
     const input = inputs.find((item) => item.dataset.serverName === serverName);
-    if (!input) return null;
-    return input.closest(".mcp-server-card") || null;
+    return input ? input.closest(".mcp-server-card") : null;
   }
 
   function makeField(labelText, control) {
@@ -84,9 +95,7 @@
         })
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.ok === false) {
-        throw new Error(data?.error?.message || data?.message || response.statusText || `HTTP ${response.status}`);
-      }
+      if (!response.ok || data.ok === false) throw new Error(data?.error?.message || data?.message || response.statusText || `HTTP ${response.status}`);
       const policy = data.policy || {};
       section.querySelector(".rv2d-mcp-transport").value = policy.realtime_transport || transport;
       section.querySelector(".rv2d-mcp-permission").value = policy.permission_mode || permission;
@@ -105,25 +114,18 @@
     const section = document.createElement("section");
     section.className = "rv2d-mcp-realtime";
     section.dataset.server = serverName;
-    section.style.cssText = "margin-top:12px;padding-top:12px;border-top:1px solid var(--border,#d7dde5);display:grid;gap:10px;";
+    section.style.cssText = "margin-top:12px;padding:12px 0;border-top:1px solid var(--border,#d7dde5);display:grid;gap:10px;";
 
     const title = document.createElement("strong");
     title.textContent = "Realtime MCP";
 
     const transport = document.createElement("select");
     transport.className = "input rv2d-mcp-transport";
-    transport.append(
-      option("Auto", "auto", policy.realtime_transport),
-      option("Native", "native", policy.realtime_transport),
-      option("STDIO", "stdio", policy.realtime_transport)
-    );
+    transport.append(option("Auto", "auto", policy.realtime_transport), option("Native", "native", policy.realtime_transport), option("STDIO", "stdio", policy.realtime_transport));
 
     const permission = document.createElement("select");
     permission.className = "input rv2d-mcp-permission";
-    permission.append(
-      option("Open", "open", policy.permission_mode),
-      option("Require approval", "approval", policy.permission_mode)
-    );
+    permission.append(option("Open", "open", policy.permission_mode), option("Require approval", "approval", policy.permission_mode));
 
     const nativeUrl = document.createElement("input");
     nativeUrl.type = "url";
@@ -144,13 +146,7 @@
     message.style.cssText = "font-size:12px;opacity:.8;";
     actions.append(save, message);
 
-    section.append(
-      title,
-      makeField("Transport", transport),
-      makeField("Permission", permission),
-      makeField("Native HTTPS URL", nativeUrl),
-      actions
-    );
+    section.append(title, makeField("Transport", transport), makeField("Permission", permission), makeField("Native HTTPS URL", nativeUrl), actions);
     return section;
   }
 
@@ -158,10 +154,12 @@
     for (const [name, policy] of Object.entries(policies)) {
       const card = findCard(name);
       if (!card) continue;
-      let section = card.querySelector(`.rv2d-mcp-realtime[data-server="${CSS.escape(name)}"]`);
+      let section = [...card.querySelectorAll(".rv2d-mcp-realtime")].find((item) => item.dataset.server === name);
       if (!section) {
         section = buildSection(name, policy);
-        card.appendChild(section);
+        const anchor = card.querySelector(".mcp-routing-box");
+        if (anchor) card.insertBefore(section, anchor);
+        else card.appendChild(section);
         continue;
       }
       if (section.dataset.saving === "1") continue;
