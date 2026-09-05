@@ -252,6 +252,26 @@ def print_mcp_event(event, call_started: dict[str, float]) -> None:
         return
 
     raw = event.data.get("event") or event.data
+    event_type = str(raw.get("type") or event.data.get("event_type") or "") if isinstance(raw, dict) else ""
+    if event_type == "response.mcp_call_arguments.delta":
+        return
+    if event_type == "response.mcp_call_arguments.done":
+        print(
+            "RV2 MCP arguments "
+            + json.dumps(
+                {
+                    "response_id": raw.get("response_id"),
+                    "item_id": raw.get("item_id"),
+                    "arguments": raw.get("arguments") or "{}",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+        return
+    if event_type in {"response.mcp_call.in_progress", "response.mcp_call.completed"}:
+        return
     print("RV2 MCP event " + json.dumps(raw, ensure_ascii=False, separators=(",", ":")), flush=True)
 
 
