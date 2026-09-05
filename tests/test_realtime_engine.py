@@ -1,7 +1,13 @@
 import asyncio
 import unittest
 
-from voice_assistant.realtime.engine import RealtimeEngine, RealtimeEngineConfig, RealtimeEngineState, RealtimeEvent
+from voice_assistant.realtime.engine import (
+    RealtimeEngine,
+    RealtimeEngineConfig,
+    RealtimeEngineState,
+    RealtimeEvent,
+    RealtimeMCPServer,
+)
 
 
 class DummyEngine(RealtimeEngine):
@@ -54,6 +60,27 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
             RealtimeEngineConfig(provider="x", model="")
         with self.assertRaises(ValueError):
             RealtimeEngineConfig(provider="x", model="y", voice="")
+
+    def test_native_mcp_server_is_provider_neutral_config(self):
+        server = RealtimeMCPServer(
+            label="mixer",
+            url="https://mixer.example.test/mcp",
+            authorization="token",
+            headers={"X-Test": "value"},
+            allowed_tools=("read_main",),
+            require_approval="never",
+        )
+        config = RealtimeEngineConfig(provider="test", model="test-model", mcp_servers=(server,))
+        self.assertEqual(config.mcp_servers, (server,))
+        self.assertEqual(config.mcp_servers[0].allowed_tools, ("read_main",))
+
+    def test_native_mcp_server_requires_label_url_and_valid_approval(self):
+        with self.assertRaises(ValueError):
+            RealtimeMCPServer(label="", url="https://example.test/mcp")
+        with self.assertRaises(ValueError):
+            RealtimeMCPServer(label="mixer", url="")
+        with self.assertRaises(ValueError):
+            RealtimeMCPServer(label="mixer", url="https://example.test/mcp", require_approval="sometimes")
 
 
 if __name__ == "__main__":
