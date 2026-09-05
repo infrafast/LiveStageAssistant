@@ -40,6 +40,7 @@ Follow the language of the user's latest utterance. If unclear, default to Engli
 Keep spoken replies concise unless the user explicitly asks for detail.
 Use the remote MCP server and tools exposed in this session whenever needed.
 Never invent a tool result and never claim an external action succeeded unless the MCP result confirms it.
+When a tool is needed, do not speak a placeholder, progress message, or waiting sentence before the tool result. Wait for the tool result, then answer once with the confirmed result.
 When interrupted, abandon the previous response and handle only the new utterance.
 If the user only asks you to stop speaking or be silent, stop without a spoken acknowledgement.
 """
@@ -270,6 +271,8 @@ async def event_loop(engine, playback_queue, interrupted_responses, first_audio_
             response_started_at[current_response_id] = now
             if speech_stopped_at is not None:
                 speech_stop_by_response[current_response_id] = speech_stopped_at
+        elif event.type == "mcp_followup_requested":
+            print("RV2 MCP follow-up response requested after completed native tool call", flush=True)
         elif event.type in {"mcp_list_tools", "mcp_call", "mcp_approval_request", "mcp_event"}:
             print_mcp_event(event, call_started)
         elif event.type == "audio_delta":
