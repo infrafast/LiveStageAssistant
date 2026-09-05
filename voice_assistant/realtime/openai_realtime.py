@@ -159,6 +159,24 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             }
         )
 
+    async def send_text(self, text: str, *, create_response: bool = True) -> None:
+        self._require_connection()
+        value = str(text or "").strip()
+        if not value:
+            raise ValueError("text is required")
+        await self._send(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": value}],
+                },
+            }
+        )
+        if create_response:
+            await self._send({"type": "response.create"})
+
     async def commit_audio(self) -> None:
         self._require_connection()
         await self._send({"type": "input_audio_buffer.commit"})
