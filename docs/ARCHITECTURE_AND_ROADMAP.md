@@ -169,7 +169,7 @@ This section is the authoritative implementation backlog for architecture-level 
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native MCP is in progress and native Funnel discovery has been validated on Raspberry Pi 5.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with write/QLC validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C auto native-first fallback is implemented and awaiting Pi5 validation.
 
 **Goal:** add a selectable low-latency full-duplex realtime voice path alongside the existing classic STT -> LLM -> TTS path, without decommissioning classic, while preserving MCP transport flexibility, wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -445,53 +445,57 @@ This milestone implements and validates `native` semantics first. No STDIO fallb
 - [x] native diagnostic discovery can require approval without changing production permission defaults;
 - [x] realtime input transcription plumbing added for `Utilisateur:` observability;
 - [~] load native endpoint/auth from the existing MCP inventory while the canonical dual-endpoint JSON shape is still being defined;
-- [ ] execute a safe/read-only XMSeries native MCP operation with normal permissive permissions;
-- [ ] measure native MCP first-call/execution/final-response latency;
-- [ ] validate production permission default: all tools available, `require_approval=never`;
-- [ ] on native failure, fail clearly and do **not** attempt STDIO in this mode;
+- [x] execute a safe/read-only XMSeries native MCP operation with normal permissive permissions;
+- [x] measure native MCP first-call/execution/final-response latency;
+- [x] validate production permission default: all tools available, `require_approval=never`;
+- [~] on native failure, fail clearly and do **not** attempt STDIO in this mode;
 - [ ] perform a controlled XMSeries write after read-only validation;
 - [ ] validate QLCPlus-MCP as a second fixture without QLC-specific realtime logic;
-- [ ] record native MCP metrics and failure modes.
+- [~] record native MCP metrics and failure modes.
 
-Validation note: Pi5 test on 2026-09-05 successfully connected `gpt-realtime-2.1-mini` to the XMSeries MCP through `https://raspberrypi-1.tail70348.ts.net/xm/mcp`; provider-side MCP tool discovery completed and the realtime voice session remained operational.
+Validation note: Pi5 tests on 2026-09-05 connected `gpt-realtime-2.1-mini` to XMSeries through `https://raspberrypi-1.tail70348.ts.net/xm/mcp`, discovered the remote MCP, executed `osc_get_mixer_status` without approval, received the real XR16/XR16RACKLIVE result and produced a single follow-up spoken answer after the native tool completed. Representative native MCP execution was about 0.85 s and first useful post-tool playback about 1.87 s after user speech end in the captured validation turn.
 
 Exit: native-only realtime MCP is reliable for repeated read operations and controlled writes through authenticated HTTPS/Funnel, with no hidden bridge fallback and no domain-specific realtime code.
 
-#### RV2B - STDIO mode / LSA bridge
+#### RV2B - STDIO mode / LSA bridge — VALIDATED
 
 This milestone implements and validates `stdio` semantics. No native attempt is made in this mode.
 
-- [ ] translate realtime tool/function events only as necessary into the existing LSA MCP execution representation;
-- [ ] dispatch through the existing LSA MCP client;
-- [ ] preserve STDIO as a first-class realtime execution path;
-- [ ] preserve local/private HTTP support through the same bridge where applicable;
-- [ ] return existing MCP results/errors to the realtime session;
-- [ ] validate a safe/read-only MCP call through STDIO/local bridge;
-- [ ] validate a controlled write through the bridge;
-- [ ] preserve current MCP discovery/routing/execution/error semantics;
-- [ ] enforce the same per-server permission policy as native mode;
-- [ ] prove `stdio` mode never attempts provider-native MCP.
+- [x] translate realtime tool/function events only as necessary into the existing LSA MCP execution representation;
+- [x] dispatch through the existing LSA MCP client;
+- [x] preserve STDIO as a first-class realtime execution path;
+- [x] preserve local/private HTTP capability structurally through the same existing `MCPClient` bridge path;
+- [x] return existing MCP results/errors to the realtime session;
+- [x] validate a safe/read-only MCP call through STDIO/local bridge;
+- [x] validate a controlled write through the bridge;
+- [x] preserve current MCP discovery/execution semantics without domain-specific realtime code;
+- [x] open/unrestricted mode is permissive and restricted allow-list filtering is implemented; approval-mode UX/runtime completion remains RV2D scope;
+- [x] prove `stdio` mode never attempts provider-native MCP.
 
-Exit: repeated realtime MCP commands work through the existing LSA client/STDIO path without requiring public exposure or duplicating MCP client logic.
+Validation note: Pi5 test on 2026-09-05 started XMSeries-MCP locally through the existing STDIO configuration, discovered 39 tools, exposed only ordinary realtime function tools, and logged `native MCP: disabled`. A live read returned the real XR16 status through `stdio/bridge`. A controlled `osc_adjust_level` call changed bus LAURENT from minus 4.8 dB to minus 3.8 dB with MCP-side read-before/write/read-back verification (`verifiedDb=-3.8`, effective delta plus 1 dB) and no provider-native/Funnel call.
 
-#### RV2C - Auto mode and transport fallback
+Exit: **met** for the STDIO bridge execution path. Realtime commands work through the existing LSA client/STDIO path without requiring public exposure or duplicating MCP client logic. Per-MCP approval UI/runtime polish remains part of the canonical configuration/GUI milestone RV2D.
+
+#### RV2C - Auto mode and transport fallback — IN PROGRESS
 
 This milestone implements the fixed `auto` semantics: native first, STDIO fallback on clear safe failure.
 
-- [ ] apply `auto` independently per MCP server;
-- [ ] attempt native remote MCP first;
-- [ ] on clear safely retryable native failure, execute the same logical request through the LSA STDIO/bridge path;
-- [ ] allow read-only fallback when native failure is clear;
-- [ ] allow write fallback only when non-execution of the native write is established;
-- [ ] suppress automatic fallback for ambiguous write outcomes;
-- [ ] retain the same per-server permission policy across native -> STDIO fallback;
-- [ ] log native attempt, failure classification, fallback decision and selected transport;
-- [ ] add metrics identifying native/stdio execution and fallback latency;
-- [ ] test network failure before dispatch, authentication rejection, explicit tool rejection, timeout before/after dispatch and ambiguous response-loss cases;
-- [ ] prove no duplicate control writes occur during fallback;
-- [ ] compare native versus STDIO on equivalent read-only operations for latency/correctness;
+- [~] apply `auto` independently per MCP server; single-server validation runner implemented, canonical per-server config wiring remains RV2D;
+- [x] attempt native remote MCP first and keep the STDIO bridge stopped while native is healthy;
+- [x] on clear pre-dispatch native failure, initialize and switch to the LSA STDIO/bridge path;
+- [x] allow read-only fallback after native dispatch when MCP metadata explicitly marks the tool `readOnlyHint=true`;
+- [x] allow write fallback only when non-execution of the native write is explicitly established by policy input;
+- [x] suppress automatic fallback for ambiguous write/unknown outcomes;
+- [~] retain the same per-server permission policy across native -> STDIO fallback; open/restricted are wired, approval completion remains RV2D;
+- [x] log native attempt, failure classification, fallback decision and selected transport;
+- [x] add metrics identifying native/stdio execution in auto mode;
+- [~] test network/discovery failure before dispatch, authentication rejection, explicit tool rejection, timeout before/after dispatch and ambiguous response-loss cases; unit policy coverage is implemented, Pi fault validation pending;
+- [~] prove no duplicate control writes occur during fallback; ambiguous mutation replay is blocked by unit policy and Pi fault validation remains pending;
+- [~] compare native versus STDIO on equivalent read-only operations for latency/correctness; separate Pi measurements exist, direct auto-session comparison pending;
 - [ ] compare classic versus realtime tool selection/arguments on a representative corpus;
 - [ ] prove another arbitrary MCP can be used without modifying the realtime engine/provider adapter.
+
+Implementation note: `scripts/rv2_auto_mcp.py` starts provider-native MCP first and deliberately defers creation/session startup of `RealtimeMCPBridge` until a fallback decision is made. Safe fallback can replay the last provider transcription through the new provider-neutral `send_text()` contract after switching sessions. Post-dispatch mutation/unknown failures return `fallback=false` unless a future signal explicitly proves non-execution.
 
 Exit: `auto` provides useful native-first resilience without ever turning an uncertain write into an automatic duplicate action.
 
@@ -715,8 +719,8 @@ Do not merge realtime runtime code into `main` until optional wake behavior, MCP
 
 1. **RV0 — complete.**
 2. **RV1 — complete.**
-3. **RV2A — in progress:** native MCP discovery over XMSeries/Tailscale Funnel is validated. Next validate normal permissive native execution with a read-only command, then controlled write and QLCPlus.
-4. **RV2B:** implement `stdio` mode through the existing LSA MCP client, preserving the same per-server permission policy.
-5. **RV2C:** implement `auto` per MCP: native first, STDIO fallback only on clear safely retryable failures, with ambiguous writes never automatically replayed.
+3. **RV2A — partially validated:** native XMSeries discovery/read/final follow-up is validated; complete native controlled-write and QLCPlus fixture validation before closing RV2A.
+4. **RV2B — validated:** realtime function tools execute through the existing LSA MCP client/STDIO path with native MCP disabled; Pi5 read and controlled write are validated.
+5. **RV2C — implementation ready for Pi validation:** validate native success with bridge never started, then force a clear native pre-dispatch discovery failure and verify automatic STDIO fallback; preserve no-replay behavior for ambiguous writes.
 6. **RV2D:** reconcile `.env`, canonical MCP JSON and GUI. Add per-MCP transport dropdown (`auto/native/stdio`) and per-MCP permission dropdown (`Open` default / `Require approval` / `Restricted tools`).
 7. Continue to RV3 only after RV2A/RV2B/RV2C/RV2D semantics, migration and safety are validated.
