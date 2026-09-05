@@ -1,7 +1,8 @@
 import base64
+import json
 import unittest
 
-from voice_assistant.realtime.engine import RealtimeEngineConfig, RealtimeEngineState, RealtimeMCPServer
+from voice_assistant.realtime.engine import RealtimeEngineConfig, RealtimeEngineState, RealtimeEvent, RealtimeMCPServer
 from voice_assistant.realtime.openai_realtime import OpenAIRealtimeEngine
 
 
@@ -117,17 +118,20 @@ class OpenAIRealtimeAdapterTests(unittest.TestCase):
         event = self.engine._translate_event(
             {
                 "type": "response.output_item.done",
+                "response_id": "resp_tools",
                 "item": {"type": "mcp_list_tools", "id": "item_1", "server_label": "mixer", "tools": []},
             }
         )
         self.assertEqual(event.type, "mcp_list_tools")
         self.assertEqual(event.data["phase"], "done")
         self.assertEqual(event.data["item"]["server_label"], "mixer")
+        self.assertEqual(event.data["response_id"], "resp_tools")
 
     def test_translates_mcp_call_item(self):
         event = self.engine._translate_event(
             {
                 "type": "response.output_item.added",
+                "response_id": "resp_call",
                 "item": {
                     "type": "mcp_call",
                     "id": "item_2",
@@ -140,6 +144,59 @@ class OpenAIRealtimeAdapterTests(unittest.TestCase):
         self.assertEqual(event.type, "mcp_call")
         self.assertEqual(event.data["phase"], "added")
         self.assertEqual(event.data["item"]["name"], "read_main")
+        self.assertEqual(event.data["response_id"], "resp_call")
+
+
+class FakeWebSocket:
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, payload):
+        self.sent.append(json.loads(payload))
+
+
+class OpenAIRealtimeNativeMCPFollowupTests(unittest.IsolatedAsyncioTestCase):
+    def make_engine(self):
+        engine = OpenAIRealtimeEngine(
+            RealtimeEngineConfig(provider="openai", model="gpt-realtime-2.1-mini"),
+            api_key="test-key",
+        )
+        engine._ws = FakeWebSocket()
+        return engine
+
+    async def test_completed_mcp_call_after_response_done_requests_one_followup(self):
+        engine = self.make_engine()
+        engine._response_active = False
+        await engine._maybe_continue_after_native_mcp(
+            RealtimeEvent("mcp_call", {"phase": "done", "response_id": "resp_1"})
+        )
+        self.assertEqual(engine._ws.sent, [{"type": "response.create"}])
+        followup = await engine.next_event()
+        self.assertEqual(followup.type, "mcp_followup_requested")
+
+    async def test_completed_mcp_call_while_response_active_waits_for_response_done(self):
+        engine = self.make_engine()
+        engine._response_active = True
+        await engine._maybe_continue_after_native_mcp(
+            RealtimeEvent("mcp_call", {"phase": "done", "response_id": "resp_2"})
+        )
+        self.assertEqual(engine._ws.sent, [])
+        done = engine._translate_event(
+            {"type": "response.done", "response": {"id": "resp_2", "status": "completed", "usage": {}}}
+        )
+        await engine._maybe_continue_after_native_mcp(done)
+        self.assertEqual(engine._ws.sent, [{"type": "response.create"}])
+
+    async def test_cancelled_response_suppresses_late_native_mcp_followup(self):
+        engine = self.make_engine()
+        done = engine._translate_event(
+            {"type": "response.done", "response": {"id": "resp_cancel", "status": "cancelled", "usage": {}}}
+        )
+        await engine._maybe_continue_after_native_mcp(done)
+        await engine._maybe_continue_after_native_mcp(
+            RealtimeEvent("mcp_call", {"phase": "done", "response_id": "resp_cancel"})
+        )
+        self.assertEqual(engine._ws.sent, [])
 
 
 if __name__ == "__main__":
