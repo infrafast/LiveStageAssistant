@@ -29,6 +29,7 @@ class RealtimeMCPServer:
     allowed_tools: tuple[str, ...] = ()
     require_approval: str = "never"
     description: str = ""
+    context_instructions: str = ""
 
     def __post_init__(self) -> None:
         if not self.label.strip():
@@ -81,8 +82,8 @@ class RealtimeEngineConfig:
             raise ValueError("realtime voice is required")
         unique_contexts: list[str] = []
         seen: set[str] = set()
-        for tool in self.function_tools:
-            context = str(tool.context_instructions or "").strip()
+        for source in (*self.mcp_servers, *self.function_tools):
+            context = str(getattr(source, "context_instructions", "") or "").strip()
             if context and context not in seen:
                 unique_contexts.append(context)
                 seen.add(context)
