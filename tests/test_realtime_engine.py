@@ -14,6 +14,7 @@ class DummyEngine(RealtimeEngine):
     def __init__(self, config):
         super().__init__(config)
         self.events = asyncio.Queue()
+        self.text_turns = []
 
     async def start(self):
         self.state = RealtimeEngineState.READY
@@ -23,6 +24,9 @@ class DummyEngine(RealtimeEngine):
 
     async def send_audio(self, pcm: bytes):
         return None
+
+    async def send_text(self, text: str, *, create_response: bool = True):
+        self.text_turns.append((text, create_response))
 
     async def commit_audio(self):
         return None
@@ -52,6 +56,11 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         event = await engine.next_event()
         self.assertEqual(event.type, "audio_delta")
         self.assertEqual(event.data["audio"], b"abc")
+
+    async def test_provider_neutral_text_replay_contract(self):
+        engine = DummyEngine(RealtimeEngineConfig(provider="test", model="test-model"))
+        await engine.send_text("repeat this", create_response=True)
+        self.assertEqual(engine.text_turns, [("repeat this", True)])
 
     def test_config_requires_provider_model_and_voice(self):
         with self.assertRaises(ValueError):
