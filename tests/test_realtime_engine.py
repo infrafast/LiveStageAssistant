@@ -114,6 +114,25 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Do not offer extra help", config.instructions)
         self.assertIn("one short confirmation sentence", config.instructions)
 
+    def test_native_mcp_context_is_composed_without_domain_knowledge(self):
+        native_instructions = "Use only identifiers and operation semantics provided by this MCP server."
+        server = RealtimeMCPServer(
+            label="service-a",
+            url="https://service.example.test/mcp",
+            context_instructions=native_instructions,
+        )
+        with patch.dict("os.environ", {"ASSISTANT_SYSTEM_PROMPT": "Global LSA prompt."}, clear=False):
+            config = RealtimeEngineConfig(
+                provider="test",
+                model="test-model",
+                instructions="Native validation prompt.",
+                mcp_servers=(server,),
+            )
+        self.assertIn(native_instructions, config.instructions)
+        self.assertIn("Global LSA prompt.", config.instructions)
+        self.assertIn("Native validation prompt.", config.instructions)
+        self.assertIn("one short confirmation sentence", config.instructions)
+
 
 if __name__ == "__main__":
     unittest.main()
