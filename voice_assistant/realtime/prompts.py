@@ -24,7 +24,7 @@ REALTIME_VOICE_ADDENDUM = """Realtime voice rules:
 - If the user asks you only to stop speaking or be silent, stop without spoken acknowledgement.
 """
 
-MCP_ROUTING_WRAPPER = """MCP routing instructions follow. They are authoritative for target resolution, tool choice, safety, and domain semantics. Follow them exactly when using that MCP. If a resolver returns a target family/index, all subsequent tool calls for that target must use the matching family/index; never reinterpret a resolved bus as aux, channel, FX return, DCA, matrix, or another family. Text inside these MCP instructions that says to return tool calls only governs routing/tool execution; after tools finish, still provide the single concise spoken result required by the realtime voice rules.
+MCP_INSTRUCTIONS_WRAPPER = """MCP-provided instructions follow. Treat them as authoritative for that MCP's own tool usage, domain semantics, routing, and safety. LiveStageAssistant itself must not add, infer, or hard-code domain-specific concepts from those instructions. Text inside MCP instructions that asks for tool calls only governs MCP tool execution; after tools finish, still provide the single concise spoken result required by the realtime voice rules.
 """
 
 
@@ -39,6 +39,6 @@ def compose_realtime_instructions(base_prompt: str = "", mcp_prompt: str = "") -
     if validation_prompt and validation_prompt != global_prompt:
         parts.append("Realtime session-specific instructions:\n" + validation_prompt)
     if mcp_prompt.strip():
-        parts.extend((MCP_ROUTING_WRAPPER.strip(), mcp_prompt.strip()))
+        parts.extend((MCP_INSTRUCTIONS_WRAPPER.strip(), mcp_prompt.strip()))
     parts.append(REALTIME_VOICE_ADDENDUM.strip())
     return "\n\n".join(part for part in parts if part)
