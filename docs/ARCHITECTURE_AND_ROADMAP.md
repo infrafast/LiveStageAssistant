@@ -336,9 +336,9 @@ must be resolvable from this document alone.
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap. RV0 creates/refreshes the dedicated `realtime-voice-architecture` branch from the current `main` before implementation work begins.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated; RV2 is the next implementation milestone.
 
-**Goal:** add a selectable low-latency full-duplex realtime voice path alongside the existing classic STT -> LLM -> TTS path, without decommissioning the classic architecture, without rewriting the existing MCP execution mechanism, and while preserving wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
+**Goal:** add a selectable low-latency full-duplex realtime voice path alongside the existing classic STT -> LLM -> TTS path, without decommissioning the classic architecture, while preserving MCP transport flexibility, wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
 
 ## RV architecture invariants
 
@@ -346,15 +346,19 @@ must be resolvable from this document alone.
 2. The classic pipeline remains a first-class supported path. RV contains no classic-pipeline decommissioning milestone.
 3. Online mode may use classic or realtime; offline mode remains classic-only until a separately validated local realtime architecture exists.
 4. LSA remains MCP-agnostic. Realtime code must contain no XMSeries-, QLCPlus- or other domain-specific execution logic.
-5. RV does not redesign the existing MCP discovery, routing, execution, error handling or domain safety mechanisms. Realtime tool calls are adapted only as needed to enter the existing LSA tool/MCP execution path.
-6. Adding a new MCP must not require modifying the realtime engine or provider adapter.
-7. Realtime providers are interchangeable behind a provider-neutral interface. OpenAI Realtime is the first reference implementation, not a permanent architectural dependency.
-8. In a realtime turn, the realtime model performs the functional roles normally split across STT + LLM/reasoning + TTS, including deciding when to emit a tool call.
-9. Realtime turns must reuse the same relevant LSA context sources, agent instructions and existing tool path rather than introducing a second domain-control stack.
-10. `WAKE_WORD` remains the single source of truth for wake activation in classic and realtime modes. No realtime-specific wake enable flag is allowed.
-11. The GUI eventually exposes the selected voice pipeline and hides settings irrelevant to that pipeline while preserving shared settings and the inactive pipeline's saved configuration.
-12. Measure latency, reliability, tool-call quality and real end-to-end cost before preferring realtime over the working classic path.
-13. Keep Python as the main backend language unless profiling proves a narrow hot path needs another language.
+5. Realtime MCP execution supports two first-class paths: provider-native remote MCP for eligible externally reachable servers, and an LSA bridge into the existing MCP client for STDIO or local/non-public HTTP servers.
+6. STDIO support is retained as a durable capability. Realtime must not require converting every local MCP to a public remote endpoint.
+7. MCP transport selection must be configurable per server or by an equivalent policy. Conceptually the modes are `auto`, `native` and `bridge`; exact configuration syntax is defined only after RV2 validation.
+8. `MCP_CONFIG` remains the MCP inventory/source of truth. Realtime integration must not create a second independent list of servers that can drift from classic configuration.
+9. Adding a new MCP must not require domain-specific modifications to the realtime engine or provider adapter.
+10. Realtime providers are interchangeable behind a provider-neutral interface. OpenAI Realtime is the first reference implementation, not a permanent architectural dependency.
+11. In a realtime turn, the realtime model performs the functional roles normally split across STT + LLM/reasoning + TTS, including deciding when to use tools/MCP.
+12. Realtime turns must reuse the same relevant LSA context and general agent instructions rather than introducing a second domain-control stack.
+13. `WAKE_WORD` remains the single source of truth for wake activation in classic and realtime modes. No realtime-specific wake enable flag is allowed.
+14. The GUI eventually exposes the selected voice pipeline and hides settings irrelevant to that pipeline while preserving shared settings and the inactive pipeline's saved configuration.
+15. Measure latency, reliability, tool-call quality and real end-to-end cost before preferring one realtime MCP transport over another.
+16. Keep Python as the main backend language unless profiling proves a narrow hot path needs another language.
+17. Technical configuration, internal system prompts/addenda and architecture documentation are written in English. User interaction remains language-agnostic: respond in the user's language when detectable, with English as fallback.
 
 ## RV target architecture
 
@@ -368,22 +372,20 @@ must be resolvable from this document alone.
                          |                 |
                   STT -> LLM -> TTS   RealtimeEngine
                          |                 |
-                         |          provider abstraction
-                         |          +------+-------+
-                         |          |              |
-                         |       OpenAI         Gemini / future
-                         |       Realtime       realtime provider
-                         |          |
-                         +----------+----------+
-                                    |
-                           structured tool call
-                                    |
-                       existing LSA tool/MCP path
-                                    |
-                              any MCP server
+                  existing LSA MCP        +-----------------------------+
+                  client/path             |                             |
+                         |            native remote MCP              LSA bridge
+                   HTTP / STDIO            |                             |
+                         |             public HTTPS                existing MCP client
+                         |                  |                        HTTP / STDIO
+                         +------------------+-------------+---------------+
+                                                      |
+                                                 any MCP server
 ```
 
-The realtime provider handles audio understanding, model reasoning/tool selection and audio response for realtime turns. LSA keeps local audio-device ownership, activation policy, optional wake-word detection, speaker/context handling where applicable, existing tool/MCP execution, online/offline switching, fallback, logging and metrics.
+The realtime provider handles audio understanding, model reasoning/tool selection and audio response for realtime turns. LSA keeps local audio-device ownership, activation policy, optional wake-word detection, speaker/context handling where applicable, classic/offline MCP execution, bridge execution for local/STDIO MCPs, online/offline switching, fallback, logging and metrics.
+
+Provider-native MCP is an optimization/integration path for MCP servers that are safely reachable by the provider over supported remote transport. It does not replace the existing LSA MCP client.
 
 The intended configuration shape after RV8 is conceptually:
 
@@ -445,13 +447,82 @@ REALTIME_READY -> speech/session activation -> REALTIME_SESSION_ACTIVE
 
 openWakeWord must not be instantiated or required in this mode.
 
+## RV prompt and spoken-language policy
+
+The VAD has no language prompt. Prompting applies to the realtime model/session, not to speech-boundary detection.
+
+Production realtime instructions must be composed from the normal general LSA prompt plus a small realtime voice addendum. The addendum must not replace or fork the general prompt.
+
+```text
+PROMPT.md / general LSA instructions
+              +
+realtime voice addendum
+              =
+realtime session instructions
+```
+
+The realtime addendum contains only voice-medium behavior such as concise spoken answers, interruption handling and silence behavior for explicit stop/silence commands. If a rule becomes generally applicable to both classic and realtime, move it to the general prompt instead of duplicating it.
+
+Internal prompt/config text is English by default. The assistant follows the user's spoken language dynamically; French input should receive French output, English input English output, and other supported languages should behave equivalently when detectable. English is the fallback when language cannot be determined.
+
+## RV MCP transport strategy
+
+Realtime MCP has two supported execution paths.
+
+### Native remote MCP
+
+Use the realtime provider's native MCP capability when the provider supports it and the MCP server is reachable through an eligible authenticated remote endpoint, typically trusted HTTPS such as an existing Tailscale Funnel exposure.
+
+```text
+OpenAI Realtime
+      |
+ native remote MCP
+      |
+ HTTPS/Funnel
+      |
+ MCP server
+```
+
+This path is expected to minimize LSA orchestration overhead and is the preferred first RV2 experiment for eligible remote MCPs.
+
+### LSA MCP bridge
+
+Use LSA as the bridge when the MCP is STDIO, localhost-only, private-LAN-only, otherwise not provider-reachable, or explicitly configured to stay local.
+
+```text
+OpenAI Realtime tool/function event
+      |
+      v
+LSA bridge
+      |
+existing LSA MCP client
+      |
+STDIO or HTTP
+      |
+MCP server
+```
+
+The bridge must reuse existing MCP discovery/execution/error semantics rather than creating a second MCP client implementation. This preserves local STDIO, private HTTP, offline-oriented deployments and provider independence.
+
+### Selection policy
+
+RV2 will validate a conceptual per-server policy:
+
+```text
+auto    -> use native remote MCP when eligible, otherwise bridge
+native  -> require provider-native remote MCP; fail clearly if not eligible
+bridge  -> always use the existing LSA MCP client
+```
+
+The exact config field and GUI representation are intentionally not frozen before the RV2 spike proves the behavior. Both paths must be testable against equivalent MCP operations so latency, reliability, cancellation and safety can be compared.
+
 ## RV provider strategy
 
 ### OpenAI Realtime direct
 
 Use first as the reference implementation and latency baseline. The backend implementation starts with a direct Python realtime transport, initially WebSocket, so existing backend audio-device selection/routing can be reused and measured with minimal orchestration overhead.
 
-At least one cost-oriented realtime model and one higher-capability realtime model should be benchmarked when available/configured. Model IDs remain configurable because provider offerings change independently of LSA architecture.
+OpenAI native remote MCP is the first provider-native MCP reference path. It does not eliminate the LSA bridge path.
 
 ### Pipecat + OpenAI Realtime
 
@@ -469,7 +540,7 @@ Use as the first alternate-provider benchmark after the OpenAI reference path is
 
 Retain permanently for offline mode, fallback, diagnostics and benchmark comparison unless a future separate roadmap explicitly changes that decision.
 
-## RV language strategy
+## RV implementation-language strategy
 
 - **Python** stays the main backend language.
 - **TypeScript** is appropriate for browser-native WebRTC and existing MCP servers.
@@ -488,9 +559,9 @@ T0 activation reference
 T1 first useful audio accepted/streamed
 T2 user speech end / turn committed
 T3 classic STT complete OR realtime model turn processing active
-T4 first tool request emitted, when applicable
-T5 existing tool/MCP execution begins
-T6 existing tool/MCP execution completes
+T4 first tool/MCP request emitted, when applicable
+T5 MCP execution begins (native remote or LSA bridge)
+T6 MCP execution completes
 T7 first response audio frame available
 T8 first response audio played
 T9 playback ends
@@ -500,8 +571,8 @@ Track at least:
 
 - activation -> useful audio;
 - speech-end -> STT complete for classic;
-- speech-end -> first tool request when applicable;
-- tool/MCP execution duration;
+- speech-end -> first tool/MCP request when applicable;
+- native-MCP or bridged-MCP execution duration;
 - speech-end -> first model audio;
 - speech-end -> first audible response;
 - total interaction duration;
@@ -510,6 +581,7 @@ Track at least:
 - provider/model errors and audio-device lockups;
 - tool-selection accuracy and argument accuracy on a shared command corpus;
 - duplicate/unnecessary tool-call rate;
+- MCP transport used (`native` or `bridge`) for comparative runs;
 - median/p90/p95 where sample size is sufficient.
 
 ### Cost comparison
@@ -528,62 +600,98 @@ For each benchmark provider/model, record actual usage when the API exposes it a
 - cost per minute of representative conversation;
 - effect of prompt/context caching where available.
 
-Cost is evaluated together with latency, tool-call correctness and stability; no provider/model is selected solely on per-token price.
+Cost is evaluated together with latency, tool-call correctness and stability; no provider/model or MCP transport is selected solely on per-token price.
 
 ## RV milestones
 
-### RV0 - Branch, classic baseline and realtime skeleton
+### RV0 - Branch, classic baseline and realtime skeleton — VALIDATED
 
 Goal: establish a current, measurable starting point before any realtime audio implementation.
 
-- [ ] create/refresh `realtime-voice-architecture` from the current `main`;
+- [x] create `realtime-voice-architecture` from the then-current `main`;
 - [x] realtime architecture and provider-neutral invariants documented in this file;
 - [x] classic/realtime coexistence and no-decommissioning policy documented;
 - [x] optional wake-word policy clarified;
 - [x] roadmap consolidated into this document;
-- [ ] formalize the classic timing events needed for comparison;
-- [ ] add only missing lightweight classic-path instrumentation;
-- [ ] record a reproducible classic latency baseline;
-- [ ] record a reproducible classic end-to-end cost baseline where cloud usage is measurable;
-- [ ] create an isolated `RealtimeEngine` interface/package skeleton only, with no live realtime audio transport yet.
+- [x] formalize the classic timing events needed for comparison;
+- [x] add the missing lightweight classic-path instrumentation used by the baseline;
+- [x] record a reproducible classic latency baseline;
+- [x] record a reproducible classic end-to-end cost baseline where cloud usage is measurable;
+- [x] create an isolated `RealtimeEngine` interface/package skeleton without changing production classic behavior.
 
-Exit: dedicated branch is current with `main`, classic latency/cost baseline is recorded, and the realtime package boundary exists without changing production classic behavior.
+Validation note: Raspberry Pi 5 classic baseline recorded before RV1. Representative medians included STT about 1.515 s, agent about 3.780 s, TTS about 5.135 s and measured classic turn about 8.946 s; the rough STT-plus-turn comparison point was about 10.461 s. The 12-turn cloud cost baseline was about USD 0.007409 per interaction (about USD 0.7409/100) using the documented ElevenLabs pricing assumption. Production classic remained unchanged by the isolated realtime skeleton.
 
-### RV1 - Minimal OpenAI Realtime audio spike
+Exit: **met**.
+
+### RV1 - Minimal OpenAI Realtime audio spike — VALIDATED
 
 Goal: prove realtime audio round trip without tool/MCP execution.
 
-- [ ] implement the OpenAI provider behind the provider-neutral realtime interface;
-- [ ] use direct Python WebSocket transport first;
-- [ ] selected backend mic -> OpenAI Realtime;
-- [ ] returned realtime audio -> selected backend output;
-- [ ] realtime model handles speech understanding/reasoning/response generation for the turn;
-- [ ] interruption/barge-in and cancellation;
-- [ ] reconnect and clean session shutdown;
-- [ ] realtime latency metrics aligned with the benchmark contract;
-- [ ] capture actual end-to-end realtime cost/usage when exposed by the provider;
-- [ ] benchmark at least a cost-oriented and a higher-capability configured realtime model when available;
-- [ ] verify `WAKE_WORD=` works without openWakeWord dependency;
-- [ ] verify no audio-device lockup after repeated start/stop/reconnect cycles.
+- [x] implement the OpenAI provider behind the provider-neutral realtime interface;
+- [x] use direct Python WebSocket transport first;
+- [x] selected backend mic -> OpenAI Realtime;
+- [x] returned realtime audio -> selected backend output;
+- [x] reuse `BACKEND_AUDIO_INPUT_DEVICE` and `BACKEND_AUDIO_OUTPUT_DEVICE` from the active Web-configured profile, including exact PipeWire source/sink selectors;
+- [x] keep CLI input/output selection only as explicit diagnostic overrides;
+- [x] realtime model handles speech understanding/reasoning/response generation for the turn;
+- [x] interruption/barge-in and cancellation validated with real speech;
+- [x] clean session shutdown and audio-resource release; automatic network reconnect remains RV4 scope;
+- [x] realtime latency metrics aligned with the benchmark contract;
+- [x] capture actual end-to-end realtime cost/usage from provider usage;
+- [x] benchmark the cost-oriented reference model `gpt-realtime-2.1-mini`; higher-capability comparative benchmarking remains a later benchmark task;
+- [x] wake-disabled RV1 runs without instantiating/requiring openWakeWord;
+- [x] repeated start/stop tests showed no audio-device lockup;
+- [x] experimental voice instructions are English internally and language-agnostic at the user surface;
+- [x] concise spoken-answer and interruption behavior validated after prompt tuning.
 
-Exit: stable 10-minute conversation, repeatable interruption, measurable latency comparison against classic, recorded cost comparison and no audio-device lockup.
+Validation notes on Raspberry Pi 5:
 
-### RV2 - Realtime connection to the existing tool path
+- clean configured-audio test selected the exact AB13X PipeWire source and sink from the active `.env.online` profile with no device-index override;
+- five-minute measurement: 10 turns, 9 completed and 1 interrupted; first-playback p50 about 1.585 s, p95 about 2.213 s; average measured cost about USD 0.003094/turn (about USD 0.3094/100);
+- final conversational validation: 20 turns, 17 completed and 3 intentional interruptions; first-playback p50 about 1.69 s; user validation reported a major qualitative improvement versus classic;
+- French/English switching, concise replies and real-speech barge-in were validated;
+- cancelled interruption turns at zero output tokens were observed as expected during clean barge-in;
+- no MCP tools were exposed in RV1 by design.
 
-Goal: connect realtime model tool calls to the existing LSA tool/MCP execution mechanism without redesigning that mechanism.
+Exit: **met**. RV1 is frozen as the validated no-tools realtime baseline. Further reconnect/failure hardening is handled by RV4 rather than reopening RV1.
 
-- [ ] convert provider realtime tool-call events only as necessary into the representation already consumed by LSA;
-- [ ] dispatch through the existing tool/MCP path rather than creating a parallel MCP implementation;
-- [ ] return the existing tool result to the realtime provider/session;
-- [ ] preserve current MCP discovery/routing/execution/error behavior;
-- [ ] add timestamps around the realtime-to-existing-tool-path boundary;
-- [ ] handle cancellation/retry/reconnect without duplicate tool execution;
-- [ ] compare classic versus realtime tool selection and arguments on the same representative command corpus;
-- [ ] use a safe/read-only XMSeries tool first only as a validation fixture, then a controlled write;
-- [ ] validate with QLCPlus only as a second fixture, not as realtime-specific code;
-- [ ] prove that another MCP can be used without modifying the realtime engine/provider adapter.
+### RV2 - Dual-path Realtime MCP integration
 
-Exit: repeated tool commands execute through the existing path with correct selection/arguments, no duplicate writes, no domain-specific realtime code and no ambiguous queued actions after cancel/reconnect.
+Goal: connect realtime model tool/MCP use while preserving both provider-native remote MCP and the existing LSA MCP client/STDIO path. Do not create domain-specific realtime code.
+
+#### RV2A - Native remote MCP reference path
+
+- [ ] expose an eligible remote HTTPS MCP to OpenAI Realtime using provider-native MCP support;
+- [ ] use existing Tailscale Funnel/HTTPS exposure as the first deployment fixture where appropriate;
+- [ ] start with a safe/read-only XMSeries operation;
+- [ ] measure native MCP discovery/listing, first-call latency, execution latency and response latency;
+- [ ] validate provider-native tool filtering/approval/security controls before writes;
+- [ ] perform a controlled XMSeries write only after read-only validation;
+- [ ] validate QLCPlus-MCP as a second fixture without adding QLC-specific realtime logic.
+
+#### RV2B - LSA bridge path for STDIO/local MCP
+
+- [ ] translate realtime tool/function events only as necessary into the representation already consumed by LSA;
+- [ ] dispatch through the existing LSA MCP client instead of implementing a second MCP client;
+- [ ] preserve STDIO as a supported realtime execution path through the bridge;
+- [ ] preserve local/private HTTP MCP support through the bridge;
+- [ ] return existing MCP results/errors to the realtime session;
+- [ ] validate a safe/read-only MCP call through STDIO/local bridge;
+- [ ] validate a controlled write through the bridge;
+- [ ] preserve current MCP discovery/routing/execution/error semantics where the bridge path is used.
+
+#### RV2C - Transport policy and parity
+
+- [ ] define and validate conceptual `auto` / `native` / `bridge` per-server selection semantics before freezing config syntax;
+- [ ] keep `MCP_CONFIG` as the common MCP inventory and avoid duplicate independent realtime server configuration;
+- [ ] compare native versus bridge on equivalent read-only operations for latency, correctness and failure behavior;
+- [ ] add metrics identifying which MCP transport executed each tool call;
+- [ ] handle cancellation/retry/reconnect without duplicate control writes on either path;
+- [ ] compare classic versus realtime tool selection/arguments on a representative command corpus;
+- [ ] prove another arbitrary MCP can be used without modifying the realtime engine/provider adapter;
+- [ ] ensure a native-ineligible server can use the bridge without changing its MCP implementation.
+
+Exit: repeated MCP commands work correctly through both eligible native HTTPS and LSA-bridge STDIO/local paths; transport policy is explicit, no duplicate writes occur, no MCP inventory is duplicated, and no XMSeries/QLC/domain-specific logic exists in the realtime engine.
 
 ### RV3 - Optional wake word and realtime session lifecycle
 
@@ -596,20 +704,22 @@ Exit: repeated tool commands execute through the existing path with correct sele
 - [ ] return to `WAIT_WAKE` only when wake enabled;
 - [ ] assistant output cannot retrigger wake word;
 - [ ] real-speaker barge-in tested;
-- [ ] all four classic/realtime + wake ON/OFF combinations remain behaviorally coherent.
+- [ ] all four classic/realtime + wake ON/OFF combinations remain behaviorally coherent;
+- [ ] production realtime session instructions compose the general `PROMPT.md` plus the English realtime voice addendum without replacing or duplicating general rules;
+- [ ] language-agnostic spoken behavior is preserved through session lifecycle changes.
 
 ### RV4 - Realtime robustness, cancellation and fallback
 
-Goal: harden the realtime path itself; this milestone does not refactor MCP.
+Goal: harden the realtime path itself without removing either MCP transport.
 
 - [ ] WebSocket/provider reconnect behavior;
 - [ ] network-loss handling;
 - [ ] cancellation during audio generation;
-- [ ] cancellation immediately before/during/after a tool call;
-- [ ] duplicate tool-call prevention across retries/reconnects;
+- [ ] cancellation immediately before/during/after an MCP call;
+- [ ] duplicate MCP/tool-call prevention across retries/reconnects;
 - [ ] provider/session timeout handling;
 - [ ] provider errors surfaced naturally;
-- [ ] existing tool errors returned to the realtime model without creating a parallel error layer;
+- [ ] native MCP and bridge MCP errors returned to the realtime model without creating contradictory error layers;
 - [ ] deterministic session/audio cleanup;
 - [ ] automatic fallback to classic when realtime becomes unavailable and fallback is safe;
 - [ ] no ambiguous action state after interruption/reconnect/fallback.
@@ -624,6 +734,7 @@ Exit: failure injection cannot cause duplicate control actions, stuck audio/sess
 - [ ] compare code complexity and failure surface;
 - [ ] compare interruption/reconnect behavior;
 - [ ] compare provider portability;
+- [ ] compare interaction with native/bridged MCP execution where applicable;
 - [ ] select primary orchestration approach and record the measured rationale here.
 
 ### RV6 - Alternate realtime provider
@@ -631,9 +742,10 @@ Exit: failure injection cannot cause duplicate control actions, stuck audio/sess
 - [ ] Gemini Live spike behind the same provider-neutral realtime interface;
 - [ ] same latency/reliability benchmark suite;
 - [ ] same end-to-end cost methodology;
-- [ ] French recognition/voice comparison;
+- [ ] multilingual recognition/voice comparison including French and English;
 - [ ] tool-selection/argument comparison on the same corpus;
 - [ ] reconnect/session stability comparison;
+- [ ] preserve bridge MCP/STDIO capability even if the alternate provider lacks native MCP;
 - [ ] confirm adding the provider requires no MCP/domain-specific change;
 - [ ] record whether the alternate provider is retained as supported, benchmark-only or rejected.
 
@@ -641,7 +753,8 @@ Exit: failure injection cannot cause duplicate control actions, stuck audio/sess
 
 - [ ] direct experimental browser realtime transport;
 - [ ] backend-mediated ephemeral/session authorization;
-- [ ] backend retains existing tool/MCP execution and security ownership;
+- [ ] preserve backend ownership of security and any bridged MCP execution;
+- [ ] define how native remote MCP authorization is provisioned without exposing permanent secrets to the browser;
 - [ ] classic browser text/audio path retained;
 - [ ] mobile browser validation;
 - [ ] latency/cost comparison with backend WebSocket path;
@@ -665,10 +778,11 @@ OPENAI_REALTIME_MODEL=<configured-realtime-model>
 - [ ] automatic fallback to classic;
 - [ ] offline profiles force/use classic without deleting realtime configuration;
 - [ ] GUI configuration for pipeline and realtime provider/model;
+- [ ] GUI exposes validated MCP transport policy without creating a duplicate MCP inventory;
 - [ ] GUI hides classic-only controls in realtime mode and realtime-only controls in classic mode;
 - [ ] GUI keeps shared controls visible;
 - [ ] switching classic <-> realtime preserves the inactive pipeline's configuration;
-- [ ] health/status indicators identify active pipeline/provider and fallback state;
+- [ ] health/status indicators identify active pipeline/provider, MCP transport and fallback state;
 - [ ] regression tests;
 - [ ] classic + wake ON tested;
 - [ ] classic + wake OFF tested;
@@ -681,17 +795,18 @@ OPENAI_REALTIME_MODEL=<configured-realtime-model>
 - [ ] network loss/reconnect/fallback;
 - [ ] high ambient noise;
 - [ ] backend audio-device stability;
-- [ ] XR16/X32 operation through the unchanged existing MCP path;
-- [ ] QLC+ simultaneous activity through the unchanged existing MCP path;
-- [ ] multiple MCPs active;
+- [ ] XR16/X32 operation through validated native and/or bridge MCP paths as configured;
+- [ ] QLC+ simultaneous activity;
+- [ ] multiple MCPs active with mixed transports where applicable;
 - [ ] long-running realtime session;
 - [ ] service restart/recovery;
 - [ ] shutdown during realtime activity;
 - [ ] profile reload and classic/realtime switching;
 - [ ] real-speaker barge-in;
-- [ ] final latency/tool-quality/cost comparison against the classic baseline.
+- [ ] final latency/tool-quality/cost comparison against the classic baseline;
+- [ ] final native-MCP versus bridge-MCP latency/reliability comparison.
 
-Do not merge realtime runtime code into `main` until optional wake behavior, existing tool/MCP-path integrity, interruption, failure recovery, fallback, Pi resource usage, tool-call quality and measured latency/cost trade-offs are validated at the milestone level required for the intended release. The classic pipeline remains supported after realtime integration.
+Do not merge realtime runtime code into `main` until optional wake behavior, MCP-path integrity, interruption, failure recovery, fallback, Pi resource usage, tool-call quality and measured latency/cost trade-offs are validated at the milestone level required for the intended release. The classic pipeline and LSA MCP client/STDIO capability remain supported after realtime integration.
 
 ---
 
@@ -912,9 +1027,9 @@ Much of this roadmap is already implemented; remaining work is primarily hardwar
 
 Recommended Realtime Voice sequence:
 
-1. **RV0**: create/refresh `realtime-voice-architecture` from current `main`, formalize/complete classic timing instrumentation, record classic latency/cost baseline, then add only the provider-neutral `RealtimeEngine` skeleton.
-2. **RV1**: implement the isolated direct OpenAI Realtime audio spike without tool/MCP execution and compare latency, stability and end-to-end cost against classic.
-3. **RV2**: connect realtime tool-call events to the unchanged existing LSA tool/MCP execution path and compare tool-call correctness on the shared corpus.
-4. Continue through **RV3-RV9** only against the acceptance criteria defined above; keep classic available throughout.
+1. **RV0 — complete:** classic baseline and provider-neutral realtime skeleton are validated.
+2. **RV1 — complete:** direct OpenAI Realtime audio on Raspberry Pi 5 is validated with configured PipeWire audio, measured latency/cost, multilingual conversation and barge-in.
+3. **RV2 — next:** first validate OpenAI native remote MCP over the existing HTTPS/Tailscale Funnel exposure with a safe XMSeries read-only call, then validate the LSA bridge against STDIO/local MCP, compare both paths, and only then freeze transport-selection configuration.
+4. After RV2, pause/review the results before RV3 wake/session integration. Continue through RV3-RV9 only against the acceptance criteria above; keep classic and STDIO capabilities available throughout.
 
 Other roadmaps are independently activable. For example, work can start on **MK0** without waiting for Realtime Voice, or on **AV0** to improve current classic voice reliability.
