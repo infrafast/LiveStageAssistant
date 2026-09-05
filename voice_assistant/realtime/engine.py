@@ -44,6 +44,7 @@ class RealtimeEngineConfig:
     voice: str = "marin"
     instructions: str = "Respond naturally and concisely in the user's language. Default to English when unclear."
     server_vad: bool = True
+    input_transcription_model: str = "gpt-4o-mini-transcribe"
     mcp_servers: tuple[RealtimeMCPServer, ...] = ()
 
     def __post_init__(self) -> None:
