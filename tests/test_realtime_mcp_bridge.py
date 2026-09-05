@@ -31,13 +31,40 @@ class FakeSession:
         )
 
 
+class PromptSession(FakeSession):
+    async def list_tools(self):
+        return [
+            SimpleNamespace(
+                name="get_agent_prompt",
+                description="Return routing instructions",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            SimpleNamespace(
+                name="read_main",
+                description="Read main level",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+        ]
+
+    async def call_tool(self, name, arguments):
+        self.calls.append((name, arguments))
+        if name == "get_agent_prompt":
+            return SimpleNamespace(
+                isError=False,
+                content=[SimpleNamespace(type="text", text="Resolved bus targets must use bus tools.")],
+                structuredContent=None,
+            )
+        return await super().call_tool(name, arguments)
+
+
 class FakeClient:
-    def __init__(self):
+    def __init__(self, session_factory=FakeSession):
         self.sessions = {}
         self.closed = False
+        self.session_factory = session_factory
 
     async def create_session(self, server_name):
-        self.sessions[server_name] = FakeSession()
+        self.sessions[server_name] = self.session_factory()
 
     def get_session(self, server_name):
         return self.sessions[server_name]
@@ -85,6 +112,15 @@ class RealtimeMCPBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["is_error"])
         self.assertEqual(result["structured_content"], {"ok": True})
         self.assertEqual(client.sessions["mixer"].calls, [("read_main", {"target": "main"})])
+
+    async def test_loads_mcp_prompt_and_attaches_it_to_function_context(self):
+        client = FakeClient(PromptSession)
+        bridge = RealtimeMCPBridge(self.config(), server_names=("mixer",), client=client)
+        functions = await bridge.start()
+        prompt = await bridge.load_prompt_text("mixer")
+        self.assertEqual(prompt, "Resolved bus targets must use bus tools.")
+        self.assertTrue(all(function.context_instructions == prompt for function in functions))
+        self.assertIn(("get_agent_prompt", {}), client.sessions["mixer"].calls)
 
     async def test_external_client_is_not_closed_by_bridge(self):
         client = FakeClient()
