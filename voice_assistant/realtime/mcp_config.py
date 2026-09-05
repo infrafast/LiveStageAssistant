@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 
 VALID_TRANSPORTS = {"native", "stdio", "auto"}
-VALID_PERMISSION_MODES = {"open", "approval", "restricted"}
+VALID_PERMISSION_MODES = {"open", "approval"}
 
 
 @dataclass(frozen=True)
@@ -60,19 +60,6 @@ def _string_mapping(value: Any, *, field_name: str) -> dict[str, str]:
     return {str(key): str(item) for key, item in mapping.items()}
 
 
-def _allowed_tools(value: Any) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, (list, tuple)):
-        raise ValueError("realtime.permissions.allowedTools must be an array")
-    result: list[str] = []
-    for item in value:
-        text = str(item).strip()
-        if text and text not in result:
-            result.append(text)
-    return tuple(result)
-
-
 def normalize_mcp_server(name: str, entry: Mapping[str, Any]) -> CanonicalMCPServerConfig:
     raw = _mapping(entry, field_name=f"mcpServers.{name}")
     native_block = _mapping(raw.get("native"), field_name=f"mcpServers.{name}.native")
@@ -110,9 +97,6 @@ def normalize_mcp_server(name: str, entry: Mapping[str, Any]) -> CanonicalMCPSer
         raise ValueError(
             f"mcpServers.{name}.realtime.permissions.mode must be one of {sorted(VALID_PERMISSION_MODES)}, got {permission_mode!r}"
         )
-    allowed_tools = _allowed_tools(permissions.get("allowedTools"))
-    if permission_mode == "restricted" and not allowed_tools:
-        raise ValueError(f"mcpServers.{name}: restricted permission mode requires allowedTools")
 
     local_entry = dict(raw)
     local_entry.pop("native", None)
@@ -125,7 +109,7 @@ def normalize_mcp_server(name: str, entry: Mapping[str, Any]) -> CanonicalMCPSer
         native=MCPNativeConfig(url=native_url, headers=native_headers),
         realtime=MCPRealtimePolicy(
             transport=transport,
-            permissions=MCPPermissionPolicy(mode=permission_mode, allowed_tools=allowed_tools),
+            permissions=MCPPermissionPolicy(mode=permission_mode),
         ),
         assistant_options=assistant_options,
         raw_entry=dict(raw),
@@ -182,6 +166,8 @@ def update_mcp_realtime_policy(
 
     Existing command/args/env/assistantOptions and unrelated server entries are
     preserved. Native URL/headers are changed only when explicitly supplied.
+    ``allowed_tools`` remains accepted temporarily for caller compatibility but
+    is intentionally ignored: RV2D supports only open or approval permissions.
     """
     config_path = Path(path)
     try:
@@ -199,15 +185,11 @@ def update_mcp_realtime_policy(
     entry = _mapping(servers[server_name], field_name=f"mcpServers.{server_name}")
     transport_value = str(transport or "").strip().lower()
     permission_value = str(permission_mode or "").strip().lower()
-    allowed = list(_allowed_tools(allowed_tools))
 
     candidate = dict(entry)
     realtime = _mapping(candidate.get("realtime"), field_name=f"mcpServers.{server_name}.realtime")
     realtime["transport"] = transport_value
-    permissions: dict[str, Any] = {"mode": permission_value}
-    if permission_value == "restricted":
-        permissions["allowedTools"] = allowed
-    realtime["permissions"] = permissions
+    realtime["permissions"] = {"mode": permission_value}
     realtime.pop("permission", None)
     candidate["realtime"] = realtime
 
@@ -247,6 +229,6 @@ def server_summary(server: CanonicalMCPServerConfig) -> dict[str, Any]:
         "nativeUrlScheme": "https" if server.native.url.lower().startswith("https://") else "",
         "realtimeTransport": server.realtime.transport,
         "permissionMode": server.realtime.permissions.mode,
-        "allowedToolCount": len(server.realtime.permissions.allowed_tools),
+        "allowedToolCount": 0,
         "hasAssistantOptions": bool(server.assistant_options),
     }
