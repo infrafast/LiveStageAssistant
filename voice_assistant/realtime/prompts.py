@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 
 DEFAULT_BASE_PROMPT = (
     "You are Live Stage Assistant. Be precise, conservative, tool-driven, concise, and suitable for spoken output. "
@@ -27,7 +29,15 @@ MCP_ROUTING_WRAPPER = """MCP routing instructions follow. They are authoritative
 
 
 def compose_realtime_instructions(base_prompt: str = "", mcp_prompt: str = "") -> str:
-    parts = [(base_prompt or DEFAULT_BASE_PROMPT).strip()]
+    global_prompt = str(os.getenv("ASSISTANT_SYSTEM_PROMPT", "") or "").strip()
+    validation_prompt = str(base_prompt or "").strip()
+    parts: list[str] = []
+    if global_prompt:
+        parts.append(global_prompt)
+    elif not validation_prompt:
+        parts.append(DEFAULT_BASE_PROMPT)
+    if validation_prompt and validation_prompt != global_prompt:
+        parts.append("Realtime session-specific instructions:\n" + validation_prompt)
     if mcp_prompt.strip():
         parts.extend((MCP_ROUTING_WRAPPER.strip(), mcp_prompt.strip()))
     parts.append(REALTIME_VOICE_ADDENDUM.strip())
