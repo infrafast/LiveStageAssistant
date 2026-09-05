@@ -50,6 +50,7 @@ class RealtimeFunctionTool:
     name: str
     description: str = ""
     parameters: dict[str, Any] = field(default_factory=lambda: {"type": "object", "properties": {}})
+    context_instructions: str = ""
 
     def __post_init__(self) -> None:
         if not self.name.strip():
