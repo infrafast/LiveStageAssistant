@@ -74,29 +74,30 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
 
     def test_native_mcp_server_is_provider_neutral_config(self):
         server = RealtimeMCPServer(
-            label="mixer",
-            url="https://mixer.example.test/mcp",
+            label="service-a",
+            url="https://service.example.test/mcp",
             authorization="token",
             headers={"X-Test": "value"},
-            allowed_tools=("read_main",),
+            allowed_tools=("read_resource",),
             require_approval="never",
         )
         config = RealtimeEngineConfig(provider="test", model="test-model", mcp_servers=(server,))
         self.assertEqual(config.mcp_servers, (server,))
-        self.assertEqual(config.mcp_servers[0].allowed_tools, ("read_main",))
+        self.assertEqual(config.mcp_servers[0].allowed_tools, ("read_resource",))
 
     def test_native_mcp_server_requires_label_url_and_valid_approval(self):
         with self.assertRaises(ValueError):
             RealtimeMCPServer(label="", url="https://example.test/mcp")
         with self.assertRaises(ValueError):
-            RealtimeMCPServer(label="mixer", url="")
+            RealtimeMCPServer(label="service-a", url="")
         with self.assertRaises(ValueError):
-            RealtimeMCPServer(label="mixer", url="https://example.test/mcp", require_approval="sometimes")
+            RealtimeMCPServer(label="service-a", url="https://example.test/mcp", require_approval="sometimes")
 
-    def test_config_composes_global_mcp_and_voice_instructions(self):
+    def test_config_composes_global_mcp_and_voice_instructions_generically(self):
+        mcp_instructions = "Use the resource identifier returned by the discovery operation exactly as provided."
         tool = RealtimeFunctionTool(
-            name="mcp__mixer__read",
-            context_instructions="Resolver result family bus must use bus tools.",
+            name="mcp__service_a__read_resource",
+            context_instructions=mcp_instructions,
         )
         with patch.dict("os.environ", {"ASSISTANT_SYSTEM_PROMPT": "Global LSA prompt."}, clear=False):
             config = RealtimeEngineConfig(
@@ -107,8 +108,9 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn("Global LSA prompt.", config.instructions)
         self.assertIn("Validation runner prompt.", config.instructions)
-        self.assertIn("Resolver result family bus must use bus tools.", config.instructions)
-        self.assertIn("never reinterpret a resolved bus as aux", config.instructions)
+        self.assertIn(mcp_instructions, config.instructions)
+        self.assertIn("MCP-provided instructions follow", config.instructions)
+        self.assertIn("must not add, infer, or hard-code domain-specific concepts", config.instructions)
         self.assertIn("Do not offer extra help", config.instructions)
         self.assertIn("one short confirmation sentence", config.instructions)
 
