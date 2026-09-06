@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Single LiveStageAssistant service launcher.
 
-Select the active connectivity profile first, then start exactly one voice
-engine. This keeps Classic/Local and provider realtime engines isolated so the
-Classic STT/TTS/wake-word stack is not imported in Realtime mode.
+The launcher owns the engine-independent startup lifecycle. It selects the
+active connectivity profile, starts the configured loader audio, launches one
+voice engine, stops the loader when that engine reports READY, and keeps engine
+process/signal handling common for Classic, Local and realtime providers.
 """
 
 from __future__ import annotations
@@ -11,10 +12,15 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import signal
 import socket
+import subprocess
 import sys
+from typing import Mapping
 
 from dotenv import dotenv_values
+
+from voice_assistant.startup_lifecycle import StartupLoader, classic_ready_marker
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTO_ENV_DIR = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "/etc/livestageassistant"))
@@ -43,7 +49,7 @@ def resolve_env_file(value: str) -> tuple[Path, bool]:
     return path, online
 
 
-def normalize_engine(values: dict, *, online: bool) -> str:
+def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
     if not online:
         return "local"
     engine = str(values.get("VOICE_ENGINE") or "classic").strip().lower()
@@ -53,19 +59,86 @@ def normalize_engine(values: dict, *, online: bool) -> str:
     return engine
 
 
-def exec_classic(env_file: Path, original_env_arg: str) -> None:
+def engine_command(engine: str, env_file: Path, original_env_arg: str) -> list[str]:
+    if engine == "openai-realtime":
+        return [sys.executable, "-m", "voice_assistant.realtime.service", "--env-file", str(env_file)]
     target = ROOT / "voice_assistant" / "agent.py"
     env_arg = "auto" if str(original_env_arg).strip().lower() == "auto" else str(env_file)
-    print(f"LSA runtime: engine={'local' if env_file == OFFLINE_ENV else 'classic'} env={env_file}", flush=True)
-    os.execv(sys.executable, [sys.executable, str(target), "--env-file", env_arg])
+    return [sys.executable, str(target), "--env-file", env_arg]
 
 
-def exec_openai_realtime(env_file: Path) -> None:
-    print(f"LSA runtime: engine=openai-realtime env={env_file}", flush=True)
-    os.execv(
-        sys.executable,
-        [sys.executable, "-m", "voice_assistant.realtime.service", "--env-file", str(env_file)],
+def ready_marker(engine: str, values: Mapping[str, object]) -> str:
+    if engine == "openai-realtime":
+        return "LSA Realtime ready:"
+    return classic_ready_marker(ROOT, values)
+
+
+def run_engine(engine: str, env_file: Path, original_env_arg: str, values: Mapping[str, object]) -> int:
+    print(f"LSA runtime: engine={engine} env={env_file}", flush=True)
+
+    loader = StartupLoader(ROOT, values)
+    loader.start()
+
+    child_env = os.environ.copy()
+    # Startup feedback belongs to the common runtime. Individual engines must
+    # not start a second loader while running under this launcher.
+    child_env["STARTUP_LOADER_SOUND_ENABLED"] = "false"
+    child_env["LSA_COMMON_STARTUP_LIFECYCLE"] = "1"
+
+    command = engine_command(engine, env_file, original_env_arg)
+    marker = ready_marker(engine, values)
+    process = subprocess.Popen(
+        command,
+        cwd=str(ROOT),
+        env=child_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
+
+    stopped_for_ready = False
+
+    def forward_signal(signum, _frame) -> None:
+        if process.poll() is None:
+            try:
+                process.send_signal(signum)
+            except Exception:
+                pass
+
+    previous_handlers = {}
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, forward_signal)
+        except Exception:
+            pass
+
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            if not stopped_for_ready and marker and marker in line:
+                loader.stop()
+                stopped_for_ready = True
+        return process.wait()
+    finally:
+        if not stopped_for_ready:
+            loader.stop()
+        for sig, handler in previous_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except Exception:
+                pass
+        if process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=3.0)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
 
 
 def main() -> int:
@@ -83,11 +156,7 @@ def main() -> int:
         f"voice_engine={engine} profile={env_file}",
         flush=True,
     )
-
-    if engine == "openai-realtime":
-        exec_openai_realtime(env_file)
-    exec_classic(env_file, args.env_file)
-    return 0
+    return run_engine(engine, env_file, args.env_file, values)
 
 
 if __name__ == "__main__":
