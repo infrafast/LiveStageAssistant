@@ -37,7 +37,6 @@ def _install_offline_piper_adapter(agent, values: dict[str, object]) -> None:
     from voice_assistant.local_tts import piper_ready, piper_voice_name, render_piper_wav
 
     original_local_tts = agent.VoiceAssistant.text_to_speech_pyttsx3
-    original_local_available = agent.local_tts_playback_available
 
     def piper_available() -> bool:
         return piper_ready(values)
@@ -102,14 +101,8 @@ def run_classic(env_file: str) -> int:
         original_announce_ready = agent.VoiceAssistant.announce_startup_ready
 
         async def announce_ready_with_connectivity(self, loaded_servers):
-            # The engine is fully initialized here. Emit a machine-readable
-            # READY marker before any spoken announcement so the common runtime
-            # can stop the loader at the correct boundary.
             print(f"{CLASSIC_READY_MARKER} connectivity={'online' if online else 'offline'}", flush=True)
 
-            # Connectivity ownership remains in the common runtime. This adapter
-            # only delivers the already-known ONLINE event with Classic's own
-            # configured speech path once that path is available.
             if online and os.getenv("LSA_ANNOUNCE_ONLINE_WITH_ENGINE", "1") == "1":
                 message = "Assistant connecté à internet."
                 print(f"LSA connectivity announcement via classic: {message}", flush=True)
