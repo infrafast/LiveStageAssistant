@@ -60,11 +60,18 @@ def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
 
 
 def engine_command(engine: str, env_file: Path, original_env_arg: str) -> list[str]:
-    if engine == "openai-realtime":
-        return [sys.executable, "-m", "voice_assistant.realtime.service", "--env-file", str(env_file)]
-    target = ROOT / "voice_assistant" / "agent.py"
-    env_arg = "auto" if str(original_env_arg).strip().lower() == "auto" else str(env_file)
-    return [sys.executable, str(target), "--env-file", env_arg]
+    env_arg = str(env_file)
+    if engine in {"classic", "local"} and str(original_env_arg).strip().lower() == "auto":
+        env_arg = "auto"
+    return [
+        sys.executable,
+        "-m",
+        "voice_assistant.engine_entry",
+        "--engine",
+        engine,
+        "--env-file",
+        env_arg,
+    ]
 
 
 def ready_marker(engine: str, values: Mapping[str, object]) -> str:
@@ -80,9 +87,6 @@ def run_engine(engine: str, env_file: Path, original_env_arg: str, values: Mappi
     loader.start()
 
     child_env = os.environ.copy()
-    # Startup feedback belongs to the common runtime. Individual engines must
-    # not start a second loader while running under this launcher.
-    child_env["STARTUP_LOADER_SOUND_ENABLED"] = "false"
     child_env["LSA_COMMON_STARTUP_LIFECYCLE"] = "1"
 
     command = engine_command(engine, env_file, original_env_arg)
