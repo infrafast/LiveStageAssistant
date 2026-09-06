@@ -67,7 +67,7 @@ Do not create a separate document to track milestone work.
 ## Important Local Profiles
 
 - `.env.online` is the cloud profile and should stay coherent with `CONNECTIVITY_MODE=online`.
-- `.env.offline` is the local profile and should stay coherent with `CONNECTIVITY_MODE=offline`, Ollama, local Whisper, local pyttsx3 TTS and offline MCP config.
+- `.env.offline` is the local profile and should stay coherent with `CONNECTIVITY_MODE=offline`, Ollama, local Whisper, Piper local TTS and offline MCP config. pyttsx3 is only a temporary emergency fallback while OR3 hardware validation is incomplete.
 - `.env.infrafasthttp` may be ignored by Git but is an active local profile; check it when the user asks about all env files or local profile behavior.
 
 Before finishing code/config changes, run the relevant lightweight checks, usually:
