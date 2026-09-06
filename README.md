@@ -5,12 +5,13 @@ Live Stage Assistant is a voice-enabled assistant for musicians and stage operat
 ## Main Features
 
 - Voice input with OpenAI Whisper or local Whisper.
-- Voice output through OpenAI, ElevenLabs, local pyttsx3, browser TTS, backend TTS, or silent text mode.
+- Voice output through OpenAI, ElevenLabs, local Piper, browser TTS, backend TTS, or silent text mode.
+- Selectable Classic or OpenAI Realtime online voice engine.
 - Optional wake word.
 - Optional speaker recognition.
 - Browser-based chat/configuration interface.
 - Online mode with cloud AI services.
-- Offline mode with Ollama, local Whisper and local TTS.
+- Offline mode with Ollama, local Whisper and Piper TTS.
 - MCP integration for XMSeries-MCP, QLCPlus-MCP and other compatible servers.
 
 ## Prerequisites
@@ -42,7 +43,15 @@ cd LiveStageAssistant
 .\scripts\install.ps1
 ```
 
-The installer creates the Python environment and installs the required dependencies. It also prepares the optional local/offline components when possible.
+The installer creates the Python environment and installs Classic and Realtime voice support plus the local/offline components when possible. Piper is installed automatically and the default French voice `fr_FR-siwis-medium` is downloaded into `data/piper`.
+
+To download or restore the default French Piper voice manually:
+
+```bash
+.venv/bin/python -m piper.download_voices --data-dir data/piper fr_FR-siwis-medium
+```
+
+On Windows PowerShell, use `.venv\Scripts\python.exe` in the same command.
 
 ## API Keys
 
@@ -57,22 +66,17 @@ The selected env profile points to these files. Do not commit real API keys.
 
 ## Running Live Stage Assistant
 
-Default automatic online/offline mode:
+The common runtime is the normal entry point when automatic online/offline switching is required:
 
 ```bash
-.venv/bin/python voice_assistant/agent.py
+.venv/bin/python -m voice_assistant.runtime --env-file auto
 ```
 
-Explicit online mode:
+Explicit online or offline engine profiles can also be started through the common runtime:
 
 ```bash
-.venv/bin/python voice_assistant/agent.py --env-file .env.online
-```
-
-Explicit offline mode:
-
-```bash
-.venv/bin/python voice_assistant/agent.py --env-file .env.offline
+.venv/bin/python -m voice_assistant.runtime --env-file .env.online
+.venv/bin/python -m voice_assistant.runtime --env-file .env.offline
 ```
 
 On Windows PowerShell, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
@@ -97,6 +101,8 @@ chmod +x install_livestageassistant_service.sh livestageassistant
 ./install_livestageassistant_service.sh
 livestageassistant auto
 ```
+
+The normal installer already installs Realtime support, Piper, and the default French Piper voice before the service pack is installed.
 
 If you use local stdio stage MCP servers, the usual layout is:
 
@@ -167,10 +173,11 @@ Important files:
 - `.env.example`: complete configuration example.
 - `mcp_servers*.json`: MCP server definitions.
 
-Common settings include:
+Typical online settings include:
 
 ```env
 CONNECTIVITY_MODE=online
+VOICE_ENGINE=classic
 LLM_PROVIDER=openai
 OPENAI_MODEL=gpt-4.1-mini
 STT_LANGUAGE=fr
@@ -182,6 +189,18 @@ WAKE_WORD=
 WEB_MONITOR_ENABLED=true
 WEB_MONITOR_PORT=8765
 MCP_CONFIG=mcp_servers.json
+```
+
+Typical offline Piper settings are:
+
+```env
+CONNECTIVITY_MODE=offline
+LLM_PROVIDER=ollama
+STT_PROVIDER=local-whisper
+LOCAL_TTS_PROVIDER=piper
+PIPER_VOICE=fr_FR-siwis-medium
+PIPER_DATA_DIR=data/piper
+WEB_TTS_PROVIDER=none
 ```
 
 ### Wake Word
@@ -247,7 +266,8 @@ Build local stdio MCP servers before starting LSA, and make sure their paths or 
 
 - Check whether TTS Output is set to Browser, Backend or Silent.
 - Verify the selected audio output device.
-- Check API keys and provider quota if using cloud TTS.
+- In offline mode, verify that `data/piper/fr_FR-siwis-medium.onnx` and its `.onnx.json` file exist.
+- Check API keys and provider quota only when using cloud TTS.
 
 ### MCP server unavailable
 
@@ -260,10 +280,10 @@ Build local stdio MCP servers before starting LSA, and make sure their paths or 
 Run explicitly with:
 
 ```bash
-.venv/bin/python voice_assistant/agent.py --env-file .env.offline
+.venv/bin/python -m voice_assistant.runtime --env-file .env.offline
 ```
 
-and verify the offline profile uses Ollama, local Whisper and local TTS.
+and verify the offline profile uses Ollama, local Whisper, Piper and local/STDIO MCP servers.
 
 ## Development And Maintenance
 
