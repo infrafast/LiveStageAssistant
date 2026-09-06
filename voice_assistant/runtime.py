@@ -11,7 +11,6 @@ and realtime providers.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import os
 from pathlib import Path
 import queue
@@ -26,6 +25,7 @@ from dotenv import dotenv_values
 
 from voice_assistant.connectivity_manager import ConnectivityEvent, ConnectivityManager
 from voice_assistant.engine_entry import CLASSIC_READY_MARKER
+from voice_assistant.local_tts import speak_local_status
 from voice_assistant.startup_lifecycle import StartupLoader
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,8 +33,6 @@ AUTO_ENV_DIR = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "/etc/livestageassistant
 ONLINE_ENV = AUTO_ENV_DIR / ".env.online"
 OFFLINE_ENV = AUTO_ENV_DIR / ".env.offline"
 CONNECTIVITY_INTERVAL = float(os.getenv("LSA_CONNECTIVITY_CHECK_INTERVAL", "10") or "10")
-LOCAL_TTS_DEFAULT_RATE = 145
-LOCAL_TTS_DEFAULT_VOLUME = 1.0
 
 
 def _load_values(path: Path) -> dict[str, object]:
@@ -72,90 +70,14 @@ def ready_marker(engine: str) -> str:
     return CLASSIC_READY_MARKER
 
 
-@contextlib.contextmanager
-def _quiet_native_stderr():
-    saved = None
-    null_fd = None
-    try:
-        saved = os.dup(2)
-        null_fd = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(null_fd, 2)
-        yield
-    finally:
-        if saved is not None:
-            os.dup2(saved, 2)
-            os.close(saved)
-        if null_fd is not None:
-            os.close(null_fd)
-
-
-def _voice_search_text(voice) -> str:
-    parts = [str(getattr(voice, "id", "") or ""), str(getattr(voice, "name", "") or "")]
-    for language in getattr(voice, "languages", None) or []:
-        if isinstance(language, bytes):
-            with contextlib.suppress(Exception):
-                language = language.decode("utf-8", errors="ignore")
-        parts.append(str(language or ""))
-    return " ".join(parts).casefold()
-
-
-def _select_local_voice(tts, values: Mapping[str, object] | None) -> str:
-    config = values or {}
-    requested = str(config.get("LOCAL_SYSTEM_TTS_VOICE") or os.getenv("LOCAL_SYSTEM_TTS_VOICE") or "").strip()
-    locale = str(config.get("STT_LANGUAGE") or config.get("LANGUAGE") or "fr").strip().lower().replace("_", "-")
-    language = locale.split("-", 1)[0] or "fr"
-    voices = list(tts.getProperty("voices") or [])
-
-    selected = None
-    if requested:
-        requested_key = requested.casefold()
-        selected = next((voice for voice in voices if requested_key in _voice_search_text(voice)), None)
-    if selected is None:
-        language_markers = {
-            "fr": ("fr-fr", "fr_", " french", "french", "français", "francais", "france"),
-            "en": ("en-us", "en-gb", " english", "english"),
-        }.get(language, (language,))
-        selected = next(
-            (voice for voice in voices if any(marker in _voice_search_text(voice) for marker in language_markers)),
-            None,
-        )
-    if selected is not None:
-        tts.setProperty("voice", selected.id)
-        return str(getattr(selected, "name", None) or getattr(selected, "id", None) or "selected")
-    return "default"
-
-
 def speak_local(text: str, values: Mapping[str, object] | None = None) -> None:
-    """Speak critical local status without depending on any cloud engine."""
+    """Speak critical status locally through Piper, with emergency fallback."""
     message = str(text or "").strip()
     if not message:
         return
     print(f"LSA local announcement: {message}", flush=True)
-    config = values or {}
-    try:
-        rate = int(float(config.get("LOCAL_SYSTEM_TTS_RATE") or os.getenv("LOCAL_SYSTEM_TTS_RATE") or LOCAL_TTS_DEFAULT_RATE))
-    except (TypeError, ValueError):
-        rate = LOCAL_TTS_DEFAULT_RATE
-    try:
-        volume = float(config.get("LOCAL_SYSTEM_TTS_VOLUME") or os.getenv("LOCAL_SYSTEM_TTS_VOLUME") or LOCAL_TTS_DEFAULT_VOLUME)
-    except (TypeError, ValueError):
-        volume = LOCAL_TTS_DEFAULT_VOLUME
-    volume = max(0.0, min(1.0, volume))
-
-    try:
-        with _quiet_native_stderr():
-            import pyttsx3
-
-            tts = pyttsx3.init()
-            voice_name = _select_local_voice(tts, config)
-            tts.setProperty("rate", max(80, min(260, rate)))
-            tts.setProperty("volume", volume)
-            print(f"LSA local TTS: voice={voice_name} rate={rate} volume={volume:.2f}", flush=True)
-            tts.say(message)
-            tts.runAndWait()
-            tts.stop()
-    except Exception as exc:
-        print(f"LSA local announcement failed: {exc}", flush=True)
+    if not speak_local_status(message, values):
+        print("LSA local announcement failed: no usable local TTS backend", flush=True)
 
 
 def _terminate_process(process: subprocess.Popen, *, timeout: float = 6.0) -> None:
@@ -238,9 +160,8 @@ def run_engine_session(
     try:
         while not stop_event.wait(0.2):
             if not online and ready_seen.is_set() and not local_ready_announced:
-                # Offline profiles intentionally may have TTS_PROVIDER=none.
-                # READY feedback is a runtime responsibility and therefore uses
-                # the same guaranteed-local speech path as connectivity loss.
+                # Offline READY feedback belongs to the common runtime and uses
+                # the same guaranteed-local Piper path as connectivity loss.
                 speak_local("Assistant vocal prêt à exécuter des commandes.", values)
                 local_ready_announced = True
 
