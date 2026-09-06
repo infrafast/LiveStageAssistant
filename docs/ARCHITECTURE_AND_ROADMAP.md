@@ -110,7 +110,7 @@ ONLINE
   -> continue fully offline
 ```
 
-The loss-of-connectivity announcement uses Piper because the cloud engine is no longer a reliable dependency at that instant. pyttsx3 remains only as a temporary emergency fallback during OR3 Pi validation.
+The loss-of-connectivity announcement uses Piper because the cloud engine is no longer a reliable dependency at that instant. OR3 is now Pi-validated and no longer configures or falls back to pyttsx3.
 
 When Internet returns:
 
@@ -174,7 +174,7 @@ CLOUD_TTS_PROVIDER=openai
 TTS_PROVIDER=none
 WEB_TTS_PROVIDER=openai
 
-# Offline/local speech defaults
+# Offline/local speech defaults. Offline does not use TTS_PROVIDER.
 LOCAL_TTS_PROVIDER=piper
 PIPER_VOICE=fr_FR-siwis-medium
 PIPER_DATA_DIR=data/piper
@@ -200,6 +200,7 @@ Configuration ownership:
   -> connectivity / voice engine / provider / audio defaults
   -> classic-pipeline settings when classic is selected
   -> realtime settings when realtime is selected
+  -> offline/local TTS exclusively through LOCAL_TTS_PROVIDER
   -> MCP_CONFIG path
 
 MCP_CONFIG JSON
@@ -250,7 +251,9 @@ One MCP's permission or transport choice must not implicitly change another MCP.
 
 Offline mode remains cloud-independent and uses Ollama, local faster-whisper, Piper local TTS and local/STDIO MCP servers. Realtime work must not weaken this path. `CONNECTIVITY_MODE=offline` must never dispatch to a cloud realtime provider even if a stale/mistaken online-engine value exists.
 
-The common `ConnectivityManager` and `EngineSupervisor` now implement the production ownership model. Piper is implemented as the normal offline/local voice path under OR3; pyttsx3 remains an emergency migration fallback until Pi hardware validation completes. Pi hardware validation of Online -> Offline -> Online transitions remains pending.
+The common `ConnectivityManager` and `EngineSupervisor` implement the production ownership model. Piper is the sole OR3 offline/local voice backend selected through `LOCAL_TTS_PROVIDER`. Basic Pi5 Online -> Offline -> Online round trips are validated for both Classic and OpenAI Realtime with local loss/READY announcements and without observed audio-device lockup.
+
+The large historical Classic `agent.py` still contains a pyttsx3 implementation for legacy non-OR3 paths. That implementation is outside the OR3 configuration contract and must not be reintroduced into offline profiles or used as an OR3 fallback. A future Classic cleanup may remove it separately once all legacy callers are audited.
 
 ## 1.9 Rack connectivity and remote MCP
 
@@ -273,7 +276,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC native fixture validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C native-first AUTO behavior includes a validated forced HTTPS-down -> STDIO fallback in the integrated service. RV2D canonical configuration, GUI persistence and common startup-loader lifecycle are materially implemented and validated. OR2 common connectivity supervision is now implemented in code and awaiting Pi round-trip validation. OR3 Piper offline speech is implemented in code and awaiting Pi audio/round-trip validation.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC native fixture validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C native-first AUTO behavior includes a validated forced HTTPS-down -> STDIO fallback in the integrated service and deterministic auth/timeout/post-dispatch safety probes implemented pending Pi execution. RV2D canonical configuration, GUI persistence, common startup-loader lifecycle and basic common connectivity round trips are materially implemented and Pi-validated. OR2 basic Classic and Realtime Online -> Offline -> Online round trips are Pi-validated. OR3 Piper offline speech is functionally Pi-validated and is now Piper-only.
 
 **Goal:** add selectable low-latency realtime voice beside Classic without decommissioning Classic, while preserving MCP transport flexibility, wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -300,8 +303,9 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 19. Startup loader timing/policy belongs to the common runtime, not individual engines.
 20. Connectivity detection, continuous connectivity watching, profile switching and engine switching belong to the common runtime, not individual engines.
 21. `Assistant connecté à internet` belongs to an ONLINE connectivity event; `Assistant vocal prêt à exécuter des commandes` belongs to an ENGINE READY event. These events must remain independent.
-22. Loss of Internet while a cloud engine is active must be announced through a guaranteed-local speech path, now Piper by default with temporary pyttsx3 emergency fallback, before/while switching to the offline profile and local engine.
+22. Loss of Internet while a cloud engine is active must be announced through the guaranteed-local Piper speech path before/while switching to the offline profile and local engine.
 23. Low-level ALSA/JACK probe noise should be suppressed while real audio failures remain visible as concise LSA errors.
+24. Offline/local TTS configuration is owned solely by `LOCAL_TTS_PROVIDER`; OR3 must not require `TTS_PROVIDER=pyttsx3` or a pyttsx3 fallback.
 
 ## RV target architecture
 
@@ -413,12 +417,15 @@ Require approval
 - [x] pre-dispatch native failure -> STDIO fallback;
 - [x] safe fallback policy blocks ambiguous write replay;
 - [x] integrated-service 502 -> STDIO fallback validated;
-- [~] remaining auth/timeout/post-dispatch fault validation;
+- [~] auth/timeout/post-dispatch deterministic fault matrix implemented; Pi execution pending;
+- [~] real native post-dispatch fault injection pending after deterministic probe validation;
 - [~] direct native-vs-STDIO comparison pending;
 - [ ] representative Classic-vs-Realtime tool corpus;
 - [ ] arbitrary unrelated MCP proof without engine changes.
 
 Validation note (Pi5, 2026-09-06): mixer=`auto/open` with a native HTTP 502 fell back before dispatch to STDIO; mixer + QLCPlus exposed 43 bridge tools and a live `Quel est le volume de Claude ?` query resolved/read the real bus and returned the correct value.
+
+Implementation note (2026-09-06): `scripts/rv2c_fault_matrix.py` and the extended `tests/test_realtime_mcp_auto.py` cover auth failures, pre-dispatch timeouts, post-dispatch read failures, ambiguous write/unknown failures and explicit non-execution. The Pi probe remains required before those deterministic cases are considered validated.
 
 #### RV2D - Canonical config, runtime and per-MCP GUI policy — IN PROGRESS
 
@@ -432,10 +439,11 @@ Validation note (Pi5, 2026-09-06): mixer=`auto/open` with a native HTTP 502 fell
 - [x] service launcher selects voice engine before importing Classic;
 - [x] common startup loader lifecycle implemented and Pi-validated for OpenAI Realtime and Classic;
 - [x] Realtime audio probe noise cleaned;
-- [~] common connectivity supervision and online/offline engine/profile switching implemented under OR2; Pi validation pending;
+- [x] common connectivity supervision and basic online/offline engine/profile round trips Pi-validated under OR2;
 - [ ] server health/status shows configured and effective transport/permission;
 - [ ] STDIO approval completion;
 - [ ] re-integrate WebMonitor into Realtime without importing Classic;
+- [ ] add an independent Realtime output-gain control so Realtime speech can be raised to match the preferred Piper level; non-blocking audio polish;
 - [ ] final inventory consolidation/plugin-style GUI.
 
 ### RV2E - Realtime MCP latency and tool-call efficiency
@@ -460,8 +468,8 @@ Validation note (Pi5, 2026-09-06): mixer=`auto/open` with a native HTTP 502 fell
 
 ### RV4 - Realtime robustness, cancellation and fallback
 
-- [ ] WebSocket/provider reconnect;
-- [~] network-loss handling implemented in common OR2 supervisor; Pi validation pending;
+- [ ] WebSocket/provider reconnect while Internet remains available;
+- [x] basic network-loss handling and Realtime -> Local -> Realtime recovery validated through common OR2 supervisor on Pi5;
 - [ ] cancellation around MCP calls;
 - [ ] duplicate-call prevention across reconnects;
 - [ ] provider/session timeout handling;
@@ -504,28 +512,30 @@ MCP_CONFIG=mcp_servers.json
 - [x] GUI `Classic / OpenAI Realtime` persistence;
 - [x] selected Realtime starts without Classic voice stack import;
 - [x] common startup loader lifecycle across Classic and Realtime;
-- [~] offline remains separate and cloud-blocked structurally;
+- [x] offline remains separate and cloud-blocked structurally;
 - [x] common `ConnectivityManager` owns startup detection + continuous watch in code;
 - [x] `EngineSupervisor` performs profile/engine replacement in code;
-- [ ] Pi validate Online -> Offline -> Online round trips;
+- [x] Pi validate Realtime Online -> Offline -> Online round trip;
+- [x] Pi validate Classic Online -> Offline -> Online round trip;
 - [ ] automatic safe fallback when selected cloud engine itself becomes unavailable while Internet remains up;
 - [ ] provider/model/voice controls finalized;
+- [ ] Realtime output gain control finalized;
 - [ ] health/status identifies active connectivity/engine/provider/MCP transport;
 - [ ] all Classic/Realtime + wake ON/OFF combinations tested.
 
 ### RV9 - Raspberry Pi 5 stage validation
 
 - [ ] CPU/RAM/temperature;
-- [~] network loss/reconnect/fallback code implemented under OR2; hardware validation pending;
+- [x] basic network loss/reconnect profile and engine replacement validated for Classic and Realtime;
 - [ ] high ambient noise;
-- [~] audio stability; repeated service restarts and PipeWire operation working;
+- [x] audio stability across the tested Classic/Reatime -> Piper -> online round trips with no observed output lockup;
 - [~] XR16/X32 and QLC+ transport validation; XR16+QLCPlus current Pi validated, X32 pending;
 - [x] mixed MCP transport policy validated;
 - [ ] mixed permission policies;
 - [ ] long-running realtime session;
 - [x] Realtime service restart validated;
 - [x] common loader lifecycle validated for Realtime and Classic startup;
-- [ ] Online -> Offline -> Online engine round trip;
+- [x] Online -> Offline -> Online engine round trips validated for both Realtime and Classic;
 - [~] barge-in validated in RV1, production-service retest pending;
 - [ ] final latency/tool-quality/cost comparison.
 
@@ -594,10 +604,11 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 
 ### OR0 - Profile contract — STRUCTURALLY VALIDATED
 
-- [x] offline remains Ollama + local Whisper + local TTS + local/STDIO MCP;
+- [x] offline remains Ollama + local Whisper + Piper local TTS + local/STDIO MCP;
 - [x] connectivity and voice engine remain independent configuration axes;
 - [x] offline must never start a cloud realtime provider;
-- [~] network status announcement semantics are centralized; full hardware round-trip validation remains pending.
+- [x] network status announcement semantics centralized and Pi-validated for the basic Classic/Realtime round trips;
+- [x] offline TTS configuration uses only `LOCAL_TTS_PROVIDER`; the obsolete `TTS_PROVIDER=pyttsx3` + fallback combination is removed.
 
 ### OR1 - Resource cleanup and service behavior
 
@@ -605,7 +616,7 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 - [x] systemd shutdown bounded;
 - [ ] service-stop-during-processing hardware test.
 
-### OR2 - Common ConnectivityManager and EngineSupervisor — IMPLEMENTED / PI VALIDATION PENDING
+### OR2 - Common ConnectivityManager and EngineSupervisor — CORE PI ROUND-TRIP VALIDATED
 
 **Goal:** remove connectivity ownership from individual engines and provide one online/offline transition mechanism for Classic, OpenAI Realtime, Local and future Gemini/other engines.
 
@@ -616,42 +627,44 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 - [x] prevent duplicate Classic + common-runtime watchers in the supervised path;
 - [x] on ONLINE startup/event, select `.env.online` and the configured online `VOICE_ENGINE`;
 - [x] on OFFLINE startup/event, select `.env.offline` and force the local engine;
-- [x] on Internet loss, announce the transition through the guaranteed-local TTS path; Piper is now the OR3 default with pyttsx3 only as emergency fallback;
+- [x] on Internet loss, announce the transition through the guaranteed-local Piper TTS path;
 - [x] stop the outgoing engine cleanly with bounded terminate/kill fallback;
 - [x] use the common startup loader while the incoming engine initializes;
 - [x] consume explicit engine READY markers so loader stops before spoken status/ready announcements;
 - [x] on Internet restoration, emit the ONLINE transition in the common runtime and relaunch the configured online engine;
 - [x] OpenAI Realtime delivers the ONLINE announcement through its native voice path; Classic receives the already-known ONLINE event through the engine-entry speech adapter;
 - [x] preserve MCP profile/config selection structurally by relaunching against the selected `.env` profile;
-- [~] preserve audio-device ownership and avoid input/output lockups across engine replacement; code uses bounded shutdown and short release window, Pi validation pending;
+- [x] preserve audio-device ownership across the tested engine replacements; no output lockup observed on Pi5;
 - [ ] expose current connectivity state and active engine to WebMonitor/health status;
-- [ ] validate Online Realtime -> Offline Local -> Online Realtime on Pi5;
-- [ ] validate Online Classic -> Offline Local -> Online Classic on Pi5;
+- [x] validate Online Realtime -> Offline Local -> Online Realtime on Pi5;
+- [x] validate Online Classic -> Offline Local -> Online Classic on Pi5;
 - [ ] validate recovery when Internet flaps repeatedly;
 - [x] future Gemini/other engines require no separate network watcher implementation.
 
-Implementation note (2026-09-06): `voice_assistant/connectivity_manager.py` owns the probe/watch event model. `voice_assistant/runtime.py` owns profile selection, child-engine supervision, local offline speech, loader lifecycle and replacement. `engine_entry.py` provides only engine-specific speech/READY adaptation and does not perform connectivity detection.
+Implementation/validation note (Pi5, 2026-09-06): `voice_assistant/connectivity_manager.py` owns the probe/watch event model. `voice_assistant/runtime.py` owns profile selection, child-engine supervision, local offline speech, loader lifecycle and replacement. `engine_entry.py` provides only engine-specific speech/READY adaptation and does not perform connectivity detection. Both OpenAI Realtime and Classic completed Online -> Offline/Piper -> Online round trips with local connectivity-loss/READY speech and no observed audio lockup.
 
 Exit: a single common ConnectivityManager/EngineSupervisor owns all connectivity-driven engine transitions, with local audible failure notification and no cloud dependency during the offline switch.
 
-### OR3 - Piper local TTS for offline mode — IMPLEMENTED / PI VALIDATION PENDING
+### OR3 - Piper local TTS for offline mode — FUNCTIONALLY VALIDATED ON PI5
 
-**Goal:** replace pyttsx3 as the normal offline/local speech backend with Piper so offline announcements and assistant responses remain fully local while sounding materially more natural on Raspberry Pi 5.
+**Goal:** use Piper as the sole normal offline/local speech backend so offline announcements and assistant responses remain fully local while sounding materially more natural on Raspberry Pi 5.
 
 - [x] add a dedicated shared Piper local-TTS adapter without coupling it to Realtime provider code;
 - [x] make `.env.offline` and the Raspberry service profile select Piper as the actual local TTS backend while keeping `CONNECTIVITY_MODE=offline` fully cloud-independent;
+- [x] offline configuration is now owned exclusively by `LOCAL_TTS_PROVIDER=piper`; `TTS_PROVIDER=pyttsx3` and `LOCAL_TTS_PYTTSX3_FALLBACK` are removed from OR3 profiles and migration;
 - [x] add explicit Piper voice/model/config/data-dir/speed settings with practical defaults and corresponding `.env.example` documentation;
-- [~] route local-engine responses through Piper using the existing configured backend playback path; code implemented, Pi audio validation pending;
-- [~] route the common-runtime Internet-loss/offline-transition and local READY announcements through Piper; code implemented, Pi audio validation pending;
-- [~] keep pyttsx3 only as a temporary migration/emergency fallback until Piper is Pi-validated; Piper is already the configured normal offline path;
-- [ ] validate the default French `fr_FR-siwis-medium` voice for intelligibility/naturalness, synthesis latency, CPU/RAM use and startup overhead on Pi5;
-- [ ] validate offline startup, normal command response, READY announcement and Internet-loss announcement with no Internet dependency;
-- [ ] validate Online Realtime -> Offline Piper -> Online Realtime and Online Classic -> Offline Piper -> Online Classic without audio-device lockup;
+- [x] route local-engine responses through Piper using the existing configured backend playback path and validate on Pi5;
+- [x] route the common-runtime Internet-loss/offline-transition and local READY announcements through Piper and validate on Pi5;
+- [x] remove pyttsx3 as an OR3 emergency fallback now that Piper is Pi-validated;
+- [~] default French `fr_FR-siwis-medium` voice qualitatively validated for intelligibility/naturalness on Pi5; quantitative synthesis latency/CPU/RAM/startup measurements remain pending;
+- [x] validate offline startup/local speech path, READY announcement and Internet-loss announcement with no Internet dependency;
+- [x] validate Online Realtime -> Offline Piper -> Online Realtime without audio-device lockup;
+- [x] validate Online Classic -> Offline Piper -> Online Classic without audio-device lockup;
 - [x] update the global Linux/macOS/Raspberry installer, Windows installer and user-facing install/config guidance so Piper and the default French voice are installed automatically; Realtime package import is also verified by the installer.
 
-Implementation note (2026-09-06): `voice_assistant/local_tts.py` owns Piper model loading/rendering and critical local status speech. The default voice is `fr_FR-siwis-medium` under `data/piper`. `engine_entry.py` adapts the historical Classic local-TTS hook to Piper only for offline sessions so the large Classic provider surface does not need to be rewritten in OR3. `scripts/install.sh` and `scripts/install.ps1` install `piper-tts`, download the default French model/config, and verify the Realtime package is installed. pyttsx3 remains available only as the temporary `LOCAL_TTS_PYTTSX3_FALLBACK` emergency path until Pi validation completes.
+Implementation note (2026-09-06): `voice_assistant/local_tts.py` owns Piper model loading/rendering and critical local status speech. The default voice is `fr_FR-siwis-medium` under `data/piper`. `engine_entry.py` adapts the historical Classic local-output hook to Piper only for offline sessions so the large Classic provider surface does not need to be rewritten in OR3. The legacy method name in `agent.py` remains an internal compatibility hook, but OR3 no longer configures or executes pyttsx3 fallback behavior. `scripts/install.sh` and `scripts/install.ps1` install `piper-tts` and download the default French model/config. The Raspberry service installer migrates existing offline profiles by removing `TTS_PROVIDER` and `LOCAL_TTS_PYTTSX3_FALLBACK` and preserving site-specific settings.
 
-Exit: offline/local speech and connectivity-loss announcements use Piper by default on Pi5, remain fully usable without Internet, and pyttsx3 is no longer the normal production offline voice path. Mark OR3 fully validated only after the Pi tests above pass.
+Exit: offline/local speech and connectivity-loss announcements use Piper exclusively on Pi5 and remain fully usable without Internet. Quantitative performance characterization can continue separately without blocking OR3 functional use.
 
 ---
 
@@ -773,11 +786,12 @@ runtime state
 
 # 9. Current Next Actions
 
-1. **OR3 — Pi smoke/voice validation:** install/update on Pi5, verify the `fr_FR-siwis-medium` voice, offline startup, normal local response and local READY speech.
-2. **OR3 / OR2 — transition validation:** Realtime Online -> Offline Piper -> Realtime Online, then Classic Online -> Offline Piper -> Classic Online; verify the local connectivity-loss announcement and no audio lockup.
-3. **OR2 / RV2D — health exposure:** expose common connectivity state + active engine to WebMonitor/health after transition behavior is validated.
-4. **RV2C:** resume remaining auth/timeout/post-dispatch/ambiguous fallback cases after OR2/OR3 hardware validation.
-5. **RV2D / RV8:** restore WebMonitor into Realtime after OR2 round trips are stable.
-6. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI.
-7. **RV2E:** latency/tool-efficiency benchmark after runtime/connectivity semantics are stable.
-8. **RV3:** optional wake lifecycle after common engine/connectivity supervision is stable.
+1. **RV2C — deterministic Pi fault probe:** run `tests.test_realtime_mcp_auto` and `scripts/rv2c_fault_matrix.py` on Pi5; confirm ambiguous post-dispatch writes never replay.
+2. **RV2C — real fault injection:** after the deterministic probe passes, validate at least one real native post-dispatch failure without duplicate stage write.
+3. **OR2 / RV2D — health exposure:** expose common connectivity state + active engine to WebMonitor/health.
+4. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the basic Classic/Realtime round trips already validated.
+5. **RV2D / RV8 — Realtime output gain:** add a simple independent Realtime output gain control when convenient; non-blocking because current speech is usable and Piper's higher level is preferred.
+6. **RV2D / RV8:** restore WebMonitor into Realtime after OR2 round trips are stable.
+7. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI.
+8. **RV2E:** latency/tool-efficiency benchmark after runtime/connectivity semantics are stable.
+9. **RV3:** optional wake lifecycle after common engine/connectivity supervision is stable.
