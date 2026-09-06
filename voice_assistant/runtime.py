@@ -237,6 +237,9 @@ def main() -> int:
         if automatic:
             online = connectivity.detect()
             env_file = ONLINE_ENV if online else OFFLINE_ENV
+            print(f"LSA initial connectivity: {'online' if online else 'offline'}", flush=True)
+            if not online:
+                speak_local("Assistant fonctionne localement.")
         else:
             env_file = Path(raw_env_arg).expanduser()
             if not env_file.is_absolute():
