@@ -25,7 +25,8 @@ from typing import Mapping
 from dotenv import dotenv_values
 
 from voice_assistant.connectivity_manager import ConnectivityEvent, ConnectivityManager
-from voice_assistant.startup_lifecycle import StartupLoader, classic_ready_marker
+from voice_assistant.engine_entry import CLASSIC_READY_MARKER
+from voice_assistant.startup_lifecycle import StartupLoader
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTO_ENV_DIR = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "/etc/livestageassistant"))
@@ -63,10 +64,10 @@ def engine_command(engine: str, env_file: Path) -> list[str]:
     ]
 
 
-def ready_marker(engine: str, values: Mapping[str, object]) -> str:
+def ready_marker(engine: str) -> str:
     if engine == "openai-realtime":
         return "LSA Realtime ready:"
-    return classic_ready_marker(ROOT, values)
+    return CLASSIC_READY_MARKER
 
 
 @contextlib.contextmanager
@@ -151,7 +152,7 @@ def run_engine_session(
         bufsize=1,
     )
 
-    marker = ready_marker(engine, values)
+    marker = ready_marker(engine)
     ready_seen = threading.Event()
     output_done = threading.Event()
     connectivity_events: queue.Queue[ConnectivityEvent] = queue.Queue(maxsize=1)
