@@ -184,9 +184,10 @@ model = Path(os.environ["PIPER_VERIFY_MODEL"])
 config = model.with_suffix(model.suffix + ".json")
 if not model.is_file() or not config.is_file():
     raise SystemExit(f"Piper voice verification failed: missing {model} or {config}")
+voice = PiperVoice.load(model, config_path=config)
 print(f"Realtime voice package OK: {voice_assistant.realtime.__name__}")
 print(f"Piper dependency OK: piper-tts {metadata.version('piper-tts')}")
-print(f"Piper French voice OK: {model.name}")
+print(f"Piper French voice OK: {model.name}, {voice.config.sample_rate} Hz")
 PY
 }
 
