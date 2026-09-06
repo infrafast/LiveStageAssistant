@@ -126,7 +126,7 @@ install_env_if_missing "$SCRIPT_DIR/.env.offline" "$OFFLINE_ENV"
 # while removing obsolete selector/fallback keys from deployed profiles.
 remove_env_key "$OFFLINE_ENV" "TTS_PROVIDER"
 remove_env_key "$OFFLINE_ENV" "LOCAL_TTS_PROVIDER"
-remove_env_key "$OFFLINE_ENV" "LOCAL_TTS_PYTTSX3_FALLBACK"
+sudo sed -i '/^LOCAL_TTS_.*FALLBACK=/d' "$OFFLINE_ENV"
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_VOICE" "$PIPER_VOICE"
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_DATA_DIR" "data/piper"
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_MODEL_PATH" ""

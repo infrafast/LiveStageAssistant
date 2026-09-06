@@ -1,7 +1,7 @@
 """Shared Piper helpers for fully-local/offline speech.
 
 Piper is the single local TTS implementation. There is no local-provider
-selection layer and no pyttsx3 fallback in this module.
+selection layer and no legacy system-TTS fallback in this module.
 """
 
 from __future__ import annotations

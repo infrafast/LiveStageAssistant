@@ -110,7 +110,7 @@ ONLINE
   -> continue fully offline
 ```
 
-The loss-of-connectivity announcement uses Piper because the cloud engine is no longer a reliable dependency at that instant. OR3 is now Pi-validated and no longer configures or falls back to pyttsx3.
+The loss-of-connectivity announcement uses Piper because the cloud engine is no longer a reliable dependency at that instant. OR3 is Pi-validated; Piper is the only local speech implementation and the fallback for backend cloud-TTS failures.
 
 When Internet returns:
 
@@ -253,7 +253,7 @@ Offline mode remains cloud-independent and uses Ollama, local faster-whisper, Pi
 
 The common `ConnectivityManager` and `EngineSupervisor` implement the production ownership model. Piper is the sole OR3 offline/local voice backend selected through `LOCAL_TTS_PROVIDER`. Basic Pi5 Online -> Offline -> Online round trips are validated for both Classic and OpenAI Realtime with local loss/READY announcements and without observed audio-device lockup.
 
-The large historical Classic `agent.py` still contains a pyttsx3 implementation for legacy non-OR3 paths. That implementation is outside the OR3 configuration contract and must not be reintroduced into offline profiles or used as an OR3 fallback. A future Classic cleanup may remove it separately once all legacy callers are audited.
+Classic now uses Piper natively for local speech and as the fallback for backend OpenAI/ElevenLabs TTS failures, including missing credentials, quota/auth/rate failures, generation failures and backend playback failures. The historical system-TTS implementation and dependency have been removed.
 
 ## 1.9 Rack connectivity and remote MCP
 
@@ -305,7 +305,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 21. `Assistant connecté à internet` belongs to an ONLINE connectivity event; `Assistant vocal prêt à exécuter des commandes` belongs to an ENGINE READY event. These events must remain independent.
 22. Loss of Internet while a cloud engine is active must be announced through the guaranteed-local Piper speech path before/while switching to the offline profile and local engine.
 23. Low-level ALSA/JACK probe noise should be suppressed while real audio failures remain visible as concise LSA errors.
-24. Offline/local TTS configuration is owned solely by `LOCAL_TTS_PROVIDER`; OR3 must not require `TTS_PROVIDER=pyttsx3` or a pyttsx3 fallback.
+24. Piper is the implicit and only local TTS implementation; offline profiles have no local-provider selector, and backend cloud-TTS failures fall back to Piper.
 
 ## RV target architecture
 
@@ -608,7 +608,7 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 - [x] connectivity and voice engine remain independent configuration axes;
 - [x] offline must never start a cloud realtime provider;
 - [x] network status announcement semantics centralized and Pi-validated for the basic Classic/Realtime round trips;
-- [x] offline TTS configuration uses only `LOCAL_TTS_PROVIDER`; the obsolete `TTS_PROVIDER=pyttsx3` + fallback combination is removed.
+- [x] offline TTS is implicit Piper with no local-provider selector or legacy system-TTS fallback configuration.
 
 ### OR1 - Resource cleanup and service behavior
 
@@ -651,18 +651,18 @@ Exit: a single common ConnectivityManager/EngineSupervisor owns all connectivity
 
 - [x] add a dedicated shared Piper local-TTS adapter without coupling it to Realtime provider code;
 - [x] make `.env.offline` and the Raspberry service profile select Piper as the actual local TTS backend while keeping `CONNECTIVITY_MODE=offline` fully cloud-independent;
-- [x] offline configuration is now owned exclusively by `LOCAL_TTS_PROVIDER=piper`; `TTS_PROVIDER=pyttsx3` and `LOCAL_TTS_PYTTSX3_FALLBACK` are removed from OR3 profiles and migration;
+- [x] Piper is implicit as the sole local TTS; offline profiles contain only Piper tuning/model keys and no local-provider selector;
 - [x] add explicit Piper voice/model/config/data-dir/speed settings with practical defaults and corresponding `.env.example` documentation;
 - [x] route local-engine responses through Piper using the existing configured backend playback path and validate on Pi5;
 - [x] route the common-runtime Internet-loss/offline-transition and local READY announcements through Piper and validate on Pi5;
-- [x] remove pyttsx3 as an OR3 emergency fallback now that Piper is Pi-validated;
+- [x] remove the historical system-TTS implementation as an OR3 fallback after Piper Pi validation;
 - [~] default French `fr_FR-siwis-medium` voice qualitatively validated for intelligibility/naturalness on Pi5; quantitative synthesis latency/CPU/RAM/startup measurements remain pending;
 - [x] validate offline startup/local speech path, READY announcement and Internet-loss announcement with no Internet dependency;
 - [x] validate Online Realtime -> Offline Piper -> Online Realtime without audio-device lockup;
 - [x] validate Online Classic -> Offline Piper -> Online Classic without audio-device lockup;
 - [x] update the global Linux/macOS/Raspberry installer, Windows installer and user-facing install/config guidance so Piper and the default French voice are installed automatically; Realtime package import is also verified by the installer.
 
-Implementation note (2026-09-06): `voice_assistant/local_tts.py` owns Piper model loading/rendering and critical local status speech. The default voice is `fr_FR-siwis-medium` under `data/piper`. `engine_entry.py` adapts the historical Classic local-output hook to Piper only for offline sessions so the large Classic provider surface does not need to be rewritten in OR3. The legacy method name in `agent.py` remains an internal compatibility hook, but OR3 no longer configures or executes pyttsx3 fallback behavior. `scripts/install.sh` and `scripts/install.ps1` install `piper-tts` and download the default French model/config. The Raspberry service installer migrates existing offline profiles by removing `TTS_PROVIDER` and `LOCAL_TTS_PYTTSX3_FALLBACK` and preserving site-specific settings.
+Implementation note (2026-09-06): `voice_assistant/local_tts.py` owns Piper model loading/rendering and critical local status speech. The default voice is `fr_FR-siwis-medium` under `data/piper`. Classic now owns Piper natively in `agent.py`; `engine_entry.py` no longer monkey-patches a historical local-TTS hook. Backend OpenAI/ElevenLabs TTS failures fall back to Piper. `scripts/install.sh` and `scripts/install.ps1` install `piper-tts` and download the default French model/config. The Raspberry service installer removes obsolete local-TTS selector/fallback keys while preserving site-specific settings.
 
 Exit: offline/local speech and connectivity-loss announcements use Piper exclusively on Pi5 and remain fully usable without Internet. Quantitative performance characterization can continue separately without blocking OR3 functional use.
 

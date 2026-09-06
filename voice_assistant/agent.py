@@ -41,7 +41,6 @@ import wave
 import numpy as np
 import openai
 import pyaudio
-import pyttsx3
 from elevenlabs.client import ElevenLabs
 from elevenlabs.types.voice_settings import VoiceSettings
 from langchain_ollama import ChatOllama
@@ -51,6 +50,7 @@ from pydantic import AnyUrl
 
 try:
     from .i18n import available_locales, i18n_text, load_locale, normalize_locale
+    from .local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from .web_monitor import WebMonitor, build_service_state
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .stage_timeout import TimedStageRunner
@@ -71,6 +71,7 @@ try:
     )
 except ImportError:
     from i18n import available_locales, i18n_text, load_locale, normalize_locale
+    from local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from web_monitor import WebMonitor, build_service_state
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from stage_timeout import TimedStageRunner
@@ -90,7 +91,6 @@ except ImportError:
         validate_wav_bytes,
     )
 
-TTS_ENGINE = pyttsx3.init()
 TTS_LOCK = threading.Lock()
 TTS_STOP_EVENT = threading.Event()
 TTS_PLAYBACK_PROCESS: subprocess.Popen | None = None
@@ -629,11 +629,10 @@ def elevenlabs_playback_available() -> bool:
     return ffmpeg_decode_available()
 
 
-def local_tts_playback_available() -> bool:
-    """Return whether pyttsx3 is likely to have a local audio player."""
-    if sys.platform.startswith("linux"):
-        return shutil.which("aplay") is not None
-    return True
+def piper_tts_playback_available() -> bool:
+    """Return whether the configured Piper model and runtime are available."""
+    return piper_ready()
+
 
 
 def ffmpeg_decode_available() -> bool:
@@ -1267,7 +1266,15 @@ def tts_output_from_values(values: dict) -> str:
 
 def resolve_tts_config_from_values(values: dict) -> ResolvedTtsConfig:
     """Normalize cloud/backend/browser TTS providers from env-style values."""
-    backend_provider = (values.get("TTS_PROVIDER") or "elevenlabs").strip().lower()
+    if connectivity_mode_from_values(values) == "offline":
+        return ResolvedTtsConfig(
+            cloud_provider="none",
+            backend_provider="piper",
+            web_provider="none",
+            output="backend",
+        )
+
+    backend_provider = (values.get("TTS_PROVIDER") or "none").strip().lower()
     web_provider = (values.get("WEB_TTS_PROVIDER") or "openai").strip().lower()
     cloud_provider = (values.get("CLOUD_TTS_PROVIDER") or "").strip().lower()
 
@@ -1285,7 +1292,7 @@ def resolve_tts_config_from_values(values: dict) -> ResolvedTtsConfig:
     if web_provider in {"openai", "elevenlabs"} or cloud_provider == "none":
         web_provider = cloud_provider
 
-    if backend_provider in {"openai", "elevenlabs", "pyttsx3"}:
+    if backend_provider in {"openai", "elevenlabs"}:
         output = "backend"
     elif web_provider in {"openai", "elevenlabs"}:
         output = "browser"
@@ -1300,6 +1307,7 @@ def resolve_tts_config_from_values(values: dict) -> ResolvedTtsConfig:
     )
 
 
+
 def connectivity_mode_from_values(values: dict, env_file: Path | None = None) -> str:
     """Return whether this profile should use online cloud controls or offline local controls."""
     configured = (values.get("CONNECTIVITY_MODE") or "").strip().lower()
@@ -1309,8 +1317,7 @@ def connectivity_mode_from_values(values: dict, env_file: Path | None = None) ->
         return "offline"
     llm_provider = (values.get("LLM_PROVIDER") or "").strip().lower()
     stt_provider = (values.get("STT_PROVIDER") or "").strip().lower()
-    tts_provider = (values.get("TTS_PROVIDER") or "").strip().lower()
-    if llm_provider == "ollama" or stt_provider == "local-whisper" or tts_provider == "pyttsx3":
+    if llm_provider == "ollama" or stt_provider == "local-whisper":
         return "offline"
     return "online"
 
@@ -1744,13 +1751,14 @@ def play_wav_file_backend(
 
 
 def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> None:
-    """Speak a network status message with the TTS configured by the detected env file."""
-    values = dotenv_values_func(env_file)
-    tts_provider = (values.get("TTS_PROVIDER") or "elevenlabs").strip().lower()
-    web_tts_provider = (values.get("WEB_TTS_PROVIDER") or "none").strip().lower()
-    cloud_provider = tts_provider
-    if cloud_provider == "none" and web_tts_provider in {"openai", "elevenlabs"}:
-        cloud_provider = web_tts_provider
+    """Speak network status, falling back to Piper whenever cloud TTS is unavailable."""
+    values = dict(dotenv_values_func(env_file))
+    if connectivity_mode_from_values(values, env_file) == "offline":
+        speak_local_status(text, values)
+        return
+
+    tts_config = resolve_tts_config_from_values(values)
+    cloud_provider = tts_config.backend_provider
     voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
     backend_tts_volume = max(0.0, min(2.0, env_float_from_mapping(values, "BACKEND_TTS_VOLUME", 1.0)))
     backend_audio_output_pan = normalize_audio_pan(env_float_from_mapping(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
@@ -1760,13 +1768,11 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
         try:
             with suppress_native_stderr():
                 temp_audio = pyaudio.PyAudio()
-            output_device_index, _status, _detail = resolve_pyaudio_device_index(
-                temp_audio,
-                values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
-                input_device=False,
+            output_device_index, status, detail = resolve_pyaudio_device_index(
+                temp_audio, values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), input_device=False
             )
-            if _status in {"invalid", "unavailable"}:
-                raise RuntimeError(_detail)
+            if status in {"invalid", "unavailable"}:
+                raise RuntimeError(detail)
             pipewire_target = parse_pipewire_id(values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), kind="sink")
             play_mp3_bytes(
                 audio_bytes,
@@ -1778,128 +1784,49 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
             )
         finally:
             if temp_audio is not None:
-                try:
+                with contextlib.suppress(Exception):
                     temp_audio.terminate()
-                except Exception:
-                    pass
 
-    with TTS_LOCK:
-        if cloud_provider == "none":
-            print(f"Auto network status: {text}")
+    try:
+        if cloud_provider == "elevenlabs":
+            api_key = read_secret_from_env_values(values, "ELEVENLABS_API_KEY")
+            if not api_key:
+                raise RuntimeError("missing ELEVENLABS_API_KEY_FILE")
+            if not elevenlabs_playback_available():
+                raise RuntimeError("local MP3 playback is not available")
+            client = ElevenLabs(api_key=api_key)
+            audio = client.text_to_speech.convert(
+                text=text,
+                voice_id=voice_id,
+                model_id="eleven_multilingual_v2",
+                output_format="mp3_44100_128",
+                optimize_streaming_latency="2",
+                voice_settings=VoiceSettings(speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0)),
+            )
+            play_auto_mp3(audio if isinstance(audio, bytes) else b"".join(audio))
             return
 
-        if cloud_provider == "pyttsx3":
-            temp_path = None
-            temp_audio = None
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                    temp_path = temp_file.name
-                TTS_ENGINE.save_to_file(prepare_text_for_tts(text), temp_path)
-                TTS_ENGINE.runAndWait()
-                if not temp_path or not os.path.exists(temp_path) or os.path.getsize(temp_path) <= 0:
-                    raise RuntimeError("pyttsx3 did not render network status audio")
-                with suppress_native_stderr():
-                    temp_audio = pyaudio.PyAudio()
-                output_device_index, output_status, output_detail = resolve_pyaudio_device_index(
-                    temp_audio,
-                    values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
-                    input_device=False,
-                )
-                if output_status in {"invalid", "unavailable"}:
-                    raise RuntimeError(output_detail)
-                pipewire_target = parse_pipewire_id(values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), kind="sink")
-                try:
-                    play_wav_file_backend(
-                        temp_audio,
-                        temp_path,
-                        output_device_index=output_device_index,
-                        pipewire_target=pipewire_target,
-                        volume=backend_tts_volume,
-                        pan=backend_audio_output_pan,
-                    )
-                except Exception:
-                    pcm_bytes = decode_audio_file_to_pcm_bytes(temp_path)
-                    play_pcm_bytes(
-                        temp_audio,
-                        pcm_bytes,
-                        sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
-                        channels=DEFAULT_BACKEND_MP3_CHANNELS,
-                        output_device_index=output_device_index,
-                        pipewire_target=pipewire_target,
-                        volume=backend_tts_volume,
-                        pan=backend_audio_output_pan,
-                    )
-                return
-            except Exception as e:
-                print(f"Auto network status local pyttsx3 TTS failed: {e}")
-                return
-            finally:
-                if temp_audio is not None:
-                    try:
-                        temp_audio.terminate()
-                    except Exception:
-                        pass
-                if temp_path:
-                    with contextlib.suppress(OSError):
-                        os.unlink(temp_path)
-
-        if cloud_provider == "elevenlabs":
-            elevenlabs_api_key = read_secret_from_env_values(values, "ELEVENLABS_API_KEY")
-            if elevenlabs_api_key:
-                try:
-                    if not elevenlabs_playback_available():
-                        raise RuntimeError("local MP3 playback is not available")
-                    client = ElevenLabs(api_key=elevenlabs_api_key)
-                    audio = client.text_to_speech.convert(
-                        text=text,
-                        voice_id=voice_id,
-                        model_id="eleven_multilingual_v2",
-                        output_format="mp3_44100_128",
-                        optimize_streaming_latency="2",
-                        voice_settings=VoiceSettings(
-                            speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0)
-                        ),
-                    )
-                    audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
-                    play_auto_mp3(audio_bytes)
-                    return
-                except Exception as e:
-                    if local_tts_playback_available():
-                        print(f"Auto network status ElevenLabs TTS failed: {e}")
-                    else:
-                        return
-            elif local_tts_playback_available():
-                print("Auto network status ElevenLabs TTS skipped: missing ELEVENLABS_API_KEY_FILE")
-            else:
-                return
-
         if cloud_provider == "openai":
-            openai_api_key = read_secret_from_env_values(values, "OPENAI_API_KEY")
-            if openai_api_key:
-                try:
-                    if not elevenlabs_playback_available():
-                        raise RuntimeError("local MP3 playback is not available")
-                    client = openai.OpenAI(api_key=openai_api_key)
-                    response = client.audio.speech.create(
-                        model=(values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip(),
-                        voice=(values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip(),
-                        input=text.strip(),
-                        response_format="mp3",
-                        speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0),
-                    )
-                    play_auto_mp3(response.read())
-                    return
-                except Exception as e:
-                    if local_tts_playback_available():
-                        print(f"Auto network status OpenAI TTS failed: {e}")
-                    else:
-                        return
-            elif local_tts_playback_available():
-                print("Auto network status OpenAI TTS skipped: missing OPENAI_API_KEY_FILE")
-            else:
-                return
+            api_key = read_secret_from_env_values(values, "OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError("missing OPENAI_API_KEY_FILE")
+            if not elevenlabs_playback_available():
+                raise RuntimeError("local MP3 playback is not available")
+            client = openai.OpenAI(api_key=api_key)
+            response = client.audio.speech.create(
+                model=(values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip(),
+                voice=(values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip(),
+                input=text.strip(),
+                response_format="mp3",
+                speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0),
+            )
+            play_auto_mp3(response.read())
+            return
 
-        print("Auto network status local direct TTS skipped to avoid using the system default audio output.")
+        raise RuntimeError(f"cloud TTS backend is {cloud_provider or 'disabled'}")
+    except Exception as exc:
+        print(f"Auto network status cloud TTS unavailable; using Piper: {exc}")
+        speak_local_status(text, values)
 
 
 class AutoNetworkMonitor:
@@ -2130,7 +2057,7 @@ class VoiceAssistant:
             stt_language: Required transcription language/locale code such as fr or en
             stt_prompt: Optional STT context prompt to bias short command transcription
             stt_timeout_seconds: Maximum seconds allowed for one STT operation
-            tts_provider: Text-to-speech provider (elevenlabs, pyttsx3, or none)
+            tts_provider: Text-to-speech provider (elevenlabs, Piper, or none)
             web_tts_enabled: Whether browser TTS is the active speech output
             elevenlabs_voice_id: ElevenLabs voice ID (default: Rachel)
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
@@ -2618,13 +2545,7 @@ class VoiceAssistant:
                 return
             except Exception as e:
                 print(f"Could not play cloud API alert sound '{API_CREDIT_ALERT_SOUND_FILE}': {e}")
-        if local_tts_playback_available():
-            previous_provider = self.tts_provider
-            self.tts_provider = "pyttsx3"
-            try:
-                self.text_to_speech_pyttsx3(message)
-            finally:
-                self.tts_provider = previous_provider
+        self.text_to_speech_piper(message)
 
     def start_thinking_sound(self) -> None:
         """Loop the configured thinking sound until stop_thinking_sound is called."""
@@ -4527,10 +4448,6 @@ class VoiceAssistant:
     def stop_tts(self) -> None:
         """Stop any local/backend TTS playback that can be interrupted."""
         TTS_STOP_EVENT.set()
-        try:
-            TTS_ENGINE.stop()
-        except Exception:
-            pass
         process = TTS_PLAYBACK_PROCESS
         if process and process.poll() is None:
             try:
@@ -5235,7 +5152,7 @@ class VoiceAssistant:
                     pass
 
     async def text_to_speech(self, text: str) -> bool:
-        """Convert text to speech using the configured provider."""
+        """Speak through the configured backend, with Piper as the universal local fallback."""
         if self.tts_provider == "none":
             self.stop_thinking_sound()
             return False
@@ -5245,155 +5162,107 @@ class VoiceAssistant:
             return False
 
         TTS_STOP_EVENT.clear()
-        if self.tts_provider == "pyttsx3":
-            return self.text_to_speech_pyttsx3(text)
+        if self.tts_provider == "piper":
+            return self.text_to_speech_piper(text)
 
         if self.tts_provider == "openai":
             if not self.openai_client:
-                if local_tts_playback_available():
-                    print("OpenAI TTS selected but OPENAI_API_KEY is missing. Falling back to pyttsx3...")
-                else:
+                print("OpenAI TTS unavailable because OPENAI_API_KEY is missing; using Piper.")
+                return self.text_to_speech_piper(text)
+            try:
+                with TTS_LOCK:
+                    TTS_STOP_EVENT.clear()
+                    audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
+            except Exception as exc:
+                cloud_error = classify_cloud_api_error(exc, provider="OpenAI", stage="tts")
+                detail = cloud_error.message if cloud_error else str(exc)
+                print(f"OpenAI TTS generation failed; using Piper: {detail}")
+                return self.text_to_speech_piper(text)
+            try:
+                with TTS_LOCK:
                     self.stop_thinking_sound()
-                    return False
-            else:
-                audio = None
-                try:
-                    with TTS_LOCK:
-                        TTS_STOP_EVENT.clear()
-                        audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
-                except Exception as e:
-                    cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="tts")
-                    if cloud_error:
-                        print(f"OpenAI TTS generation failed: {cloud_error.message} ({e})")
-                        self.speak_cloud_api_alert(cloud_error.message)
-                        return False
-                    if local_tts_playback_available():
-                        print(f"OpenAI TTS generation failed: {e}")
-                        print("Falling back to local pyttsx3 TTS on the configured backend output...")
-                    else:
-                        self.stop_thinking_sound()
-                        return False
-                if audio is not None:
-                    try:
-                        with TTS_LOCK:
-                            self.stop_thinking_sound()
-                            play_mp3_bytes(
-                                audio,
-                                audio=self.audio,
-                                output_device_index=self.audio_output_device_index,
-                                pipewire_target=self.audio_output_pipewire_target,
-                                volume=self.backend_tts_volume,
-                                pan=self.backend_audio_output_pan,
-                            )
-                        return True
-                    except Exception as e:
-                        if local_tts_playback_available():
-                            print(f"OpenAI TTS playback failed: {e}")
-                        self.stop_thinking_sound()
-                        print("Skipping local pyttsx3 fallback because backend cloud TTS playback failed.")
-                        return False
+                    play_mp3_bytes(
+                        audio,
+                        audio=self.audio,
+                        output_device_index=self.audio_output_device_index,
+                        pipewire_target=self.audio_output_pipewire_target,
+                        volume=self.backend_tts_volume,
+                        pan=self.backend_audio_output_pan,
+                    )
+                return True
+            except Exception as exc:
+                print(f"OpenAI TTS playback failed; using Piper: {exc}")
+                return self.text_to_speech_piper(text)
 
-        elif self.tts_provider == "elevenlabs":
-            if self.elevenlabs_client:
-                if not elevenlabs_playback_available():
-                    if local_tts_playback_available():
-                        print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
-                    return self.text_to_speech_pyttsx3(text)
-                audio_bytes = None
-                try:
-                    with TTS_LOCK:
-                        TTS_STOP_EVENT.clear()
-                        audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
-                        audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
-                except Exception as e:
-                    cloud_error = classify_cloud_api_error(e, provider="ElevenLabs", stage="tts")
-                    if cloud_error:
-                        print(f"ElevenLabs TTS generation failed: {cloud_error.message} ({e})")
-                        self.speak_cloud_api_alert(cloud_error.message)
-                        return False
-                    if local_tts_playback_available():
-                        print(f"ElevenLabs TTS generation failed: {e}")
-                        print("Falling back to local pyttsx3 TTS on the configured backend output...")
-                    else:
-                        self.stop_thinking_sound()
-                        return False
-                if audio_bytes is not None:
-                    try:
-                        with TTS_LOCK:
-                            self.stop_thinking_sound()
-                            play_mp3_bytes(
-                                audio_bytes,
-                                audio=self.audio,
-                                output_device_index=self.audio_output_device_index,
-                                pipewire_target=self.audio_output_pipewire_target,
-                                volume=self.backend_tts_volume,
-                                pan=self.backend_audio_output_pan,
-                            )
-                        return True
-                    except Exception as e:
-                        if local_tts_playback_available():
-                            print(f"ElevenLabs TTS playback failed: {e}")
-                        self.stop_thinking_sound()
-                        print("Skipping local pyttsx3 fallback because backend cloud TTS playback failed.")
-                        return False
-            elif local_tts_playback_available():
-                print("ElevenLabs TTS selected but ELEVENLABS_API_KEY is missing. Falling back to pyttsx3...")
-            else:
-                self.stop_thinking_sound()
-                return False
-        else:
-            if local_tts_playback_available():
-                print(f"Unknown TTS provider '{self.tts_provider}'. Falling back to pyttsx3...")
-            else:
-                self.stop_thinking_sound()
-                return False
+        if self.tts_provider == "elevenlabs":
+            if not self.elevenlabs_client:
+                print("ElevenLabs TTS unavailable because ELEVENLABS_API_KEY is missing; using Piper.")
+                return self.text_to_speech_piper(text)
+            if not elevenlabs_playback_available():
+                print("ElevenLabs MP3 playback unavailable; using Piper.")
+                return self.text_to_speech_piper(text)
+            try:
+                with TTS_LOCK:
+                    TTS_STOP_EVENT.clear()
+                    audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
+                    audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
+            except Exception as exc:
+                cloud_error = classify_cloud_api_error(exc, provider="ElevenLabs", stage="tts")
+                detail = cloud_error.message if cloud_error else str(exc)
+                print(f"ElevenLabs TTS generation failed; using Piper: {detail}")
+                return self.text_to_speech_piper(text)
+            try:
+                with TTS_LOCK:
+                    self.stop_thinking_sound()
+                    play_mp3_bytes(
+                        audio_bytes,
+                        audio=self.audio,
+                        output_device_index=self.audio_output_device_index,
+                        pipewire_target=self.audio_output_pipewire_target,
+                        volume=self.backend_tts_volume,
+                        pan=self.backend_audio_output_pan,
+                    )
+                return True
+            except Exception as exc:
+                print(f"ElevenLabs TTS playback failed; using Piper: {exc}")
+                return self.text_to_speech_piper(text)
 
-        return self.text_to_speech_pyttsx3(text)
+        print(f"Unknown backend TTS provider '{self.tts_provider}'; using Piper.")
+        return self.text_to_speech_piper(text)
 
-    def text_to_speech_pyttsx3(self, text: str) -> bool:
-        """Speak text through local TTS, preferring a file rendered into backend PyAudio output."""
-        if not local_tts_playback_available():
+    def text_to_speech_piper(self, text: str) -> bool:
+        """Render Piper speech and play it through the configured backend output."""
+        if not piper_ready():
+            self.stop_thinking_sound()
+            print("Piper local TTS is unavailable.")
             return False
         if not self._backend_output_ready():
             self.stop_thinking_sound()
-            print(f"Local pyttsx3 TTS skipped: backend audio output is {self.audio_output_device_status}.")
+            print(f"Piper TTS skipped: backend audio output is {self.audio_output_device_status}.")
             return False
 
-        spoken_text = prepare_text_for_tts(text)
         temp_path = None
         try:
-            with TTS_LOCK:
-                TTS_STOP_EVENT.clear()
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                    temp_path = temp_file.name
-                TTS_ENGINE.save_to_file(spoken_text, temp_path)
-                TTS_ENGINE.runAndWait()
-                file_rendered = temp_path and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
-                if file_rendered:
-                    try:
-                        self.stop_thinking_sound()
-                        self.play_local_tts_file(temp_path, stop_event=TTS_STOP_EVENT)
-                        return True
-                    except Exception as e:
-                        print(f"Local pyttsx3 backend playback failed on configured output: {e}")
-                        return False
-                if not file_rendered:
-                    print("Local pyttsx3 file rendering failed; direct system TTS is disabled.")
-                self.stop_thinking_sound()
-                return False
-        except Exception as e:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_path = temp_file.name
+            piper_values = dict(os.environ)
+            piper_values["BACKEND_TTS_VOLUME"] = "1.0"
+            render_piper_wav(prepare_text_for_tts(text), temp_path, piper_values)
+            print(f"Piper TTS fallback/local voice: {piper_voice_name(piper_values)}")
             self.stop_thinking_sound()
-            print(f"Local pyttsx3 TTS failed: {e}")
+            self.play_local_tts_file(temp_path, stop_event=TTS_STOP_EVENT)
+            return True
+        except Exception as exc:
+            self.stop_thinking_sound()
+            print(f"Piper local TTS failed: {exc}")
             return False
         finally:
             if temp_path:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(temp_path)
-                except OSError:
-                    pass
 
     def play_local_tts_file(self, audio_path: str | Path, *, stop_event: threading.Event | None = None) -> None:
-        """Play a pyttsx3-rendered file through the selected backend output device."""
+        """Play a locally rendered TTS WAV through the selected backend output device."""
         try:
             self.play_wav_file(audio_path, stop_event=stop_event)
             return
@@ -5645,7 +5514,7 @@ class VoiceAssistant:
             raise ValueError(f"backend audio output device is not available: {self.audio_output_device_detail}")
 
         TTS_STOP_EVENT.clear()
-        if selected_provider == "pyttsx3":
+        if selected_provider == "piper":
             previous_volume = self.backend_tts_volume
             previous_pan = self.backend_audio_output_pan
             previous_output_device_index = self.audio_output_device_index
@@ -5655,7 +5524,7 @@ class VoiceAssistant:
             self.audio_output_device_index = test_output_device_index
             self.audio_output_pipewire_target = test_output_pipewire_target
             try:
-                return self.text_to_speech_pyttsx3(text)
+                return self.text_to_speech_piper(text)
             finally:
                 self.backend_tts_volume = previous_volume
                 self.backend_audio_output_pan = previous_pan
@@ -5683,24 +5552,14 @@ class VoiceAssistant:
 
         if selected_provider == "elevenlabs":
             if not elevenlabs_playback_available():
-                if local_tts_playback_available():
-                    print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
-                    previous_volume = self.backend_tts_volume
-                    previous_pan = self.backend_audio_output_pan
-                    previous_output_device_index = self.audio_output_device_index
-                    previous_output_pipewire_target = self.audio_output_pipewire_target
-                    self.backend_tts_volume = test_volume
-                    self.backend_audio_output_pan = test_pan
-                    self.audio_output_device_index = test_output_device_index
-                    self.audio_output_pipewire_target = test_output_pipewire_target
-                    try:
-                        return self.text_to_speech_pyttsx3(text)
-                    finally:
-                        self.backend_tts_volume = previous_volume
-                        self.backend_audio_output_pan = previous_pan
-                        self.audio_output_device_index = previous_output_device_index
-                        self.audio_output_pipewire_target = previous_output_pipewire_target
-                return False
+                print("ElevenLabs MP3 playback unavailable; testing Piper fallback instead.")
+                return self.test_backend_text_to_speech(
+                    text,
+                    provider="piper",
+                    volume=test_volume,
+                    pan=test_pan,
+                    output_device=output_device,
+                )
             with TTS_LOCK:
                 TTS_STOP_EVENT.clear()
                 audio = self.generate_elevenlabs_tts_audio(
@@ -6562,11 +6421,6 @@ class VoiceAssistant:
                     except Exception:
                         pass
                 print("TTS engine stop deferred for reload.")
-            else:
-                try:
-                    TTS_ENGINE.stop()
-                except Exception:
-                    pass
             if self.mcp_client and self.mcp_client.sessions:
                 try:
                     await asyncio.wait_for(self.mcp_client.close_all_sessions(), timeout=6.0)
@@ -7423,7 +7277,7 @@ async def main():
             cloud_tts_provider = "none"
             tts_output = "backend"
             stt_input = "backend"
-            updated_tts_provider = "pyttsx3"
+            updated_tts_provider = "piper"
             updated_web_tts_provider = "none"
         else:
             if provider == "ollama":
@@ -7451,7 +7305,7 @@ async def main():
         elif cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "backend":
             if auto_env_mode and env_file == AUTO_ENV_OFFLINE:
                 raise ValueError(
-                    "auto mode is currently using .env.offline, whose backend TTS is local pyttsx3. "
+                    "auto mode is currently using .env.offline, whose backend TTS is local Piper. "
                     "Start with --env-file .env.online or wait for auto mode to switch online before saving cloud backend TTS."
                 )
             updated_tts_provider = cloud_tts_provider
@@ -7554,6 +7408,11 @@ async def main():
             speaker_updates[f"SPEAKER_PROFILE_{index}_NAME"] = str(profile.get("name") or "")
             speaker_updates[f"SPEAKER_PROFILE_{index}_ENABLED"] = "true" if profile.get("enabled") else "false"
 
+        tts_env_updates = {} if connectivity_mode == "offline" else {"TTS_PROVIDER": updated_tts_provider}
+        env_remove_keys = {"WEB_AUDIO_ENABLED", "BACKEND_WAKE_WORD_MODE", "COMMAND_ACK_SOUND_ENABLED"}
+        if connectivity_mode == "offline":
+            env_remove_keys.add("TTS_PROVIDER")
+
         update_env_file_values(
             env_file,
             {
@@ -7564,7 +7423,7 @@ async def main():
                 "STT_INPUT": stt_input,
                 "STT_LANGUAGE": stt_language,
                 "CLOUD_TTS_PROVIDER": cloud_tts_provider,
-                "TTS_PROVIDER": updated_tts_provider,
+                **tts_env_updates,
                 "WEB_STT_PROVIDER": "openai",
                 "WEB_STT_MODEL": (values.get("WEB_STT_MODEL") or "whisper-1").strip() or "whisper-1",
                 "WEB_TTS_PROVIDER": updated_web_tts_provider,
@@ -7611,7 +7470,7 @@ async def main():
                 "BACKEND_AUDIO_MONITOR_VOLUME": f"{backend_audio_monitor_volume:.2f}",
                 **speaker_updates,
             },
-            remove_keys={"WEB_AUDIO_ENABLED", "BACKEND_WAKE_WORD_MODE", "COMMAND_ACK_SOUND_ENABLED"},
+            remove_keys=env_remove_keys,
         )
         values = dict(dotenv_values(env_file))
         mcp_config = load_mcp_config_from_values(values)
@@ -7623,7 +7482,7 @@ async def main():
                     llm_provider=provider,
                     model=model,
                     stt_provider=(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
-                    tts_provider=(values.get("TTS_PROVIDER") or "elevenlabs").strip().lower(),
+                    tts_provider=resolve_tts_config_from_values(values).backend_provider,
                     mcp_config=mcp_config,
                 ),
                 thinking_sound_file=thinking_sound_file,
@@ -7913,8 +7772,8 @@ async def main():
         if cloud_tts_provider not in {"none", "openai", "elevenlabs"}:
             print(f"Error: CLOUD_TTS_PROVIDER must be 'none', 'openai', or 'elevenlabs', got: {cloud_tts_provider}")
             sys.exit(1)
-        if tts_provider not in {"openai", "elevenlabs", "pyttsx3", "none"}:
-            print(f"Error: TTS_PROVIDER must be 'openai', 'elevenlabs', 'pyttsx3', or 'none', got: {tts_provider}")
+        if tts_provider not in {"openai", "elevenlabs", "piper", "none"}:
+            print(f"Error: TTS_PROVIDER must be 'openai', 'elevenlabs', 'piper', or 'none', got: {tts_provider}")
             sys.exit(1)
         if web_stt_provider not in {"openai"}:
             print(f"Error: WEB_STT_PROVIDER must be 'openai', got: {web_stt_provider}")
@@ -8422,7 +8281,7 @@ async def main():
                         llm_provider=(values.get("LLM_PROVIDER") or "openai").strip().lower(),
                         model=(values.get("OPENAI_MODEL") or "gpt-4o-mini").strip(),
                         stt_provider=(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
-                        tts_provider=(values.get("TTS_PROVIDER") or "elevenlabs").strip().lower(),
+                        tts_provider=resolve_tts_config_from_values(values).backend_provider,
                         mcp_config=mcp_config,
                     ),
                 )
