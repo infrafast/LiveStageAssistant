@@ -55,7 +55,7 @@ def resolve_path(value: str, env_file: Path) -> Path:
     path = Path(os.path.expandvars(value)).expanduser()
     if path.is_absolute():
         return path
-    candidates = [env_file.parent / path, ROOT / path]
+    candidates = [env_file.parent / path, ROOT / path, ROOT / "assets" / path]
     return next((candidate for candidate in candidates if candidate.is_file()), candidates[-1])
 
 
@@ -87,7 +87,7 @@ def play_startup_sound(env_file: Path) -> None:
         else:
             print("Realtime startup sound: no pw-play/aplay available", flush=True)
             return
-        print(f"Realtime startup sound: {path.name}", flush=True)
+        print(f"Realtime startup sound: {path}", flush=True)
         subprocess.run(command, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
     except Exception as exc:
         print(f"Realtime startup sound: failed ({exc})", flush=True)
@@ -289,12 +289,8 @@ async def wait_until_ready(engine) -> None:
             print(f"Realtime MCP startup event: {event.type}", flush=True)
 
 
-async def announce_ready(engine, output_stream, output_rate: int, output_channels: int, connectivity: str) -> None:
-    if connectivity == "online":
-        text = "Assistant connecté à internet. Assistant vocal prêt à exécuter des commandes."
-    else:
-        text = "Assistant hors ligne. Assistant vocal prêt à exécuter des commandes."
-    instruction = f"Annonce système de démarrage. Prononce exactement ces deux phrases en français, sans ajouter un seul mot : {text}"
+async def _announce_phrase(engine, output_stream, output_rate: int, output_channels: int, text: str) -> None:
+    instruction = f"Annonce système de démarrage. Prononce exactement cette phrase en français, sans ajouter un seul mot : {text}"
     print(f"Realtime startup announcement: {text}", flush=True)
     await engine.send_text(instruction)
     resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
@@ -313,6 +309,13 @@ async def announce_ready(engine, output_stream, output_rate: int, output_channel
             raise RuntimeError(f"Realtime startup announcement failed: {event.data}")
         elif event.type.startswith("mcp_"):
             print(f"Realtime MCP startup event: {event.type}", flush=True)
+
+
+async def announce_ready(engine, output_stream, output_rate: int, output_channels: int, connectivity: str) -> None:
+    connectivity_text = "Assistant connecté à internet." if connectivity == "online" else "Assistant hors ligne."
+    await _announce_phrase(engine, output_stream, output_rate, output_channels, connectivity_text)
+    await asyncio.sleep(0.45)
+    await _announce_phrase(engine, output_stream, output_rate, output_channels, "Assistant vocal prêt à exécuter des commandes.")
 
 
 async def event_loop(engine, bridge: RealtimeMCPBridge | None, queue: asyncio.Queue, interrupted: set[str], first_played: dict[str, float], stop_event: asyncio.Event) -> None:
