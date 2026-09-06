@@ -134,21 +134,60 @@ install_wakeword_dependencies() {
         uv pip install "openwakeword>=0.6,<1" --no-deps
         uv run python - <<'PY'
 from pathlib import Path
-
 from openwakeword import utils as oww_utils
 
 download_models = getattr(oww_utils, "download_models", None)
 if not callable(download_models):
     raise SystemExit("openWakeWord resource download failed: openwakeword.utils.download_models is unavailable")
-
 download_models()
-
 for metadata_file in Path("data").rglob("._*.onnx"):
     print(f"Ignoring macOS metadata file: {metadata_file}")
 PY
     else
         uv pip install -e ".[wakeword]"
     fi
+}
+
+install_piper_voice() {
+    if [ "${LSA_SKIP_PIPER:-}" = "1" ]; then
+        printf '%s\n' "Skipping Piper setup because LSA_SKIP_PIPER=1."
+        return
+    fi
+
+    piper_voice="${LSA_PIPER_VOICE:-fr_FR-siwis-medium}"
+    piper_data_dir="${LSA_PIPER_DATA_DIR:-$repo_dir/data/piper}"
+    mkdir -p "$piper_data_dir"
+
+    printf '%s\n' "Installing/verifying Piper local TTS."
+    uv pip install "piper-tts>=1.4,<2"
+
+    if [ -f "$piper_data_dir/$piper_voice.onnx" ] && [ -f "$piper_data_dir/$piper_voice.onnx.json" ]; then
+        printf '%s\n' "Piper voice ${piper_voice} is already available."
+    else
+        printf '%s\n' "Downloading default French Piper voice ${piper_voice}."
+        uv run python -m piper.download_voices --data-dir "$piper_data_dir" "$piper_voice"
+    fi
+}
+
+verify_realtime_and_piper() {
+    piper_voice="${LSA_PIPER_VOICE:-fr_FR-siwis-medium}"
+    piper_data_dir="${LSA_PIPER_DATA_DIR:-$repo_dir/data/piper}"
+    PIPER_VERIFY_MODEL="$piper_data_dir/$piper_voice.onnx" uv run python - <<'PY'
+import os
+from importlib import metadata
+from pathlib import Path
+
+import voice_assistant.realtime
+from piper import PiperVoice
+
+model = Path(os.environ["PIPER_VERIFY_MODEL"])
+config = model.with_suffix(model.suffix + ".json")
+if not model.is_file() or not config.is_file():
+    raise SystemExit(f"Piper voice verification failed: missing {model} or {config}")
+print(f"Realtime voice package OK: {voice_assistant.realtime.__name__}")
+print(f"Piper dependency OK: piper-tts {metadata.version('piper-tts')}")
+print(f"Piper French voice OK: {model.name}")
+PY
 }
 
 machine="$(uname -m 2>/dev/null || printf unknown)"
@@ -161,8 +200,10 @@ if [ ! -d ".venv" ]; then
     create_venv
 fi
 
+# Editable install includes the Classic runtime and voice_assistant.realtime package.
 uv pip install -e .
 uv pip install "mcp-use>=1.7.0,<2.0.0" "mcp>=1.24.0,<2.0.0"
+install_piper_voice
 install_wakeword_dependencies
 
 printf '%s\n' "Installing speaker recognition dependencies for ${system}/${machine}."
@@ -176,14 +217,11 @@ case "$system" in
         ;;
 esac
 uv pip install resemblyzer --no-deps
-# Resemblyzer declares the legacy backport package "typing", which is not
-# compatible with modern Python and is not needed at runtime.
 uv pip uninstall typing >/dev/null 2>&1 || true
 
 uv run python - <<'PY'
 import os
 from importlib import metadata
-
 from mcp.shared.context import RequestContext
 from mcp_use import MCPAgent, MCPClient
 from resemblyzer import VoiceEncoder, preprocess_wav
@@ -197,7 +235,6 @@ print(f"Speaker recognition dependencies OK: resemblyzer {metadata.version('rese
 try:
     import importlib.resources as resources
     from pathlib import Path
-
     from openwakeword import utils as oww_utils
     from openwakeword.model import Model
 
@@ -207,9 +244,7 @@ try:
 
     models_dir = resources.files("openwakeword") / "resources" / "models"
     required_resources = ("melspectrogram.onnx", "embedding_model.onnx")
-    missing_resources = [
-        name for name in required_resources if not (models_dir / name).is_file()
-    ]
+    missing_resources = [name for name in required_resources if not (models_dir / name).is_file()]
     if missing_resources:
         raise SystemExit(
             "Wake-word dependency check failed: missing openWakeWord ONNX resource(s): "
@@ -219,8 +254,7 @@ try:
         print("Wake-word dependency warning: optional openWakeWord silero_vad.onnx resource is missing")
 
     local_models = [
-        path
-        for path in sorted(Path("data").rglob("*.onnx"))
+        path for path in sorted(Path("data").rglob("*.onnx"))
         if path.is_file() and not path.name.startswith("._")
     ]
     model_kwargs = {"inference_framework": "onnx"}
@@ -237,6 +271,8 @@ except metadata.PackageNotFoundError:
     else:
         raise SystemExit("Wake-word dependency check failed: openwakeword is not installed")
 PY
+
+verify_realtime_and_piper
 
 if uv pip freeze | grep -Ei '^(nvidia|cuda|triton)' >/dev/null; then
     printf '%s\n' "Warning: GPU/CUDA packages are present in the environment:"
