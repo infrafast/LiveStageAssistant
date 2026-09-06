@@ -1,7 +1,7 @@
-"""Shared fully-local TTS helpers for offline runtime speech.
+"""Shared Piper helpers for fully-local/offline speech.
 
-Piper is the sole OR3 local backend. Offline/local speech must not depend on
-cloud TTS or on the historical pyttsx3 backend.
+Piper is the single local TTS implementation. There is no local-provider
+selection layer and no pyttsx3 fallback in this module.
 """
 
 from __future__ import annotations
@@ -30,10 +30,6 @@ def _value(values: Mapping[str, object] | None, key: str, default: str = "") -> 
     if raw in (None, ""):
         raw = os.getenv(key, default)
     return str(raw or default).strip()
-
-
-def local_tts_provider(values: Mapping[str, object] | None = None) -> str:
-    return (_value(values, "LOCAL_TTS_PROVIDER", "piper") or "piper").lower()
 
 
 def piper_voice_name(values: Mapping[str, object] | None = None) -> str:
@@ -70,8 +66,6 @@ def piper_config_path(values: Mapping[str, object] | None = None) -> Path:
 
 
 def piper_ready(values: Mapping[str, object] | None = None) -> bool:
-    if local_tts_provider(values) != "piper":
-        return False
     model = piper_model_path(values)
     config = piper_config_path(values)
     if not model.is_file() or not config.is_file():
@@ -171,11 +165,6 @@ def speak_local_status(text: str, values: Mapping[str, object] | None = None) ->
     """Speak a critical local status through Piper without cloud dependency."""
     message = str(text or "").strip()
     if not message:
-        return False
-
-    provider = local_tts_provider(values)
-    if provider != "piper":
-        print(f"LSA local TTS disabled/unknown provider: {provider}", flush=True)
         return False
 
     temp_path = None
