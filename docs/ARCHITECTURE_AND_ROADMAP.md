@@ -168,7 +168,7 @@ This section is the authoritative implementation backlog for architecture-level 
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC native fixture validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C native-first AUTO behavior now includes a validated forced HTTPS-down -> STDIO fallback in the integrated production service with `gpt-realtime-2.1`; remaining failure classes and ambiguous post-dispatch cases are still open. RV2D canonical configuration, GUI persistence and service runtime selection are materially implemented and validated, while final configuration consolidation, approval support, health/status and plugin-style GUI work remain in progress.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC native fixture validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C native-first AUTO behavior now includes a validated forced HTTPS-down -> STDIO fallback in the integrated production service with `gpt-realtime-2.1`; remaining failure classes and ambiguous post-dispatch cases are still open. RV2D canonical configuration, GUI persistence, service runtime selection and Realtime startup/operator feedback are materially implemented and validated, while final configuration consolidation, approval support, health/status, offline round-trip and plugin-style GUI work remain in progress.
 
 **Goal:** add a selectable low-latency full-duplex realtime voice path alongside the existing classic STT -> LLM -> TTS path, without decommissioning classic, while preserving MCP transport flexibility, wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -192,7 +192,7 @@ This section is the authoritative implementation backlog for architecture-level 
 16. Realtime logs must show both sides of a spoken turn when transcription is available: `Utilisateur: <input transcription>` and `Assistant: <output transcription>`. Input transcription is observability and must not reintroduce STT into the realtime decision path.
 17. Measure latency, reliability, tool-call quality and end-to-end cost before selecting defaults.
 18. No automatic retry may create a credible risk of duplicate stage-control writes.
-19. Startup/operator feedback is engine-independent product behavior: configured local loader audio should play before engine initialization; after the selected engine is ready, connectivity/readiness announcements occur before normal microphone capture starts.
+19. Startup/operator feedback is engine-independent product behavior: configured local loader audio should play before engine initialization; after the selected engine is ready, connectivity/readiness announcements occur before normal microphone capture starts. Low-level ALSA/JACK probe noise should be suppressed while real audio failures remain surfaced as clear LSA errors.
 
 ## RV target architecture
 
@@ -502,7 +502,9 @@ This milestone aligns `.env`, MCP JSON, runtime and GUI with the validated nativ
 - [x] mixed Pi configuration is validated in the integrated Realtime service: mixer=`auto/open`, QLCPlus=`stdio/open`, with independent effective transport selection;
 - [x] global online voice-engine selector `Classic / OpenAI Realtime` is implemented in the GUI and persists to the active env profile;
 - [x] service launcher selects `VOICE_ENGINE` before importing the classic pipeline; Realtime service start is validated with no legacy openWakeWord/Whisper/ElevenLabs initialization;
-- [~] startup feedback parity is implemented for Realtime: configured loader WAV is played locally before initialization and Realtime connectivity/readiness announcements occur after `READY`; user validation on 2026-09-06 confirmed the spoken announcements, while loader asset-path resolution required a follow-up fix to search `assets/`;
+- [x] Realtime startup/operator feedback is validated on Pi5: `assets/loader2.wav` resolves and plays locally before initialization, the two Realtime announcements are emitted separately after `READY`, and microphone capture starts only after both announcements complete;
+- [x] noisy ALSA/JACK probe diagnostics are suppressed during Realtime audio initialization while real audio failures continue to surface as LSA errors;
+- [ ] optional polish: keep the loader sound active/looping through the full initialization window and stop it immediately before the first spoken connectivity announcement; current behavior is acceptable and validated, so this is not a release blocker;
 - [ ] server health/status shows configured transport mode, actual active transport and permission mode;
 - [ ] complete STDIO `Require approval` runtime semantics or keep unsupported combinations explicitly disabled;
 - [ ] validate online -> offline -> online engine/profile switching and confirm offline remains fully cloud-independent;
@@ -510,6 +512,8 @@ This milestone aligns `.env`, MCP JSON, runtime and GUI with the validated nativ
 - [ ] re-integrate the WebMonitor/GUI into the Realtime runtime without importing the classic voice pipeline;
 - [ ] implement the Evolution GUI milestones in section 7 and retire the temporary injected MCP realtime controls once superseded;
 - [ ] document final user-facing configuration examples in `.env.example`/README without creating another source of truth.
+
+Validation note (Pi5, 2026-09-06): after the loader asset-path fix and native audio-log suppression, a service restart produced clean startup logs without the previous ALSA/JACK warning flood. `loader2.wav` was audible, connectivity/readiness announcements were both audible and separated, and normal Realtime listening began only after the second announcement. The user accepted this startup behavior. Loader duration across the whole initialization interval remains an optional cosmetic improvement.
 
 Exit: `.env`, MCP JSON, runtime and GUI expose one coherent configuration model with independent transport and permission controls for every MCP server, and ordinary users manage MCPs through the plugin-style GUI rather than editing transport-specific inventory files.
 
@@ -609,7 +613,7 @@ MCP_CONFIG=mcp_servers.json
 - [ ] CPU/RAM/temperature;
 - [ ] network loss/reconnect/fallback;
 - [ ] high ambient noise;
-- [~] audio-device stability; Realtime PipeWire source/sink operation and repeated service restart are working, long-run validation remains;
+- [~] audio-device stability; Realtime PipeWire source/sink operation, clean audio initialization logs and repeated service restart are working, long-run validation remains;
 - [~] XR16/X32 and QLC+ through configured native/STDIO modes; XR16 and QLCPlus mixed bridge startup are validated on current Pi, X32 remains;
 - [x] multiple MCPs with mixed transport policy validated for mixer=`auto` and QLCPlus=`stdio`, both `open`;
 - [ ] mixed permission policies;
@@ -867,7 +871,7 @@ Provide an import path for legacy inventories. Migration must parse/normalize wi
 - [x] audit current branch code/config/GUI state on 2026-09-06;
 - [x] record canonical normalization, safe web updates, transport controls and integrated realtime service;
 - [x] narrow current permission contract to `open | approval` and defer tool allow-list UX;
-- [x] keep RV2D checklist synchronized through the first integrated-service AUTO fallback validation.
+- [x] keep RV2D checklist synchronized through the first integrated-service AUTO fallback and startup-feedback validation.
 
 ### CFG-1 - Freeze canonical MCP model
 
@@ -969,7 +973,7 @@ Provide an import path for legacy inventories. Migration must parse/normalize wi
 3. **RV2A — partially validated:** native XMSeries discovery/read/writes are validated; QLCPlus native fixture validation remains.
 4. **RV2B — validated:** realtime function tools execute through the existing LSA MCP client/STDIO path with Pi5 read/write validation.
 5. **RV2C — production pre-dispatch fallback validated:** integrated service now handles a real HTTPS 502 before dispatch by classifying it safe, starting STDIO and completing a live MCP read. Next RV2C work is post-dispatch/auth/timeout/ambiguous-failure coverage; do not close the milestone yet.
-6. **RV2D / RV8 — continue runtime/config integration:** validate the loader asset fix, restore WebMonitor in Realtime without importing Classic, then validate Classic ↔ Realtime and Online ↔ Offline round trips.
+6. **RV2D / RV8 — continue runtime/config integration:** restore WebMonitor in Realtime without importing Classic, then validate Classic ↔ Realtime and Online ↔ Offline round trips. Loader duration-through-initialization is optional polish, not a blocker.
 7. **RV2D / Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI; temporary technical controls remain transitional.
 8. **RV2E — latency/tool efficiency:** benchmark equivalent native/STDIO commands and reduce unnecessary model/tool calls without domain-specific shortcuts in LSA.
 9. Continue to RV3 optional wake lifecycle after the immediate engine/config/service integration is stable; Evolution GUI and RV2E may advance in parallel where dependencies are clear.
