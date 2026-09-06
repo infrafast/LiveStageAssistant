@@ -1,7 +1,7 @@
 """Shared fully-local TTS helpers for offline runtime speech.
 
-Piper is the preferred local backend. pyttsx3 remains available only as an
-emergency migration fallback while OR3 is being Pi-validated.
+Piper is the sole OR3 local backend. Offline/local speech must not depend on
+cloud TTS or on the historical pyttsx3 backend.
 """
 
 from __future__ import annotations
@@ -19,8 +19,6 @@ import wave
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PIPER_VOICE = "fr_FR-siwis-medium"
 DEFAULT_PIPER_DATA_DIR = ROOT / "data" / "piper"
-DEFAULT_LOCAL_TTS_RATE = 145
-DEFAULT_LOCAL_TTS_VOLUME = 1.0
 
 _PIPER_CACHE: dict[str, object] = {}
 _PIPER_LOCK = threading.Lock()
@@ -169,113 +167,32 @@ def play_local_wav(path: str | Path, values: Mapping[str, object] | None = None)
     raise RuntimeError("Neither pw-play nor aplay is available for local TTS playback")
 
 
-@contextlib.contextmanager
-def _quiet_native_stderr():
-    saved = None
-    null_fd = None
-    try:
-        saved = os.dup(2)
-        null_fd = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(null_fd, 2)
-        yield
-    finally:
-        if saved is not None:
-            os.dup2(saved, 2)
-            os.close(saved)
-        if null_fd is not None:
-            os.close(null_fd)
-
-
-def _voice_search_text(voice) -> str:
-    parts = [str(getattr(voice, "id", "") or ""), str(getattr(voice, "name", "") or "")]
-    for language in getattr(voice, "languages", None) or []:
-        if isinstance(language, bytes):
-            with contextlib.suppress(Exception):
-                language = language.decode("utf-8", errors="ignore")
-        parts.append(str(language or ""))
-    return " ".join(parts).casefold()
-
-
-def _speak_pyttsx3_fallback(text: str, values: Mapping[str, object] | None = None) -> bool:
-    """Emergency fallback only; not the normal OR3 offline path."""
-    config = values or {}
-    try:
-        rate = int(float(_value(config, "LOCAL_SYSTEM_TTS_RATE", str(DEFAULT_LOCAL_TTS_RATE))))
-    except ValueError:
-        rate = DEFAULT_LOCAL_TTS_RATE
-    try:
-        volume = float(_value(config, "LOCAL_SYSTEM_TTS_VOLUME", str(DEFAULT_LOCAL_TTS_VOLUME)))
-    except ValueError:
-        volume = DEFAULT_LOCAL_TTS_VOLUME
-    volume = max(0.0, min(1.0, volume))
-
-    try:
-        with _quiet_native_stderr():
-            import pyttsx3
-
-            tts = pyttsx3.init()
-            requested = _value(config, "LOCAL_SYSTEM_TTS_VOICE")
-            locale = (_value(config, "STT_LANGUAGE", "fr") or "fr").lower().replace("_", "-")
-            language = locale.split("-", 1)[0]
-            voices = list(tts.getProperty("voices") or [])
-            selected = None
-            if requested:
-                requested_key = requested.casefold()
-                selected = next((voice for voice in voices if requested_key in _voice_search_text(voice)), None)
-            if selected is None:
-                markers = {
-                    "fr": ("fr-fr", "fr_", " french", "french", "français", "francais", "france"),
-                    "en": ("en-us", "en-gb", " english", "english"),
-                }.get(language, (language,))
-                selected = next(
-                    (voice for voice in voices if any(marker in _voice_search_text(voice) for marker in markers)),
-                    None,
-                )
-            if selected is not None:
-                tts.setProperty("voice", selected.id)
-            tts.setProperty("rate", max(80, min(260, rate)))
-            tts.setProperty("volume", volume)
-            tts.say(text)
-            tts.runAndWait()
-            tts.stop()
-        return True
-    except Exception as exc:
-        print(f"LSA emergency pyttsx3 fallback failed: {exc}", flush=True)
-        return False
-
-
 def speak_local_status(text: str, values: Mapping[str, object] | None = None) -> bool:
-    """Speak a critical local status without any cloud dependency."""
+    """Speak a critical local status through Piper without cloud dependency."""
     message = str(text or "").strip()
     if not message:
         return False
 
     provider = local_tts_provider(values)
-    if provider == "piper":
-        temp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                temp_path = temp_file.name
-            render_piper_wav(message, temp_path, values)
-            print(
-                f"LSA local TTS: provider=piper voice={piper_voice_name(values)} model={piper_model_path(values)}",
-                flush=True,
-            )
-            play_local_wav(temp_path, values)
-            return True
-        except Exception as exc:
-            print(f"LSA Piper local TTS failed: {exc}", flush=True)
-            if _value(values, "LOCAL_TTS_PYTTSX3_FALLBACK", "true").lower() in {"1", "true", "yes", "on"}:
-                print("LSA local TTS: falling back to pyttsx3 emergency path.", flush=True)
-                return _speak_pyttsx3_fallback(message, values)
-            return False
-        finally:
-            if temp_path:
-                with contextlib.suppress(OSError):
-                    os.unlink(temp_path)
+    if provider != "piper":
+        print(f"LSA local TTS disabled/unknown provider: {provider}", flush=True)
+        return False
 
-    if provider == "pyttsx3":
-        return _speak_pyttsx3_fallback(message, values)
-
-    print(f"LSA local TTS disabled/unknown provider: {provider}", flush=True)
-    return False
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            temp_path = temp_file.name
+        render_piper_wav(message, temp_path, values)
+        print(
+            f"LSA local TTS: provider=piper voice={piper_voice_name(values)} model={piper_model_path(values)}",
+            flush=True,
+        )
+        play_local_wav(temp_path, values)
+        return True
+    except Exception as exc:
+        print(f"LSA Piper local TTS failed: {exc}", flush=True)
+        return False
+    finally:
+        if temp_path:
+            with contextlib.suppress(OSError):
+                os.unlink(temp_path)
