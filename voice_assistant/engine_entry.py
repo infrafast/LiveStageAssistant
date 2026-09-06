@@ -23,13 +23,7 @@ CLASSIC_READY_MARKER = "LSA Classic ready:"
 
 
 def _install_offline_piper_adapter(agent, values: dict[str, object]) -> None:
-    """Route the legacy local-TTS hook through Piper for the offline engine.
-
-    `agent.py` still names its historical local method `text_to_speech_pyttsx3`.
-    During OR3 migration we replace that method only for offline/local sessions,
-    so the normal production offline path is Piper without rewriting the large
-    Classic agent/provider surface in the same milestone.
-    """
+    """Route the historical Classic local-TTS hook through Piper offline."""
     provider = str(values.get("LOCAL_TTS_PROVIDER") or "piper").strip().lower()
     if provider != "piper":
         return
@@ -37,6 +31,15 @@ def _install_offline_piper_adapter(agent, values: dict[str, object]) -> None:
     from voice_assistant.local_tts import piper_ready, piper_voice_name, render_piper_wav
 
     original_local_tts = agent.VoiceAssistant.text_to_speech_pyttsx3
+    original_resolve_tts = agent.resolve_tts_config_from_values
+
+    def resolve_tts_with_piper(env_values: dict):
+        # Existing deployed offline profiles may still contain TTS_PROVIDER=none.
+        # Keep the file intact, but route the Classic backend internally through
+        # its historical local hook; that hook is replaced by Piper below.
+        normalized = dict(env_values)
+        normalized["TTS_PROVIDER"] = "pyttsx3"
+        return original_resolve_tts(normalized)
 
     def piper_available() -> bool:
         return piper_ready(values)
@@ -77,6 +80,7 @@ def _install_offline_piper_adapter(agent, values: dict[str, object]) -> None:
                 with contextlib.suppress(OSError):
                     Path(temp_path).unlink()
 
+    agent.resolve_tts_config_from_values = resolve_tts_with_piper
     agent.local_tts_playback_available = piper_available
     agent.VoiceAssistant.text_to_speech_pyttsx3 = text_to_speech_piper
     print(
