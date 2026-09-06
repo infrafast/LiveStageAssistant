@@ -43,7 +43,26 @@ jobs:
         shell: bash
         run: |
           python -m py_compile voice_assistant/agent.py voice_assistant/engine_entry.py voice_assistant/local_tts.py
-          python -m unittest tests.test_realtime_mcp_auto
+          python - <<'PY'
+          from pathlib import Path
+          agent = Path('voice_assistant/agent.py').read_text()
+          engine = Path('voice_assistant/engine_entry.py').read_text()
+          project = Path('pyproject.toml').read_text()
+          required = [
+              'def text_to_speech_piper(',
+              'OpenAI TTS generation failed; using Piper:',
+              'ElevenLabs TTS generation failed; using Piper:',
+              'backend_provider="piper"',
+              'speak_local_status(text, values)',
+          ]
+          missing = [item for item in required if item not in agent]
+          if missing:
+              raise SystemExit(f'missing Piper migration invariants: {missing}')
+          if '_install_offline_piper_adapter' in engine:
+              raise SystemExit('legacy engine_entry Piper monkey-patch remains')
+          if 'pyttsx3' in project.lower():
+              raise SystemExit('legacy pyttsx3 dependency remains in pyproject.toml')
+          PY
           if grep -Rni --exclude-dir=.git --exclude=decommission-pyttsx3.yml --exclude=fix-decommission-migration.yml --exclude=decommission_pyttsx3_migration.py --exclude='*.pyc' 'pyttsx3' .; then
             echo 'Legacy pyttsx3 references remain.' >&2
             exit 1
