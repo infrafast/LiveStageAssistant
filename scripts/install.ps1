@@ -55,8 +55,27 @@ if (-not (Test-Path ".venv")) {
     uv venv
 }
 
+# Editable install includes both Classic and voice_assistant.realtime.
 uv pip install -e .
 uv pip install "mcp-use>=1.7.0,<2.0.0" "mcp>=1.24.0,<2.0.0"
+
+if ($env:LSA_SKIP_PIPER -eq "1") {
+    Write-Host "Skipping Piper setup because LSA_SKIP_PIPER=1."
+} else {
+    $PiperVoice = if ($env:LSA_PIPER_VOICE) { $env:LSA_PIPER_VOICE } else { "fr_FR-siwis-medium" }
+    $PiperDataDir = if ($env:LSA_PIPER_DATA_DIR) { $env:LSA_PIPER_DATA_DIR } else { Join-Path $RepoDir "data\piper" }
+    New-Item -ItemType Directory -Force -Path $PiperDataDir | Out-Null
+    Write-Host "Installing/verifying Piper local TTS."
+    uv pip install "piper-tts>=1.4,<2"
+    $PiperModel = Join-Path $PiperDataDir "$PiperVoice.onnx"
+    $PiperConfig = "$PiperModel.json"
+    if ((Test-Path $PiperModel) -and (Test-Path $PiperConfig)) {
+        Write-Host "Piper voice $PiperVoice is already available."
+    } else {
+        Write-Host "Downloading default French Piper voice $PiperVoice."
+        uv run python -m piper.download_voices --data-dir $PiperDataDir $PiperVoice
+    }
+}
 
 if ($env:LSA_SKIP_WAKEWORD -eq "1") {
     Write-Host "Skipping openWakeWord dependencies because LSA_SKIP_WAKEWORD=1."
@@ -69,11 +88,9 @@ Write-Host "Installing speaker recognition dependencies for Windows."
 uv pip install -e ".[speaker]"
 uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 uv pip install resemblyzer --no-deps
-# Resemblyzer declares the legacy backport package "typing", which is not
-# compatible with modern Python and is not needed at runtime.
 uv pip uninstall typing | Out-Null
 
-uv run python -c "from importlib import metadata; from mcp.shared.context import RequestContext; from mcp_use import MCPAgent, MCPClient; from resemblyzer import VoiceEncoder, preprocess_wav; print('MCP dependencies OK: mcp-use ' + metadata.version('mcp-use') + ', mcp ' + metadata.version('mcp')); print('Speaker recognition dependencies OK: resemblyzer ' + metadata.version('resemblyzer'));`ntry:`n    print('Wake-word dependencies OK: openwakeword ' + metadata.version('openwakeword'))`nexcept metadata.PackageNotFoundError:`n    print('Wake-word dependencies skipped: openwakeword is not installed')"
+uv run python -c "from importlib import metadata; import voice_assistant.realtime; from piper import PiperVoice; from mcp.shared.context import RequestContext; from mcp_use import MCPAgent, MCPClient; from resemblyzer import VoiceEncoder, preprocess_wav; print('Realtime voice package OK: voice_assistant.realtime'); print('Piper dependency OK: piper-tts ' + metadata.version('piper-tts')); print('MCP dependencies OK: mcp-use ' + metadata.version('mcp-use') + ', mcp ' + metadata.version('mcp')); print('Speaker recognition dependencies OK: resemblyzer ' + metadata.version('resemblyzer'));`ntry:`n    print('Wake-word dependencies OK: openwakeword ' + metadata.version('openwakeword'))`nexcept metadata.PackageNotFoundError:`n    print('Wake-word dependencies skipped: openwakeword is not installed')"
 
 $gpuPackages = uv pip freeze | Select-String -Pattern "^(nvidia|cuda|triton)" -CaseSensitive:$false
 if ($gpuPackages) {
