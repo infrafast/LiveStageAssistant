@@ -138,7 +138,7 @@ HTTP and STDIO are both durable transports. Local STDIO remains a first-class ca
 Each MCP server owns two independent realtime policies:
 
 1. **Transport policy**: `native`, `stdio` or `auto`.
-2. **Permission policy**: permissive/open by default, with optional approval or tool restriction configured independently for that server.
+2. **Permission policy**: permissive/open by default, with optional approval configured independently for that server. Tool allow-list restriction may be revisited later if a validated product need emerges, but it is not part of the current RV2D contract.
 
 One MCP's permission or transport choice must not implicitly change another MCP.
 
@@ -169,7 +169,7 @@ This section is the authoritative implementation backlog for architecture-level 
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with write/QLC validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C auto native-first path and prompt parity are validated with `gpt-realtime-2.1`; the final forced HTTPS-down -> STDIO fallback retest remains pending.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C auto native-first path and prompt parity are validated with `gpt-realtime-2.1`; the final forced HTTPS-down -> STDIO fallback retest remains pending. RV2D configuration/runtime work is already partially implemented and now continues together with the Evolution GUI roadmap in section 7.
 
 **Goal:** add a selectable low-latency full-duplex realtime voice path alongside the existing classic STT -> LLM -> TTS path, without decommissioning classic, while preserving MCP transport flexibility, wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -182,7 +182,7 @@ This section is the authoritative implementation backlog for architecture-level 
 5. STDIO support is retained as a durable capability. Realtime must not require converting every local MCP to a public endpoint.
 6. `MCP_CONFIG` remains the common MCP inventory/source of truth. Realtime must not create an independent server inventory that can drift from classic configuration.
 7. MCP transport policy is configured **per MCP server** and uses `native`, `stdio` or `auto` semantics as defined below.
-8. MCP permission policy is configured **per MCP server**. Production/live default is permissive: all exposed tools available and no per-call approval. Restriction is opt-in.
+8. MCP permission policy is configured **per MCP server**. Production/live default is permissive: all exposed tools available and no per-call approval. Approval is opt-in.
 9. The GUI must expose each MCP server's transport and permission settings independently and edit the same canonical MCP configuration consumed by the runtime.
 10. `.env` profiles select the MCP inventory and profile-level runtime defaults; they must not duplicate per-server native/STDIO/permission state from the MCP JSON.
 11. Adding a new MCP must not require domain-specific changes to the realtime engine/provider adapter.
@@ -317,11 +317,9 @@ Open / unrestricted   <- DEFAULT
 
 Require approval
   -> expose tools but require approval according to provider/bridge capability
-
-Restricted tools
-  -> expose/allow only explicitly selected tools
-  -> approval behavior can remain separately configurable where supported
 ```
+
+A future tool allow-list mode may be added only if a validated product/safety requirement justifies the added complexity. It is not part of the current RV2D GUI contract.
 
 `--discover-only` and equivalent diagnostic modes may intentionally force approval for safety, but that must never silently become the production/live default.
 
@@ -329,7 +327,7 @@ The same semantic permission policy must be enforced whether the server is reach
 
 ## RV MCP configuration contract
 
-The MCP inventory is the canonical home for per-server transport and permission state. Exact JSON field names are frozen during RV2D after compatibility review of existing `mcp_servers*.json`, but the semantic shape is fixed now:
+The MCP inventory is the canonical home for per-server transport and permission state. The current normalizer already supports legacy local fields plus additive native/realtime policy blocks. The final user-facing schema and migration are completed in RV2D and section 7.
 
 ```text
 MCP server
@@ -338,12 +336,11 @@ MCP server
     STDIO command/args/env and/or private HTTP as supported
   native execution
     provider-reachable HTTPS URL
-    auth/headers as required
+    auth/headers or secret references as required
   realtime transport mode
     native | stdio | auto
   permissions
-    open (default) | approval | restricted
-    optional allowed-tool list for restricted mode
+    open (default) | approval
 ```
 
 Migration requirements:
@@ -353,8 +350,8 @@ Migration requirements:
 - `.env` profiles keep `MCP_CONFIG` as the inventory selector and do not become a second per-server policy store;
 - GUI loads and saves per-server mode/permissions through the backend into the canonical MCP config;
 - configuration schema/defaulting must make existing configs behave safely and predictably during migration;
-- live default for a newly configured MCP permission policy is `open` unless the user explicitly chooses a restriction;
-- transport default will be selected only after RV2 native/stdio/auto validation, but the GUI must support all three values per server.
+- live default for a newly configured MCP permission policy is `open` unless the user explicitly chooses approval;
+- capability data such as tools/prompts/resources is discovered from the MCP and is not duplicated as configuration truth.
 
 ## RV benchmark and instrumentation contract
 
@@ -433,7 +430,7 @@ Exit: **met**. RV1 is frozen as the validated no-tools realtime baseline. Automa
 
 ### RV2 - Dual-path Realtime MCP integration
 
-Goal: connect realtime MCP use while preserving both provider-native remote MCP and the existing LSA STDIO/local bridge. Transport and permission policy are per MCP. **Implementation starts with native mode only.**
+Goal: connect realtime MCP use while preserving both provider-native remote MCP and the existing LSA STDIO/local bridge. Transport and permission policy are per MCP.
 
 #### RV2A - Native mode reference path — IN PROGRESS
 
@@ -444,7 +441,7 @@ This milestone implements and validates `native` semantics first. No STDIO fallb
 - [x] preserve provider-neutral realtime code with no XMSeries-specific execution logic;
 - [x] native diagnostic discovery can require approval without changing production permission defaults;
 - [x] realtime input transcription plumbing added for `Utilisateur:` observability;
-- [~] load native endpoint/auth from the existing MCP inventory while the canonical dual-endpoint JSON shape is still being defined;
+- [~] load native endpoint/auth from the existing MCP inventory while the canonical dual-endpoint JSON shape is still being finalized;
 - [x] execute a safe/read-only XMSeries native MCP operation with normal permissive permissions;
 - [x] measure native MCP first-call/execution/final-response latency;
 - [x] validate production permission default: all tools available, `require_approval=never`;
@@ -469,18 +466,18 @@ This milestone implements and validates `stdio` semantics. No native attempt is 
 - [x] validate a safe/read-only MCP call through STDIO/local bridge;
 - [x] validate a controlled write through the bridge;
 - [x] preserve current MCP discovery/execution semantics without domain-specific realtime code;
-- [x] open/unrestricted mode is permissive and restricted allow-list filtering is implemented; approval-mode UX/runtime completion remains RV2D scope;
+- [x] open/unrestricted mode is permissive;
 - [x] prove `stdio` mode never attempts provider-native MCP.
 
 Validation note: Pi5 test on 2026-09-05 started XMSeries-MCP locally through the existing STDIO configuration, discovered 39 tools, exposed only ordinary realtime function tools, and logged `native MCP: disabled`. A live read returned the real XR16 status through `stdio/bridge`. A controlled `osc_adjust_level` call changed bus LAURENT from minus 4.8 dB to minus 3.8 dB with MCP-side read-before/write/read-back verification (`verifiedDb=-3.8`, effective delta plus 1 dB) and no provider-native/Funnel call.
 
-Exit: **met** for the STDIO bridge execution path. Realtime commands work through the existing LSA client/STDIO path without requiring public exposure or duplicating MCP client logic. Per-MCP approval UI/runtime polish remains part of the canonical configuration/GUI milestone RV2D.
+Exit: **met** for the STDIO bridge execution path. Realtime commands work through the existing LSA client/STDIO path without requiring public exposure or duplicating MCP client logic. STDIO approval UX/runtime completion remains RV2D scope.
 
 #### RV2C - Auto mode and transport fallback — IN PROGRESS
 
 This milestone implements the fixed `auto` semantics: native first, STDIO fallback on clear safe failure.
 
-- [~] apply `auto` independently per MCP server; single-server validation runner implemented, canonical per-server config wiring remains RV2D;
+- [~] apply `auto` independently per MCP server; single-server validation runner implemented, production service parity remains incomplete;
 - [x] attempt native remote MCP first and keep the STDIO bridge stopped while native is healthy;
 - [x] load the MCP-owned prompt for the native path before session start, using MCP prompt discovery with generic fallback compatibility, without adding domain logic to LSA;
 - [x] preserve MCP-owned prompt context on the STDIO/bridge path;
@@ -488,42 +485,43 @@ This milestone implements the fixed `auto` semantics: native first, STDIO fallba
 - [x] allow read-only fallback after native dispatch when MCP metadata explicitly marks the tool `readOnlyHint=true`;
 - [x] allow write fallback only when non-execution of the native write is explicitly established by policy input;
 - [x] suppress automatic fallback for ambiguous write/unknown outcomes;
-- [~] retain the same per-server permission policy across native -> STDIO fallback; open/restricted are wired, approval completion remains RV2D;
+- [~] retain the same per-server permission policy across native -> STDIO fallback; open is wired, approval completion remains RV2D;
 - [x] log native attempt, failure classification, fallback decision and selected transport;
 - [x] add metrics identifying native/stdio execution in auto mode;
 - [x] suppress low-value native MCP argument delta events from normal logs while retaining completed JSON arguments, tool name, output/error and duration;
 - [~] test network/discovery failure before dispatch, authentication rejection, explicit tool rejection, timeout before/after dispatch and ambiguous response-loss cases; unit policy coverage is implemented, Pi fault validation pending;
 - [~] prove no duplicate control writes occur during fallback; ambiguous mutation replay is blocked by unit policy and Pi fault validation remains pending;
-- [~] compare native versus STDIO on equivalent read-only operations for latency/correctness; separate Pi measurements exist, direct auto-session comparison pending;
+- [~] compare native versus STDIO on equivalent read-only operations for latency/correctness; separate Pi measurements exist, direct comparison pending;
 - [ ] compare classic versus realtime tool selection/arguments on a representative corpus;
 - [ ] prove another arbitrary MCP can be used without modifying the realtime engine/provider adapter.
 
 Validation note: on Pi5, AUTO with HTTPS healthy stayed provider-native and never started the bridge. With `gpt-realtime-2.1`, repeated `retour de Claude` commands resolved `Claude` in the MCP-defined bus family, used the resolved bus index in the following write, and produced concise confirmations. Earlier `gpt-realtime-2.1-mini` runs showed materially weaker multi-tool adherence even though the MCP prompt was demonstrably loaded and readable; the full model is therefore the current functional reference for RV2C validation. A final forced HTTPS-down -> STDIO fallback retest with the full model remains required before closing RV2C.
 
-Implementation note: `scripts/rv2_auto_mcp.py` starts provider-native MCP first and deliberately defers creation/session startup of `RealtimeMCPBridge` until a fallback decision is made. Safe fallback can replay the last provider transcription through the new provider-neutral `send_text()` contract after switching sessions. Post-dispatch mutation/unknown failures return `fallback=false` unless a future signal explicitly proves non-execution.
+Implementation note: `scripts/rv2_auto_mcp.py` contains the fuller safe-fallback orchestration. The integrated production-facing `voice_assistant/realtime/service.py` currently performs static `auto` selection at session startup (`native` when a native URL exists, otherwise bridge) and must reach behavioral parity before RV2C is complete.
 
 Exit: `auto` provides useful native-first resilience without ever turning an uncertain write into an automatic duplicate action.
 
-#### RV2D - Canonical MCP config, migration and per-MCP GUI policy
+#### RV2D - Canonical MCP config, migration and per-MCP GUI policy — IN PROGRESS
 
-This milestone aligns `.env`, MCP JSON, runtime and GUI with the validated native/stdio/auto and permission semantics before RV2 is considered complete.
+This milestone aligns `.env`, MCP JSON, runtime and GUI with the validated native/stdio/auto and permission semantics before RV2 is considered complete. The 2026-09-06 code audit confirms that implementation is already materially underway.
 
 - [ ] inventory current `.env.*`, `/etc/livestageassistant` profiles and `mcp_servers*.json` variants used by Pi/dev deployments;
-- [ ] define one backward-compatible canonical per-server MCP config shape containing local execution data, native HTTPS data, transport mode and permission policy;
-- [ ] keep `MCP_CONFIG` as the profile-level inventory selector;
-- [ ] eliminate duplicated per-server transport/permission settings from `.env` where they would conflict with MCP JSON;
-- [ ] migration/defaulting logic for existing MCP configs;
-- [ ] per-MCP GUI transport dropdown: `auto`, `native`, `stdio`;
-- [ ] per-MCP GUI permission dropdown: `Open / unrestricted` (default), `Require approval`, `Restricted tools`;
-- [ ] restricted mode UI supports selecting allowed tools after discovery where feasible;
-- [ ] permission changes for XMSeries do not affect QLCPlus and vice versa;
-- [ ] GUI reads/saves the same canonical MCP config used by both classic/realtime runtime;
+- [~] define one backward-compatible canonical per-server MCP config shape containing local execution data, native HTTPS data, transport mode and permission policy; `CanonicalMCPServerConfig` and normalization already exist;
+- [x] keep `MCP_CONFIG` as the profile-level inventory selector;
+- [~] eliminate duplicated per-server transport/permission settings from `.env` where they would conflict with MCP JSON;
+- [~] migration/defaulting logic for existing MCP configs exists for legacy STDIO, HTTPS and realtime policy blocks but full deployment migration is pending;
+- [~] per-MCP GUI transport dropdown `auto/native/stdio` exists in `assets/web/mcp-realtime.js` but will be replaced by the simpler plugin-style UX in section 7;
+- [~] per-MCP GUI permission dropdown `Open / unrestricted` and `Require approval` exists; STDIO approval runtime support is pending;
+- [~] permission changes are per-server in the canonical update path; mixed multi-MCP validation remains pending;
+- [~] GUI reads/saves the active canonical MCP config through `mcp_config_web.py` / `mcp_realtime_web_endpoint.py`;
 - [ ] server health/status shows configured transport mode, actual active transport and permission mode;
-- [ ] profile reload preserves per-MCP settings;
-- [ ] validate mixed configuration, e.g. XMSeries=`auto/open` and QLCPlus=`stdio/restricted`;
-- [ ] document configuration examples in `.env.example`/README as appropriate without creating another source of truth.
+- [ ] profile reload preserves all per-MCP settings;
+- [ ] validate mixed configuration, e.g. XMSeries=`auto/open` and QLCPlus=`stdio/open` or `stdio/approval` once approval is implemented;
+- [ ] converge normal deployments toward one active MCP inventory instead of network-specific duplicate inventory files;
+- [ ] implement the Evolution GUI milestones in section 7 and retire the temporary injected MCP realtime controls once superseded;
+- [ ] document final user-facing configuration examples in `.env.example`/README without creating another source of truth.
 
-Exit: `.env`, MCP JSON, runtime and GUI expose one coherent configuration model with independent transport and permission controls for every MCP server.
+Exit: `.env`, MCP JSON, runtime and GUI expose one coherent configuration model with independent transport and permission controls for every MCP server, and ordinary users manage MCPs through the plugin-style GUI rather than editing transport-specific inventory files.
 
 #### RV2E - Realtime MCP latency and tool-call efficiency
 
@@ -610,7 +608,7 @@ MCP_CONFIG=mcp_servers.json
 - [ ] automatic fallback to classic;
 - [ ] offline profiles force classic without deleting realtime config;
 - [ ] GUI configuration for pipeline/realtime settings;
-- [ ] reuse the per-MCP transport/permission controls established in RV2D rather than creating global duplicate controls;
+- [ ] reuse the per-MCP controls established in RV2D/section 7 rather than creating global duplicate controls;
 - [ ] health/status identifies active pipeline/provider/MCP transport/fallback state;
 - [ ] all four classic/realtime + wake ON/OFF combinations tested.
 
@@ -729,7 +727,414 @@ Do not merge realtime runtime code into `main` until optional wake behavior, MCP
 
 ---
 
-# 7. Roadmap Maintenance Rules
+# 7. Evolution GUI
+
+**Status:** active design/implementation roadmap tied to RV2D. The 2026-09-06 audit found that canonical MCP normalization, safe web policy updates, per-server realtime controls and an integrated realtime service already exist, but the user-facing experience is still configuration-centric rather than plugin-centric.
+
+**Goal:** simplify the web interface so ordinary users manage MCP servers like plugins: add a remote MCP by URL, inspect what it exposes, enable/disable/remove it, and use advanced transport options only when needed. STDIO remains fully supported, but its creation flow is intentionally developer-oriented and primarily JSON-based.
+
+## 7.1 UX principles
+
+1. The primary object shown to the user is an **MCP plugin/server**, not a transport configuration.
+2. The default view shows name, connection status and discovered capabilities. `native`, `stdio` and `auto` belong in Advanced settings.
+3. One logical MCP can have a remote connection, a local/STDIO connection, or both; it must not appear as duplicate plugins merely because it has two execution paths.
+4. Tools, prompts and resources are discovered dynamically from the MCP and are never copied into configuration as a second source of truth.
+5. The GUI edits the same canonical MCP inventory used by classic and realtime runtime.
+6. The browser never receives stored secret values. Existing authentication headers/tokens remain backend-only.
+7. A connection probe may initialize/discover a server but must never execute a write/control tool.
+8. Remove means remove the LSA configuration; it does not imply uninstalling external MCP software.
+9. Disable keeps configuration but prevents runtime loading.
+10. The temporary per-card controls in `assets/web/mcp-realtime.js` should be retired once the dedicated MCP Plugins view fully supersedes them; two durable MCP configuration UIs are not allowed.
+
+## 7.2 Target configuration ownership
+
+Normal deployments should converge toward one active MCP inventory per installation:
+
+```text
+.env profile
+  -> global LSA/runtime/provider/audio settings
+  -> MCP_CONFIG path
+
+canonical MCP inventory
+  -> logical MCP servers
+  -> remote endpoint when available
+  -> local STDIO/private HTTP execution when available
+  -> enabled state
+  -> per-server realtime transport policy
+  -> per-server permission policy
+  -> assistant routing/prompt options
+
+runtime state
+  -> current connection status
+  -> actual active transport
+  -> last error/probe
+  -> capability counts and discovery cache
+```
+
+`MCP_CONFIG` remains supported, but ordinary installations should use a stable path such as `/etc/livestageassistant/mcp.json` or `/config/mcp.json` in containers rather than switching among transport/network-specific inventory files.
+
+Network-specific variants such as `mcp_servers_tailscale.json`, `mcp_servers_localhost.json` or equivalent should be migrated away where they exist only because endpoint values differ. Export/import remains useful for reproducing deployments, but normal network changes should not require selecting a structurally different MCP inventory.
+
+## 7.3 Canonical MCP shape target
+
+The final schema must remain backward-compatible during migration. The historical `mcpServers` root can remain while the normalized model evolves toward a clearer logical separation:
+
+```json
+{
+  "version": 2,
+  "mcpServers": {
+    "mixer": {
+      "displayName": "XM Series Mixer",
+      "enabled": true,
+      "remote": {
+        "url": "https://raspberry.example/mcp",
+        "auth": {
+          "type": "bearer",
+          "secretRef": "MCP_MIXER_TOKEN"
+        }
+      },
+      "stdio": {
+        "command": "node",
+        "args": ["../XMSeries-MCP/dist/index.js"],
+        "env": {
+          "OSC_HOST": "${MIXER_IP}",
+          "OSC_PORT": "${MIXER_PORT}",
+          "OSC_PROTOCOL": "${MIXER_PROTOCOL}"
+        }
+      },
+      "execution": {
+        "realtimeTransport": "auto",
+        "permission": "open"
+      },
+      "assistant": {
+        "routing": ["mixer", "mix", "volume", "bus"],
+        "loadPrompts": true
+      }
+    }
+  }
+}
+```
+
+The exact serialized field names may change during CFG-1 if required for backward compatibility, but the semantic separation is fixed: identity/enabled state, remote connection, local execution, execution policy, and assistant options.
+
+Secrets should progressively move from exportable raw headers toward backend secret references. A GUI may display `Bearer token configured` and allow replacement, but must never retrieve the current token into JavaScript.
+
+## 7.4 Connection semantics
+
+### Remote only
+
+```text
+classic          -> LSA HTTP MCP client
+realtime native  -> provider-native remote MCP
+realtime auto    -> native when provider-reachable
+```
+
+### Local/STDIO only
+
+```text
+classic          -> LSA STDIO/local client
+realtime stdio   -> LSA bridge
+realtime auto    -> local bridge
+```
+
+### Remote + local
+
+```text
+auto
+  -> native remote first
+  -> local/STDIO fallback only under RV2C safe-fallback rules
+```
+
+Provider-native OpenAI Realtime requires provider-reachable HTTPS. Private HTTP, localhost, LAN-only or STDIO execution remains backend/bridge territory even if the same logical MCP also has a public native endpoint.
+
+## 7.5 MCP Plugins main view
+
+Target top-level GUI concept:
+
+```text
+MCP Plugins                               [+ Add MCP]
+
+XM Series Mixer
+● Connected
+HTTPS + local fallback
+39 tools · 1 prompt · 0 resources
+                                      [Open] [•••]
+
+QLCPlus
+● Connected
+Local / STDIO
+18 tools · 1 prompt
+                                      [Open] [•••]
+```
+
+The primary view should expose only information useful to a normal operator: display name, enabled/connected state, capability counts and a concise connection summary.
+
+## 7.6 Add remote HTTPS MCP
+
+The normal Add flow should be short:
+
+```text
+Name
+[ XM Series Mixer ]
+
+MCP URL
+[ https://example.com/mcp ]
+
+Authentication
+[ None ▼ ]
+
+[Cancel] [Connect]
+```
+
+Initial authentication choices:
+
+```text
+None
+Bearer token
+Custom header
+```
+
+`Connect` must perform a safe MCP initialize/discovery probe, then show a summary before persistence:
+
+```text
+Connected successfully
+Server: XMSeries-MCP
+Tools: 39
+Prompts: 1
+Resources: 0
+
+[Cancel] [Add MCP]
+```
+
+Adding an HTTPS MCP must not require the user to understand OpenAI Realtime. Realtime transport selection remains Automatic by default and is an Advanced setting.
+
+## 7.7 Add local / STDIO MCP
+
+STDIO is intrinsically a developer/system configuration and should not be expanded into a large wizard.
+
+```text
+Add MCP
+  Remote URL
+  Local / STDIO (Advanced)
+```
+
+STDIO creation flow:
+
+```text
+Paste MCP JSON configuration
+
+{
+  "command": "node",
+  "args": ["..."],
+  "env": {}
+}
+
+[Test]
+```
+
+The backend parses and validates the JSON, starts the child process, performs MCP initialize/capability discovery, reports errors, and closes the test process cleanly. After Add, the resulting MCP uses the same plugin card and capability views as an HTTPS MCP. Raw JSON editing remains available only in Advanced settings.
+
+## 7.8 Plugin detail view
+
+Opening a plugin should provide:
+
+```text
+Overview | Tools | Prompts | Resources | Settings
+```
+
+Overview example:
+
+```text
+Status             Connected
+Connection         HTTPS
+Endpoint           https://.../mcp
+Tools              39
+Prompts            1
+Resources          0
+Last checked       12 s ago
+
+[Test connection] [Disable]
+```
+
+The backend must distinguish configured transport from actual active transport. For example `configuredRealtimeTransport=auto` and `activeTransport=native` are separate fields; the GUI must never claim that `auto` itself is an active transport.
+
+## 7.9 Tools browser
+
+Use MCP `tools/list` and display at least tool name, description and relevant annotations. Tool detail may show the input schema and annotations such as `readOnlyHint`, `destructiveHint` and `idempotentHint` when supplied by the server.
+
+Tool discovery is live/server-owned. A local cache may improve UI responsiveness or diagnostics, but it is not configuration truth and must be refreshable.
+
+## 7.10 Prompts browser
+
+Use `prompts/list` and `prompts/get`. Show prompt name/description and allow read-only inspection of returned prompt content.
+
+Because MCP prompts are already part of realtime routing/context, the UI should also expose diagnostic state such as whether an MCP prompt is enabled/loaded by LSA and when it was last refreshed.
+
+## 7.11 Resources browser
+
+If the MCP exposes resources, use `resources/list` and display URI, name, MIME type and description. This capability browser also provides a natural GUI foundation for Roadmap MK without embedding domain-specific knowledge in LSA.
+
+## 7.12 Settings and Advanced settings
+
+The ordinary settings surface should remain compact:
+
+```text
+Enabled                 [on]
+Permission              Open / Require approval
+Realtime routing        Automatic
+```
+
+Advanced settings expose the technical details:
+
+```text
+Realtime transport      Automatic / Native HTTPS / LSA local-STDIO
+Remote endpoint         https://...
+Authentication          Bearer configured / none / custom
+Local fallback          Configured / Not configured
+Load MCP prompts        on/off
+Routing hints           ...
+Raw local JSON          edit/test
+```
+
+Until STDIO approval is implemented, the GUI must not imply that `Local/STDIO + Require approval` is operational. Unsupported combinations must either be disabled with an explanation or rejected safely before save.
+
+## 7.13 Target backend API
+
+Converge MCP GUI operations toward a coherent API surface:
+
+```text
+GET    /api/mcp
+POST   /api/mcp
+GET    /api/mcp/{id}
+PATCH  /api/mcp/{id}
+DELETE /api/mcp/{id}
+
+POST   /api/mcp/{id}/probe
+GET    /api/mcp/{id}/capabilities
+GET    /api/mcp/{id}/tools
+GET    /api/mcp/{id}/prompts
+GET    /api/mcp/{id}/prompts/{name}
+GET    /api/mcp/{id}/resources
+```
+
+The existing `/api/mcp-realtime-policy` endpoint may remain temporarily during migration but should not become a second permanent MCP API.
+
+A backend `MCPRegistry`/`MCPManager` abstraction should own inventory load/save, add/remove, enable/disable, probe, discovery and status, while reusing the existing MCP client/protocol implementation rather than creating another MCP stack for the GUI.
+
+## 7.14 Migration/import behavior
+
+Provide an `Import existing MCP JSON` path for legacy inventories. Migration must:
+
+- parse and normalize without silently dropping fields;
+- show a preview/warnings for legacy fields where practical;
+- write atomically;
+- preserve unrelated servers/settings;
+- avoid mutating multiple source files silently;
+- leave a recoverable backup/rollback path when an installation file is migrated.
+
+A normal Pi target layout is:
+
+```text
+/etc/livestageassistant/.env
+/etc/livestageassistant/mcp.json
+/etc/livestageassistant/secrets/...
+```
+
+Container target is equivalent under `/config` and container secret facilities.
+
+## 7.15 Evolution GUI milestones
+
+### CFG-0 - Align canonical roadmap with implemented RV2D work — IN PROGRESS
+
+- [x] audit current branch code/config/GUI state on 2026-09-06;
+- [x] record that canonical normalization, safe web updates, transport controls and integrated realtime service already exist;
+- [x] narrow current permission contract to `open | approval` and defer tool allow-list UX;
+- [~] keep RV2D checklist synchronized as implementation/validation progresses.
+
+### CFG-1 - Freeze canonical MCP model
+
+- [ ] inventory all deployed `.env.*`, `/etc/livestageassistant` profiles and MCP JSON variants;
+- [ ] freeze backward-compatible canonical server representation used by classic, realtime, API and GUI;
+- [ ] add `enabled` and user-facing identity/display name semantics;
+- [ ] define remote/local connection representation and secret references;
+- [ ] prevent divergent classic and realtime parsers/models.
+
+### CFG-2 - MCP registry/manager service
+
+- [ ] implement one backend service for load/save/add/remove/enable/disable/probe/status;
+- [ ] reuse existing MCP clients and child-process lifecycle code;
+- [ ] add tools/prompts/resources capability discovery;
+- [ ] ensure probe/discovery cannot execute write tools;
+- [ ] expose configured and actual transport independently.
+
+### CFG-3 - Unified MCP web API
+
+- [ ] implement `/api/mcp` collection/detail CRUD;
+- [ ] implement safe probe/capability/tools/prompts/resources endpoints;
+- [ ] guarantee stored secrets are never returned to browser clients;
+- [ ] test invalid URLs, auth failure, timeout and malformed STDIO JSON;
+- [ ] test STDIO child cleanup and atomic persistence.
+
+### CFG-4 - MCP Plugins GUI
+
+- [ ] create dedicated plugin list with Add MCP;
+- [ ] show status/capability counts and concise connection summary;
+- [ ] implement plugin detail tabs Overview/Tools/Prompts/Resources/Settings;
+- [ ] show actual active transport in status/diagnostics;
+- [ ] retire duplicated `mcp-realtime.js` configuration UI once fully superseded.
+
+### CFG-5 - Remote HTTPS add/remove lifecycle
+
+- [ ] URL + authentication Connect/Test/Add flow;
+- [ ] safe capability preview before persistence;
+- [ ] enable/disable;
+- [ ] remove without implying server software uninstall;
+- [ ] token/custom-header replacement without exposing current secret value.
+
+### CFG-6 - Local/STDIO JSON lifecycle
+
+- [ ] paste raw local MCP JSON;
+- [ ] validate/test/initialize/discover/cleanup;
+- [ ] persist as the local connection of one logical MCP;
+- [ ] Advanced raw edit/test after creation;
+- [ ] support remote + local on the same logical MCP without duplicate cards.
+
+### CFG-7 - Legacy inventory consolidation
+
+- [ ] import existing MCP JSON with preview and atomic migration;
+- [ ] converge Pi/container normal deployments toward one active inventory;
+- [ ] remove transport/network-specific duplicate inventory files when no longer needed;
+- [ ] validate profile reload and restart preservation;
+- [ ] update `.env.example`/README only with concise user-facing configuration guidance.
+
+### CFG-8 - Multi-MCP and production validation
+
+- [ ] validate XMSeries and QLCPlus through the same generic plugin UI/runtime paths;
+- [ ] validate mixed remote/local and mixed realtime transport policies;
+- [ ] complete STDIO approval behavior or keep that combination explicitly unsupported;
+- [ ] validate AUTO production-service parity with RV2C safe-fallback rules;
+- [ ] run native-versus-STDIO latency benchmark under RV2E after transport/config semantics are frozen.
+
+## 7.16 Acceptance invariants
+
+The Evolution GUI work is not complete unless all of these remain true:
+
+1. Classic continues to work with the same logical MCP inventory.
+2. OpenAI Realtime continues to support native and bridge paths.
+3. STDIO remains first-class.
+4. Private HTTP/backend MCP remains supported.
+5. Provider-native MCP uses provider-reachable HTTPS.
+6. AUTO never replays an ambiguous mutation.
+7. Browser payloads never contain stored secret values.
+8. XMSeries and QLCPlus remain separate MCPs and no domain logic moves into LSA.
+9. Tools/prompts/resources remain MCP-owned and dynamically discovered.
+10. GUI and runtime read/write the same canonical configuration.
+11. Configuration writes remain atomic.
+12. Probe/test operations are read/discovery-only and cannot trigger control writes.
+
+---
+
+# 8. Roadmap Maintenance Rules
 
 1. This file is the default destination for architecture-level plans and milestones.
 2. Do not create parallel roadmap/architecture/ADR/worklog files for work represented here.
@@ -739,13 +1144,13 @@ Do not merge realtime runtime code into `main` until optional wake behavior, MCP
 
 ---
 
-# 8. Current Next Actions
+# 9. Current Next Actions
 
 1. **RV0 — complete.**
 2. **RV1 — complete.**
 3. **RV2A — partially validated:** native XMSeries discovery/read and controlled writes are validated with `gpt-realtime-2.1`; QLCPlus fixture validation remains before closing RV2A.
 4. **RV2B — validated:** realtime function tools execute through the existing LSA MCP client/STDIO path with native MCP disabled; Pi5 read and controlled write are validated.
-5. **RV2C — final fallback retest:** keep `gpt-realtime-2.1` as the functional reference, force a clear native pre-dispatch discovery failure by making the HTTPS endpoint unavailable, verify automatic STDIO fallback, then execute an equivalent named-target write through the bridge. Preserve no-replay behavior for ambiguous writes.
-6. **RV2D:** reconcile `.env`, canonical MCP JSON and GUI. Add per-MCP transport dropdown (`auto/native/stdio`) and per-MCP permission dropdown (`Open` default / `Require approval` / `Restricted tools`).
-7. **RV2E — latency/tool efficiency:** after RV2 transport semantics are stable, eliminate non-essential tool calls and reduce realtime MCP p50/p95 without adding MCP/domain-specific shortcuts to LSA.
-8. Continue to RV3 only after RV2A/RV2B/RV2C/RV2D semantics, migration and safety are validated; RV2E may proceed in parallel once transport correctness is frozen.
+5. **RV2C — final fallback/production parity:** force a clear native pre-dispatch failure with `gpt-realtime-2.1`, verify safe STDIO fallback, preserve no-replay behavior for ambiguous writes, then bring integrated `realtime/service.py` AUTO orchestration to parity with the validated runner.
+6. **RV2D / Evolution GUI:** continue CFG-1 through CFG-8. Freeze the canonical MCP model, build one MCP manager/API, then replace the temporary technical controls with the plugin-style MCP management interface.
+7. **RV2E — latency/tool efficiency:** once transport/config semantics are frozen, benchmark equivalent native and STDIO commands and reduce unnecessary model/tool calls without MCP/domain-specific shortcuts in LSA.
+8. Continue to RV3 only after RV2 transport/config/safety semantics are validated; RV2E and Evolution GUI work may advance in parallel where dependencies are clear.
