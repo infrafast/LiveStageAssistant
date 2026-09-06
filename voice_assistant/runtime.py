@@ -33,6 +33,8 @@ AUTO_ENV_DIR = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "/etc/livestageassistant
 ONLINE_ENV = AUTO_ENV_DIR / ".env.online"
 OFFLINE_ENV = AUTO_ENV_DIR / ".env.offline"
 CONNECTIVITY_INTERVAL = float(os.getenv("LSA_CONNECTIVITY_CHECK_INTERVAL", "10") or "10")
+LOCAL_TTS_DEFAULT_RATE = 145
+LOCAL_TTS_DEFAULT_VOLUME = 1.0
 
 
 def _load_values(path: Path) -> dict[str, object]:
@@ -87,17 +89,68 @@ def _quiet_native_stderr():
             os.close(null_fd)
 
 
-def speak_local(text: str) -> None:
-    """Speak a connectivity transition without depending on a cloud engine."""
+def _voice_search_text(voice) -> str:
+    parts = [str(getattr(voice, "id", "") or ""), str(getattr(voice, "name", "") or "")]
+    for language in getattr(voice, "languages", None) or []:
+        if isinstance(language, bytes):
+            with contextlib.suppress(Exception):
+                language = language.decode("utf-8", errors="ignore")
+        parts.append(str(language or ""))
+    return " ".join(parts).casefold()
+
+
+def _select_local_voice(tts, values: Mapping[str, object] | None) -> str:
+    config = values or {}
+    requested = str(config.get("LOCAL_SYSTEM_TTS_VOICE") or os.getenv("LOCAL_SYSTEM_TTS_VOICE") or "").strip()
+    locale = str(config.get("STT_LANGUAGE") or config.get("LANGUAGE") or "fr").strip().lower().replace("_", "-")
+    language = locale.split("-", 1)[0] or "fr"
+    voices = list(tts.getProperty("voices") or [])
+
+    selected = None
+    if requested:
+        requested_key = requested.casefold()
+        selected = next((voice for voice in voices if requested_key in _voice_search_text(voice)), None)
+    if selected is None:
+        language_markers = {
+            "fr": ("fr-fr", "fr_", " french", "french", "français", "francais", "france"),
+            "en": ("en-us", "en-gb", " english", "english"),
+        }.get(language, (language,))
+        selected = next(
+            (voice for voice in voices if any(marker in _voice_search_text(voice) for marker in language_markers)),
+            None,
+        )
+    if selected is not None:
+        tts.setProperty("voice", selected.id)
+        return str(getattr(selected, "name", None) or getattr(selected, "id", None) or "selected")
+    return "default"
+
+
+def speak_local(text: str, values: Mapping[str, object] | None = None) -> None:
+    """Speak critical local status without depending on any cloud engine."""
     message = str(text or "").strip()
     if not message:
         return
     print(f"LSA local announcement: {message}", flush=True)
+    config = values or {}
+    try:
+        rate = int(float(config.get("LOCAL_SYSTEM_TTS_RATE") or os.getenv("LOCAL_SYSTEM_TTS_RATE") or LOCAL_TTS_DEFAULT_RATE))
+    except (TypeError, ValueError):
+        rate = LOCAL_TTS_DEFAULT_RATE
+    try:
+        volume = float(config.get("LOCAL_SYSTEM_TTS_VOLUME") or os.getenv("LOCAL_SYSTEM_TTS_VOLUME") or LOCAL_TTS_DEFAULT_VOLUME)
+    except (TypeError, ValueError):
+        volume = LOCAL_TTS_DEFAULT_VOLUME
+    volume = max(0.0, min(1.0, volume))
+
     try:
         with _quiet_native_stderr():
             import pyttsx3
 
             tts = pyttsx3.init()
+            voice_name = _select_local_voice(tts, config)
+            tts.setProperty("rate", max(80, min(260, rate)))
+            tts.setProperty("volume", volume)
+            print(f"LSA local TTS: voice={voice_name} rate={rate} volume={volume:.2f}", flush=True)
             tts.say(message)
             tts.runAndWait()
             tts.stop()
@@ -156,6 +209,7 @@ def run_engine_session(
     ready_seen = threading.Event()
     output_done = threading.Event()
     connectivity_events: queue.Queue[ConnectivityEvent] = queue.Queue(maxsize=1)
+    local_ready_announced = False
 
     def read_output() -> None:
         try:
@@ -183,6 +237,13 @@ def run_engine_session(
 
     try:
         while not stop_event.wait(0.2):
+            if not online and ready_seen.is_set() and not local_ready_announced:
+                # Offline profiles intentionally may have TTS_PROVIDER=none.
+                # READY feedback is a runtime responsibility and therefore uses
+                # the same guaranteed-local speech path as connectivity loss.
+                speak_local("Assistant vocal prêt à exécuter des commandes.", values)
+                local_ready_announced = True
+
             try:
                 event = connectivity_events.get_nowait()
             except queue.Empty:
@@ -240,7 +301,8 @@ def main() -> int:
             env_file = ONLINE_ENV if online else OFFLINE_ENV
             print(f"LSA initial connectivity: {'online' if online else 'offline'}", flush=True)
             if not online:
-                speak_local("Assistant fonctionne localement.")
+                offline_values = _load_values(OFFLINE_ENV) if OFFLINE_ENV.is_file() else {}
+                speak_local("Assistant fonctionne localement.", offline_values)
         else:
             env_file = Path(raw_env_arg).expanduser()
             if not env_file.is_absolute():
@@ -281,7 +343,8 @@ def main() -> int:
             if not online:
                 # This must never depend on the cloud engine that just became
                 # unavailable. Announce locally before starting the offline path.
-                speak_local("Connexion internet perdue. Assistant fonctionne localement.")
+                offline_values = _load_values(OFFLINE_ENV) if OFFLINE_ENV.is_file() else {}
+                speak_local("Connexion internet perdue. Assistant fonctionne localement.", offline_values)
                 env_file = OFFLINE_ENV
             else:
                 # The newly selected online engine owns the normal online voice
