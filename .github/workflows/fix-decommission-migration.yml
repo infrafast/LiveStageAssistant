@@ -1,0 +1,41 @@
+name: Fix and dispatch pyttsx3 migration
+
+on:
+  push:
+    branches: [realtime-voice-architecture]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: realtime-voice-architecture
+          fetch-depth: 0
+      - name: Scope env migration to save_llm_config
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/decommission-pyttsx3.yml')
+          s = p.read_text()
+          old = """          once(marker, insertion, 'offline env save setup')\n"""
+          new = """          save_start = text.find('    def save_llm_config(')\n          if save_start < 0:\n              raise SystemExit('save_llm_config not found')\n          marker_index = text.find(marker, save_start)\n          if marker_index < 0:\n              raise SystemExit('save_llm_config update_env_file_values marker not found')\n          text = text[:marker_index] + insertion + text[marker_index + len(marker):]\n"""
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one migration marker, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/decommission-pyttsx3.yml
+          git commit -m 'ci: scope pyttsx3 migration to LLM config saver [skip ci]'
+          git push origin HEAD:realtime-voice-architecture
+      - name: Dispatch corrected migration
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run decommission-pyttsx3.yml --ref realtime-voice-architecture
