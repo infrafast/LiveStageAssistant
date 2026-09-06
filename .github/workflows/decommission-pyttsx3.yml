@@ -27,9 +27,9 @@ jobs:
           from pathlib import Path
           p = Path('voice_assistant/agent.py')
           s = p.read_text()
-          duplicate_class = 'class AutoNetworkMonitor:\n\nclass AutoNetworkMonitor:\n'
+          duplicate_class = 'class AutoNetworkMonitor:\n\n\nclass AutoNetworkMonitor:\n'
           signature = '    def play_local_tts_file(self, audio_path: str | Path, *, stop_event: threading.Event | None = None) -> None:\n'
-          duplicate_method = signature + signature
+          duplicate_method = signature + '\n' + signature
           if s.count(duplicate_class) != 1:
               raise SystemExit(f'expected one duplicated AutoNetworkMonitor boundary, found {s.count(duplicate_class)}')
           if s.count(duplicate_method) != 1:
