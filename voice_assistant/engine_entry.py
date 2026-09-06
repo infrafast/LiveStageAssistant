@@ -16,6 +16,8 @@ import sys
 
 from dotenv import dotenv_values
 
+CLASSIC_READY_MARKER = "LSA Classic ready:"
+
 
 def run_classic(env_file: str) -> int:
     from voice_assistant import agent
@@ -30,6 +32,11 @@ def run_classic(env_file: str) -> int:
         original_announce_ready = agent.VoiceAssistant.announce_startup_ready
 
         async def announce_ready_with_connectivity(self, loaded_servers):
+            # The engine is fully initialized here. Emit a machine-readable
+            # READY marker before any spoken announcement so the common runtime
+            # can stop the loader at the correct boundary.
+            print(f"{CLASSIC_READY_MARKER} connectivity={'online' if online else 'offline'}", flush=True)
+
             # Connectivity ownership remains in the common runtime. This adapter
             # only delivers the already-known ONLINE event with Classic's own
             # configured speech path once that path is available.
