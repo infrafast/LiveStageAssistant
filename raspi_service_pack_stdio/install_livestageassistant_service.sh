@@ -102,6 +102,16 @@ ensure_env_value_if_missing() {
   echo "Added $key to existing $target"
 }
 
+remove_env_key() {
+  local target="$1"
+  local key="$2"
+  if ! sudo grep -q "^${key}=" "$target"; then
+    return
+  fi
+  sudo sed -i "/^${key}=/d" "$target"
+  echo "Removed obsolete $key from $target"
+}
+
 require_python_stack
 require_node_stack
 
@@ -112,15 +122,17 @@ sudo loginctl enable-linger "$SERVICE_USER"
 install_env_if_missing "$SCRIPT_DIR/.env.online" "$ONLINE_ENV"
 install_env_if_missing "$SCRIPT_DIR/.env.offline" "$OFFLINE_ENV"
 
-# Existing profiles are intentionally preserved. Add only missing OR3 keys so
-# upgrades adopt Piper without overwriting site-specific mixer/audio settings.
+# OR3 now owns offline speech exclusively through LOCAL_TTS_PROVIDER=Piper.
+# Preserve site-specific settings while removing the obsolete dual-selector and
+# pyttsx3 emergency-fallback keys from already deployed profiles.
+remove_env_key "$OFFLINE_ENV" "TTS_PROVIDER"
+remove_env_key "$OFFLINE_ENV" "LOCAL_TTS_PYTTSX3_FALLBACK"
 ensure_env_value_if_missing "$OFFLINE_ENV" "LOCAL_TTS_PROVIDER" "piper"
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_VOICE" "$PIPER_VOICE"
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_DATA_DIR" "data/piper"
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_MODEL_PATH" ""
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_CONFIG_PATH" ""
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_LENGTH_SCALE" "1.00"
-ensure_env_value_if_missing "$OFFLINE_ENV" "LOCAL_TTS_PYTTSX3_FALLBACK" "true"
 
 sudo cp "$SCRIPT_DIR/livestageassistant.service" /etc/systemd/system/livestageassistant.service
 sudo cp "$SCRIPT_DIR/livestageassistant" /usr/local/bin/livestageassistant
@@ -134,7 +146,7 @@ sudo chmod +x /usr/local/bin/livestageassistant
 sudo systemctl daemon-reload
 
 echo
-echo "Installation complete. Existing runtime env profiles were preserved and missing OR3 Piper keys were added."
+echo "Installation complete. Existing runtime env profiles were preserved and offline TTS was migrated to Piper-only configuration."
 echo "Next steps:"
 echo "  1) Check $ONLINE_ENV and $OFFLINE_ENV"
 echo "  2) Make sure /home/pi/XMSeries-MCP and /home/pi/QLCPlus-MCP exist and are built"
