@@ -23,20 +23,24 @@ CLASSIC_READY_MARKER = "LSA Classic ready:"
 
 
 def _install_offline_piper_adapter(agent, values: dict[str, object]) -> None:
-    """Route the historical Classic local-TTS hook through Piper offline."""
+    """Route the historical Classic local-TTS hook through Piper offline.
+
+    Offline configuration is owned solely by LOCAL_TTS_PROVIDER. The temporary
+    internal normalization below only activates the legacy Classic local-output
+    code path; it is not a user-facing pyttsx3 configuration or fallback.
+    """
     provider = str(values.get("LOCAL_TTS_PROVIDER") or "piper").strip().lower()
     if provider != "piper":
         return
 
     from voice_assistant.local_tts import piper_ready, piper_voice_name, render_piper_wav
 
-    original_local_tts = agent.VoiceAssistant.text_to_speech_pyttsx3
     original_resolve_tts = agent.resolve_tts_config_from_values
 
     def resolve_tts_with_piper(env_values: dict):
-        # Existing deployed offline profiles may still contain TTS_PROVIDER=none.
-        # Keep the file intact, but route the Classic backend internally through
-        # its historical local hook; that hook is replaced by Piper below.
+        # Classic still identifies its historical local-output hook with the
+        # internal provider token "pyttsx3". Keep that implementation detail out
+        # of env profiles; the hook itself is replaced by Piper below.
         normalized = dict(env_values)
         normalized["TTS_PROVIDER"] = "pyttsx3"
         return original_resolve_tts(normalized)
@@ -46,11 +50,8 @@ def _install_offline_piper_adapter(agent, values: dict[str, object]) -> None:
 
     def text_to_speech_piper(self, text: str) -> bool:
         if not piper_ready(values):
-            if str(values.get("LOCAL_TTS_PYTTSX3_FALLBACK") or "true").strip().lower() in {"1", "true", "yes", "on"}:
-                print("Piper unavailable in offline mode; using emergency pyttsx3 fallback.", flush=True)
-                return original_local_tts(self, text)
             self.stop_thinking_sound()
-            print("Piper unavailable in offline mode and emergency fallback is disabled.", flush=True)
+            print("Piper unavailable in offline mode; local speech is unavailable.", flush=True)
             return False
 
         if not self._backend_output_ready():
@@ -71,9 +72,6 @@ def _install_offline_piper_adapter(agent, values: dict[str, object]) -> None:
         except Exception as exc:
             self.stop_thinking_sound()
             print(f"Local Piper TTS failed: {exc}", flush=True)
-            if str(values.get("LOCAL_TTS_PYTTSX3_FALLBACK") or "true").strip().lower() in {"1", "true", "yes", "on"}:
-                print("Falling back to emergency pyttsx3 local TTS.", flush=True)
-                return original_local_tts(self, text)
             return False
         finally:
             if temp_path:
