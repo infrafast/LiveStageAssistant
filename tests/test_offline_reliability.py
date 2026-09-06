@@ -66,7 +66,7 @@ def test_auto_network_status_pyttsx3_uses_configured_backend_output(monkeypatch,
     assert fake_audio.terminated is True
 
 
-def test_offline_profiles_are_cloud_independent():
+def test_offline_profiles_are_cloud_independent_and_select_piper():
     for relative_path in [".env.offline", "raspi_service_pack_stdio/.env.offline"]:
         values = {}
         for raw_line in Path(relative_path).read_text().splitlines():
@@ -80,7 +80,13 @@ def test_offline_profiles_are_cloud_independent():
         assert values["LLM_PROVIDER"] == "ollama"
         assert values["STT_PROVIDER"] == "local-whisper"
         assert values["STT_INPUT"] == "backend"
+        # TTS_PROVIDER remains the legacy Classic route identifier during OR3;
+        # LOCAL_TTS_PROVIDER is the actual local backend selection.
         assert values["TTS_PROVIDER"] == "pyttsx3"
+        assert values["LOCAL_TTS_PROVIDER"] == "piper"
+        assert values["PIPER_VOICE"] == "fr_FR-siwis-medium"
+        assert values["PIPER_DATA_DIR"] == "data/piper"
+        assert values["LOCAL_TTS_PYTTSX3_FALLBACK"] == "true"
         assert values["WEB_TTS_PROVIDER"] == "none"
         assert values["OPENAI_API_KEY_FILE"] == ""
         assert values["ELEVENLABS_API_KEY_FILE"] == ""
