@@ -23,24 +23,18 @@ CLASSIC_READY_MARKER = "LSA Classic ready:"
 
 
 def _install_offline_piper_adapter(agent, values: dict[str, object]) -> None:
-    """Route the historical Classic local-TTS hook through Piper offline.
+    """Route the historical Classic local-output hook through Piper offline.
 
-    Offline configuration is owned solely by LOCAL_TTS_PROVIDER. The temporary
-    internal normalization below only activates the legacy Classic local-output
-    code path; it is not a user-facing pyttsx3 configuration or fallback.
+    Piper is implicit in offline/local mode. No local-provider selector is read
+    from the profile. The temporary internal normalization only activates the
+    historical Classic local-output hook; that hook is replaced with Piper
+    immediately below and is not a user-facing pyttsx3 selection.
     """
-    provider = str(values.get("LOCAL_TTS_PROVIDER") or "piper").strip().lower()
-    if provider != "piper":
-        return
-
     from voice_assistant.local_tts import piper_ready, piper_voice_name, render_piper_wav
 
     original_resolve_tts = agent.resolve_tts_config_from_values
 
     def resolve_tts_with_piper(env_values: dict):
-        # Classic still identifies its historical local-output hook with the
-        # internal provider token "pyttsx3". Keep that implementation detail out
-        # of env profiles; the hook itself is replaced by Piper below.
         normalized = dict(env_values)
         normalized["TTS_PROVIDER"] = "pyttsx3"
         return original_resolve_tts(normalized)
