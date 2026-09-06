@@ -173,7 +173,9 @@ verify_realtime_and_piper() {
     piper_voice="${LSA_PIPER_VOICE:-fr_FR-siwis-medium}"
     piper_data_dir="${LSA_PIPER_DATA_DIR:-$repo_dir/data/piper}"
     PIPER_VERIFY_MODEL="$piper_data_dir/$piper_voice.onnx" uv run python - <<'PY'
+import io
 import os
+import wave
 from importlib import metadata
 from pathlib import Path
 
@@ -185,9 +187,14 @@ config = model.with_suffix(model.suffix + ".json")
 if not model.is_file() or not config.is_file():
     raise SystemExit(f"Piper voice verification failed: missing {model} or {config}")
 voice = PiperVoice.load(model, config_path=config)
+rendered = io.BytesIO()
+with wave.open(rendered, "wb") as wav_file:
+    voice.synthesize_wav("Test de synthèse vocale locale.", wav_file)
+if len(rendered.getvalue()) <= 44:
+    raise SystemExit("Piper voice verification failed: synthesis produced no audio")
 print(f"Realtime voice package OK: {voice_assistant.realtime.__name__}")
 print(f"Piper dependency OK: piper-tts {metadata.version('piper-tts')}")
-print(f"Piper French voice OK: {model.name}, {voice.config.sample_rate} Hz")
+print(f"Piper French voice OK: {model.name}, {voice.config.sample_rate} Hz, synthesis OK")
 PY
 }
 
