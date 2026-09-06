@@ -88,6 +88,7 @@ def run_engine(engine: str, env_file: Path, original_env_arg: str, values: Mappi
 
     child_env = os.environ.copy()
     child_env["LSA_COMMON_STARTUP_LIFECYCLE"] = "1"
+    child_env["PYTHONUNBUFFERED"] = "1"
 
     command = engine_command(engine, env_file, original_env_arg)
     marker = ready_marker(engine, values)
