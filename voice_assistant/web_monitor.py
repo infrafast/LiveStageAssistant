@@ -28,6 +28,8 @@ VOICE_ENGINE_ONLINE = {"classic", "openai-realtime"}
 VOICE_ENGINE_OFFLINE = {"local"}
 DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"
 DEFAULT_RUNTIME_STATUS_STALE_SECONDS = 30.0
+DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1"
+DEFAULT_REALTIME_VOICE = "marin"
 
 
 def _active_env_file_from_snapshot(snapshot: dict[str, Any]) -> Path:
@@ -51,28 +53,29 @@ def _runtime_status_stale_seconds() -> float:
         return DEFAULT_RUNTIME_STATUS_STALE_SECONDS
 
 
-def _write_env_value(path: Path, key: str, value: str) -> None:
+def _write_env_values(path: Path, values: dict[str, str]) -> None:
+    """Atomically replace one or more env keys while preserving file mode/order."""
     if not path.is_file():
         raise ValueError(f"active env file not found: {path}")
     original_mode = path.stat().st_mode & 0o777
+    requested = {str(key): str(value) for key, value in values.items()}
+    remaining = dict(requested)
     lines = path.read_text(encoding="utf-8").splitlines()
-    prefix = f"{key}="
-    replaced = False
     output: list[str] = []
+    insert_at = 0
     for line in lines:
-        if line.startswith(prefix):
-            if not replaced:
-                output.append(f"{key}={value}")
-                replaced = True
+        if line.startswith("CONNECTIVITY_MODE="):
+            insert_at = len(output) + 1
+        key, sep, _value = line.partition("=")
+        if sep and key in requested:
+            if key in remaining:
+                output.append(f"{key}={requested[key]}")
+                remaining.pop(key, None)
             continue
         output.append(line)
-    if not replaced:
-        insert_at = 0
-        for index, line in enumerate(output):
-            if line.startswith("CONNECTIVITY_MODE="):
-                insert_at = index + 1
-                break
+    for key, value in remaining.items():
         output.insert(insert_at, f"{key}={value}")
+        insert_at += 1
     text = "\n".join(output) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
@@ -80,6 +83,10 @@ def _write_env_value(path: Path, key: str, value: str) -> None:
         tmp_path = Path(handle.name)
     os.chmod(tmp_path, original_mode)
     tmp_path.replace(path)
+
+
+def _write_env_value(path: Path, key: str, value: str) -> None:
+    _write_env_values(path, {key: value})
 
 
 def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> dict[str, dict[str, Any]]:
@@ -192,7 +199,7 @@ class WebMonitor(_BaseWebMonitor):
             "runtime": status,
         }
 
-    def _save_voice_engine(self, engine: str) -> dict[str, Any]:
+    def _save_voice_engine(self, engine: str, *, realtime_model: str = "", realtime_voice: str = "") -> dict[str, Any]:
         snapshot = self.snapshot()
         config = snapshot.get("config") or {}
         env_values = dict(config.get("env") or {})
@@ -202,16 +209,32 @@ class WebMonitor(_BaseWebMonitor):
         if normalized not in allowed:
             expected = ", ".join(sorted(allowed))
             raise ValueError(f"voice_engine must be one of: {expected}")
+
+        updates = {"VOICE_ENGINE": normalized}
+        model = str(realtime_model or "").strip()
+        voice = str(realtime_voice or "").strip()
+        if normalized == "openai-realtime":
+            model = model or str(env_values.get("OPENAI_REALTIME_MODEL") or DEFAULT_REALTIME_MODEL).strip()
+            voice = voice or str(env_values.get("OPENAI_REALTIME_VOICE") or DEFAULT_REALTIME_VOICE).strip()
+            if not model:
+                raise ValueError("OPENAI_REALTIME_MODEL must not be empty")
+            if not voice:
+                raise ValueError("OPENAI_REALTIME_VOICE must not be empty")
+            updates["OPENAI_REALTIME_MODEL"] = model
+            updates["OPENAI_REALTIME_VOICE"] = voice
+
         env_file = _active_env_file_from_snapshot(snapshot)
-        _write_env_value(env_file, "VOICE_ENGINE", normalized)
-        env_values["VOICE_ENGINE"] = normalized
+        _write_env_values(env_file, updates)
+        env_values.update(updates)
         self.update(env_values=env_values)
         return {
             "ok": True,
             "voice_engine": normalized,
+            "realtime_model": model if normalized == "openai-realtime" else str(env_values.get("OPENAI_REALTIME_MODEL") or DEFAULT_REALTIME_MODEL).strip(),
+            "realtime_voice": voice if normalized == "openai-realtime" else str(env_values.get("OPENAI_REALTIME_VOICE") or DEFAULT_REALTIME_VOICE).strip(),
             "connectivity_mode": connectivity,
             "restart_required": True,
-            "message": "Voice engine saved. Restart LiveStageAssistant to apply it.",
+            "message": "Voice engine settings saved. Restart LiveStageAssistant to apply them.",
         }
 
     def start(self, host: str = "127.0.0.1", port: int = 8765) -> tuple[str, int]:
@@ -249,7 +272,11 @@ class WebMonitor(_BaseWebMonitor):
                         if payload is None:
                             return
                         try:
-                            result = monitor._save_voice_engine(str(payload.get("voice_engine") or ""))
+                            result = monitor._save_voice_engine(
+                                str(payload.get("voice_engine") or ""),
+                                realtime_model=str(payload.get("realtime_model") or ""),
+                                realtime_voice=str(payload.get("realtime_voice") or ""),
+                            )
                         except ValueError as error:
                             self._send_json_error(400, {"ok": False, "error": {"message": str(error)}})
                             return
