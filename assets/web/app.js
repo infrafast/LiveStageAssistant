@@ -177,6 +177,9 @@
     const thinkingSoundField = document.querySelector("#thinking-sound-field");
     const thinkingSound = document.querySelector("#thinking-sound");
     const thinkingSoundPlay = document.querySelector("#thinking-sound-play");
+    const readySoundField = document.querySelector("#ready-sound-field");
+    const readySound = document.querySelector("#ready-sound");
+    const readySoundPlay = document.querySelector("#ready-sound-play");
     const listeningSoundField = document.querySelector("#listening-sound-field");
     const listeningSound = document.querySelector("#listening-sound");
     const listeningSoundPlay = document.querySelector("#listening-sound-play");
@@ -197,6 +200,9 @@
     const realtimeModelField = document.querySelector("#realtime-model-field");
     const realtimeVoice = document.querySelector("#realtime-voice");
     const realtimeVoiceField = document.querySelector("#realtime-voice-field");
+    const realtimeBrowserField = document.querySelector("#realtime-browser-field");
+    const realtimeBrowserToggle = document.querySelector("#realtime-browser-toggle");
+    const realtimeBrowserStatus = document.querySelector("#realtime-browser-status");
     const speechOutputGain = document.querySelector("#speech-output-gain");
     const speechOutputGainField = document.querySelector("#speech-output-gain-field");
     const speechOutputGainLabel = document.querySelector("#speech-output-gain-label");
@@ -251,6 +257,9 @@
     let currentCloudGain = 1;
     let currentLocalGain = 1;
     let currentClassicCloudSpeech = true;
+    let realtimeBrowserPeer = null;
+    let realtimeBrowserStream = null;
+    let realtimeBrowserAudio = null;
     let lastSnapshot = null;
     let speakerRecognitionUnavailableReason = "";
     let speakerRecognitionEnvEnabled = false;
@@ -2825,6 +2834,12 @@
       thinkingSoundPlay.title = thinkingSoundField.title;
 
       const listeningBackendUnavailable = !backendAudioCapabilities.output;
+      readySound.disabled = listeningBackendUnavailable;
+      readySoundPlay.disabled = !readySound.value || listeningBackendUnavailable;
+      readySoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "READY_SOUND_FILE";
+      readySound.title = readySoundField.title;
+      readySoundPlay.title = readySoundField.title;
+
       listeningSound.disabled = listeningBackendUnavailable;
       listeningSoundPlay.disabled = !listeningSound.value || listeningBackendUnavailable;
       listeningSoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "LISTENING_SOUND_FILE";
@@ -2981,6 +2996,7 @@
         backend_audio_monitor_volume: Number(backendAudioMonitorVolume.value || 1),
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
+        ready_sound_file: readySound.value || "",
         listening_sound_file: listeningSound.value || "",
         wake_detected_sound_file: wakeDetectedSound.value || "",
         startup_loader_sound_file: startupLoaderSound.value || "",
@@ -3032,15 +3048,94 @@
         : "Gain applied to cloud-generated speech, including Realtime.";
     }
 
+
+    async function stopBrowserRealtime() {
+      if (realtimeBrowserPeer) {
+        try { realtimeBrowserPeer.close(); } catch (_) {}
+      }
+      realtimeBrowserPeer = null;
+      if (realtimeBrowserStream) {
+        for (const track of realtimeBrowserStream.getTracks()) track.stop();
+      }
+      realtimeBrowserStream = null;
+      if (realtimeBrowserAudio) {
+        realtimeBrowserAudio.pause();
+        realtimeBrowserAudio.srcObject = null;
+        realtimeBrowserAudio.remove();
+      }
+      realtimeBrowserAudio = null;
+      if (realtimeBrowserToggle) realtimeBrowserToggle.textContent = "Start browser realtime";
+      if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = "Stopped.";
+    }
+
+    async function startBrowserRealtime() {
+      if (realtimeBrowserPeer) { await stopBrowserRealtime(); return; }
+      if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+        throw new Error("Browser microphone/WebRTC requires HTTPS or localhost.");
+      }
+      realtimeBrowserToggle.disabled = true;
+      realtimeBrowserStatus.textContent = "Creating short-lived Realtime session…";
+      try {
+        const secretResponse = await fetch("/api/realtime-browser-secret", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        const secretData = await fetchJsonOrThrow(secretResponse);
+        const ephemeral = secretData?.client_secret?.value || "";
+        if (!ephemeral) throw new Error("No browser client secret returned.");
+
+        const pc = new RTCPeerConnection();
+        realtimeBrowserPeer = pc;
+        const audio = document.createElement("audio");
+        audio.autoplay = true;
+        audio.hidden = true;
+        document.body.appendChild(audio);
+        realtimeBrowserAudio = audio;
+        pc.ontrack = (event) => { audio.srcObject = event.streams[0]; };
+        pc.onconnectionstatechange = () => {
+          realtimeBrowserStatus.textContent = `WebRTC: ${pc.connectionState}`;
+          if (["failed", "closed"].includes(pc.connectionState)) stopBrowserRealtime();
+        };
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        realtimeBrowserStream = stream;
+        for (const track of stream.getTracks()) pc.addTrack(track, stream);
+        pc.createDataChannel("oai-events");
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const answerResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${ephemeral}`,
+            "Content-Type": "application/sdp"
+          },
+          body: offer.sdp
+        });
+        if (!answerResponse.ok) throw new Error(await answerResponse.text());
+        await pc.setRemoteDescription({ type: "answer", sdp: await answerResponse.text() });
+        realtimeBrowserToggle.textContent = "Stop browser realtime";
+        realtimeBrowserStatus.textContent = "WebRTC connected; server API key remains on the Pi.";
+      } catch (error) {
+        await stopBrowserRealtime();
+        realtimeBrowserStatus.textContent = `WebRTC failed: ${error.message || error}`;
+        throw error;
+      } finally {
+        realtimeBrowserToggle.disabled = false;
+      }
+    }
+
     function syncVoiceEngineControls() {
       if (!voiceEngine) return;
       const offline = selectedConnectivityMode() === "offline";
       if (offline) voiceEngine.value = "local";
-      const realtime = !offline && voiceEngine.value === "openai-realtime";
+      const realtime = !offline && ["openai-realtime", "gemini-live"].includes(voiceEngine.value);
+      const browserRealtime = !offline && voiceEngine.value === "openai-realtime";
       voiceEngine.disabled = offline;
       for (const item of voiceEngine.options) item.disabled = offline ? item.value !== "local" : item.value === "local";
       realtimeModelField.classList.toggle("hidden", !realtime);
       realtimeVoiceField.classList.toggle("hidden", !realtime);
+      realtimeBrowserField.classList.toggle("hidden", !browserRealtime);
+      if (!browserRealtime && realtimeBrowserPeer) stopBrowserRealtime();
       llmProviderField.classList.toggle("hidden", realtime);
       llmModelField.classList.toggle("hidden", realtime);
       classicSttPromptField.classList.toggle("hidden", realtime);
@@ -5051,6 +5146,16 @@
           }
         }
 
+        readySound.replaceChildren();
+        const selectedReadySound = data.selected_ready_sound_file || "";
+        readySound.appendChild(option("No ready sound", "", false, !selectedReadySound));
+        for (const sound of sounds) {
+          readySound.appendChild(option(sound.label || sound.id, sound.id, false, sound.id === selectedReadySound));
+        }
+        if (selectedReadySound && !sounds.some((sound) => sound.id === selectedReadySound)) {
+          readySound.appendChild(option(`${selectedReadySound} (${tr("current", "current")})`, selectedReadySound, false, true));
+        }
+
         listeningSound.replaceChildren();
         const selectedListeningSound = data.selected_listening_sound_file || "";
         listeningSound.appendChild(option(
@@ -5187,6 +5292,7 @@
         browserAudioTest.disabled = !browserAudioCapabilities.input || browserAudioInputField.classList.contains("hidden");
         backendAudioTest.disabled = !backendAudioCapabilities.input || backendAudioInputField.classList.contains("hidden");
         thinkingSound.disabled = thinkingSound.options.length === 0;
+        readySound.disabled = readySound.options.length === 0;
         listeningSound.disabled = listeningSound.options.length === 0;
         wakeDetectedSound.disabled = wakeDetectedSound.options.length === 0;
         commandAckSound.disabled = commandAckSound.options.length === 0;
@@ -5637,6 +5743,7 @@
       stopCurrentAudioSample();
       syncAudioSampleControls();
     });
+    readySound.addEventListener("change", () => { stopCurrentAudioSample(); syncAudioSampleControls(); });
     listeningSound.addEventListener("change", () => {
       stopCurrentAudioSample();
       syncAudioSampleControls();
@@ -5650,6 +5757,7 @@
       syncAudioSampleControls();
     });
     thinkingSoundPlay.addEventListener("click", () => toggleAudioSample(thinkingSound, thinkingSoundPlay));
+    readySoundPlay.addEventListener("click", () => toggleAudioSample(readySound, readySoundPlay, true));
     listeningSoundPlay.addEventListener("click", () => toggleAudioSample(listeningSound, listeningSoundPlay, true));
     wakeDetectedSoundPlay.addEventListener("click", () => toggleAudioSample(
       wakeDetectedSound,
@@ -5719,6 +5827,7 @@
     voiceEngine.addEventListener("change", () => { syncVoiceEngineControls(); syncConfigActionState(); });
     realtimeModel.addEventListener("input", syncConfigActionState);
     realtimeVoice.addEventListener("input", syncConfigActionState);
+    realtimeBrowserToggle.addEventListener("click", () => startBrowserRealtime().catch(() => {}));
     speechOutputGain.addEventListener("input", () => { syncSpeechOutputGainLabel(); syncConfigActionState(); });
     cloudTtsProvider.addEventListener("change", syncVoiceEngineControls);
     panelConfig.addEventListener("input", syncConfigActionState);
@@ -5750,6 +5859,7 @@
       const backendAudioMonitorVolumeValue = Number(backendAudioMonitorVolume.value || 1);
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
+      const readySoundFile = readySound.value;
       const listeningSoundFile = listeningSound.value;
       const wakeDetectedSoundFile = wakeDetectedSound.value;
       const startupLoaderSoundFile = startupLoaderSound.value;
@@ -5812,6 +5922,7 @@
             system_prompt: systemPromptValue,
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
+            ready_sound_file: readySoundFile,
             listening_sound_file: listeningSoundFile,
             wake_detected_sound_file: wakeDetectedSoundFile,
             startup_loader_sound_file: startupLoaderSoundFile,

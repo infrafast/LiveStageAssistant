@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Integrated OpenAI Realtime runtime for LiveStageAssistant service mode."""
+"""Integrated provider-neutral Realtime runtime for LiveStageAssistant."""
 
 from __future__ import annotations
 
@@ -32,13 +32,18 @@ from .mcp_auto import classify_auto_fallback
 from .mcp_bridge import RealtimeMCPBridge, load_remote_mcp_prompt
 from .mcp_config import CanonicalMCPServerConfig, load_mcp_inventory
 from .metrics import realtime_usage_cost_usd
-from .openai_realtime import OpenAIRealtimeEngine
+from .provider_factory import create_realtime_engine
 from .prompts import DEFAULT_BASE_PROMPT
 
 ROOT = Path(__file__).resolve().parents[2]
 REALTIME_RATE = 24000
 DEFAULT_MODEL = "gpt-realtime-2.1"
 DEFAULT_VOICE = "marin"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-live-preview"
+DEFAULT_GEMINI_VOICE = "Kore"
+TRANSIENT_PROVIDER_EXIT = 75
+_RECENT_BRIDGE_CALL_IDS: set[str] = set()
+
 
 
 def read_secret(name: str, env_file: Path) -> str:
@@ -316,16 +321,27 @@ async def execute_bridge_call(engine, bridge: RealtimeMCPBridge, event, complete
     arguments = str(event.data.get("arguments") or "{}")
     if not call_id or call_id in completed_calls:
         return
+    if len(completed_calls) >= 2048:
+        completed_calls.clear()
     completed_calls.add(call_id)
     target = bridge.tool_targets.get(name)
     started = time.perf_counter()
     print("Realtime bridge call " + json.dumps({"server": target.server if target else None, "tool": target.tool if target else name, "arguments": arguments}, ensure_ascii=False, separators=(",", ":")), flush=True)
+    timeout = max(1.0, float(os.getenv("MCP_AGENT_TIMEOUT_SECONDS", "20") or "20"))
     try:
-        result = await bridge.execute(name, arguments)
+        result = await asyncio.wait_for(bridge.execute(name, arguments), timeout=timeout)
+    except asyncio.TimeoutError:
+        result = {"is_error": True, "error": f"MCP call timed out after {timeout:.1f}s; execution state is not replayed automatically"}
     except Exception as exc:
         result = {"is_error": True, "error": str(exc)}
     print(f"Realtime bridge result: call_id={call_id} duration_ms={(time.perf_counter()-started)*1000:.1f}", flush=True)
-    await engine.submit_tool_result(call_id, result)
+    try:
+        await engine.submit_tool_result(call_id, result)
+    except Exception as exc:
+        # The MCP call may already have changed external state. Never replay it
+        # merely because the provider connection disappeared before receiving
+        # the tool result.
+        print(f"Realtime bridge result delivery failed: call_id={call_id} error={exc}", flush=True)
 
 
 async def wait_until_ready(engine) -> None:
@@ -377,9 +393,10 @@ async def event_loop(
     first_played: dict[str, float],
     stop_event: asyncio.Event,
     semantic: SemanticAudioController,
+    provider_failure: asyncio.Event,
 ) -> None:
     current_response_id = ""
-    completed_calls: set[str] = set()
+    completed_calls = _RECENT_BRIDGE_CALL_IDS
     completed_responses: set[str] = set()
     audio_started: set[str] = set()
     tool_tasks: set[asyncio.Task] = set()
@@ -396,6 +413,10 @@ async def event_loop(
             if current_response_id:
                 interrupted.add(current_response_id)
                 clear_queue(queue)
+                try:
+                    await engine.cancel_response()
+                except Exception as exc:
+                    print(f"Realtime cancellation warning: {exc}", flush=True)
         elif event.type == "speech_stopped":
             speech_stopped_at = now
             print("Realtime speech stopped", flush=True)
@@ -439,8 +460,8 @@ async def event_loop(
             completed_responses.add(response_id)
             turn += 1
             speech_end = speech_stop_by_response.get(response_id)
-            metrics = {"pipeline":"realtime","provider":"openai","model":engine.config.model,"turn":turn,"response_id":response_id,"speech_end_to_first_audio_ms":round((first_audio_received[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_audio_received else None,"speech_end_to_first_playback_ms":round((first_played[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_played else None,"response_start_to_done_ms":round((now-response_started[response_id])*1000,1) if response_id in response_started else None,"usage":event.data.get("usage") or {}}
-            metrics["cost_usd"] = realtime_usage_cost_usd(engine.config.model, metrics["usage"])
+            metrics = {"pipeline":"realtime","provider":engine.config.provider,"model":engine.config.model,"turn":turn,"response_id":response_id,"speech_end_to_first_audio_ms":round((first_audio_received[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_audio_received else None,"speech_end_to_first_playback_ms":round((first_played[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_played else None,"response_start_to_done_ms":round((now-response_started[response_id])*1000,1) if response_id in response_started else None,"usage":event.data.get("usage") or {}}
+            metrics["cost_usd"] = realtime_usage_cost_usd(engine.config.model, metrics["usage"]) if engine.config.provider == "openai" else None
             print("REALTIME_METRICS " + json.dumps(metrics, ensure_ascii=False, separators=(",", ":")), flush=True)
             if response_id in audio_started:
                 await queue.put((response_id, None))
@@ -448,8 +469,10 @@ async def event_loop(
                 current_response_id = ""
         elif event.type in {"provider_error", "connection_error"}:
             print(f"Realtime provider error: {event.data}", flush=True)
+            provider_failure.set()
         elif event.type == "connection_closed":
             print("Realtime connection closed", flush=True)
+            provider_failure.set()
             stop_event.set()
     for task in tuple(tool_tasks):
         task.cancel()
@@ -463,11 +486,21 @@ async def run(args) -> int:
     connectivity = str(os.getenv("CONNECTIVITY_MODE") or "online").strip().lower()
     play_startup_sound(env_file)
 
-    api_key = read_secret("OPENAI_API_KEY", env_file)
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY / OPENAI_API_KEY_FILE is not configured")
-    model = str(os.getenv("OPENAI_REALTIME_MODEL") or DEFAULT_MODEL).strip()
-    voice = str(os.getenv("OPENAI_REALTIME_VOICE") or DEFAULT_VOICE).strip()
+    provider = str(os.getenv("LSA_REALTIME_PROVIDER") or "openai").strip().lower()
+    if provider == "gemini":
+        api_key = read_secret("GEMINI_API_KEY", env_file)
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY / GEMINI_API_KEY_FILE is not configured")
+        model = str(os.getenv("GEMINI_LIVE_MODEL") or DEFAULT_GEMINI_MODEL).strip()
+        voice = str(os.getenv("GEMINI_LIVE_VOICE") or DEFAULT_GEMINI_VOICE).strip()
+    elif provider == "openai":
+        api_key = read_secret("OPENAI_API_KEY", env_file)
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY / OPENAI_API_KEY_FILE is not configured")
+        model = str(os.getenv("OPENAI_REALTIME_MODEL") or DEFAULT_MODEL).strip()
+        voice = str(os.getenv("OPENAI_REALTIME_VOICE") or DEFAULT_VOICE).strip()
+    else:
+        raise RuntimeError(f"unsupported realtime provider: {provider!r}")
     output_gains = VoiceOutputGains.from_env()
     semantic_config = SemanticAudioConfig.from_env()
     config_path = resolve_path(str(os.getenv("MCP_CONFIG") or "mcp_servers.json").strip(), env_file)
@@ -482,6 +515,18 @@ async def run(args) -> int:
     bridge_names: list[str] = []
     for server in inventory.values():
         transport = server.realtime.transport
+        if provider == "gemini":
+            if server.realtime.permissions.mode == "approval":
+                raise RuntimeError(f"Gemini bridge approval is not implemented for MCP {server.name!r}; use Open or disable the server")
+            if transport == "native":
+                raise RuntimeError(f"Gemini Live has no provider-native MCP adapter for {server.name!r}; select Auto or STDIO")
+            if transport == "auto":
+                local_ok, local_reason = await probe_local_stdio(raw_config, server)
+                if not local_ok:
+                    raise RuntimeError(f"AUTO MCP {server.name!r} has no healthy local bridge for Gemini: {local_reason}")
+                print(f"Realtime MCP auto selection: {server.name} -> stdio ({local_reason})", flush=True)
+            bridge_names.append(server.name)
+            continue
         if transport == "auto":
             print(f"Realtime MCP auto selection: {server.name} -> probing local STDIO/bridge first", flush=True)
             local_ok, local_reason = await probe_local_stdio(raw_config, server)
@@ -526,6 +571,7 @@ async def run(args) -> int:
     queue: asyncio.Queue = asyncio.Queue()
     interrupted: set[str] = set()
     first_played: dict[str, float] = {}
+    provider_failure = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
@@ -552,10 +598,10 @@ async def run(args) -> int:
             on_state=lambda state: print(f"LSA semantic state: {state.value}", flush=True),
         )
 
-        engine = OpenAIRealtimeEngine(RealtimeEngineConfig(provider="openai", model=model, voice=voice, instructions=DEFAULT_BASE_PROMPT, server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)
+        engine = create_realtime_engine(provider, RealtimeEngineConfig(provider=provider, model=model, voice=voice, instructions=DEFAULT_BASE_PROMPT, server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)
         await engine.start()
         await wait_until_ready(engine)
-        print(f"LSA Realtime ready: model={model} voice={voice}", flush=True)
+        print(f"LSA Realtime ready: provider={provider} model={model} voice={voice}", flush=True)
         await announce_ready(engine, output_stream, output_rate, output_channels, connectivity, output_gains.cloud)
         semantic.transition(SemanticAudioState.READY)
         semantic.transition(SemanticAudioState.LISTENING)
@@ -563,11 +609,11 @@ async def run(args) -> int:
 
         tasks = [
             asyncio.create_task(capture_loop(engine, input_stream, input_rate, input_channels, input_frames, stop_event), name="lsa-realtime-capture"),
-            asyncio.create_task(event_loop(engine, bridge, queue, interrupted, first_played, stop_event, semantic), name="lsa-realtime-events"),
+            asyncio.create_task(event_loop(engine, bridge, queue, interrupted, first_played, stop_event, semantic, provider_failure), name="lsa-realtime-events"),
             asyncio.create_task(playback_loop(queue, output_stream, output_rate, output_channels, interrupted, first_played, stop_event, output_gains.cloud, semantic), name="lsa-realtime-playback"),
         ]
         await stop_event.wait()
-        return 0
+        return TRANSIENT_PROVIDER_EXIT if provider_failure.is_set() else 0
     finally:
         stop_event.set()
         for task in tasks:
@@ -596,13 +642,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", required=True)
     args = parser.parse_args()
-    try:
-        return asyncio.run(run(args))
-    except KeyboardInterrupt:
-        return 130
-    except Exception as exc:
-        print(f"LSA Realtime failed: {exc}", file=sys.stderr, flush=True)
-        return 1
+    attempts = max(0, int(os.getenv("REALTIME_RECONNECT_ATTEMPTS", "3") or "3"))
+    backoff = max(0.2, float(os.getenv("REALTIME_RECONNECT_BACKOFF_SECONDS", "1.0") or "1.0"))
+    for attempt in range(attempts + 1):
+        try:
+            code = asyncio.run(run(args))
+        except KeyboardInterrupt:
+            return 130
+        except Exception as exc:
+            print(f"LSA Realtime failed: {exc}", file=sys.stderr, flush=True)
+            code = TRANSIENT_PROVIDER_EXIT
+        if code != TRANSIENT_PROVIDER_EXIT:
+            return code
+        if attempt >= attempts:
+            print("LSA Realtime reconnect budget exhausted", file=sys.stderr, flush=True)
+            return 1
+        delay = min(8.0, backoff * (2 ** attempt))
+        print(f"LSA Realtime reconnect: attempt={attempt + 1}/{attempts} delay={delay:.1f}s", flush=True)
+        time.sleep(delay)
+    return 1
 
 
 if __name__ == "__main__":

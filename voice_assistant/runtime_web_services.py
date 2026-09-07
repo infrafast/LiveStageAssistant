@@ -373,13 +373,14 @@ class RuntimeWebServices:
             "selected_backend_audio_output_device": backend_output,
             "thinking_sounds": self._wav_options(),
             "selected_thinking_sound_file": str(values.get("THINKING_SOUND_FILE") or "thinking.wav").strip(),
+            "selected_ready_sound_file": str(values.get("READY_SOUND_FILE") or "").strip(),
             "selected_listening_sound_file": str(values.get("LISTENING_SOUND_FILE") or "").strip(),
             "selected_wake_detected_sound_file": str(values.get("WAKE_DETECTED_SOUND_FILE") or "").strip(),
             "selected_startup_loader_sound_file": startup_file,
             "selected_command_ack_sound_file": command_ack,
             "selected_voice_engine": str(values.get("VOICE_ENGINE") or ("local" if connectivity == "offline" else "classic")).strip().lower(),
-            "selected_realtime_model": str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
-            "selected_realtime_voice": str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
+            "selected_realtime_model": (str(values.get("GEMINI_LIVE_MODEL") or "gemini-3.1-flash-live-preview").strip() if str(values.get("VOICE_ENGINE") or "").strip().lower() == "gemini-live" else str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip()),
+            "selected_realtime_voice": (str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip() if str(values.get("VOICE_ENGINE") or "").strip().lower() == "gemini-live" else str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip()),
             "selected_cloud_tts_output_gain": self._float(values, "CLOUD_TTS_OUTPUT_GAIN", 1.0),
             "selected_local_tts_output_gain": self._float(values, "LOCAL_TTS_OUTPUT_GAIN", 1.0),
             "message": f"Common runtime options loaded from active profile: {self.active_profile()}",
@@ -406,6 +407,7 @@ class RuntimeWebServices:
         backend_audio_output_device: str,
         voice_id: str,
         thinking_sound_file: str,
+        ready_sound_file: str,
         listening_sound_file: str,
         wake_detected_sound_file: str,
         startup_loader_sound_file: str,
@@ -497,14 +499,16 @@ class RuntimeWebServices:
             backend_audio_monitor_mode = "off"
 
         requested_engine = str(voice_engine or ("local" if active_connectivity == "offline" else "classic")).strip().lower()
-        allowed_engines = {"local"} if active_connectivity == "offline" else {"classic", "openai-realtime"}
+        allowed_engines = {"local"} if active_connectivity == "offline" else {"classic", "openai-realtime", "gemini-live"}
         if requested_engine not in allowed_engines:
             raise ValueError(f"voice_engine must be one of: {', '.join(sorted(allowed_engines))}")
         cloud_tts_output_gain = max(0.0, min(2.0, float(cloud_tts_output_gain)))
         local_tts_output_gain = max(0.0, min(2.0, float(local_tts_output_gain)))
-        if requested_engine == "openai-realtime":
-            realtime_model = str(realtime_model or "gpt-realtime-2.1").strip()
-            realtime_voice = str(realtime_voice or "marin").strip()
+        if requested_engine in {"openai-realtime", "gemini-live"}:
+            default_model = "gemini-3.1-flash-live-preview" if requested_engine == "gemini-live" else "gpt-realtime-2.1"
+            default_voice = "Kore" if requested_engine == "gemini-live" else "marin"
+            realtime_model = str(realtime_model or default_model).strip()
+            realtime_voice = str(realtime_voice or default_voice).strip()
             if not realtime_model or not realtime_voice:
                 raise ValueError("Realtime model and voice are required")
 
@@ -527,6 +531,7 @@ class RuntimeWebServices:
             "BACKEND_AUDIO_OUTPUT_DEVICE": str(backend_audio_output_device or "").strip(),
             "ELEVENLABS_VOICE_ID": str(voice_id or "").strip(),
             "THINKING_SOUND_FILE": str(thinking_sound_file or "").strip(),
+            "READY_SOUND_FILE": str(ready_sound_file or "").strip(),
             "LISTENING_SOUND_FILE": str(listening_sound_file or "").strip(),
             "WAKE_DETECTED_SOUND_FILE": str(wake_detected_sound_file or "").strip(),
             "STARTUP_LOADER_SOUND_ENABLED": "true" if str(startup_loader_sound_file or "").strip() else "false",
@@ -563,6 +568,9 @@ class RuntimeWebServices:
         if requested_engine == "openai-realtime":
             updates["OPENAI_REALTIME_MODEL"] = realtime_model
             updates["OPENAI_REALTIME_VOICE"] = realtime_voice
+        elif requested_engine == "gemini-live":
+            updates["GEMINI_LIVE_MODEL"] = realtime_model
+            updates["GEMINI_LIVE_VOICE"] = realtime_voice
         if provider == "ollama":
             updates["OLLAMA_MODEL"] = model
             updates["OFFLINE_MODEL"] = model
@@ -596,6 +604,7 @@ class RuntimeWebServices:
         values = self._values()
         openai_present = self._secret_present(values, "OPENAI_API_KEY")
         eleven_present = self._secret_present(values, "ELEVENLABS_API_KEY")
+        gemini_present = self._secret_present(values, "GEMINI_API_KEY")
         return {
             "openai": {
                 "status": "configured" if openai_present else "missing",
@@ -606,6 +615,11 @@ class RuntimeWebServices:
                 "status": "configured" if eleven_present else "missing",
                 "masked_key": "configured" if eleven_present else "",
                 "lines": ["API key configured." if eleven_present else "ELEVENLABS_API_KEY_FILE is not configured."],
+            },
+            "gemini": {
+                "status": "configured" if gemini_present else "missing",
+                "masked_key": "configured" if gemini_present else "",
+                "lines": ["API key configured." if gemini_present else "GEMINI_API_KEY_FILE is not configured."],
             },
         }
 

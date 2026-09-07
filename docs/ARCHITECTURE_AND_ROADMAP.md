@@ -569,24 +569,24 @@ Exit: Classic, Realtime and Local expose the same user-understandable semantic s
 
 ### RV3 - Optional wake word and realtime session lifecycle
 
-- [ ] wake-enabled realtime uses local openWakeWord;
+- [~] wake-enabled realtime uses local openWakeWord; provider-neutral local gate implemented, final Pi recette pending;
 - [x] wake-disabled realtime does not instantiate openWakeWord;
-- [ ] preserve `WAKE_WORD` across engine switching;
-- [ ] integrate RV2F semantic feedback contract with wake lifecycle;
-- [ ] preserve Classic post-TTS suppression/re-arm semantics;
+- [~] preserve `WAKE_WORD` across engine switching; unified profile save and common wake gate implemented, final Pi recette pending;
+- [~] integrate RV2F semantic feedback contract with wake lifecycle; WAIT_WAKE/WAKE_DETECTED/re-arm wiring implemented;
+- [~] preserve Classic post-TTS suppression/re-arm semantics; Realtime uses the same post-TTS suppression contract, consolidated comparison pending;
 - [ ] inactivity/close policy;
-- [ ] production-service barge-in retest;
+- [~] production-service barge-in retest; response cancellation is wired, hardware retest pending;
 - [x] general prompt + realtime addendum composition;
 - [x] transcript observability.
 
 ### RV4 - Realtime robustness, cancellation and fallback
 
-- [ ] WebSocket/provider reconnect while Internet remains available;
+- [~] WebSocket/provider reconnect while Internet remains available; bounded exponential reconnect implemented, Pi/provider validation pending;
 - [x] basic network-loss handling and Realtime -> Local -> Realtime recovery validated through common OR2 supervisor on Pi5;
-- [ ] cancellation around MCP calls;
-- [ ] duplicate-call prevention across reconnects;
-- [ ] provider/session timeout handling;
-- [ ] deterministic cleanup;
+- [~] cancellation around MCP calls; speech cancellation does not cancel/replay already-dispatched MCP tasks;
+- [~] duplicate-call prevention across reconnects; bounded call-id memory suppresses duplicate bridge dispatch within the child lifecycle;
+- [~] provider/session timeout handling; startup/tool timeouts and reconnect budget implemented;
+- [~] deterministic cleanup; reconnect attempts reuse the existing deterministic session cleanup path;
 - [~] provider-failure fallback to Classic/local implemented at supervisor level but not prioritized for further work or validation yet;
 - [ ] no ambiguous action state after interruption/reconnect/fallback.
 
@@ -598,16 +598,16 @@ Exit: Classic, Realtime and Local expose the same user-understandable semantic s
 
 ### RV6 - Alternate realtime provider
 
-- [ ] alternate provider behind same interface;
+- [~] alternate provider behind same interface; Gemini Live adapter/factory implemented, live validation pending;
 - [x] architecture requires no new connectivity watcher for Gemini/other engines;
 - [ ] equivalent latency/reliability/cost/multilingual benchmark;
-- [ ] preserve bridge/STDIO regardless of provider-native MCP capability.
+- [~] preserve bridge/STDIO regardless of provider-native MCP capability; Gemini uses the common LSA bridge and rejects unsupported native mode explicitly.
 
 ### RV7 - Browser WebRTC
 
-- [ ] direct browser realtime transport;
-- [ ] backend-mediated ephemeral authorization;
-- [ ] secrets stay server-side;
+- [~] direct browser realtime transport; WebRTC diagnostic path implemented, browser validation pending;
+- [~] backend-mediated ephemeral authorization; short-lived OpenAI client-secret endpoint implemented;
+- [~] secrets stay server-side; browser receives only the short-lived client secret;
 - [ ] mobile browser validation.
 
 ### RV8 - Unified selectable voice engine and GUI — IN PROGRESS

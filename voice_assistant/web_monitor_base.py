@@ -1671,6 +1671,7 @@ class WebMonitor:
                     backend_audio_monitor_mode = str(payload.get("backend_audio_monitor_mode") or "off").strip().lower()
                     voice_id = str(payload.get("voice_id") or "").strip()
                     thinking_sound_file = str(payload.get("thinking_sound_file") or "").strip()
+                    ready_sound_file = str(payload.get("ready_sound_file") or "").strip()
                     listening_sound_file = str(payload.get("listening_sound_file") or "").strip()
                     wake_detected_sound_file = str(payload.get("wake_detected_sound_file") or "").strip()
                     startup_loader_sound_file = str(payload.get("startup_loader_sound_file") or "").strip()
@@ -1749,6 +1750,7 @@ class WebMonitor:
                             backend_audio_output_device,
                             voice_id,
                             thinking_sound_file,
+                            ready_sound_file,
                             listening_sound_file,
                             wake_detected_sound_file,
                             startup_loader_sound_file,

@@ -78,7 +78,7 @@ def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
     if not online:
         return "local"
     engine = str(values.get("VOICE_ENGINE") or "classic").strip().lower()
-    if engine not in {"classic", "openai-realtime"}:
+    if engine not in {"classic", "openai-realtime", "gemini-live"}:
         print(f"Invalid VOICE_ENGINE={engine!r}; falling back to classic.", flush=True)
         return "classic"
     return engine
@@ -93,7 +93,7 @@ def fallback_engine_candidates(values: Mapping[str, object], *, online: bool) ->
     result: list[str] = []
     for item in raw.split(","):
         name = item.strip()
-        if name not in {"classic", "openai-realtime"}:
+        if name not in {"classic", "openai-realtime", "gemini-live"}:
             print(f"Ignoring invalid VOICE_ENGINE_FALLBACK entry {name!r}.", flush=True)
             continue
         if name not in result:
@@ -122,6 +122,12 @@ def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str
             str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
             str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
         )
+    if engine == "gemini-live":
+        return (
+            "gemini",
+            str(values.get("GEMINI_LIVE_MODEL") or "gemini-3.1-flash-live-preview").strip(),
+            str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip(),
+        )
     provider = str(values.get("LLM_PROVIDER") or ("ollama" if engine == "local" else "openai")).strip().lower()
     model_keys = {"openai": "OPENAI_MODEL", "anthropic": "ANTHROPIC_MODEL", "ollama": "OLLAMA_MODEL"}
     model = str(values.get(model_keys.get(provider, "MODEL")) or "").strip()
@@ -141,7 +147,7 @@ def engine_command(engine: str, env_file: Path) -> list[str]:
 
 
 def ready_marker(engine: str) -> str:
-    return "LSA Realtime ready:" if engine == "openai-realtime" else CLASSIC_READY_MARKER
+    return "LSA Realtime ready:" if engine in {"openai-realtime", "gemini-live"} else CLASSIC_READY_MARKER
 
 
 def speak_local(text: str, values: Mapping[str, object] | None = None) -> None:
@@ -269,7 +275,7 @@ def run_engine_session(
 ) -> tuple[int | None, ConnectivityEvent | None, bool]:
     print(f"LSA runtime: engine={engine} connectivity={'online' if online else 'offline'} env={env_file}", flush=True)
 
-    if engine != "openai-realtime":
+    if engine not in {"openai-realtime", "gemini-live"}:
         for item in status_tracker.status.mcp:
             status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=None, detail="local MCP path selected")
 

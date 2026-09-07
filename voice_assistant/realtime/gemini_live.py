@@ -45,6 +45,7 @@ class GeminiLiveEngine(RealtimeEngine):
         self._active_turn = ""
         self._cancelled = False
         self._last_usage: dict[str, Any] = {}
+        self._call_names: dict[str, str] = {}
 
     def _function_declarations(self) -> list[dict[str, Any]]:
         return [
@@ -114,6 +115,7 @@ class GeminiLiveEngine(RealtimeEngine):
         self._input_resampler = Pcm16MonoResampler(24000, 16000)
         self._active_turn = ""
         self._cancelled = False
+        self._call_names.clear()
         self.state = RealtimeEngineState.STOPPED
 
     async def send_audio(self, pcm: bytes) -> None:
@@ -156,11 +158,14 @@ class GeminiLiveEngine(RealtimeEngine):
         if not call_id:
             raise ValueError("call_id is required")
         payload = result if isinstance(result, dict) else {"result": result}
+        name = self._call_names.pop(call_id, "")
+        if not name:
+            raise ValueError(f"unknown Gemini function call id: {call_id}")
         await self._send(
             {
                 "toolResponse": {
                     "functionResponses": [
-                        {"id": call_id, "name": call_id.split(":", 1)[-1], "response": payload}
+                        {"id": call_id, "name": name, "response": payload}
                     ]
                 }
             }
@@ -214,6 +219,7 @@ class GeminiLiveEngine(RealtimeEngine):
                 name = str(call.get("name") or "")
                 if not call_id:
                     call_id = f"{self._active_turn or self._new_turn()}:{name}"
+                self._call_names[call_id] = name
                 events.append(
                     RealtimeEvent(
                         "tool_call",

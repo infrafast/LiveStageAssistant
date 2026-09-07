@@ -236,24 +236,24 @@ class OpenAIRealtimeNativeMCPFollowupTests(unittest.IsolatedAsyncioTestCase):
     async def test_completed_mcp_call_after_response_done_requests_one_followup(self):
         engine = self.make_engine()
         engine._response_active = False
-        await engine._maybe_continue_after_native_mcp(
+        await engine._maybe_continue_after_tools(
             RealtimeEvent("mcp_call", {"phase": "done", "response_id": "resp_1"})
         )
         self.assertEqual(engine._ws.sent, [{"type": "response.create"}])
         followup = await engine.next_event()
-        self.assertEqual(followup.type, "mcp_followup_requested")
+        self.assertEqual(followup.type, "tool_followup_requested")
 
     async def test_completed_mcp_call_while_response_active_waits_for_response_done(self):
         engine = self.make_engine()
         engine._response_active = True
-        await engine._maybe_continue_after_native_mcp(
+        await engine._maybe_continue_after_tools(
             RealtimeEvent("mcp_call", {"phase": "done", "response_id": "resp_2"})
         )
         self.assertEqual(engine._ws.sent, [])
         done = engine._translate_event(
             {"type": "response.done", "response": {"id": "resp_2", "status": "completed", "usage": {}}}
         )
-        await engine._maybe_continue_after_native_mcp(done)
+        await engine._maybe_continue_after_tools(done)
         self.assertEqual(engine._ws.sent, [{"type": "response.create"}])
 
     async def test_cancelled_response_suppresses_late_native_mcp_followup(self):
@@ -261,8 +261,8 @@ class OpenAIRealtimeNativeMCPFollowupTests(unittest.IsolatedAsyncioTestCase):
         done = engine._translate_event(
             {"type": "response.done", "response": {"id": "resp_cancel", "status": "cancelled", "usage": {}}}
         )
-        await engine._maybe_continue_after_native_mcp(done)
-        await engine._maybe_continue_after_native_mcp(
+        await engine._maybe_continue_after_tools(done)
+        await engine._maybe_continue_after_tools(
             RealtimeEvent("mcp_call", {"phase": "done", "response_id": "resp_cancel"})
         )
         self.assertEqual(engine._ws.sent, [])

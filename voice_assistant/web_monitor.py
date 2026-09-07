@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
+from dotenv import dotenv_values
 import tempfile
 import threading
 from typing import Any, Callable
@@ -18,10 +20,12 @@ try:
         test_mcp_server_from_snapshot,
     )
     from .runtime_status import read_status_file
+    from .realtime.browser_auth import create_openai_browser_client_secret
 except ImportError:  # pragma: no cover - direct script fallback
     import web_monitor_base as _base
     from mcp_realtime_web_endpoint import delete_mcp_server_from_snapshot, mcp_registry_from_snapshot, save_mcp_realtime_policy_from_snapshot, save_mcp_server_from_snapshot, test_mcp_server_from_snapshot
     from runtime_status import read_status_file
+    from realtime.browser_auth import create_openai_browser_client_secret
 
 for _name in dir(_base):
     if not _name.startswith("_") and _name != "WebMonitor":
@@ -172,6 +176,32 @@ class WebMonitor(_BaseWebMonitor):
     def _test_mcp_server(self, server_name: str) -> dict[str, Any]:
         return test_mcp_server_from_snapshot(self.snapshot(), server_name)
 
+
+    def _browser_realtime_secret(self) -> dict[str, Any]:
+        snapshot = super().snapshot()
+        env_file = Path(str(snapshot.get("env_file") or "")).expanduser()
+        if not env_file.is_file():
+            raise RuntimeError("active runtime profile is unavailable")
+        values = dict(dotenv_values(env_file))
+        if str(values.get("VOICE_ENGINE") or "").strip().lower() != "openai-realtime":
+            raise ValueError("browser WebRTC is available only with OpenAI Realtime selected")
+        secret_path = str(values.get("OPENAI_API_KEY_FILE") or "").strip()
+        api_key = str(values.get("OPENAI_API_KEY") or "").strip()
+        if not api_key and secret_path:
+            path = Path(secret_path).expanduser()
+            if not path.is_absolute():
+                path = env_file.parent / path
+            try:
+                api_key = path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise RuntimeError(f"could not read OPENAI_API_KEY_FILE: {exc}") from exc
+        return create_openai_browser_client_secret(
+            api_key,
+            model=str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
+            voice=str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
+            instructions=str(values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip(),
+        )
+
     def _runtime_status(self) -> dict[str, Any]:
         path = _runtime_status_file()
         if not path.is_file():
@@ -212,7 +242,7 @@ class WebMonitor(_BaseWebMonitor):
 
                     def do_POST(self) -> None:
                         parsed = _base.urlparse(self.path)
-                        routes = {"/api/mcp-realtime-policy", "/api/mcp-server", "/api/mcp-test", "/api/runtime-restart"}
+                        routes = {"/api/mcp-realtime-policy", "/api/mcp-server", "/api/mcp-test", "/api/runtime-restart", "/api/realtime-browser-secret"}
                         if parsed.path not in routes:
                             super().do_POST()
                             return
@@ -221,11 +251,24 @@ class WebMonitor(_BaseWebMonitor):
                             return
                         if parsed.path == "/api/runtime-restart":
                             self._handle_runtime_restart(); return
+                        if parsed.path == "/api/realtime-browser-secret":
+                            self._handle_realtime_browser_secret(); return
                         if parsed.path == "/api/mcp-server":
                             self._handle_mcp_server(); return
                         if parsed.path == "/api/mcp-test":
                             self._handle_mcp_test(); return
                         self._handle_mcp_realtime_policy_save()
+
+                    def _handle_realtime_browser_secret(self) -> None:
+                        payload = self._read_json_body(max_bytes=4 * 1024)
+                        if payload is None: return
+                        try:
+                            result = monitor._browser_realtime_secret()
+                        except ValueError as error:
+                            self._send_json_error(400, {"ok": False, "error": {"message": str(error)}}); return
+                        except Exception as error:
+                            self._send_json_error(503, {"ok": False, "error": {"message": str(error)}}); return
+                        self._send_json({"ok": True, "client_secret": result})
 
                     def _handle_runtime_restart(self) -> None:
                         payload = self._read_json_body(max_bytes=4 * 1024)
