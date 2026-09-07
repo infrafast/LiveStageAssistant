@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Single LiveStageAssistant runtime and engine supervisor.
 
-The runtime owns engine-independent connectivity and startup lifecycle. It
-selects the active profile, launches exactly one voice engine, watches Internet
-availability, switches between online and offline profiles when connectivity
-changes, and keeps loader/process/signal handling common across Classic, Local
-and realtime providers.
+The runtime owns engine-independent connectivity, startup lifecycle and the
+single production WebMonitor. It selects the active profile, launches exactly
+one voice engine, watches Internet availability, switches between online and
+offline profiles when connectivity changes, and keeps loader/process/signal
+handling common across Classic, Local and realtime providers.
 """
 
 from __future__ import annotations
@@ -73,6 +73,53 @@ def _mcp_config_for_monitor(values: Mapping[str, object], profile: Path) -> dict
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _refresh_common_web_monitor(
+    monitor: WebMonitor | None,
+    values: Mapping[str, object],
+    env_file: Path,
+    *,
+    online: bool,
+) -> None:
+    if monitor is None:
+        return
+    monitor.set_web_password(str(values.get("WEB_PASSWORD") or "").strip())
+    monitor.update(
+        mode="auto-runtime",
+        env_file=env_file,
+        internet=online,
+        env_values=dict(values),
+        mcp_config=_mcp_config_for_monitor(values, env_file),
+    )
+
+
+def _start_common_web_monitor(
+    values: Mapping[str, object],
+    env_file: Path,
+    *,
+    online: bool,
+) -> WebMonitor | None:
+    """Start the one production WebMonitor owned by the common runtime."""
+    if not _env_bool(values, "WEB_MONITOR_ENABLED", True):
+        return None
+    host = str(values.get("WEB_MONITOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(str(values.get("WEB_MONITOR_PORT") or "8765").strip())
+    except ValueError:
+        print(f"Invalid WEB_MONITOR_PORT={values.get('WEB_MONITOR_PORT')!r}; WebMonitor disabled", flush=True)
+        return None
+    monitor = WebMonitor(web_password=str(values.get("WEB_PASSWORD") or "").strip())
+    _refresh_common_web_monitor(monitor, values, env_file, online=online)
+    monitor.install_console_capture()
+    try:
+        actual_host, actual_port = monitor.start(host, port)
+    except OSError as error:
+        monitor.restore_console_capture()
+        print(f"Web monitor unavailable on {host}:{port}: {error}", flush=True)
+        return None
+    print(f"Web monitor available at http://{actual_host}:{actual_port}", flush=True)
+    return monitor
 
 
 def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
@@ -204,35 +251,6 @@ def _update_semantic_status_from_line(tracker: RuntimeStatusTracker, line: str) 
         tracker.set_runtime(semantic_state=state)
 
 
-def _start_realtime_web_monitor(values: Mapping[str, object], env_file: Path) -> WebMonitor | None:
-    """Expose the common monitor while Realtime is active without importing Classic."""
-    if not _env_bool(values, "WEB_MONITOR_ENABLED", True):
-        return None
-    host = str(values.get("WEB_MONITOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    try:
-        port = int(str(values.get("WEB_MONITOR_PORT") or "8765").strip())
-    except ValueError:
-        print(f"Invalid WEB_MONITOR_PORT={values.get('WEB_MONITOR_PORT')!r}; WebMonitor disabled", flush=True)
-        return None
-    monitor = WebMonitor(web_password=str(values.get("WEB_PASSWORD") or "").strip())
-    monitor.update(
-        mode="auto-runtime",
-        env_file=env_file,
-        internet=True,
-        env_values=dict(values),
-        mcp_config=_mcp_config_for_monitor(values, env_file),
-    )
-    monitor.install_console_capture()
-    try:
-        actual_host, actual_port = monitor.start(host, port)
-    except OSError as error:
-        monitor.restore_console_capture()
-        print(f"Web monitor unavailable on {host}:{port}: {error}", flush=True)
-        return None
-    print(f"Web monitor available at http://{actual_host}:{actual_port}", flush=True)
-    return monitor
-
-
 def run_engine_session(
     *,
     engine: str,
@@ -252,13 +270,13 @@ def run_engine_session(
         for item in status_tracker.status.mcp:
             status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=None, detail="local MCP path selected")
 
-    realtime_web_monitor = _start_realtime_web_monitor(values, env_file) if engine == "openai-realtime" else None
     loader = StartupLoader(ROOT, values)
     loader.start()
     status_tracker.set_runtime(semantic_state="starting")
 
     child_env = os.environ.copy()
     child_env["LSA_COMMON_STARTUP_LIFECYCLE"] = "1"
+    child_env["LSA_COMMON_WEB_MONITOR"] = "1"
     child_env["PYTHONUNBUFFERED"] = "1"
 
     process = subprocess.Popen(
@@ -347,9 +365,6 @@ def run_engine_session(
             loader.stop()
         if process.poll() is None:
             _terminate_process(process)
-        if realtime_web_monitor is not None:
-            realtime_web_monitor.stop()
-            realtime_web_monitor.restore_console_capture()
 
 
 def main() -> int:
@@ -359,6 +374,7 @@ def main() -> int:
 
     stop_event = threading.Event()
     connectivity = ConnectivityManager(interval=CONNECTIVITY_INTERVAL)
+    common_web_monitor: WebMonitor | None = None
 
     def request_stop(_signum, _frame) -> None:
         stop_event.set()
@@ -392,12 +408,18 @@ def main() -> int:
             values = _load_values(env_file)
             online = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower() != "offline"
 
+        if not env_file.is_file():
+            print(f"Active env file not found: {env_file}", file=sys.stderr, flush=True)
+            return 2
+        common_web_monitor = _start_common_web_monitor(_load_values(env_file), env_file, online=online)
+
         while not stop_event.is_set():
             if not env_file.is_file():
                 print(f"Active env file not found: {env_file}", file=sys.stderr, flush=True)
                 return 2
 
             values = _load_values(env_file)
+            _refresh_common_web_monitor(common_web_monitor, values, env_file, online=online)
             engine = engine_override or normalize_engine(values, online=online)
             provider, model, voice = engine_identity(engine, values)
             tracker = RuntimeStatusTracker(
@@ -471,6 +493,9 @@ def main() -> int:
         return 0
     finally:
         connectivity.stop()
+        if common_web_monitor is not None:
+            common_web_monitor.stop()
+            common_web_monitor.restore_console_capture()
         for sig, handler in previous_handlers.items():
             try:
                 signal.signal(sig, handler)
