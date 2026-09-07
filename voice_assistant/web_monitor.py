@@ -164,7 +164,7 @@ class WebMonitor(_BaseWebMonitor):
         self._mcp_realtime_policy_save_handler: Callable[[str, dict[str, Any]], dict[str, Any]] = self._save_mcp_realtime_policy
         self._runtime_restart_handler: Callable[[], None] | None = None
         self._runtime_reload_pending = False
-        self._runtime_reload_started = False
+        self._runtime_reload_status_revision = ""
 
     def set_mcp_realtime_policy_save_handler(self, handler: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
         with self._lock:
@@ -193,14 +193,15 @@ class WebMonitor(_BaseWebMonitor):
 
         semantic_state = str(runtime.get("semantic_state") or "").strip().lower()
         ready = bool(runtime.get("ready"))
+        status_revision = str(payload.get("revision") or "")
         loading = False
         with self._lock:
             if not stale and self._runtime_reload_pending:
-                if semantic_state == "starting":
-                    self._runtime_reload_started = True
-                if self._runtime_reload_started and (ready or semantic_state in {"ready", "listening", "wait_wake", "idle"}):
+                status_advanced = bool(status_revision) and status_revision != self._runtime_reload_status_revision
+                runtime_ready = ready and semantic_state != "starting"
+                if status_advanced and runtime_ready:
                     self._runtime_reload_pending = False
-                    self._runtime_reload_started = False
+                    self._runtime_reload_status_revision = ""
                 else:
                     loading = True
             elif not stale and semantic_state == "starting" and not ready:
@@ -235,6 +236,7 @@ class WebMonitor(_BaseWebMonitor):
             "available": True,
             "stale": stale,
             "age_seconds": age_seconds,
+            "revision": f"{stat.st_ino}:{stat.st_mtime_ns}",
             "status_file": str(path),
             "runtime": status,
         }
@@ -307,13 +309,15 @@ class WebMonitor(_BaseWebMonitor):
         }
 
     def _request_runtime_restart(self) -> dict[str, Any]:
+        status = self._runtime_status()
         with self._lock:
             handler = self._runtime_restart_handler
             self._runtime_reload_pending = True
-            self._runtime_reload_started = False
+            self._runtime_reload_status_revision = str(status.get("revision") or "")
         if handler is None:
             with self._lock:
                 self._runtime_reload_pending = False
+                self._runtime_reload_status_revision = ""
             raise RuntimeError("runtime restart is not available")
         self.set_environment_loading(True, "Application de la configuration")
         handler()
@@ -396,7 +400,7 @@ class WebMonitor(_BaseWebMonitor):
                         except Exception as error:
                             with monitor._lock:
                                 monitor._runtime_reload_pending = False
-                                monitor._runtime_reload_started = False
+                                monitor._runtime_reload_status_revision = ""
                             monitor.set_environment_loading(False)
                             self._send_json_error(503, {"ok": False, "error": {"message": str(error)}})
                             return
