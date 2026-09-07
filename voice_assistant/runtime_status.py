@@ -28,6 +28,7 @@ class RuntimeStatus:
     model: str = ""
     voice: str = ""
     ready: bool = False
+    semantic_state: str = ""
     profile: str = ""
     mcp: tuple[MCPRuntimeStatus, ...] = field(default_factory=tuple)
 
