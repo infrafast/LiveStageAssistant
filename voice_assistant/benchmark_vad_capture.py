@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+import math
 import os
 from pathlib import Path
 import time
 from typing import Any
 
+import numpy as np
 import pyaudio
 
 from voice_assistant.agent import DEFAULT_SILERO_VAD_MODEL, SileroVadGate, pcm_to_vad_16k_mono
@@ -30,6 +32,27 @@ def _env_int(name: str, default: int) -> int:
         return int(float(os.getenv(name, str(default)) or default))
     except (TypeError, ValueError):
         return default
+
+
+def _apply_gain(pcm: bytes, gain: float) -> bytes:
+    if not pcm or abs(gain - 1.0) < 1e-6:
+        return pcm
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    samples *= float(gain)
+    np.clip(samples, -32768.0, 32767.0, out=samples)
+    return samples.astype(np.int16).tobytes()
+
+
+def _peak_dbfs(pcm: bytes) -> float:
+    if not pcm:
+        return -120.0
+    samples = np.frombuffer(pcm, dtype=np.int16)
+    if samples.size == 0:
+        return -120.0
+    peak = float(np.max(np.abs(samples.astype(np.int32)))) / 32768.0
+    if peak <= 1e-9:
+        return -120.0
+    return 20.0 * math.log10(peak)
 
 
 async def capture_vad_utterance(
@@ -57,6 +80,7 @@ async def capture_vad_utterance(
             max_speech_seconds=_env_float("VAD_MAX_SPEECH_SECONDS", 8.0),
         )
         vad.reset()
+        input_gain = max(0.5, min(2.0, _env_float("BACKEND_AUDIO_INPUT_GAIN", 1.0)))
         to_target = Pcm16MonoResampler(source_rate, TARGET_RATE)
         chunk_ms = frames / float(source_rate) * 1000.0
         pre_roll_count = max(1, int((vad.speech_pad_ms / max(chunk_ms, 1.0)) + 0.999))
@@ -68,26 +92,46 @@ async def capture_vad_utterance(
         silence_ms = 0.0
         speech_started = False
         started_at = time.monotonic()
+        next_diag = started_at + 1.0
+        max_vad_seen = 0.0
+        max_peak_dbfs = -120.0
 
         print(
             f"RV2E_VAD input_selector={selected or '<default>'} resolved_input={name} "
             f"threshold={vad.threshold:.2f} neg_threshold={vad.neg_threshold:.2f} "
-            f"min_speech_ms={vad.min_speech_ms} min_silence_ms={vad.min_silence_ms}",
+            f"min_speech_ms={vad.min_speech_ms} min_silence_ms={vad.min_silence_ms} "
+            f"input_gain={input_gain:.2f}",
             flush=True,
         )
         print("RV2E_VAD waiting for speech: Quel est le volume de Claude ?", flush=True)
 
         while True:
             if not speech_started and time.monotonic() - started_at > wait_timeout:
-                raise RuntimeError("no speech detected before RV2E VAD timeout")
+                raise RuntimeError(
+                    "no speech detected before RV2E VAD timeout "
+                    f"(max_vad={max_vad_seen:.3f}, peak_dbfs={max_peak_dbfs:.1f})"
+                )
 
             raw = await asyncio.to_thread(stream.read, frames, False)
+            raw = _apply_gain(raw, input_gain)
             mono = downmix_pcm16(raw, channels)
             target = to_target.process(mono)
             vad_pcm = pcm_to_vad_16k_mono(raw, source_rate=source_rate, channels=channels)
             probabilities = vad.process_pcm(vad_pcm)
             probability = max(probabilities) if probabilities else 0.0
             probability_ms = vad.chunk_ms * max(1, len(probabilities))
+            peak_dbfs = _peak_dbfs(mono)
+            max_vad_seen = max(max_vad_seen, probability)
+            max_peak_dbfs = max(max_peak_dbfs, peak_dbfs)
+
+            now = time.monotonic()
+            if not speech_started and now >= next_diag:
+                print(
+                    f"RV2E_VAD_DIAG peak_dbfs={peak_dbfs:.1f} max_peak_dbfs={max_peak_dbfs:.1f} "
+                    f"vad={probability:.3f} max_vad={max_vad_seen:.3f}",
+                    flush=True,
+                )
+                next_diag = now + 1.0
 
             if speech_started:
                 if target:
@@ -114,7 +158,10 @@ async def capture_vad_utterance(
                     captured = list(pre_roll) + candidate
                     speech_ms = candidate_ms
                     silence_ms = 0.0
-                    print("RV2E_VAD speech detected", flush=True)
+                    print(
+                        f"RV2E_VAD speech detected vad={probability:.3f} peak_dbfs={peak_dbfs:.1f}",
+                        flush=True,
+                    )
             else:
                 candidate.clear()
                 candidate_ms = 0.0
@@ -130,6 +177,9 @@ async def capture_vad_utterance(
             "selector": selected,
             "rate": TARGET_RATE,
             "capture": "silero_vad",
+            "input_gain": input_gain,
+            "max_vad": max_vad_seen,
+            "max_peak_dbfs": max_peak_dbfs,
         }
     finally:
         if stream is not None:
