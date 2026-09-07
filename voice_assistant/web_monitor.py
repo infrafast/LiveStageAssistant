@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 import tempfile
 import threading
-import time
 from typing import Any, Callable
 
 try:
@@ -27,7 +26,6 @@ _START_PATCH_LOCK = threading.Lock()
 VOICE_ENGINE_ONLINE = {"classic", "openai-realtime"}
 VOICE_ENGINE_OFFLINE = {"local"}
 DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"
-DEFAULT_RUNTIME_STATUS_STALE_SECONDS = 30.0
 DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1"
 DEFAULT_REALTIME_VOICE = "marin"
 
@@ -51,13 +49,6 @@ def _profile_env_files() -> tuple[Path, ...]:
 
 def _runtime_status_file() -> Path:
     return Path(os.getenv("LSA_RUNTIME_STATUS_FILE", DEFAULT_RUNTIME_STATUS_FILE)).expanduser()
-
-
-def _runtime_status_stale_seconds() -> float:
-    try:
-        return max(1.0, float(os.getenv("LSA_RUNTIME_STATUS_STALE_SECONDS", str(DEFAULT_RUNTIME_STATUS_STALE_SECONDS)) or DEFAULT_RUNTIME_STATUS_STALE_SECONDS))
-    except (TypeError, ValueError):
-        return DEFAULT_RUNTIME_STATUS_STALE_SECONDS
 
 
 def _write_env_values(path: Path, values: dict[str, str]) -> None:
@@ -106,7 +97,7 @@ def _bounded_gain(value: Any) -> float:
     return parsed
 
 
-def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> dict[str, dict[str, Any]]:
+def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Translate the provider/MCP-neutral runtime contract into existing monitor tiles."""
     if not isinstance(status, dict) or not status:
         return {}
@@ -115,13 +106,13 @@ def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> di
     provider = str(status.get("provider") or "").strip()
     model = str(status.get("model") or "").strip()
     voice = str(status.get("voice") or "").strip()
-    ready = bool(status.get("ready")) and not stale
+    ready = bool(status.get("ready"))
     identity = " / ".join(part for part in (provider, model, voice) if part)
 
     services: dict[str, dict[str, Any]] = {
         "Voice engine": {
-            "status": "ready" if ready else ("offline" if stale else "starting"),
-            "detail": f"{engine}{(' · ' + identity) if identity else ''}{' · stale status' if stale else ''}",
+            "status": "ready" if ready else "starting",
+            "detail": f"{engine}{(' · ' + identity) if identity else ''}",
         }
     }
 
@@ -135,9 +126,7 @@ def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> di
         healthy = entry.get("healthy")
         detail = str(entry.get("detail") or "").strip()
         transport = effective or configured or "unknown"
-        if stale:
-            state = "offline"
-        elif healthy is True:
+        if healthy is True:
             state = "online"
         elif healthy is False:
             state = "offline"
@@ -150,8 +139,6 @@ def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> di
             parts.append(f"permission={permission}")
         if detail:
             parts.append(detail)
-        if stale:
-            parts.append("stale runtime status")
         services[f"MCP · {name}"] = {"status": state, "detail": " · ".join(parts)}
     return services
 
@@ -163,8 +150,7 @@ class WebMonitor(_BaseWebMonitor):
         super().__init__(*args, **kwargs)
         self._mcp_realtime_policy_save_handler: Callable[[str, dict[str, Any]], dict[str, Any]] = self._save_mcp_realtime_policy
         self._runtime_restart_handler: Callable[[], None] | None = None
-        self._runtime_reload_pending = False
-        self._runtime_reload_status_revision = ""
+        self._runtime_reload_state_provider: Callable[[], bool] = lambda: False
 
     def set_mcp_realtime_policy_save_handler(self, handler: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
         with self._lock:
@@ -174,45 +160,38 @@ class WebMonitor(_BaseWebMonitor):
         with self._lock:
             self._runtime_restart_handler = handler
 
+    def set_runtime_reload_state_provider(self, provider: Callable[[], bool] | None) -> None:
+        with self._lock:
+            self._runtime_reload_state_provider = provider or (lambda: False)
+
     def snapshot(self) -> dict[str, Any]:
         snapshot = super().snapshot()
         config = snapshot.get("config")
         if isinstance(config, dict):
             snapshot["config"] = _base.redact_mapping(config)
             snapshot["config_text"] = __import__("json").dumps(snapshot["config"], ensure_ascii=False, indent=2)
-        payload = self._runtime_status()
-        if not payload.get("available"):
-            return snapshot
-        runtime = payload.get("runtime") or {}
-        stale = bool(payload.get("stale"))
-        snapshot["runtime_status"] = runtime
-        snapshot["runtime_status_stale"] = stale
-        services = dict(snapshot.get("services") or {})
-        services.update(_runtime_service_tiles(runtime, stale=stale))
-        snapshot["services"] = services
 
-        semantic_state = str(runtime.get("semantic_state") or "").strip().lower()
-        ready = bool(runtime.get("ready"))
-        status_revision = str(payload.get("revision") or "")
-        loading = False
         with self._lock:
-            if not stale and self._runtime_reload_pending:
-                status_advanced = bool(status_revision) and status_revision != self._runtime_reload_status_revision
-                runtime_ready = ready and semantic_state != "starting"
-                if status_advanced and runtime_ready:
-                    self._runtime_reload_pending = False
-                    self._runtime_reload_status_revision = ""
-                else:
-                    loading = True
-            elif not stale and semantic_state == "starting" and not ready:
-                loading = True
-
+            reload_state_provider = self._runtime_reload_state_provider
+        try:
+            loading = bool(reload_state_provider())
+        except Exception:
+            loading = False
         snapshot["environment_loading"] = {
             "active": loading,
             "title": "Application de la configuration" if loading else "",
         }
         if not loading:
             self.set_environment_loading(False)
+
+        payload = self._runtime_status()
+        if not payload.get("available"):
+            return snapshot
+        runtime = payload.get("runtime") or {}
+        snapshot["runtime_status"] = runtime
+        services = dict(snapshot.get("services") or {})
+        services.update(_runtime_service_tiles(runtime))
+        snapshot["services"] = services
         return snapshot
 
     def _save_mcp_realtime_policy(self, server_name: str, policy: dict[str, Any]) -> dict[str, Any]:
@@ -225,18 +204,12 @@ class WebMonitor(_BaseWebMonitor):
         if not path.is_file():
             return {"ok": False, "available": False, "status_file": str(path), "error": "runtime status is not available yet"}
         try:
-            stat = path.stat()
-            age_seconds = max(0.0, time.time() - stat.st_mtime)
             status = read_status_file(path)
         except Exception as error:
             return {"ok": False, "available": False, "status_file": str(path), "error": f"could not read runtime status: {error}"}
-        stale = age_seconds > _runtime_status_stale_seconds()
         return {
-            "ok": not stale,
+            "ok": True,
             "available": True,
-            "stale": stale,
-            "age_seconds": age_seconds,
-            "revision": f"{stat.st_ino}:{stat.st_mtime_ns}",
             "status_file": str(path),
             "runtime": status,
         }
@@ -309,17 +282,10 @@ class WebMonitor(_BaseWebMonitor):
         }
 
     def _request_runtime_restart(self) -> dict[str, Any]:
-        status = self._runtime_status()
         with self._lock:
             handler = self._runtime_restart_handler
-            self._runtime_reload_pending = True
-            self._runtime_reload_status_revision = str(status.get("revision") or "")
         if handler is None:
-            with self._lock:
-                self._runtime_reload_pending = False
-                self._runtime_reload_status_revision = ""
             raise RuntimeError("runtime restart is not available")
-        self.set_environment_loading(True, "Application de la configuration")
         handler()
         return {"ok": True, "restart_requested": True, "message": "Runtime engine reload requested."}
 
@@ -398,10 +364,6 @@ class WebMonitor(_BaseWebMonitor):
                         try:
                             result = monitor._request_runtime_restart()
                         except Exception as error:
-                            with monitor._lock:
-                                monitor._runtime_reload_pending = False
-                                monitor._runtime_reload_status_revision = ""
-                            monitor.set_environment_loading(False)
                             self._send_json_error(503, {"ok": False, "error": {"message": str(error)}})
                             return
                         self._send_json(result)
