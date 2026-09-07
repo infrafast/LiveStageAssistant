@@ -18,7 +18,7 @@ from voice_assistant.realtime.audio import Pcm16MonoResampler, downmix_pcm16
 from voice_assistant.realtime.service import open_configured_input
 
 TARGET_RATE = 24000
-BENCHMARK_PROMPT = "Quel est le volume de vocal-clode ?"
+BENCHMARK_PROMPT = "Quel est le volume de clic ?"
 
 
 def _env_float(name: str, default: float) -> float:
