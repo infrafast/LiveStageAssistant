@@ -190,7 +190,25 @@ async def run_stdio_sample(api_key: str, env_file: Path, args, sample: int) -> d
         mcp_config = args.mcp_config
         mcp_server = args.server
 
-    _, config = stdio_runner.load_mcp_config(BridgeArgs(), env_file)
+    _, loaded_config = stdio_runner.load_mcp_config(BridgeArgs(), env_file)
+    config = json.loads(json.dumps(loaded_config))
+    servers = config.get("mcpServers") or {}
+    server_config = servers.get(args.server)
+    if not isinstance(server_config, dict):
+        raise RuntimeError(f"STDIO benchmark server {args.server!r} not found")
+    server_env = server_config.setdefault("env", {})
+    server_env["OSC_HOST"] = args.osc_host
+    server_env["OSC_PORT"] = str(args.osc_port)
+    server_env["OSC_PROTOCOL"] = args.osc_protocol
+    print(
+        "RV2_BENCH stdio target "
+        + json.dumps(
+            {"host": args.osc_host, "port": args.osc_port, "protocol": args.osc_protocol},
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
+
     bridge = RealtimeMCPBridge(
         config,
         server_names=(args.server,),
@@ -284,6 +302,9 @@ async def run(args) -> int:
                 "tool": args.tool,
                 "samples": args.samples,
                 "timeout": args.timeout,
+                "stdio_osc_host": args.osc_host,
+                "stdio_osc_port": args.osc_port,
+                "stdio_osc_protocol": args.osc_protocol,
             },
             separators=(",", ":"),
         ),
@@ -327,6 +348,9 @@ def main() -> int:
     parser.add_argument("--model", default=os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1"))
     parser.add_argument("--samples", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument("--osc-host", default=os.getenv("RV2_BENCH_OSC_HOST", "192.168.100.16"))
+    parser.add_argument("--osc-port", type=int, default=int(os.getenv("RV2_BENCH_OSC_PORT", "10024")))
+    parser.add_argument("--osc-protocol", default=os.getenv("RV2_BENCH_OSC_PROTOCOL", "OSCXR"))
     args = parser.parse_args()
     if args.samples < 1:
         parser.error("--samples must be >= 1")
