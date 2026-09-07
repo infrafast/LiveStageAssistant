@@ -25,23 +25,28 @@ _BaseWebMonitor = _base.WebMonitor
 _START_PATCH_LOCK = threading.Lock()
 VOICE_ENGINE_ONLINE = {"classic", "openai-realtime"}
 VOICE_ENGINE_OFFLINE = {"local"}
+DEFAULT_AUTO_ENV_DIR = "/etc/livestageassistant"
 DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"
 DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1"
 DEFAULT_REALTIME_VOICE = "marin"
+
+
+def _auto_env_dir() -> Path:
+    return Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", DEFAULT_AUTO_ENV_DIR)).expanduser()
 
 
 def _active_env_file_from_snapshot(snapshot: dict[str, Any]) -> Path:
     config = snapshot.get("config") or {}
     env_values = config.get("env") or {}
     mode = str(env_values.get("CONNECTIVITY_MODE") or "").strip().lower()
-    env_dir = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "."))
+    env_dir = _auto_env_dir()
     if mode == "offline":
         return env_dir / ".env.offline"
     return env_dir / ".env.online"
 
 
 def _profile_env_files() -> tuple[Path, ...]:
-    env_dir = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "."))
+    env_dir = _auto_env_dir()
     candidates = (env_dir / ".env.online", env_dir / ".env.offline")
     existing = tuple(path for path in candidates if path.is_file())
     return existing or candidates[:1]
@@ -202,7 +207,7 @@ class WebMonitor(_BaseWebMonitor):
     def _save_mcp_realtime_policy(self, server_name: str, policy: dict[str, Any]) -> dict[str, Any]:
         safe_policy, refreshed_config = save_mcp_realtime_policy_from_snapshot(self.snapshot(), server_name, policy)
         self.update(mcp_config=refreshed_config)
-        return {"ok": True, "server": server_name, "policy": safe_policy}
+        return {"ok": True, "server": server_name, "policy": safe_policy, "restart_required": True}
 
     def _runtime_status(self) -> dict[str, Any]:
         path = _runtime_status_file()
@@ -246,13 +251,14 @@ class WebMonitor(_BaseWebMonitor):
         env_file = _active_env_file_from_snapshot(snapshot)
         _write_env_values(env_file, updates)
         env_values.update(updates)
-        self.update(env_values=env_values)
+        self.update(env_file=env_file, env_values=env_values)
         return {
             "ok": True,
             "voice_engine": normalized,
             "realtime_model": model if normalized == "openai-realtime" else str(env_values.get("OPENAI_REALTIME_MODEL") or DEFAULT_REALTIME_MODEL).strip(),
             "realtime_voice": voice if normalized == "openai-realtime" else str(env_values.get("OPENAI_REALTIME_VOICE") or DEFAULT_REALTIME_VOICE).strip(),
             "connectivity_mode": connectivity,
+            "profile": str(env_file),
             "restart_required": True,
             "message": "Voice engine settings saved. Restart LiveStageAssistant to apply them.",
         }
