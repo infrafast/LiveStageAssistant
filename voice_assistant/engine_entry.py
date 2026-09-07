@@ -59,16 +59,16 @@ def run_classic(env_file: str) -> int:
     return classic_engine.run(env_file)
 
 
-def run_openai_realtime(env_file: str) -> int:
+def run_realtime(env_file: str, provider: str) -> int:
     from voice_assistant.realtime import service
     from voice_assistant.realtime import wake_runtime
 
+    os.environ["LSA_REALTIME_PROVIDER"] = provider
     if os.getenv("LSA_COMMON_STARTUP_LIFECYCLE") == "1":
         service.play_startup_sound = lambda _env_file: None
 
-    # Install the provider-neutral local wake authorization layer before the
-    # realtime service constructs its capture/semantic tasks. When WAKE_WORD is
-    # empty this is a no-op and the historical direct-listening flow is kept.
+    # Wake authorization remains local and provider-neutral. With WAKE_WORD
+    # empty this is a no-op and the direct-listening flow is preserved.
     wake_runtime.install(service, env_file)
 
     sys.argv = [sys.argv[0], "--env-file", env_file]
@@ -77,12 +77,14 @@ def run_openai_realtime(env_file: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--engine", required=True, choices=("classic", "local", "openai-realtime"))
+    parser.add_argument("--engine", required=True, choices=("classic", "local", "openai-realtime", "gemini-live"))
     parser.add_argument("--env-file", required=True)
     args = parser.parse_args()
 
     if args.engine == "openai-realtime":
-        return run_openai_realtime(args.env_file)
+        return run_realtime(args.env_file, "openai")
+    if args.engine == "gemini-live":
+        return run_realtime(args.env_file, "gemini")
     return run_classic(args.env_file)
 
 
