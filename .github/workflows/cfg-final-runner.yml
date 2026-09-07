@@ -25,13 +25,13 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import textwrap
           source = Path('.github/workflows/cfg-final-refactor.yml').read_text(encoding='utf-8')
           start_marker = "          python - <<'PY'\n"
           end_marker = "\n          PY\n"
           start = source.index(start_marker) + len(start_marker)
           end = source.index(end_marker, start)
-          script = textwrap.dedent(source[start:end])
+          raw = source[start:end]
+          script = "\n".join(line[10:] if line.startswith("          ") else line for line in raw.splitlines())
           exec(compile(script, '<cfg-refactor>', 'exec'))
           PY
       - name: Validate
