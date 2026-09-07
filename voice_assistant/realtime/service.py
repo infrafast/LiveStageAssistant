@@ -18,7 +18,13 @@ from typing import Any
 import pyaudio
 from dotenv import load_dotenv
 
-from ..semantic_audio import VoiceOutputGains
+from ..semantic_audio import (
+    SemanticAudioConfig,
+    SemanticAudioController,
+    SemanticAudioState,
+    VoiceOutputGains,
+)
+from ..semantic_audio_output import SemanticCuePlayer
 from .audio import Pcm16MonoResampler, apply_pcm16_gain, downmix_pcm16, expand_pcm16_channels
 from .audio_devices import PipeWireInputStream, PipeWireOutputStream, parse_pipewire_selector
 from .engine import RealtimeEngineConfig, RealtimeMCPServer
@@ -256,11 +262,26 @@ async def capture_loop(engine, stream, source_rate: int, channels: int, frames: 
                 return
 
 
-async def playback_loop(queue: asyncio.Queue, stream, output_rate: int, output_channels: int, interrupted: set[str], first_played: dict[str, float], stop_event: asyncio.Event, cloud_gain: float) -> None:
+async def playback_loop(
+    queue: asyncio.Queue,
+    stream,
+    output_rate: int,
+    output_channels: int,
+    interrupted: set[str],
+    first_played: dict[str, float],
+    stop_event: asyncio.Event,
+    cloud_gain: float,
+    semantic: SemanticAudioController,
+) -> None:
     current_response_id = ""
     resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
     while not stop_event.is_set():
         response_id, audio = await queue.get()
+        if audio is None:
+            if response_id not in interrupted:
+                semantic.transition(SemanticAudioState.IDLE)
+                semantic.transition(SemanticAudioState.LISTENING)
+            continue
         if response_id in interrupted:
             continue
         if response_id != current_response_id:
@@ -348,10 +369,19 @@ async def announce_ready(engine, output_stream, output_rate: int, output_channel
     await _announce_phrase(engine, output_stream, output_rate, output_channels, "Assistant vocal prêt à exécuter des commandes.", cloud_gain)
 
 
-async def event_loop(engine, bridge: RealtimeMCPBridge | None, queue: asyncio.Queue, interrupted: set[str], first_played: dict[str, float], stop_event: asyncio.Event) -> None:
+async def event_loop(
+    engine,
+    bridge: RealtimeMCPBridge | None,
+    queue: asyncio.Queue,
+    interrupted: set[str],
+    first_played: dict[str, float],
+    stop_event: asyncio.Event,
+    semantic: SemanticAudioController,
+) -> None:
     current_response_id = ""
     completed_calls: set[str] = set()
     completed_responses: set[str] = set()
+    audio_started: set[str] = set()
     tool_tasks: set[asyncio.Task] = set()
     speech_stopped_at: float | None = None
     response_started: dict[str, float] = {}
@@ -379,6 +409,7 @@ async def event_loop(engine, bridge: RealtimeMCPBridge | None, queue: asyncio.Qu
             response_started[current_response_id] = now
             if speech_stopped_at is not None:
                 speech_stop_by_response[current_response_id] = speech_stopped_at
+            semantic.transition(SemanticAudioState.PROCESSING)
         elif event.type == "tool_call" and bridge is not None:
             task = asyncio.create_task(execute_bridge_call(engine, bridge, event, completed_calls))
             tool_tasks.add(task)
@@ -391,6 +422,10 @@ async def event_loop(engine, bridge: RealtimeMCPBridge | None, queue: asyncio.Qu
                 continue
             audio = event.data.get("audio") or b""
             if audio:
+                if response_id not in audio_started:
+                    audio_started.add(response_id)
+                    semantic.transition(SemanticAudioState.RESULT_READY)
+                    semantic.transition(SemanticAudioState.SPEAKING)
                 first_audio_received.setdefault(response_id, now)
                 await queue.put((response_id, audio))
         elif event.type == "transcript_done":
@@ -407,6 +442,8 @@ async def event_loop(engine, bridge: RealtimeMCPBridge | None, queue: asyncio.Qu
             metrics = {"pipeline":"realtime","provider":"openai","model":engine.config.model,"turn":turn,"response_id":response_id,"speech_end_to_first_audio_ms":round((first_audio_received[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_audio_received else None,"speech_end_to_first_playback_ms":round((first_played[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_played else None,"response_start_to_done_ms":round((now-response_started[response_id])*1000,1) if response_id in response_started else None,"usage":event.data.get("usage") or {}}
             metrics["cost_usd"] = realtime_usage_cost_usd(engine.config.model, metrics["usage"])
             print("REALTIME_METRICS " + json.dumps(metrics, ensure_ascii=False, separators=(",", ":")), flush=True)
+            if response_id in audio_started:
+                await queue.put((response_id, None))
             if current_response_id == response_id:
                 current_response_id = ""
         elif event.type in {"provider_error", "connection_error"}:
@@ -432,6 +469,7 @@ async def run(args) -> int:
     model = str(os.getenv("OPENAI_REALTIME_MODEL") or DEFAULT_MODEL).strip()
     voice = str(os.getenv("OPENAI_REALTIME_VOICE") or DEFAULT_VOICE).strip()
     output_gains = VoiceOutputGains.from_env()
+    semantic_config = SemanticAudioConfig.from_env()
     config_path = resolve_path(str(os.getenv("MCP_CONFIG") or "mcp_servers.json").strip(), env_file)
     raw_config = json.loads(config_path.read_text(encoding="utf-8"))
     inventory = load_mcp_inventory(config_path)
@@ -477,6 +515,8 @@ async def run(args) -> int:
     pa = pyaudio.PyAudio()
     input_stream = output_stream = None
     engine = None
+    cue_player: SemanticCuePlayer | None = None
+    semantic: SemanticAudioController | None = None
     tasks: list[asyncio.Task] = []
     stop_event = asyncio.Event()
     queue: asyncio.Queue = asyncio.Queue()
@@ -499,17 +539,28 @@ async def run(args) -> int:
         print(f"Realtime MCP native: {[item.label for item in native_servers] or 'none'}", flush=True)
         print(f"Realtime MCP stdio bridge: {bridge_names or 'none'}", flush=True)
 
+        cue_player = SemanticCuePlayer()
+        semantic = SemanticAudioController(
+            semantic_config,
+            play_once=cue_player.play_once,
+            start_loop=cue_player.start_loop,
+            stop_loop=cue_player.stop_loop,
+            on_state=lambda state: print(f"LSA semantic state: {state.value}", flush=True),
+        )
+
         engine = OpenAIRealtimeEngine(RealtimeEngineConfig(provider="openai", model=model, voice=voice, instructions=DEFAULT_BASE_PROMPT, server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)
         await engine.start()
         await wait_until_ready(engine)
         print(f"LSA Realtime ready: model={model} voice={voice}", flush=True)
         await announce_ready(engine, output_stream, output_rate, output_channels, connectivity, output_gains.cloud)
+        semantic.transition(SemanticAudioState.READY)
+        semantic.transition(SemanticAudioState.LISTENING)
         print("LSA Realtime listening: provider VAD active", flush=True)
 
         tasks = [
             asyncio.create_task(capture_loop(engine, input_stream, input_rate, input_channels, input_frames, stop_event), name="lsa-realtime-capture"),
-            asyncio.create_task(event_loop(engine, bridge, queue, interrupted, first_played, stop_event), name="lsa-realtime-events"),
-            asyncio.create_task(playback_loop(queue, output_stream, output_rate, output_channels, interrupted, first_played, stop_event, output_gains.cloud), name="lsa-realtime-playback"),
+            asyncio.create_task(event_loop(engine, bridge, queue, interrupted, first_played, stop_event, semantic), name="lsa-realtime-events"),
+            asyncio.create_task(playback_loop(queue, output_stream, output_rate, output_channels, interrupted, first_played, stop_event, output_gains.cloud, semantic), name="lsa-realtime-playback"),
         ]
         await stop_event.wait()
         return 0
@@ -519,6 +570,10 @@ async def run(args) -> int:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if semantic is not None:
+            semantic.close()
+        if cue_player is not None:
+            cue_player.close()
         if engine is not None:
             await engine.stop()
         if bridge is not None:
