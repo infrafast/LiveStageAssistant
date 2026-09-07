@@ -9,12 +9,12 @@
 
   const saveButton = document.querySelector("#llm-save");
   const message = document.querySelector("#llm-message");
+  const configPanel = document.querySelector("#panel-config");
   if (!saveButton) return;
 
   let restartRequired = false;
   let restartInFlight = false;
-  let wakeSelectorReady = false;
-  let wakeSelectorDirty = false;
+  let saveGeneration = 0;
 
   function errorMessage(data, response) {
     return data?.error?.message || data?.message || response?.statusText || `HTTP ${response?.status || "?"}`;
@@ -31,42 +31,18 @@
     return data;
   }
 
-  function visibleWakeValue() {
-    const select = document.querySelector("#wake-word-select");
-    if (select) return String(select.value || "").trim();
-    const legacy = document.querySelector("#wake-word");
-    return String(legacy?.value || "").trim();
-  }
-
-  // app-main.js still owns the legacy /api/llm-config request. Until that form is
-  // fully migrated, make the visible common selector authoritative at the final
-  // request boundary so a stale hidden #wake-word value can never overwrite it.
-  if (!window.__lsaWakeCanonicalFetchInstalled) {
-    window.__lsaWakeCanonicalFetchInstalled = true;
-    const baseFetch = window.fetch.bind(window);
-    window.fetch = (input, init = undefined) => {
-      const rawUrl = typeof input === "string" ? input : String(input?.url || "");
-      let parsedPath = rawUrl;
-      try {
-        parsedPath = new URL(rawUrl, window.location.href).pathname;
-      } catch (_error) {
-      }
-      if (parsedPath === "/api/llm-config" && init && typeof init.body === "string") {
-        try {
-          const payload = JSON.parse(init.body);
-          payload.wake_word = visibleWakeValue();
-          init = { ...init, body: JSON.stringify(payload) };
-        } catch (_error) {
-        }
-      }
-      return baseFetch(input, init);
-    };
-  }
-
   function setRestartRequired(required) {
     restartRequired = Boolean(required);
     saveButton.dataset.restartRequired = restartRequired ? "1" : "0";
     if (!restartInFlight) saveButton.textContent = restartRequired ? "Restart" : "Save";
+  }
+
+  function markConfigDirty() {
+    saveGeneration += 1;
+    if (restartRequired && !restartInFlight) {
+      setRestartRequired(false);
+      if (message) message.textContent = "Unsaved changes.";
+    }
   }
 
   function hideDuplicateButtons() {
@@ -100,92 +76,6 @@
     return { cloud_gain: Number(cloud.value), local_gain: Number(local.value) };
   }
 
-  function normalizeWakeOption(entry) {
-    if (typeof entry === "string") return { value: entry, label: entry };
-    if (!entry || typeof entry !== "object") return null;
-    const value = String(entry.id || entry.value || entry.name || entry.label || "").trim();
-    if (!value) return null;
-    return { value, label: String(entry.label || entry.name || value).trim() || value };
-  }
-
-  function ensureWakeOption(select, value) {
-    const normalized = String(value || "").trim();
-    if (!normalized) return;
-    if ([...select.options].some((option) => option.value === normalized)) return;
-    const option = document.createElement("option");
-    option.value = normalized;
-    option.textContent = normalized;
-    select.append(option);
-  }
-
-  function syncWakeSelectorFromCanonical() {
-    if (!wakeSelectorReady || wakeSelectorDirty) return;
-    const legacy = document.querySelector("#wake-word");
-    const select = document.querySelector("#wake-word-select");
-    if (!legacy || !select) return;
-    const canonical = String(legacy.value || "").trim();
-    ensureWakeOption(select, canonical);
-    if (select.value !== canonical) select.value = canonical;
-  }
-
-  async function ensureWakeSelector() {
-    const legacy = document.querySelector("#wake-word");
-    if (!legacy) return;
-    if (legacy.dataset.unifiedWake === "1") {
-      wakeSelectorReady = true;
-      syncWakeSelectorFromCanonical();
-      return;
-    }
-
-    let optionsData = {};
-    try {
-      const response = await fetch(LLM_OPTIONS_URL, { cache: "no-store" });
-      if (response.ok) optionsData = await response.json();
-    } catch (_error) {
-    }
-
-    const selected = String(optionsData.selected_wake_word || legacy.value || "").trim();
-    const known = Array.isArray(optionsData.wake_word_model_files) ? optionsData.wake_word_model_files : [];
-    const normalized = [];
-    const seen = new Set();
-    for (const raw of known) {
-      const item = normalizeWakeOption(raw);
-      if (!item || seen.has(item.value)) continue;
-      seen.add(item.value);
-      normalized.push(item);
-    }
-    if (selected && !seen.has(selected)) normalized.unshift({ value: selected, label: selected });
-
-    const select = document.createElement("select");
-    select.id = "wake-word-select";
-    select.className = legacy.className;
-    const disabled = document.createElement("option");
-    disabled.value = "";
-    disabled.textContent = "Disabled";
-    select.append(disabled);
-    for (const item of normalized) {
-      const option = document.createElement("option");
-      option.value = item.value;
-      option.textContent = item.label;
-      select.append(option);
-    }
-    select.value = selected;
-    select.addEventListener("change", () => {
-      wakeSelectorDirty = true;
-      legacy.value = select.value;
-      legacy.dispatchEvent(new Event("input", { bubbles: true }));
-      legacy.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-
-    legacy.dataset.unifiedWake = "1";
-    legacy.classList.add("hidden");
-    legacy.setAttribute("aria-hidden", "true");
-    legacy.tabIndex = -1;
-    legacy.insertAdjacentElement("afterend", select);
-    wakeSelectorReady = true;
-    syncWakeSelectorFromCanonical();
-  }
-
   async function saveExtendedConfig() {
     const requests = [];
     const engine = enginePayload();
@@ -197,10 +87,11 @@
     return results.some((item) => item?.restart_required);
   }
 
-  async function waitForGlobalSaveResult(timeoutMs = 15000) {
+  async function waitForGlobalSaveResult(generation, timeoutMs = 15000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100));
+      if (generation !== saveGeneration) return false;
       const text = String(message?.textContent || "").trim().toLowerCase();
       if (text.includes("failed") || text.includes("error") || text.includes("échec") || text.includes("erreur")) return false;
       if (!saveButton.disabled && !text.includes("saving") && !text.includes("enregistrement")) return true;
@@ -208,14 +99,17 @@
     return false;
   }
 
-  async function verifyWakePersistence() {
-    const expected = visibleWakeValue();
+  async function verifyCanonicalConfig() {
     const response = await fetch(LLM_OPTIONS_URL, { cache: "no-store" });
-    if (!response.ok) throw new Error(`wake persistence verification failed: HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`configuration verification failed: HTTP ${response.status}`);
     const data = await response.json();
-    const actual = String(data.selected_wake_word || "").trim();
-    if (actual !== expected) {
-      throw new Error(`wake word was not persisted (expected ${expected || "Disabled"}, got ${actual || "Disabled"})`);
+    const wake = document.querySelector("#wake-word");
+    if (wake) {
+      const expected = String(wake.value || "").trim();
+      const actual = String(data.selected_wake_word || "").trim();
+      if (actual !== expected) {
+        throw new Error(`wake word was not persisted (expected ${expected || "Disabled"}, got ${actual || "Disabled"})`);
+      }
     }
     return true;
   }
@@ -250,9 +144,7 @@
       const ready = await waitUntilReady();
       if (!ready) throw new Error("runtime did not become ready before timeout");
       setRestartRequired(false);
-      wakeSelectorDirty = false;
       if (message) message.textContent = "Configuration applied.";
-      setTimeout(syncWakeSelectorFromCanonical, 0);
     } catch (error) {
       if (message) message.textContent = `Restart failed: ${error.message || error}`;
       setRestartRequired(true);
@@ -270,37 +162,34 @@
       restartRuntime();
       return;
     }
-    const wakeSelect = document.querySelector("#wake-word-select");
-    const legacyWake = document.querySelector("#wake-word");
-    if (wakeSelect && legacyWake) {
-      legacyWake.value = wakeSelect.value;
-      legacyWake.dispatchEvent(new Event("input", { bubbles: true }));
-      legacyWake.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+
+    const generationAtSave = saveGeneration;
     saveExtendedConfig()
       .then(async (required) => {
-        if (!required) return;
-        const globalSaveOk = await waitForGlobalSaveResult();
+        const globalSaveOk = await waitForGlobalSaveResult(generationAtSave);
         if (!globalSaveOk) return;
-        try {
-          await verifyWakePersistence();
-          setRestartRequired(true);
-        } catch (error) {
-          setRestartRequired(false);
-          if (message) message.textContent = `Save failed: ${error.message || error}`;
-        }
+        await verifyCanonicalConfig();
+        if (generationAtSave !== saveGeneration) return;
+        if (required) setRestartRequired(true);
       })
       .catch((error) => {
+        setRestartRequired(false);
         if (message) message.textContent = `Save failed: ${error.message || error}`;
       });
   }, true);
 
-  const observer = new MutationObserver(() => {
-    hideDuplicateButtons();
-    ensureWakeSelector();
-  });
+  if (configPanel) {
+    configPanel.addEventListener("input", (event) => {
+      if (event.target === saveButton) return;
+      markConfigDirty();
+    }, true);
+    configPanel.addEventListener("change", (event) => {
+      if (event.target === saveButton) return;
+      markConfigDirty();
+    }, true);
+  }
+
+  const observer = new MutationObserver(hideDuplicateButtons);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   hideDuplicateButtons();
-  ensureWakeSelector();
-  window.setInterval(syncWakeSelectorFromCanonical, 500);
 })();
