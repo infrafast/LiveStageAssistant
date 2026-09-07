@@ -141,6 +141,35 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
             self.assertEqual(saved.count("OPENAI_REALTIME_MODEL="), 1)
             self.assertEqual(saved.count("OPENAI_REALTIME_VOICE="), 1)
 
+    def test_voice_output_gains_are_persisted_to_online_and_offline_profiles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            online = Path(temp_dir) / ".env.online"
+            offline = Path(temp_dir) / ".env.offline"
+            online.write_text("CONNECTIVITY_MODE=online\nBACKEND_TTS_VOLUME=1.00\n", encoding="utf-8")
+            offline.write_text("CONNECTIVITY_MODE=offline\nBACKEND_TTS_VOLUME=1.00\n", encoding="utf-8")
+            monitor = WebMonitor()
+            monitor.update(env_values={"CONNECTIVITY_MODE": "online", "BACKEND_TTS_VOLUME": "1.00"})
+            with patch.dict(os.environ, {"ASSISTANT_AUTO_ENV_DIR": temp_dir}):
+                result = monitor._save_voice_output_gains(1.35, 0.80)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["cloud_gain"], 1.35)
+            self.assertEqual(result["local_gain"], 0.80)
+            for path in (online, offline):
+                saved = path.read_text(encoding="utf-8")
+                self.assertIn("CLOUD_TTS_OUTPUT_GAIN=1.35", saved)
+                self.assertIn("LOCAL_TTS_OUTPUT_GAIN=0.80", saved)
+                self.assertEqual(saved.count("CLOUD_TTS_OUTPUT_GAIN="), 1)
+                self.assertEqual(saved.count("LOCAL_TTS_OUTPUT_GAIN="), 1)
+
+    def test_voice_output_gains_reject_out_of_range_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env.online"
+            env_path.write_text("CONNECTIVITY_MODE=online\n", encoding="utf-8")
+            monitor = WebMonitor()
+            with patch.dict(os.environ, {"ASSISTANT_AUTO_ENV_DIR": temp_dir}):
+                with self.assertRaises(ValueError):
+                    monitor._save_voice_output_gains(2.1, 1.0)
+
     def test_post_updates_policy_and_preserves_native_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "mcp.json"
