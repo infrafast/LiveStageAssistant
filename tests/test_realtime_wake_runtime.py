@@ -24,14 +24,21 @@ class FakeGate:
         self.waiting = True
         self.enabled = True
         self.rearms = []
+        self.preroll = b"PRE"
 
     def feed(self, _pcm):
         self.waiting = False
         return True
 
+    def consume_pre_roll(self):
+        payload = self.preroll
+        self.preroll = b""
+        return payload
+
     def rearm(self, *, suppress_ms=None):
         self.waiting = True
         self.rearms.append(suppress_ms)
+        self.preroll = b""
 
 
 class FakeResampler:
@@ -48,6 +55,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         handle.write("WAKE_WORD=momo\n")
         handle.write("BACKEND_WAKE_WORD_MODEL_NAMES=momo\n")
         handle.write("BACKEND_WAKE_WORD_THRESHOLD=0.60\n")
+        handle.write("BACKEND_WAKE_WORD_PRE_ROLL_MS=1600\n")
         handle.write(f"INTERRUPT_CONVERSATION_ENABLED={'true' if interrupt else 'false'}\n")
         handle.close()
         self.addCleanup(lambda: Path(handle.name).unlink(missing_ok=True))
@@ -87,7 +95,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         service.SemanticAudioController.transition(controller, SemanticAudioState.IDLE)
         self.assertIsNone(gate.rearms[-1])
 
-    def test_capture_drops_detection_frame_and_forwards_next_audio(self):
+    def test_capture_forwards_preroll_then_following_audio(self):
         service = self._service()
         with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
             wake_runtime.install(service, self._env_file())
@@ -114,7 +122,8 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
             return engine
 
         engine = asyncio.run(scenario())
-        self.assertEqual(len(engine.sent), 1)
+        self.assertEqual(engine.sent[0], b"PRE")
+        self.assertEqual(len(engine.sent), 2)
 
 
 if __name__ == "__main__":
