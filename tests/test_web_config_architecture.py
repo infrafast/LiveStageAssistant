@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import unittest
 
 
@@ -23,11 +24,34 @@ class WebConfigArchitectureTests(unittest.TestCase):
         self.assertIn("current.replaceWith(select)", script)
         self.assertNotIn("wake-word-select", script)
 
-    def test_changes_after_save_cancel_restart_state(self):
+    def test_apply_policy_is_restart_safe_by_default(self):
+        policy = json.loads((WEB / "config-apply-policy.json").read_text(encoding="utf-8"))
+        self.assertEqual(policy["default_mode"], "engine-restart")
+        self.assertIn("#web-tts-volume", policy["hot"])
+        self.assertIn("#browser-audio-input", policy["ignore"])
+
+    def test_multiple_changed_fields_use_strictest_mode(self):
         script = (WEB / "config-unified.js").read_text(encoding="utf-8")
-        self.assertIn("function markConfigDirty()", script)
-        self.assertIn("setRestartRequired(false)", script)
-        self.assertIn('configPanel.addEventListener("change"', script)
+        self.assertIn("function globalMode(entries)", script)
+        self.assertIn('entry.mode === "engine-restart"', script)
+        self.assertIn('return "hot"', script)
+
+    def test_extended_endpoints_are_only_called_for_dirty_groups(self):
+        script = (WEB / "config-unified.js").read_text(encoding="utf-8")
+        self.assertIn('keys.has("voice-engine")', script)
+        self.assertIn('keys.has("voice-output-gains")', script)
+
+    def test_restart_pending_survives_additional_unsaved_changes(self):
+        script = (WEB / "config-unified.js").read_text(encoding="utf-8")
+        self.assertIn("let restartPending = false", script)
+        self.assertIn("if (dirty.size > 0)", script)
+        self.assertIn("if (restartPending)", script)
+        self.assertNotIn("setRestartRequired(false)", script)
+
+    def test_save_is_disabled_when_clean(self):
+        script = (WEB / "config-unified.js").read_text(encoding="utf-8")
+        self.assertIn('saveButton.disabled = true', script)
+        self.assertIn('saveButton.textContent = "Save"', script)
 
 
 if __name__ == "__main__":
