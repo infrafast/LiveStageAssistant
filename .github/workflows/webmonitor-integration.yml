@@ -1,0 +1,26 @@
+name: WebMonitor integration
+
+on:
+  push:
+    branches: [realtime-voice-architecture]
+  workflow_dispatch:
+
+jobs:
+  webmonitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run WebMonitor architecture tests
+        run: |
+          python tests/test_web_config_architecture.py
+          python tests/test_web_monitor_reload_lifecycle.py
+          python tests/test_web_monitor_http_integration.py
+      - name: Parse frontend JavaScript
+        run: |
+          node --check assets/web/app.js
+          node --check assets/web/app-main.js
+          node --check assets/web/mcp-realtime.js
+          node --check assets/web/config-unified.js
