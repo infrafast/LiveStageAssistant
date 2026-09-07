@@ -50,12 +50,10 @@ class RuntimeWebServices:
         monitor: Any,
         active_profile: Callable[[], Path],
         automatic_profiles: bool = True,
-        request_reload: Callable[[], None] | None = None,
     ) -> None:
         self.monitor = monitor
         self.active_profile = active_profile
         self.automatic_profiles = bool(automatic_profiles)
-        self.request_reload = request_reload
         self._lock = threading.RLock()
 
     def bind(self) -> None:
@@ -177,10 +175,6 @@ class RuntimeWebServices:
         if mcp_config is not None:
             kwargs["mcp_config"] = mcp_config
         self.monitor.update(**kwargs)
-
-    def _reload(self) -> None:
-        if self.request_reload is not None:
-            self.request_reload()
 
     def _secret_present(self, values: dict[str, Any], name: str) -> bool:
         path = str(values.get(f"{name}_FILE") or "").strip()
@@ -446,7 +440,7 @@ class RuntimeWebServices:
         cloud_tts_output_gain: float,
         local_tts_output_gain: float,
     ) -> dict[str, Any]:
-        """Persist the legacy GUI form into the active runtime profile."""
+        """Persist the unified GUI configuration into the active runtime profile."""
         values = self._values()
         active_connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
         requested_connectivity = str(connectivity_mode or active_connectivity).strip().lower()

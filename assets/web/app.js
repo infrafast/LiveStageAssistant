@@ -248,7 +248,6 @@
     let configBaseline = "";
     let restartRequired = false;
     let runtimeRestarting = false;
-    let restartLoadingSeen = false;
     let currentCloudGain = 1;
     let currentLocalGain = 1;
     let currentClassicCloudSpeech = true;
@@ -3079,7 +3078,6 @@
     async function requestRuntimeRestart() {
       if (runtimeRestarting) return;
       runtimeRestarting = true;
-      restartLoadingSeen = false;
       llmMessage.textContent = "Restarting…";
       syncConfigActionState();
       try {
@@ -5253,17 +5251,13 @@
           Boolean(environmentLoading.active),
           environmentLoading.title || tr("environment_refresh", "rafraichissement de l'environnement")
         );
-        if (runtimeRestarting) {
-          if (environmentLoading.active) restartLoadingSeen = true;
-          if (restartLoadingSeen && !environmentLoading.active && data.runtime_status?.ready) {
-            runtimeRestarting = false;
-            restartRequired = false;
-            restartLoadingSeen = false;
-            llmMessage.textContent = "Restart complete.";
-            llmControlsInitialized = false;
-            configBaseline = configSignature();
-            syncConfigActionState();
-          }
+        if (runtimeRestarting && !environmentLoading.active && data.runtime_status?.ready) {
+          runtimeRestarting = false;
+          restartRequired = false;
+          llmMessage.textContent = "Restart complete.";
+          llmControlsInitialized = false;
+          configBaseline = configSignature();
+          syncConfigActionState();
         }
         const envProfileChanged = await loadEnvProfiles();
         if (envProfileChanged) {
