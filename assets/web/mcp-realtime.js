@@ -4,10 +4,12 @@
   const SNAPSHOT_URL = "/api/snapshot";
   const SAVE_URL = "/api/mcp-realtime-policy";
   const VOICE_ENGINE_SAVE_URL = "/api/voice-engine";
+  const VOICE_GAINS_SAVE_URL = "/api/voice-output-gains";
   const POLL_MS = 2000;
   let busy = false;
   let lastSignature = "";
   let lastVoiceEngineSignature = "";
+  let lastVoiceGainsSignature = "";
 
   function option(label, value, selected) {
     const item = document.createElement("option");
@@ -34,6 +36,21 @@
   function snapshotEnv(snapshot) {
     if (snapshot?.config?.env && typeof snapshot.config.env === "object") return snapshot.config.env;
     return {};
+  }
+
+  function numericGain(value, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.max(0, Math.min(2, parsed));
+  }
+
+  function voiceGainState(snapshot) {
+    const env = snapshotEnv(snapshot);
+    const legacy = numericGain(env.BACKEND_TTS_VOLUME, 1);
+    return {
+      cloud: numericGain(env.CLOUD_TTS_OUTPUT_GAIN, legacy),
+      local: numericGain(env.LOCAL_TTS_OUTPUT_GAIN, legacy)
+    };
   }
 
   function voiceEngineState(snapshot) {
@@ -93,6 +110,13 @@
 
   function setVoiceMessage(section, text, isError = false) {
     const message = section.querySelector(".rv2d-voice-engine-message");
+    if (!message) return;
+    message.textContent = text;
+    message.style.color = isError ? "var(--bad, #b3261e)" : "";
+  }
+
+  function setGainMessage(section, text, isError = false) {
+    const message = section.querySelector(".rv2d-voice-gains-message");
     if (!message) return;
     message.textContent = text;
     message.style.color = isError ? "var(--bad, #b3261e)" : "";
@@ -232,6 +256,117 @@
     syncRealtimeFields(section);
   }
 
+  function gainControl(className, value, labelClass) {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;";
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "0";
+    input.max = "2";
+    input.step = "0.05";
+    input.value = String(value);
+    input.className = className;
+    const label = document.createElement("span");
+    label.className = labelClass;
+    label.textContent = `${Number(value).toFixed(2)}x`;
+    input.addEventListener("input", () => {
+      label.textContent = `${Number(input.value || 1).toFixed(2)}x`;
+    });
+    wrap.append(input, label);
+    return wrap;
+  }
+
+  async function saveVoiceGains(section) {
+    const cloud = section.querySelector(".rv2d-cloud-gain");
+    const local = section.querySelector(".rv2d-local-gain");
+    const button = section.querySelector(".rv2d-voice-gains-save");
+    if (!cloud || !local || !button || button.disabled) return;
+    button.disabled = true;
+    setGainMessage(section, "Saving...");
+    try {
+      const response = await fetch(VOICE_GAINS_SAVE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cloud_gain: Number(cloud.value),
+          local_gain: Number(local.value)
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) {
+        throw new Error(data?.error?.message || data?.message || response.statusText || `HTTP ${response.status}`);
+      }
+      cloud.value = String(data.cloud_gain ?? cloud.value);
+      local.value = String(data.local_gain ?? local.value);
+      section.querySelector(".rv2d-cloud-gain-label").textContent = `${Number(cloud.value).toFixed(2)}x`;
+      section.querySelector(".rv2d-local-gain-label").textContent = `${Number(local.value).toFixed(2)}x`;
+      setGainMessage(section, "Saved. Restart required.");
+      lastVoiceGainsSignature = "";
+    } catch (error) {
+      setGainMessage(section, `Save failed: ${error.message || error}`, true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function buildVoiceGainsSection(state) {
+    const section = document.createElement("div");
+    section.className = "rv2d-voice-gains";
+    section.style.cssText = "margin-top:10px;padding-top:10px;border-top:1px solid var(--border,#d7dde5);display:grid;gap:8px;";
+
+    const title = document.createElement("strong");
+    title.textContent = "Speech output gain";
+    const hint = document.createElement("div");
+    hint.className = "field-hint";
+    hint.textContent = "Cloud applies to cloud-generated speech including Realtime. Local applies to fully local speech.";
+
+    const cloudField = makeField("Cloud", gainControl("rv2d-cloud-gain", state.cloud, "rv2d-cloud-gain-label"));
+    const localField = makeField("Local", gainControl("rv2d-local-gain", state.local, "rv2d-local-gain-label"));
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "small-button rv2d-voice-gains-save";
+    save.textContent = "Save gains";
+    save.addEventListener("click", () => saveVoiceGains(section));
+    const message = document.createElement("span");
+    message.className = "rv2d-voice-gains-message";
+    message.style.cssText = "font-size:12px;opacity:.8;";
+    actions.append(save, message);
+
+    section.append(title, hint, cloudField, localField, actions);
+    return section;
+  }
+
+  function reconcileVoiceGains(state) {
+    const legacyField = document.querySelector("#backend-tts-volume-field");
+    const host = legacyField?.parentElement;
+    if (!host) return;
+    legacyField.classList.add("hidden");
+
+    let section = host.querySelector(".rv2d-voice-gains");
+    if (!section) {
+      section = buildVoiceGainsSection(state);
+      host.insertBefore(section, legacyField);
+      return;
+    }
+    const cloud = section.querySelector(".rv2d-cloud-gain");
+    const local = section.querySelector(".rv2d-local-gain");
+    if (!cloud || !local) {
+      section.replaceWith(buildVoiceGainsSection(state));
+      return;
+    }
+    if (document.activeElement !== cloud) {
+      cloud.value = String(state.cloud);
+      section.querySelector(".rv2d-cloud-gain-label").textContent = `${Number(state.cloud).toFixed(2)}x`;
+    }
+    if (document.activeElement !== local) {
+      local.value = String(state.local);
+      section.querySelector(".rv2d-local-gain-label").textContent = `${Number(state.local).toFixed(2)}x`;
+    }
+  }
+
   async function saveSection(section) {
     if (section.dataset.saving === "1") return;
     const server = section.dataset.server || "";
@@ -342,11 +477,17 @@
       const snapshot = await response.json();
       const policies = canonicalPolicies(snapshot);
       const state = voiceEngineState(snapshot);
+      const gains = voiceGainState(snapshot);
       const signature = JSON.stringify(policies);
       const voiceSignature = JSON.stringify(state);
+      const gainsSignature = JSON.stringify(gains);
       if (voiceSignature !== lastVoiceEngineSignature || !document.querySelector(".rv2d-voice-engine")) {
         reconcileVoiceEngine(state);
         lastVoiceEngineSignature = voiceSignature;
+      }
+      if (gainsSignature !== lastVoiceGainsSignature || !document.querySelector(".rv2d-voice-gains")) {
+        reconcileVoiceGains(gains);
+        lastVoiceGainsSignature = gainsSignature;
       }
       if (signature !== lastSignature || document.querySelectorAll(".rv2d-mcp-realtime").length < Object.keys(policies).length) {
         reconcile(policies);
