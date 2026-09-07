@@ -34,19 +34,29 @@ def run_classic(env_file: str) -> int:
         async def announce_ready_with_connectivity(self, loaded_servers):
             print(f"{CLASSIC_READY_MARKER} connectivity={'online' if online else 'offline'}", flush=True)
 
-            if online and os.getenv("LSA_ANNOUNCE_ONLINE_WITH_ENGINE", "1") == "1":
-                message = "Assistant connecté à internet."
-                print(f"LSA connectivity announcement via classic: {message}", flush=True)
-                if getattr(self, "tts_provider", "none") != "none":
-                    try:
-                        await asyncio.wait_for(
-                            asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message))),
-                            timeout=8.0,
-                        )
-                    except Exception as exc:
-                        print(f"Classic connectivity announcement failed: {exc}", flush=True)
-                await asyncio.sleep(0.45)
-            await original_announce_ready(self, loaded_servers)
+            if online:
+                if os.getenv("LSA_ANNOUNCE_ONLINE_WITH_ENGINE", "1") == "1":
+                    message = "Assistant connecté à internet."
+                    print(f"LSA connectivity announcement via classic: {message}", flush=True)
+                    if getattr(self, "tts_provider", "none") != "none":
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message))),
+                                timeout=8.0,
+                            )
+                        except Exception as exc:
+                            print(f"Classic connectivity announcement failed: {exc}", flush=True)
+                    await asyncio.sleep(0.45)
+
+                # Online Classic owns its normal ready announcement.
+                await original_announce_ready(self, loaded_servers)
+                return
+
+            # With the common lifecycle active, the parent runtime is the sole
+            # owner of the offline READY announcement and speaks it through the
+            # guaranteed-local Piper path. Calling the legacy Classic startup
+            # announcement here would speak the same sentence twice.
+            return
 
         agent.VoiceAssistant.announce_startup_ready = announce_ready_with_connectivity
 
