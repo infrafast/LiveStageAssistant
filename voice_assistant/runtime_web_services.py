@@ -1,8 +1,8 @@
 """Engine-neutral services used by the runtime-owned WebMonitor.
 
-The production HTTP server belongs to ``voice_assistant.runtime``.  This module
-contains file/session configuration services only; it does not bind sockets and
-has no Classic/Realtime/Local engine dependency.
+The production HTTP server belongs to ``voice_assistant.runtime``. This module
+contains profile/session/configuration services only; it does not bind sockets
+and has no Classic/Realtime/Local engine dependency.
 """
 
 from __future__ import annotations
@@ -18,7 +18,27 @@ from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
+from .i18n import available_locales, normalize_locale
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
+
+
+CLOUD_TTS_PROVIDER_OPTIONS = [
+    {"id": "none", "label": "None"},
+    {"id": "openai", "label": "OpenAI"},
+    {"id": "elevenlabs", "label": "ElevenLabs"},
+]
+TTS_OUTPUT_OPTIONS = [
+    {"id": "backend", "label": "Backend"},
+    {"id": "browser", "label": "Browser"},
+    {"id": "silent", "label": "Silent"},
+]
+OPENAI_TTS_VOICE_OPTIONS = [
+    {"id": voice, "label": voice}
+    for voice in ("alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer")
+]
+DEFAULT_STT_PROMPT = ""
+DEFAULT_SYSTEM_PROMPT = ""
+DEFAULT_MCP_AGENT_MAX_STEPS = 20
 
 
 class RuntimeWebServices:
@@ -40,6 +60,11 @@ class RuntimeWebServices:
 
     def bind(self) -> None:
         """Register only engine-neutral handlers on the common WebMonitor."""
+        self.monitor.set_llm_config_handlers(
+            options_handler=self.llm_options,
+            save_handler=self.save_llm_config,
+        )
+        self.monitor.set_cloud_api_status_handler(self.cloud_api_status)
         self.monitor.set_env_profile_handlers(
             list_handler=self.list_env_profiles,
             switch_handler=self.switch_env_profile,
@@ -59,6 +84,27 @@ class RuntimeWebServices:
 
     def _values(self, profile: Path | None = None) -> dict[str, Any]:
         return dict(dotenv_values(profile or self.active_profile()))
+
+    @staticmethod
+    def _bool(values: dict[str, Any], key: str, default: bool = False) -> bool:
+        raw = values.get(key)
+        if raw in (None, ""):
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def _int(values: dict[str, Any], key: str, default: int) -> int:
+        try:
+            return int(str(values.get(key) if values.get(key) not in (None, "") else default))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _float(values: dict[str, Any], key: str, default: float) -> float:
+        try:
+            return float(str(values.get(key) if values.get(key) not in (None, "") else default))
+        except (TypeError, ValueError):
+            return default
 
     def _profile_dir(self) -> Path:
         return self.active_profile().parent
@@ -135,6 +181,409 @@ class RuntimeWebServices:
     def _reload(self) -> None:
         if self.request_reload is not None:
             self.request_reload()
+
+    def _secret_present(self, values: dict[str, Any], name: str) -> bool:
+        path = str(values.get(f"{name}_FILE") or "").strip()
+        if not path:
+            return False
+        try:
+            return bool(Path(path).expanduser().read_text(encoding="utf-8").strip())
+        except OSError:
+            return False
+
+    @staticmethod
+    def _voice_options(values: dict[str, Any]) -> list[dict[str, str]]:
+        result: list[dict[str, str]] = []
+        raw = str(values.get("ELEVENLABS_VOICE_OPTIONS") or "")
+        for voice_id, label in re.findall(r"([A-Za-z0-9_-]+)\s*\(([^)]+)\)", raw):
+            result.append({"id": voice_id, "label": label.strip()})
+        current = str(values.get("ELEVENLABS_VOICE_ID") or "").strip()
+        if current and all(entry["id"] != current for entry in result):
+            result.insert(0, {"id": current, "label": current})
+        return result
+
+    @staticmethod
+    def _wav_options() -> list[dict[str, str]]:
+        assets = Path.cwd() / "assets"
+        if not assets.is_dir():
+            return []
+        return [
+            {"id": path.name, "label": path.name}
+            for path in sorted(assets.glob("*.wav"), key=lambda item: item.name.lower())
+            if path.is_file()
+        ]
+
+    @staticmethod
+    def _wake_model_options() -> list[dict[str, str]]:
+        data = Path.cwd() / "data"
+        if not data.is_dir():
+            return []
+        result: list[dict[str, str]] = []
+        for path in sorted(data.rglob("*.onnx"), key=lambda item: item.as_posix().lower()):
+            if not path.is_file() or path.name.startswith("._"):
+                continue
+            try:
+                model_id = path.relative_to(Path.cwd()).as_posix()
+            except ValueError:
+                model_id = path.as_posix()
+            result.append({"id": model_id, "label": model_id})
+        return result
+
+    def _speaker_profiles(self, values: dict[str, Any]) -> list[dict[str, Any]]:
+        root = Path(str(values.get("SPEAKER_PROFILES_DIR") or "data/speaker_profiles"))
+        maximum = max(0, min(5, self._int(values, "SPEAKER_PROFILES_MAX", 5)))
+        result: list[dict[str, Any]] = []
+        for index in range(1, maximum + 1):
+            name = str(values.get(f"SPEAKER_PROFILE_{index}_NAME") or "").strip()
+            enabled = self._bool(values, f"SPEAKER_PROFILE_{index}_ENABLED", False)
+            samples = []
+            embedding_count = 0
+            for sample in range(1, 4):
+                wav = root / f"profil{index}_{sample}.wav"
+                embedding = wav.with_suffix(".npy")
+                ready = wav.is_file()
+                embedding_ready = ready and embedding.is_file() and embedding.stat().st_mtime >= wav.stat().st_mtime
+                if embedding_ready:
+                    embedding_count += 1
+                samples.append({
+                    "index": sample,
+                    "wav_path": wav.as_posix(),
+                    "filename": wav.name,
+                    "ready": ready,
+                    "embedding_path": embedding.as_posix(),
+                    "embedding_ready": embedding_ready,
+                    "status": "ready" if ready else "missing",
+                })
+            result.append({
+                "index": index,
+                "name": name,
+                "enabled": enabled,
+                "wav_paths": [item["wav_path"] for item in samples],
+                "samples": samples,
+                "complete": all(item["ready"] for item in samples),
+                "usable": embedding_count > 0,
+                "embedding_count": embedding_count,
+                "embedding_total": 3,
+                "status": f"{embedding_count}/3 embeddings",
+                "embedding_ready": embedding_count > 0,
+                "embedding_path": next((item["embedding_path"] for item in samples if item["embedding_ready"]), ""),
+                "slug": re.sub(r"[^a-zA-Z0-9_.-]+", "_", (name or f"speaker_{index}").lower()).strip("._-")[:64],
+            })
+        return result
+
+    def llm_options(self, requested_provider: str | None = None) -> dict[str, Any]:
+        """Return GUI options from the active profile without constructing an engine."""
+        values = self._values()
+        connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
+        current_provider = str(values.get("LLM_PROVIDER") or ("ollama" if connectivity == "offline" else "openai")).strip().lower()
+        provider = str(requested_provider or current_provider).strip().lower()
+        if provider not in {"openai", "ollama"}:
+            provider = current_provider if current_provider in {"openai", "ollama"} else "openai"
+        if connectivity == "offline":
+            provider = "ollama"
+
+        if provider == "ollama":
+            selected_model = str(values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or "").strip()
+        else:
+            selected_model = str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
+        models = [{"id": selected_model, "label": selected_model}] if selected_model else []
+
+        cloud_tts = str(values.get("CLOUD_TTS_PROVIDER") or "").strip().lower()
+        if not cloud_tts:
+            backend_provider = str(values.get("TTS_PROVIDER") or "").strip().lower()
+            browser_provider = str(values.get("WEB_TTS_PROVIDER") or "").strip().lower()
+            cloud_tts = backend_provider if backend_provider in {"openai", "elevenlabs"} else browser_provider
+        if cloud_tts not in {"none", "openai", "elevenlabs"}:
+            cloud_tts = "none" if connectivity == "offline" else "openai"
+
+        backend_provider = str(values.get("TTS_PROVIDER") or "none").strip().lower()
+        browser_provider = str(values.get("WEB_TTS_PROVIDER") or "none").strip().lower()
+        if backend_provider in {"openai", "elevenlabs", "piper"}:
+            tts_output = "backend"
+        elif browser_provider in {"openai", "elevenlabs"}:
+            tts_output = "browser"
+        else:
+            tts_output = "silent"
+
+        command_ack = str(values.get("COMMAND_ACK_SOUND_FILE") or "").strip()
+        if not command_ack and self._bool(values, "COMMAND_ACK_SOUND_ENABLED", False):
+            command_ack = "ring.wav"
+        startup_enabled = self._bool(values, "STARTUP_LOADER_SOUND_ENABLED", False)
+        startup_file = str(values.get("STARTUP_LOADER_SOUND_FILE") or "loader.wav").strip() if startup_enabled else ""
+        stt_input = str(values.get("STT_INPUT") or "both").strip().lower()
+        if stt_input not in {"both", "backend", "browser", "silent"}:
+            stt_input = "both"
+
+        providers = [
+            {"id": "openai", "label": "OpenAI", "available": connectivity != "offline", "reason": None if connectivity != "offline" else "offline"},
+            {"id": "ollama", "label": "Ollama", "available": True, "reason": None},
+        ]
+        backend_input = str(values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
+        backend_output = str(values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
+        return {
+            "provider": provider,
+            "selected_connectivity_mode": connectivity,
+            "providers": providers,
+            "models": models,
+            "selected_model": selected_model,
+            "cloud_tts_providers": CLOUD_TTS_PROVIDER_OPTIONS,
+            "selected_cloud_tts_provider": cloud_tts,
+            "selected_stt_input": stt_input,
+            "selected_stt_language": normalize_locale(str(values.get("STT_LANGUAGE") or "fr")),
+            "available_locales": available_locales(),
+            "tts_outputs": TTS_OUTPUT_OPTIONS,
+            "selected_tts_output": tts_output,
+            "selected_wake_word": str(values.get("WAKE_WORD") or "").strip(),
+            "selected_stt_prompt": str(values.get("STT_PROMPT") or DEFAULT_STT_PROMPT).strip(),
+            "selected_system_prompt": str(values.get("ASSISTANT_SYSTEM_PROMPT") or DEFAULT_SYSTEM_PROMPT).strip(),
+            "selected_session_context_size": self._int(values, "SESSION_CONTEXT_SIZE", 6000),
+            "selected_mcp_agent_max_steps": self._int(values, "MCP_AGENT_MAX_STEPS", DEFAULT_MCP_AGENT_MAX_STEPS),
+            "selected_mcp_tool_routing_enabled": self._bool(values, "MCP_TOOL_ROUTING_ENABLED", False),
+            "selected_interrupt_conversation_enabled": self._bool(values, "INTERRUPT_CONVERSATION_ENABLED", False),
+            "voices": self._voice_options(values),
+            "selected_voice_id": str(values.get("ELEVENLABS_VOICE_ID") or "").strip(),
+            "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
+            "selected_openai_tts_voice": str(values.get("WEB_TTS_VOICE") or "alloy").strip(),
+            "selected_openai_tts_speed": self._float(values, "WEB_TTS_SPEED", 1.0),
+            "selected_web_tts_volume": min(1.0, self._float(values, "WEB_TTS_VOLUME", 1.0)),
+            "selected_backend_tts_volume": self._float(values, "BACKEND_TTS_VOLUME", 1.0),
+            "selected_backend_audio_output_pan": self._float(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0),
+            "selected_backend_audio_monitor_mode": str(values.get("BACKEND_AUDIO_MONITOR_MODE") or "off").strip().lower(),
+            "selected_backend_audio_monitor_volume": self._float(values, "BACKEND_AUDIO_MONITOR_VOLUME", 1.0),
+            "selected_backend_audio_input_gain": self._float(values, "BACKEND_AUDIO_INPUT_GAIN", 1.0),
+            "selected_vad_speech_threshold": self._float(values, "VAD_SPEECH_THRESHOLD", 0.5),
+            "selected_vad_negative_threshold": self._float(values, "VAD_NEGATIVE_THRESHOLD", 0.35),
+            "selected_vad_min_speech_ms": self._int(values, "VAD_MIN_SPEECH_MS", 250),
+            "selected_vad_min_silence_ms": self._int(values, "VAD_MIN_SILENCE_MS", 650),
+            "selected_vad_speech_pad_ms": self._int(values, "VAD_SPEECH_PAD_MS", 100),
+            "selected_vad_max_speech_seconds": self._float(values, "VAD_MAX_SPEECH_SECONDS", 8.0),
+            "selected_backend_wake_word_model_paths": str(values.get("BACKEND_WAKE_WORD_MODEL_PATHS") or "").strip(),
+            "selected_backend_wake_word_model_names": str(values.get("BACKEND_WAKE_WORD_MODEL_NAMES") or "").strip(),
+            "selected_backend_wake_word_threshold": self._float(values, "BACKEND_WAKE_WORD_THRESHOLD", 0.5),
+            "selected_backend_wake_word_pre_roll_ms": self._int(values, "BACKEND_WAKE_WORD_PRE_ROLL_MS", 1600),
+            "selected_backend_wake_word_cooldown_ms": self._int(values, "BACKEND_WAKE_WORD_COOLDOWN_MS", 1200),
+            "selected_backend_wake_word_vad_threshold": self._float(values, "BACKEND_WAKE_WORD_VAD_THRESHOLD", 0.0),
+            "wake_word_model_files": self._wake_model_options(),
+            "selected_speaker_recognition_enabled": self._bool(values, "SPEAKER_RECOGNITION_ENABLED", False),
+            "selected_speaker_backend": str(values.get("SPEAKER_BACKEND") or "resemblyzer").strip().lower(),
+            "selected_speaker_threshold": self._float(values, "SPEAKER_THRESHOLD", 0.75),
+            "selected_speaker_margin": self._float(values, "SPEAKER_MARGIN", 0.10),
+            "speaker_recognition_runtime": {},
+            "selected_speaker_profiles_max": max(0, min(5, self._int(values, "SPEAKER_PROFILES_MAX", 5))),
+            "speaker_profiles": self._speaker_profiles(values),
+            # Device enumeration moves to the common audio service. Preserve the
+            # selected ids meanwhile so the current config remains visible.
+            "backend_audio_inputs": ([{"id": backend_input, "label": backend_input, "name": backend_input, "default": False}] if backend_input else []),
+            "backend_audio_outputs": ([{"id": backend_output, "label": backend_output, "name": backend_output, "default": False}] if backend_output else []),
+            "selected_backend_audio_input_device": backend_input,
+            "selected_backend_audio_output_device": backend_output,
+            "thinking_sounds": self._wav_options(),
+            "selected_thinking_sound_file": str(values.get("THINKING_SOUND_FILE") or "thinking.wav").strip(),
+            "selected_listening_sound_file": str(values.get("LISTENING_SOUND_FILE") or "").strip(),
+            "selected_wake_detected_sound_file": str(values.get("WAKE_DETECTED_SOUND_FILE") or "").strip(),
+            "selected_startup_loader_sound_file": startup_file,
+            "selected_command_ack_sound_file": command_ack,
+            "message": f"Common runtime options loaded from active profile: {self.active_profile()}",
+        }
+
+    def save_llm_config(
+        self,
+        provider: str,
+        model: str,
+        cloud_tts_provider: str,
+        tts_output: str,
+        stt_input: str,
+        stt_language: str,
+        connectivity_mode: str,
+        wake_word: str,
+        stt_prompt: str,
+        system_prompt: str,
+        session_context_size: int,
+        mcp_agent_max_steps: int,
+        mcp_tool_routing_enabled: bool,
+        interrupt_conversation_enabled: bool,
+        backend_audio_input_device: str,
+        backend_audio_input_gain: float,
+        backend_audio_output_device: str,
+        voice_id: str,
+        thinking_sound_file: str,
+        listening_sound_file: str,
+        wake_detected_sound_file: str,
+        startup_loader_sound_file: str,
+        command_ack_sound_file: str,
+        openai_tts_voice: str,
+        openai_tts_speed: float,
+        web_tts_volume: float,
+        backend_tts_volume: float,
+        backend_audio_output_pan: float,
+        backend_audio_monitor_mode: str,
+        backend_audio_monitor_volume: float,
+        vad_speech_threshold: float,
+        vad_negative_threshold: float,
+        vad_min_speech_ms: int,
+        vad_min_silence_ms: int,
+        vad_speech_pad_ms: int,
+        vad_max_speech_seconds: float,
+        backend_wake_word_model_paths: str,
+        backend_wake_word_model_names: str,
+        backend_wake_word_threshold: float,
+        backend_wake_word_pre_roll_ms: int,
+        backend_wake_word_cooldown_ms: int,
+        backend_wake_word_vad_threshold: float,
+        speaker_recognition_enabled: bool,
+        speaker_backend: str,
+        speaker_threshold: float,
+        speaker_margin: float,
+        speaker_profiles: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Persist the legacy GUI form into the active runtime profile."""
+        values = self._values()
+        active_connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
+        requested_connectivity = str(connectivity_mode or active_connectivity).strip().lower()
+        if requested_connectivity not in {"online", "offline"}:
+            raise ValueError(f"unsupported connectivity mode: {requested_connectivity}")
+        if self.automatic_profiles and requested_connectivity != active_connectivity:
+            raise ValueError("connectivity is controlled automatically by the runtime; switch network state instead")
+
+        provider = str(provider or "").strip().lower()
+        if active_connectivity == "offline":
+            provider = "ollama"
+        elif provider != "openai":
+            raise ValueError("online mode uses the cloud LLM provider; local Ollama belongs to the offline profile")
+        model = str(model or "").strip()
+        if not model:
+            raise ValueError("Model is required")
+
+        stt_input = str(stt_input or "both").strip().lower()
+        if stt_input not in {"both", "backend", "browser", "silent"}:
+            raise ValueError(f"unsupported STT input: {stt_input}")
+        cloud_tts_provider = str(cloud_tts_provider or "none").strip().lower()
+        tts_output = str(tts_output or "silent").strip().lower()
+        if active_connectivity == "offline":
+            cloud_tts_provider = "none"
+            tts_output = "backend"
+            tts_provider = "piper"
+            web_tts_provider = "none"
+            stt_input = "backend"
+        else:
+            if cloud_tts_provider not in {"none", "openai", "elevenlabs"}:
+                raise ValueError(f"unsupported cloud TTS provider: {cloud_tts_provider}")
+            if tts_output not in {"backend", "browser", "silent"}:
+                raise ValueError(f"unsupported TTS output: {tts_output}")
+            if cloud_tts_provider == "none" or tts_output == "silent":
+                tts_provider = "none"
+                web_tts_provider = "none"
+                tts_output = "silent"
+            elif tts_output == "backend":
+                tts_provider = cloud_tts_provider
+                web_tts_provider = "none"
+            else:
+                tts_provider = "none"
+                web_tts_provider = cloud_tts_provider
+
+        vad_speech_threshold = max(0.05, min(0.95, float(vad_speech_threshold)))
+        vad_negative_threshold = max(0.01, min(0.95, float(vad_negative_threshold)))
+        if vad_negative_threshold >= vad_speech_threshold:
+            vad_negative_threshold = max(0.01, vad_speech_threshold - 0.15)
+        backend_audio_monitor_mode = str(backend_audio_monitor_mode or "off").strip().lower()
+        if backend_audio_monitor_mode not in {"off", "rejected", "passthrough"}:
+            raise ValueError(f"unsupported audio monitor mode: {backend_audio_monitor_mode}")
+        wake_word = str(wake_word or "").strip()
+        if backend_audio_monitor_mode == "rejected" and not wake_word:
+            backend_audio_monitor_mode = "off"
+
+        updates = {
+            "LLM_PROVIDER": provider,
+            "STT_INPUT": stt_input,
+            "STT_LANGUAGE": normalize_locale(stt_language),
+            "WAKE_WORD": wake_word,
+            "STT_PROMPT": str(stt_prompt or "").strip(),
+            "ASSISTANT_SYSTEM_PROMPT": str(system_prompt or "").strip(),
+            "SESSION_CONTEXT_SIZE": str(max(0, min(12000, int(session_context_size)))),
+            "MCP_AGENT_MAX_STEPS": str(max(5, min(60, int(mcp_agent_max_steps)))),
+            "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",
+            "INTERRUPT_CONVERSATION_ENABLED": "true" if interrupt_conversation_enabled else "false",
+            "BACKEND_AUDIO_INPUT_DEVICE": str(backend_audio_input_device or "").strip(),
+            "BACKEND_AUDIO_INPUT_GAIN": f"{max(0.5, min(2.0, float(backend_audio_input_gain))):.2f}",
+            "BACKEND_AUDIO_OUTPUT_DEVICE": str(backend_audio_output_device or "").strip(),
+            "ELEVENLABS_VOICE_ID": str(voice_id or "").strip(),
+            "THINKING_SOUND_FILE": str(thinking_sound_file or "").strip(),
+            "LISTENING_SOUND_FILE": str(listening_sound_file or "").strip(),
+            "WAKE_DETECTED_SOUND_FILE": str(wake_detected_sound_file or "").strip(),
+            "STARTUP_LOADER_SOUND_ENABLED": "true" if str(startup_loader_sound_file or "").strip() else "false",
+            "STARTUP_LOADER_SOUND_FILE": str(startup_loader_sound_file or "").strip() or "loader.wav",
+            "COMMAND_ACK_SOUND_FILE": str(command_ack_sound_file or "").strip(),
+            "COMMAND_ACK_SOUND_ENABLED": "true" if str(command_ack_sound_file or "").strip() else "false",
+            "WEB_TTS_VOICE": str(openai_tts_voice or "alloy").strip(),
+            "WEB_TTS_SPEED": f"{max(0.6, min(1.8, float(openai_tts_speed))):.2f}",
+            "WEB_TTS_VOLUME": f"{max(0.0, min(1.0, float(web_tts_volume))):.2f}",
+            "BACKEND_TTS_VOLUME": f"{max(0.0, min(2.0, float(backend_tts_volume))):.2f}",
+            "BACKEND_AUDIO_OUTPUT_PAN": f"{max(-1.0, min(1.0, float(backend_audio_output_pan))):.2f}",
+            "BACKEND_AUDIO_MONITOR_MODE": backend_audio_monitor_mode,
+            "BACKEND_AUDIO_MONITOR_VOLUME": f"{max(0.0, min(2.0, float(backend_audio_monitor_volume))):.2f}",
+            "VAD_SPEECH_THRESHOLD": f"{vad_speech_threshold:.3f}",
+            "VAD_NEGATIVE_THRESHOLD": f"{vad_negative_threshold:.3f}",
+            "VAD_MIN_SPEECH_MS": str(max(0, min(2000, int(vad_min_speech_ms)))),
+            "VAD_MIN_SILENCE_MS": str(max(100, min(5000, int(vad_min_silence_ms)))),
+            "VAD_SPEECH_PAD_MS": str(max(0, min(1000, int(vad_speech_pad_ms)))),
+            "VAD_MAX_SPEECH_SECONDS": f"{max(1.0, min(30.0, float(vad_max_speech_seconds))):.2f}",
+            "BACKEND_WAKE_WORD_MODEL_PATHS": str(backend_wake_word_model_paths or "").strip(),
+            "BACKEND_WAKE_WORD_MODEL_NAMES": str(backend_wake_word_model_names or "").strip(),
+            "BACKEND_WAKE_WORD_THRESHOLD": f"{max(0.05, min(0.99, float(backend_wake_word_threshold))):.3f}",
+            "BACKEND_WAKE_WORD_PRE_ROLL_MS": str(max(200, min(5000, int(backend_wake_word_pre_roll_ms)))),
+            "BACKEND_WAKE_WORD_COOLDOWN_MS": str(max(0, min(10000, int(backend_wake_word_cooldown_ms)))),
+            "BACKEND_WAKE_WORD_VAD_THRESHOLD": f"{max(0.0, min(1.0, float(backend_wake_word_vad_threshold))):.3f}",
+            "SPEAKER_RECOGNITION_ENABLED": "true" if speaker_recognition_enabled else "false",
+            "SPEAKER_BACKEND": str(speaker_backend or "resemblyzer").strip().lower(),
+            "SPEAKER_THRESHOLD": f"{max(0.0, min(1.0, float(speaker_threshold))):.3f}",
+            "SPEAKER_MARGIN": f"{max(0.0, min(1.0, float(speaker_margin))):.3f}",
+            "CLOUD_TTS_PROVIDER": cloud_tts_provider,
+            "TTS_PROVIDER": tts_provider,
+            "WEB_TTS_PROVIDER": web_tts_provider,
+        }
+        if provider == "ollama":
+            updates["OLLAMA_MODEL"] = model
+            updates["OFFLINE_MODEL"] = model
+            updates["STT_PROVIDER"] = "local-whisper"
+        else:
+            updates["OPENAI_MODEL"] = model
+            updates["STT_PROVIDER"] = str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower()
+
+        for index in range(1, 6):
+            entry = speaker_profiles[index - 1] if index <= len(speaker_profiles) and isinstance(speaker_profiles[index - 1], dict) else {}
+            updates[f"SPEAKER_PROFILE_{index}_NAME"] = str(entry.get("name") or "").strip()
+            updates[f"SPEAKER_PROFILE_{index}_ENABLED"] = "true" if bool(entry.get("enabled")) else "false"
+
+        with self._lock:
+            self._write_env(self.active_profile(), updates)
+            self._refresh_monitor_config()
+            self._reload()
+        return {
+            "saved": True,
+            "provider": provider,
+            "model": model,
+            "connectivity_mode": active_connectivity,
+            "restart_required": True,
+            "message": "Configuration saved. Restart LiveStageAssistant to apply it.",
+        }
+
+    def cloud_api_status(self) -> dict[str, Any]:
+        """Expose key presence only; provider billing calls remain optional/non-core."""
+        values = self._values()
+        openai_present = self._secret_present(values, "OPENAI_API_KEY")
+        eleven_present = self._secret_present(values, "ELEVENLABS_API_KEY")
+        return {
+            "openai": {
+                "status": "configured" if openai_present else "missing",
+                "masked_key": "configured" if openai_present else "",
+                "lines": ["API key configured." if openai_present else "OPENAI_API_KEY_FILE is not configured."],
+            },
+            "elevenlabs": {
+                "status": "configured" if eleven_present else "missing",
+                "masked_key": "configured" if eleven_present else "",
+                "lines": ["API key configured." if eleven_present else "ELEVENLABS_API_KEY_FILE is not configured."],
+            },
+        }
 
     def list_env_profiles(self) -> dict[str, Any]:
         active = self.active_profile().resolve()
