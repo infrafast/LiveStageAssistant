@@ -2,9 +2,10 @@
 """Engine entry adapter for the common LSA runtime lifecycle.
 
 This module contains no connectivity detection or startup policy. It prevents
-legacy per-engine loader ownership when launched by `voice_assistant.runtime`
-and provides the small engine-specific speech adapter needed to deliver a
-pending online-connectivity announcement with the selected engine voice.
+legacy per-engine loader/WebMonitor ownership when launched by
+`voice_assistant.runtime` and provides the small engine-specific speech adapter
+needed to deliver a pending online-connectivity announcement with the selected
+engine voice.
 """
 
 from __future__ import annotations
@@ -14,12 +15,41 @@ import asyncio
 import os
 import sys
 
+import dotenv
 from dotenv import dotenv_values
 
 CLASSIC_READY_MARKER = "LSA Classic ready:"
 
 
+def _suppress_legacy_web_monitor(env_file: str) -> None:
+    """Force the legacy Classic child monitor off under the common supervisor.
+
+    `agent.py` still contains backward-compatible standalone WebMonitor wiring.
+    Production supervised execution owns one WebMonitor in `runtime.py`; this
+    adapter prevents a child engine from binding a second server while the
+    remaining configuration handlers are migrated into common services.
+    """
+    if os.getenv("LSA_COMMON_WEB_MONITOR") != "1":
+        return
+
+    original_dotenv_values = dotenv.dotenv_values
+    target = os.path.abspath(env_file)
+
+    def supervised_dotenv_values(dotenv_path=None, *args, **kwargs):
+        values = original_dotenv_values(dotenv_path, *args, **kwargs)
+        try:
+            candidate = os.path.abspath(os.fspath(dotenv_path)) if dotenv_path is not None else ""
+        except TypeError:
+            candidate = ""
+        if candidate == target:
+            values["WEB_MONITOR_ENABLED"] = "false"
+        return values
+
+    dotenv.dotenv_values = supervised_dotenv_values
+
+
 def run_classic(env_file: str) -> int:
+    _suppress_legacy_web_monitor(env_file)
     from voice_assistant import agent
 
     values = dict(dotenv_values(env_file)) if str(env_file).lower() != "auto" else {}
@@ -48,14 +78,9 @@ def run_classic(env_file: str) -> int:
                             print(f"Classic connectivity announcement failed: {exc}", flush=True)
                     await asyncio.sleep(0.45)
 
-                # Online Classic owns its normal ready announcement.
                 await original_announce_ready(self, loaded_servers)
                 return
 
-            # With the common lifecycle active, the parent runtime is the sole
-            # owner of the offline READY announcement and speaks it through the
-            # guaranteed-local Piper path. Calling the legacy Classic startup
-            # announcement here would speak the same sentence twice.
             return
 
         agent.VoiceAssistant.announce_startup_ready = announce_ready_with_connectivity
