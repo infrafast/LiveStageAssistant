@@ -18,6 +18,7 @@ jobs:
       - name: Verify lightweight runtime imports
         run: |
           python -c "import voice_assistant.web_monitor, voice_assistant.runtime_status"
+          python -m py_compile voice_assistant/runtime.py voice_assistant/web_monitor.py
       - name: Run WebMonitor architecture tests
         run: |
           python tests/test_web_config_architecture.py
