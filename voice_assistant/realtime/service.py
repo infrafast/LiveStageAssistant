@@ -18,7 +18,8 @@ from typing import Any
 import pyaudio
 from dotenv import load_dotenv
 
-from .audio import Pcm16MonoResampler, downmix_pcm16, expand_pcm16_channels
+from ..semantic_audio import VoiceOutputGains
+from .audio import Pcm16MonoResampler, apply_pcm16_gain, downmix_pcm16, expand_pcm16_channels
 from .audio_devices import PipeWireInputStream, PipeWireOutputStream, parse_pipewire_selector
 from .engine import RealtimeEngineConfig, RealtimeMCPServer
 from .mcp_auto import classify_auto_fallback
@@ -217,12 +218,7 @@ def _has_local_mcp_route(server: CanonicalMCPServerConfig) -> bool:
 
 
 async def probe_local_stdio(raw_config: dict[str, Any], server: CanonicalMCPServerConfig) -> tuple[bool, str]:
-    """Probe one AUTO server through the local bridge without executing a tool.
-
-    AUTO prefers this route when it is configured and tool discovery succeeds.
-    Approval-mode STDIO remains unsupported, so those servers fall through to
-    provider-native selection when available.
-    """
+    """Probe one AUTO server through the local bridge without executing a tool."""
     if server.realtime.permissions.mode == "approval":
         return False, "stdio approval is not implemented"
     if not _has_local_mcp_route(server):
@@ -260,7 +256,7 @@ async def capture_loop(engine, stream, source_rate: int, channels: int, frames: 
                 return
 
 
-async def playback_loop(queue: asyncio.Queue, stream, output_rate: int, output_channels: int, interrupted: set[str], first_played: dict[str, float], stop_event: asyncio.Event) -> None:
+async def playback_loop(queue: asyncio.Queue, stream, output_rate: int, output_channels: int, interrupted: set[str], first_played: dict[str, float], stop_event: asyncio.Event, cloud_gain: float) -> None:
     current_response_id = ""
     resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
     while not stop_event.is_set():
@@ -273,6 +269,7 @@ async def playback_loop(queue: asyncio.Queue, stream, output_rate: int, output_c
         converted = resampler.process(audio)
         if not converted:
             continue
+        converted = apply_pcm16_gain(converted, cloud_gain)
         converted = expand_pcm16_channels(converted, output_channels)
         if response_id not in first_played:
             first_played[response_id] = time.perf_counter()
@@ -321,7 +318,7 @@ async def wait_until_ready(engine) -> None:
             print(f"Realtime MCP startup event: {event.type}", flush=True)
 
 
-async def _announce_phrase(engine, output_stream, output_rate: int, output_channels: int, text: str) -> None:
+async def _announce_phrase(engine, output_stream, output_rate: int, output_channels: int, text: str, cloud_gain: float) -> None:
     instruction = f"Annonce système de démarrage. Prononce exactement cette phrase en français, sans ajouter un seul mot : {text}"
     print(f"Realtime startup announcement: {text}", flush=True)
     await engine.send_text(instruction)
@@ -332,6 +329,7 @@ async def _announce_phrase(engine, output_stream, output_rate: int, output_chann
             audio = event.data.get("audio") or b""
             converted = resampler.process(audio)
             if converted:
+                converted = apply_pcm16_gain(converted, cloud_gain)
                 await asyncio.to_thread(output_stream.write, expand_pcm16_channels(converted, output_channels))
         elif event.type == "transcript_done":
             print(f"Realtime startup announcement transcript: {str(event.data.get('text') or '').strip()}", flush=True)
@@ -343,11 +341,11 @@ async def _announce_phrase(engine, output_stream, output_rate: int, output_chann
             print(f"Realtime MCP startup event: {event.type}", flush=True)
 
 
-async def announce_ready(engine, output_stream, output_rate: int, output_channels: int, connectivity: str) -> None:
+async def announce_ready(engine, output_stream, output_rate: int, output_channels: int, connectivity: str, cloud_gain: float) -> None:
     connectivity_text = "Assistant connecté à internet." if connectivity == "online" else "Assistant hors ligne."
-    await _announce_phrase(engine, output_stream, output_rate, output_channels, connectivity_text)
+    await _announce_phrase(engine, output_stream, output_rate, output_channels, connectivity_text, cloud_gain)
     await asyncio.sleep(0.45)
-    await _announce_phrase(engine, output_stream, output_rate, output_channels, "Assistant vocal prêt à exécuter des commandes.")
+    await _announce_phrase(engine, output_stream, output_rate, output_channels, "Assistant vocal prêt à exécuter des commandes.", cloud_gain)
 
 
 async def event_loop(engine, bridge: RealtimeMCPBridge | None, queue: asyncio.Queue, interrupted: set[str], first_played: dict[str, float], stop_event: asyncio.Event) -> None:
@@ -433,6 +431,7 @@ async def run(args) -> int:
         raise RuntimeError("OPENAI_API_KEY / OPENAI_API_KEY_FILE is not configured")
     model = str(os.getenv("OPENAI_REALTIME_MODEL") or DEFAULT_MODEL).strip()
     voice = str(os.getenv("OPENAI_REALTIME_VOICE") or DEFAULT_VOICE).strip()
+    output_gains = VoiceOutputGains.from_env()
     config_path = resolve_path(str(os.getenv("MCP_CONFIG") or "mcp_servers.json").strip(), env_file)
     raw_config = json.loads(config_path.read_text(encoding="utf-8"))
     inventory = load_mcp_inventory(config_path)
@@ -496,7 +495,7 @@ async def run(args) -> int:
         input_stream, input_rate, input_channels, input_frames, input_name = open_configured_input(pa, input_selected)
         output_stream, output_rate, output_channels, output_name = open_configured_output(pa, output_selected)
         print(f"Realtime input: {input_name} {input_channels}ch/{input_rate}Hz -> 24kHz mono", flush=True)
-        print(f"Realtime output: 24kHz mono -> {output_name} {output_channels}ch/{output_rate}Hz", flush=True)
+        print(f"Realtime output: 24kHz mono -> {output_name} {output_channels}ch/{output_rate}Hz cloud_gain={output_gains.cloud:.2f}", flush=True)
         print(f"Realtime MCP native: {[item.label for item in native_servers] or 'none'}", flush=True)
         print(f"Realtime MCP stdio bridge: {bridge_names or 'none'}", flush=True)
 
@@ -504,13 +503,13 @@ async def run(args) -> int:
         await engine.start()
         await wait_until_ready(engine)
         print(f"LSA Realtime ready: model={model} voice={voice}", flush=True)
-        await announce_ready(engine, output_stream, output_rate, output_channels, connectivity)
+        await announce_ready(engine, output_stream, output_rate, output_channels, connectivity, output_gains.cloud)
         print("LSA Realtime listening: provider VAD active", flush=True)
 
         tasks = [
             asyncio.create_task(capture_loop(engine, input_stream, input_rate, input_channels, input_frames, stop_event), name="lsa-realtime-capture"),
             asyncio.create_task(event_loop(engine, bridge, queue, interrupted, first_played, stop_event), name="lsa-realtime-events"),
-            asyncio.create_task(playback_loop(queue, output_stream, output_rate, output_channels, interrupted, first_played, stop_event), name="lsa-realtime-playback"),
+            asyncio.create_task(playback_loop(queue, output_stream, output_rate, output_channels, interrupted, first_played, stop_event, output_gains.cloud), name="lsa-realtime-playback"),
         ]
         await stop_event.wait()
         return 0
