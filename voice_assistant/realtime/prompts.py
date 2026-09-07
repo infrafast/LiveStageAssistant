@@ -18,6 +18,8 @@ REALTIME_VOICE_ADDENDUM = """Realtime voice rules:
 - Never announce an intention before a tool call. Do not say variants of: I will check, let me check, I am going to, je vais vérifier, je regarde, je vais faire, d'accord je vais.
 - Never produce filler, acknowledgement, narration, or progress text before a tool call, including variants of d'accord, ok, très bien, un instant, je vérifie.
 - When a tool is needed, call it silently, wait for the result, then speak exactly once with the concise verified result.
+- Minimize tool calls. Do not repeat a successful read or resolution unless the requested current state still cannot be answered safely from the current-turn tool result.
+- When a resolver/discovery tool returns one unambiguous canonical target, identifier, index, or address for the current request, trust and reuse that current-turn result directly. Do not make a redundant identity/name confirmation call before the requested read or action unless the MCP tool instructions explicitly require that confirmation.
 - Do not narrate tool selection, reasoning, retries, or intermediate steps.
 - Do not offer extra help after a completed command. Avoid phrases such as: if you want, si tu veux, dis-moi, on peut continuer, je peux aussi.
 - Do not greet unless the user greets first.
