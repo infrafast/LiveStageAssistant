@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import threading
+import time
 from typing import Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,12 +36,10 @@ def pipewire_sink(values: Mapping[str, object] | None = None) -> str:
 
 
 class SemanticCuePlayer:
-    """Non-blocking one-shot and loop WAV playback for semantic feedback.
+    """Non-blocking one-shot and interruptible loop WAV playback.
 
-    PipeWire is preferred because it safely mixes cue playback with an already
-    open assistant speech stream. ALSA is retained as a fallback for systems
-    without PipeWire; on exclusive ALSA devices cues may fail rather than steal
-    the active speech device.
+    PipeWire is preferred because it can mix cue playback with an already open
+    assistant speech stream. ALSA remains a compatibility fallback.
     """
 
     def __init__(self, values: Mapping[str, object] | None = None) -> None:
@@ -48,6 +47,7 @@ class SemanticCuePlayer:
         self._loop_lock = threading.Lock()
         self._loop_stop: threading.Event | None = None
         self._loop_thread: threading.Thread | None = None
+        self._loop_process: subprocess.Popen | None = None
         self._warned: set[str] = set()
 
     def _command(self, path: Path) -> list[str]:
@@ -62,26 +62,29 @@ class SemanticCuePlayer:
             return ["aplay", "-q", str(path)]
         raise RuntimeError("no pw-play/aplay available for semantic audio feedback")
 
-    def _play_blocking(self, cue: str) -> None:
+    def _resolved_command(self, cue: str) -> list[str]:
         path = resolve_cue_path(cue)
         if not path.is_file():
             raise FileNotFoundError(f"semantic cue not found: {path}")
-        subprocess.run(
-            self._command(path),
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=30,
-        )
+        return self._command(path)
 
     def _play_safe(self, cue: str) -> None:
         try:
-            self._play_blocking(cue)
+            subprocess.run(
+                self._resolved_command(cue),
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
         except Exception as exc:
-            key = f"{cue}:{type(exc).__name__}"
-            if key not in self._warned:
-                self._warned.add(key)
-                print(f"Semantic audio cue failed: cue={cue!r} error={exc}", flush=True)
+            self._warn(cue, exc)
+
+    def _warn(self, cue: str, exc: Exception) -> None:
+        key = f"{cue}:{type(exc).__name__}"
+        if key not in self._warned:
+            self._warned.add(key)
+            print(f"Semantic audio cue failed: cue={cue!r} error={exc}", flush=True)
 
     def play_once(self, cue: str) -> None:
         if not str(cue or "").strip():
@@ -101,7 +104,32 @@ class SemanticCuePlayer:
 
         def worker() -> None:
             while not stop.is_set():
-                self._play_safe(cue)
+                try:
+                    process = subprocess.Popen(
+                        self._resolved_command(cue),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    with self._loop_lock:
+                        if stop.is_set():
+                            process.terminate()
+                        else:
+                            self._loop_process = process
+                    while process.poll() is None:
+                        if stop.wait(0.02):
+                            process.terminate()
+                            try:
+                                process.wait(timeout=0.25)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                            break
+                    with self._loop_lock:
+                        if self._loop_process is process:
+                            self._loop_process = None
+                except Exception as exc:
+                    self._warn(cue, exc)
+                    if stop.wait(0.25):
+                        return
                 if stop.wait(0.02):
                     return
 
@@ -115,12 +143,20 @@ class SemanticCuePlayer:
         with self._loop_lock:
             stop = self._loop_stop
             thread = self._loop_thread
+            process = self._loop_process
             self._loop_stop = None
             self._loop_thread = None
+            self._loop_process = None
         if stop is not None:
             stop.set()
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.25)
+            except subprocess.TimeoutExpired:
+                process.kill()
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
-            thread.join(timeout=0.35)
+            thread.join(timeout=0.40)
 
     def close(self) -> None:
         self.stop_loop()
