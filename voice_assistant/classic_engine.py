@@ -1,6 +1,6 @@
 """Web-free Classic/Local engine construction for the common LSA runtime.
 
-This module deliberately owns no HTTP server and imports no WebMonitor.  It
+This module deliberately owns no HTTP server and imports no WebMonitor. It
 reuses ``VoiceAssistant`` as the Classic speech/LLM/MCP engine library while
 ``voice_assistant.runtime`` remains the sole owner of the production GUI.
 """
@@ -11,13 +11,14 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 from dotenv import dotenv_values, load_dotenv
 
 from . import agent
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
-from .speaker_recognition import SpeakerProfile, safe_speaker_profile_slug
+from .speaker_recognition import SpeakerProfile
 from .wake_word import parse_wake_words
 
 
@@ -78,6 +79,10 @@ def _mcp_config(values: dict[str, Any], env_file: Path) -> dict[str, Any] | None
     return payload
 
 
+def _speaker_slug(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", value.strip().lower()).strip("._-")[:64] or "speaker"
+
+
 def _speaker_profiles(values: dict[str, Any]) -> list[SpeakerProfile]:
     maximum = max(0, min(5, _int(values, "SPEAKER_PROFILES_MAX", 5)))
     root = Path(str(values.get("SPEAKER_PROFILES_DIR") or "data/speaker_profiles").strip())
@@ -93,7 +98,7 @@ def _speaker_profiles(values: dict[str, Any]) -> list[SpeakerProfile]:
                 name=resolved_name,
                 wav_paths=[root / f"profil{index}_{sample}.wav" for sample in range(1, 4)],
                 enabled=enabled,
-                slug=safe_speaker_profile_slug(resolved_name),
+                slug=_speaker_slug(resolved_name),
             )
         )
     return profiles
