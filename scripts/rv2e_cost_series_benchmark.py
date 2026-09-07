@@ -6,8 +6,9 @@ transactions and N Realtime transactions. Realtime transactions share one
 session so turn 1 is cold and subsequent turns are warm. The runner reports
 median/p95 latency and provider cost plus per-100/per-1000 extrapolations.
 
-The benchmark remains read-only and MCP-neutral at the LSA layer; the selected
-MCP server and its own prompt/tools define domain behavior.
+The fixed spoken query is "Quel est le volume de clic ?". The benchmark remains
+read-only and MCP-neutral at the LSA layer; the selected MCP server and its own
+prompt/tools define domain behavior.
 """
 
 from __future__ import annotations
@@ -40,12 +41,9 @@ DEFAULT_SERVICE_ENV = "/etc/livestageassistant/.env.online"
 
 
 def validate_series_transcript(text: str) -> None:
-    """Accept expected ASR variants of the fixed spoken benchmark target.
+    """Accept only expected ASR spellings of the fixed target name clic.
 
-    This is intentionally benchmark-local. It does not add domain semantics to
-    the production LSA runtime; it only protects an apples-to-apples repeated
-    measurement from harmless transcription spelling variants of the one fixed
-    utterance spoken by the operator.
+    This is benchmark-local and does not add domain semantics to production LSA.
     """
     normalized = " ".join(
         text.casefold()
@@ -56,8 +54,9 @@ def validate_series_transcript(text: str) -> None:
         .replace(",", " ")
         .split()
     )
-    target_variants = ("vocal claude", "vocal clode", "vocal cloud")
-    if "volume" not in normalized or not any(variant in normalized for variant in target_variants):
+    words = set(normalized.split())
+    target_variants = {"clic", "click", "clique"}
+    if "volume" not in words or not words.intersection(target_variants):
         raise RuntimeError(
             "recorded speech was not recognized as the fixed transaction benchmark query; "
             f"got {text!r}. No cost comparison produced."
