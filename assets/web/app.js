@@ -9,9 +9,9 @@
     document.head.appendChild(script);
   }
 
-  loadClassicScript("/assets/web/app-main.js?v=rv2d-20260907h", () => {
-    loadClassicScript("/assets/web/mcp-realtime.js?v=rv2d-20260907h", () => {
-      loadClassicScript("/assets/web/config-unified.js?v=rv2d-20260907h");
+  loadClassicScript("/assets/web/app-main.js?v=rv2d-20260907i", () => {
+    loadClassicScript("/assets/web/mcp-realtime.js?v=rv2d-20260907i", () => {
+      loadClassicScript("/assets/web/config-unified.js?v=rv2d-20260907i");
     });
   });
 })();
