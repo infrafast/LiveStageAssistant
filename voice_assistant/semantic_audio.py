@@ -67,8 +67,9 @@ class VoiceOutputGains:
     CLOUD_TTS_OUTPUT_GAIN applies to cloud-produced speech, including realtime
     speech streams. LOCAL_TTS_OUTPUT_GAIN applies to fully local speech.
 
-    BACKEND_TTS_VOLUME remains a compatibility fallback for cloud speech until
-    existing profiles have migrated.
+    BACKEND_TTS_VOLUME remains a compatibility fallback for both values until
+    deployed profiles have explicit Cloud/Local gains. Once either new key is
+    present it is independent from the other.
     """
 
     cloud: float = 1.0
@@ -85,9 +86,9 @@ class VoiceOutputGains:
     @classmethod
     def from_env(cls, values: Mapping[str, str] | None = None) -> "VoiceOutputGains":
         env = values if values is not None else os.environ
-        legacy_cloud = env.get("BACKEND_TTS_VOLUME", "1.0")
-        cloud = env.get("CLOUD_TTS_OUTPUT_GAIN", legacy_cloud)
-        local = env.get("LOCAL_TTS_OUTPUT_GAIN", "1.0")
+        legacy = env.get("BACKEND_TTS_VOLUME", "1.0")
+        cloud = env.get("CLOUD_TTS_OUTPUT_GAIN", legacy)
+        local = env.get("LOCAL_TTS_OUTPUT_GAIN", legacy)
         return cls(
             cloud=cls._bounded(cloud, 1.0),
             local=cls._bounded(local, 1.0),
