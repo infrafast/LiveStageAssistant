@@ -264,6 +264,7 @@ def run_engine_session(
     connectivity: ConnectivityManager,
     stop_event: threading.Event,
     reload_event: threading.Event,
+    reload_in_progress: threading.Event,
     status_tracker: RuntimeStatusTracker,
 ) -> tuple[int | None, ConnectivityEvent | None, bool]:
     print(f"LSA runtime: engine={engine} connectivity={'online' if online else 'offline'} env={env_file}", flush=True)
@@ -311,6 +312,7 @@ def run_engine_session(
                         status_tracker.set_runtime(ready=True, semantic_state="ready")
                     else:
                         status_tracker.set_runtime(ready=True)
+                    reload_in_progress.clear()
         finally:
             output_done.set()
 
@@ -381,6 +383,7 @@ def main() -> int:
 
     stop_event = threading.Event()
     reload_event = threading.Event()
+    reload_in_progress = threading.Event()
     connectivity = ConnectivityManager(interval=CONNECTIVITY_INTERVAL)
 
     def request_stop(_signum, _frame) -> None:
@@ -428,7 +431,12 @@ def main() -> int:
             automatic_profiles=automatic,
         )
         if monitor is not None:
-            monitor.set_runtime_restart_handler(reload_event.set)
+            def request_runtime_reload() -> None:
+                reload_in_progress.set()
+                reload_event.set()
+
+            monitor.set_runtime_restart_handler(request_runtime_reload)
+            monitor.set_runtime_reload_state_provider(reload_in_progress.is_set)
 
         while not stop_event.is_set():
             if not env_file.is_file():
@@ -471,6 +479,7 @@ def main() -> int:
                 connectivity=connectivity,
                 stop_event=stop_event,
                 reload_event=reload_event,
+                reload_in_progress=reload_in_progress,
                 status_tracker=tracker,
             )
 
@@ -522,6 +531,7 @@ def main() -> int:
         connectivity.stop()
         if monitor is not None:
             monitor.set_runtime_restart_handler(None)
+            monitor.set_runtime_reload_state_provider(None)
             monitor.stop()
             monitor.restore_console_capture()
         for sig, handler in previous_handlers.items():
