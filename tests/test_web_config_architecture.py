@@ -8,27 +8,17 @@ WEB = ROOT / "assets" / "web"
 
 
 class WebConfigArchitectureTests(unittest.TestCase):
-    def test_bootstrap_runs_before_app_main(self):
+    def test_validated_frontend_boot_sequence_has_no_bootstrap(self):
         app = (WEB / "app.js").read_text(encoding="utf-8")
-        self.assertLess(app.index("config-bootstrap.js"), app.index("app-main.js"))
-
-    def test_web_boot_continues_when_optional_module_fails(self):
-        app = (WEB / "app.js").read_text(encoding="utf-8")
-        self.assertIn('script.addEventListener("error"', app)
-        self.assertIn("if (oncomplete) oncomplete(ok)", app)
-        self.assertIn("reportBootError", app)
+        self.assertNotIn("config-bootstrap.js", app)
+        self.assertLess(app.index("app-main.js"), app.index("mcp-realtime.js"))
+        self.assertLess(app.index("mcp-realtime.js"), app.index("config-unified.js"))
 
     def test_unified_controller_has_no_dual_wake_selector(self):
         script = (WEB / "config-unified.js").read_text(encoding="utf-8")
         self.assertNotIn("wake-word-select", script)
         self.assertNotIn("legacyWake", script)
         self.assertNotIn("__lsaWakeCanonicalFetchInstalled", script)
-
-    def test_bootstrap_replaces_wake_control_with_single_canonical_select(self):
-        script = (WEB / "config-bootstrap.js").read_text(encoding="utf-8")
-        self.assertIn('select.id = "wake-word"', script)
-        self.assertIn("current.replaceWith(select)", script)
-        self.assertNotIn("wake-word-select", script)
 
     def test_multifield_apply_policy_is_restart_by_default(self):
         policy = json.loads((WEB / "config-apply-policy.json").read_text(encoding="utf-8"))
@@ -54,6 +44,16 @@ class WebConfigArchitectureTests(unittest.TestCase):
         self.assertIn("const dirty = new Map()", script)
         self.assertIn("restartPending = true", script)
         self.assertIn("if (dirty.size > 0)", script)
+
+    def test_restart_wait_uses_backend_loading_contract(self):
+        script = (WEB / "config-unified.js").read_text(encoding="utf-8")
+        self.assertIn("snapshot.environment_loading?.active", script)
+        self.assertIn('runtime.ready && state !== "starting"', script)
+        self.assertNotIn("reloadObserved", script)
+
+    def test_frontend_asset_revision_was_bumped_for_reload_fix(self):
+        app = (WEB / "app.js").read_text(encoding="utf-8")
+        self.assertIn("rv2d-20260907i", app)
 
 
 if __name__ == "__main__":
