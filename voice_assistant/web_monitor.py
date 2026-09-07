@@ -169,6 +169,13 @@ class WebMonitor(_BaseWebMonitor):
 
     def snapshot(self) -> dict[str, Any]:
         snapshot = super().snapshot()
+        config = snapshot.get("config")
+        if isinstance(config, dict):
+            # Re-apply redaction at the final public boundary. Some save paths
+            # intentionally keep raw MCP headers internally for proxy use; no
+            # secret may ever escape through /api/snapshot.
+            snapshot["config"] = _base.redact_mapping(config)
+            snapshot["config_text"] = __import__("json").dumps(snapshot["config"], ensure_ascii=False, indent=2)
         payload = self._runtime_status()
         if not payload.get("available"):
             return snapshot
