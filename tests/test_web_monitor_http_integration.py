@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
-import time
+import threading
 import unittest
 from urllib.request import Request, urlopen
 from unittest.mock import patch
@@ -30,9 +30,11 @@ class WebMonitorHttpIntegrationTests(unittest.TestCase):
                 profile="/tmp/.env.online",
             ),
         )
+        self.reload_in_progress = threading.Event()
         self.monitor = WebMonitor()
         self.monitor.update(env_values={"CONNECTIVITY_MODE": "online", "VOICE_ENGINE": "openai-realtime"})
-        self.monitor.set_runtime_restart_handler(lambda: None)
+        self.monitor.set_runtime_reload_state_provider(self.reload_in_progress.is_set)
+        self.monitor.set_runtime_restart_handler(self.reload_in_progress.set)
         host, port = self.monitor.start("127.0.0.1", 0)
         self.base = f"http://{host}:{port}"
 
@@ -64,7 +66,7 @@ class WebMonitorHttpIntegrationTests(unittest.TestCase):
         self.assertEqual(snapshot["runtime_status"]["semantic_state"], "wait_wake")
         self.assertFalse(snapshot["environment_loading"]["active"])
 
-    def test_http_restart_loading_cycle_closes_on_new_ready_revision(self):
+    def test_http_restart_modal_follows_runtime_owned_state(self):
         status, payload = self.post_json("/api/runtime-restart", {})
         self.assertEqual(status, 200)
         self.assertTrue(payload["restart_requested"])
@@ -73,6 +75,12 @@ class WebMonitorHttpIntegrationTests(unittest.TestCase):
         pending = json.loads(body.decode("utf-8"))
         self.assertTrue(pending["environment_loading"]["active"])
 
+        self.reload_in_progress.clear()
+        _, _, body = self.get("/api/snapshot")
+        ready = json.loads(body.decode("utf-8"))
+        self.assertFalse(ready["environment_loading"]["active"])
+
+    def test_spontaneous_starting_state_never_opens_configuration_modal(self):
         write_status_file(
             self.status_file,
             RuntimeStatus(
@@ -81,17 +89,15 @@ class WebMonitorHttpIntegrationTests(unittest.TestCase):
                 provider="openai",
                 model="gpt-realtime-2.1",
                 voice="marin",
-                ready=True,
-                semantic_state="wait_wake",
+                ready=False,
+                semantic_state="starting",
                 profile="/tmp/.env.online",
             ),
         )
-        time.sleep(0.01)
+
         _, _, body = self.get("/api/snapshot")
-        ready = json.loads(body.decode("utf-8"))
-        self.assertTrue(ready["runtime_status"]["ready"])
-        self.assertEqual(ready["runtime_status"]["semantic_state"], "wait_wake")
-        self.assertFalse(ready["environment_loading"]["active"])
+        snapshot = json.loads(body.decode("utf-8"))
+        self.assertFalse(snapshot["environment_loading"]["active"])
 
 
 if __name__ == "__main__":
