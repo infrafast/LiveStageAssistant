@@ -61,9 +61,15 @@ def run_classic(env_file: str) -> int:
 
 def run_openai_realtime(env_file: str) -> int:
     from voice_assistant.realtime import service
+    from voice_assistant.realtime import wake_runtime
 
     if os.getenv("LSA_COMMON_STARTUP_LIFECYCLE") == "1":
         service.play_startup_sound = lambda _env_file: None
+
+    # Install the provider-neutral local wake authorization layer before the
+    # realtime service constructs its capture/semantic tasks. When WAKE_WORD is
+    # empty this is a no-op and the historical direct-listening flow is kept.
+    wake_runtime.install(service, env_file)
 
     sys.argv = [sys.argv[0], "--env-file", env_file]
     return service.main()
