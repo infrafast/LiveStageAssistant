@@ -25,6 +25,7 @@ jobs:
         run: |
           python .github/rv_finalize.py
           sed -i 's/_maybe_continue_after_native_mcp/_maybe_continue_after_tools/g' tests/test_openai_realtime_adapter.py
+          sed -i 's/mcp_followup_requested/tool_followup_requested/g' tests/test_openai_realtime_adapter.py
       - name: Validate syntax and focused tests
         run: |
           python -m compileall -q voice_assistant
