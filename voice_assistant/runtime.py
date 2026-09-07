@@ -26,6 +26,7 @@ from dotenv import dotenv_values
 from voice_assistant.connectivity_manager import ConnectivityEvent, ConnectivityManager
 from voice_assistant.engine_entry import CLASSIC_READY_MARKER
 from voice_assistant.local_tts import speak_local_status
+from voice_assistant.runtime_status import RuntimeStatus, RuntimeStatusTracker, configured_mcp_statuses
 from voice_assistant.startup_lifecycle import StartupLoader
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +34,7 @@ AUTO_ENV_DIR = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "/etc/livestageassistant
 ONLINE_ENV = AUTO_ENV_DIR / ".env.online"
 OFFLINE_ENV = AUTO_ENV_DIR / ".env.offline"
 CONNECTIVITY_INTERVAL = float(os.getenv("LSA_CONNECTIVITY_CHECK_INTERVAL", "10") or "10")
+STATUS_FILE = Path(os.getenv("LSA_RUNTIME_STATUS_FILE", "/tmp/livestageassistant-runtime-status.json"))
 
 
 def _load_values(path: Path) -> dict[str, object]:
@@ -47,6 +49,24 @@ def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
         print(f"Invalid VOICE_ENGINE={engine!r}; falling back to classic.", flush=True)
         return "classic"
     return engine
+
+
+def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str, str]:
+    """Resolve generic provider/model/voice status from the selected profile."""
+    if engine == "openai-realtime":
+        return (
+            "openai",
+            str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
+            str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
+        )
+    provider = str(values.get("LLM_PROVIDER") or ("ollama" if engine == "local" else "openai")).strip().lower()
+    model_keys = {
+        "openai": "OPENAI_MODEL",
+        "anthropic": "ANTHROPIC_MODEL",
+        "ollama": "OLLAMA_MODEL",
+    }
+    model = str(values.get(model_keys.get(provider, "MODEL")) or "").strip()
+    return provider, model, ""
 
 
 def engine_command(engine: str, env_file: Path) -> list[str]:
@@ -96,6 +116,27 @@ def _terminate_process(process: subprocess.Popen, *, timeout: float = 6.0) -> No
         pass
 
 
+def _update_mcp_status_from_line(tracker: RuntimeStatusTracker, line: str) -> None:
+    """Consume provider-neutral transport selection logs emitted by Realtime."""
+    prefix = "Realtime MCP auto selection: "
+    if line.startswith(prefix) and " -> " in line:
+        server, result = line[len(prefix):].strip().split(" -> ", 1)
+        transport = result.split(" ", 1)[0].strip().lower()
+        if transport in {"stdio", "native"}:
+            tracker.set_mcp(server, effective_transport=transport, healthy=True, detail="selected and healthy")
+        return
+    local_prefix = "Realtime MCP auto local unavailable: "
+    if line.startswith(local_prefix):
+        server = line[len(local_prefix):].split(" ", 1)[0].strip()
+        tracker.set_mcp(server, detail="local route unavailable; evaluating alternate transport")
+        return
+    native_prefix = "Realtime MCP auto native unavailable "
+    if line.startswith(native_prefix):
+        # The following JSON/error line is diagnostic; leave the final health
+        # decision to a subsequent successful selection or process failure.
+        return
+
+
 def run_engine_session(
     *,
     engine: str,
@@ -104,11 +145,18 @@ def run_engine_session(
     online: bool,
     connectivity: ConnectivityManager,
     stop_event: threading.Event,
+    status_tracker: RuntimeStatusTracker,
 ) -> tuple[int | None, ConnectivityEvent | None]:
     print(
         f"LSA runtime: engine={engine} connectivity={'online' if online else 'offline'} env={env_file}",
         flush=True,
     )
+
+    if engine != "openai-realtime":
+        for item in status_tracker.status.mcp:
+            # Classic/local use the existing local MCP client path. This is a
+            # transport fact only; no MCP/domain semantics are inferred here.
+            status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=None, detail="local MCP path selected")
 
     loader = StartupLoader(ROOT, values)
     loader.start()
@@ -138,9 +186,12 @@ def run_engine_session(
             assert process.stdout is not None
             for line in process.stdout:
                 print(line, end="", flush=True)
+                stripped = line.strip()
+                _update_mcp_status_from_line(status_tracker, stripped)
                 if not ready_seen.is_set() and marker and marker in line:
                     loader.stop()
                     ready_seen.set()
+                    status_tracker.set_runtime(ready=True)
         finally:
             output_done.set()
 
@@ -175,16 +226,19 @@ def run_engine_session(
                     f"(previous={'online' if event.previous_online else 'offline'})",
                     flush=True,
                 )
+                status_tracker.set_runtime(ready=False, connectivity="online" if event.online else "offline")
                 loader.stop()
                 _terminate_process(process)
                 output_done.wait(timeout=2.0)
                 return None, event
             if process.poll() is not None:
                 output_done.wait(timeout=2.0)
+                status_tracker.set_runtime(ready=False)
                 return int(process.returncode or 0), None
         loader.stop()
         _terminate_process(process)
         output_done.wait(timeout=2.0)
+        status_tracker.set_runtime(ready=False)
         return 0, None
     finally:
         if not ready_seen.is_set():
@@ -238,6 +292,21 @@ def main() -> int:
 
             values = _load_values(env_file)
             engine = normalize_engine(values, online=online)
+            provider, model, voice = engine_identity(engine, values)
+            tracker = RuntimeStatusTracker(
+                STATUS_FILE,
+                RuntimeStatus(
+                    connectivity="online" if online else "offline",
+                    engine=engine,
+                    provider=provider,
+                    model=model,
+                    voice=voice,
+                    ready=False,
+                    profile=str(env_file),
+                    mcp=configured_mcp_statuses(values, profile=env_file, root=ROOT),
+                ),
+            )
+            print(f"LSA runtime status: {STATUS_FILE}", flush=True)
             print(
                 f"LSA runtime selection: connectivity={'online' if online else 'offline'} "
                 f"voice_engine={engine} profile={env_file}",
@@ -251,6 +320,7 @@ def main() -> int:
                 online=online,
                 connectivity=connectivity,
                 stop_event=stop_event,
+                status_tracker=tracker,
             )
 
             if event is None:
