@@ -18,10 +18,7 @@
 
     <main class="main-layout">
       <aside class="session-sidebar" aria-label="Sessions" data-i18n-aria-label="sessions">
-        <div class="session-header">
-          <span data-i18n="sessions">Sessions</span>
-          <button class="small-button" id="session-new" type="button" title="New session" aria-label="New session" data-i18n-title="new_session" data-i18n-aria-label="new_session">+</button>
-        </div>
+        <div class="session-header"><span data-i18n="sessions">Sessions</span><button class="small-button" id="session-new" type="button" title="New session" aria-label="New session" data-i18n-title="new_session" data-i18n-aria-label="new_session">+</button></div>
         <div class="session-list" id="session-list"></div>
       </aside>
       <div class="chat-panel" id="chat-panel">
@@ -29,19 +26,12 @@
           <summary><span data-i18n="remote_screen">Remote screen</span> <span class="vnc-status offline" id="vnc-status" data-i18n="offline">hors ligne</span></summary>
           <div class="vnc-controls">
             <input id="vnc-url" type="text" value="vnc://192.168.0.160:5900" spellcheck="false" aria-label="VNC URL">
-            <label class="vnc-view-only" title="Lecture seule: affiche l'écran distant sans envoyer clavier ni souris" data-i18n-title="readonly_title">
-              <input id="vnc-view-only" type="checkbox" checked>
-              <span data-i18n="readonly">Lecture seule</span>
-            </label>
+            <label class="vnc-view-only" title="Lecture seule: affiche l'écran distant sans envoyer clavier ni souris" data-i18n-title="readonly_title"><input id="vnc-view-only" type="checkbox" checked><span data-i18n="readonly">Lecture seule</span></label>
             <button class="small-button" id="vnc-connect" type="button" data-i18n="connect">Connecter</button>
           </div>
-          <div class="vnc-frame-wrap">
-            <iframe class="vnc-frame" id="vnc-frame" title="noVNC remote screen" loading="lazy" referrerpolicy="no-referrer"></iframe>
-          </div>
+          <div class="vnc-frame-wrap"><iframe class="vnc-frame" id="vnc-frame" title="noVNC remote screen" loading="lazy" referrerpolicy="no-referrer"></iframe></div>
         </details>
-        <div class="chat-scroll" id="chat-scroll">
-          <div class="messages" id="messages"></div>
-        </div>
+        <div class="chat-scroll" id="chat-scroll"><div class="messages" id="messages"></div></div>
       </div>
     </main>
 
@@ -49,14 +39,8 @@
       <form class="inject-form" id="inject-form">
         <button id="web-conversation" type="button" title="Conversation mode" aria-label="Conversation mode" data-i18n-title="conversation_mode" data-i18n-aria-label="conversation_mode" disabled>💬</button>
         <button id="web-mic" type="button" title="Voice input" aria-label="Voice input" data-i18n-title="voice_input" data-i18n-aria-label="voice_input" disabled>🎙️</button>
-        <select class="composer-speaker" id="composer-speaker" title="Speaker recognition unavailable" aria-label="Speaker profile" data-i18n-title="speaker_unavailable" data-i18n-aria-label="speaker_profile" disabled>
-          <option value="auto" data-i18n="auto_detect">Auto detect</option>
-          <option value="unknown" data-i18n="unknown">Unknown</option>
-        </select>
-        <div class="command-field" id="command-field">
-          <canvas id="soundwave" aria-hidden="true"></canvas>
-          <textarea id="inject-command" rows="1" autocomplete="off" enterkeyhint="send" placeholder="Message" data-i18n-placeholder="message_placeholder"></textarea>
-        </div>
+        <select class="composer-speaker" id="composer-speaker" title="Speaker recognition unavailable" aria-label="Speaker profile" data-i18n-title="speaker_unavailable" data-i18n-aria-label="speaker_profile" disabled><option value="auto" data-i18n="auto_detect">Auto detect</option><option value="unknown" data-i18n="unknown">Unknown</option></select>
+        <div class="command-field" id="command-field"><canvas id="soundwave" aria-hidden="true"></canvas><textarea id="inject-command" rows="1" autocomplete="off" enterkeyhint="send" placeholder="Message" data-i18n-placeholder="message_placeholder"></textarea></div>
         <button id="composer-attach" type="button" title="Upload WAV or text file" aria-label="Upload WAV or text file" data-i18n-title="upload_file" data-i18n-aria-label="upload_file">+</button>
         <input id="composer-file" type="file" accept=".wav,audio/wav,audio/x-wav,.txt,text/plain" hidden>
         <button id="inject-stop" type="button" title="Stop" aria-label="Stop" data-i18n-title="stop" data-i18n-aria-label="stop">&#9632;</button>
@@ -66,173 +50,49 @@
 
   <div class="overlay" id="settings-overlay" aria-hidden="true">
     <div class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <div class="settings-header">
-        <div class="settings-title" id="settings-title" data-i18n="settings">Settings</div>
-        <button class="icon-button" id="settings-close" type="button" title="Close" aria-label="Close" data-i18n-title="close" data-i18n-aria-label="close">&times;</button>
-      </div>
-      <div class="tabs" role="tablist">
-        <button class="tab active" id="tab-monitor" type="button" role="tab" aria-selected="true" aria-controls="panel-monitor" data-i18n="monitor">Monitor</button>
-        <button class="tab" id="tab-config" type="button" role="tab" aria-selected="false" aria-controls="panel-config" data-i18n="config">Config</button>
-      </div>
+      <div class="settings-header"><div class="settings-title" id="settings-title" data-i18n="settings">Settings</div><button class="icon-button" id="settings-close" type="button" title="Close" aria-label="Close" data-i18n-title="close" data-i18n-aria-label="close">&times;</button></div>
+      <div class="tabs" role="tablist"><button class="tab active" id="tab-monitor" type="button" role="tab" aria-selected="true" aria-controls="panel-monitor" data-i18n="monitor">Monitor</button><button class="tab" id="tab-config" type="button" role="tab" aria-selected="false" aria-controls="panel-config" data-i18n="config">Config</button></div>
       <div class="tab-panel active" id="panel-monitor" role="tabpanel" aria-labelledby="tab-monitor">
-        <section>
-          <details open>
-            <summary data-i18n="state">State</summary>
-            <div class="state" id="state"></div>
-          </details>
-        </section>
-        <section>
-          <details open>
-            <summary data-i18n="console_log">Console Log</summary>
-            <textarea class="inspect" id="logs" readonly spellcheck="false"></textarea>
-          </details>
-        </section>
+        <section><details open><summary data-i18n="state">State</summary><div class="state" id="state"></div></details></section>
+        <section><details open><summary data-i18n="console_log">Console Log</summary><textarea class="inspect" id="logs" readonly spellcheck="false"></textarea></details></section>
       </div>
       <div class="tab-panel" id="panel-config" role="tabpanel" aria-labelledby="tab-config">
         <section>
-          <details>
-            <summary data-i18n="connectivity">Connectivity</summary>
-            <div class="config-controls">
-              <div class="field full-row">
-                <label><span data-i18n="profile">Profile</span> <span class="inline-badge hidden" id="connectivity-auto-badge">Auto</span></label>
-                <select id="env-profile"></select>
-                <div class="segmented" id="connectivity-mode" role="radiogroup" aria-label="Connectivity">
-                  <label><input type="radio" name="connectivity-mode" value="online">Online</label>
-                  <label><input type="radio" name="connectivity-mode" value="offline">Offline</label>
-                </div>
-              </div>
-            </div>
-          </details>
+          <details><summary data-i18n="connectivity">Connectivity</summary><div class="config-controls"><div class="field full-row"><label><span data-i18n="profile">Profile</span> <span class="inline-badge hidden" id="connectivity-auto-badge">Auto</span></label><select id="env-profile"></select><div class="segmented" id="connectivity-mode" role="radiogroup" aria-label="Connectivity"><label><input type="radio" name="connectivity-mode" value="online">Online</label><label><input type="radio" name="connectivity-mode" value="offline">Offline</label></div></div></div></details>
         </section>
         <section>
-          <details id="mcp-servers-details">
-            <summary data-i18n="mcp_servers">MCP Servers</summary>
-            <div class="mcp-server-panel">
-              <div class="mcp-server-toolbar">
-                <div class="detail" data-i18n="mcp_admin_detail">HTTP MCP admin pages can load through LiveStageAssistant or directly from this browser.</div>
-                <div class="segmented" id="mcp-admin-route" role="radiogroup" aria-label="MCP admin route">
-                  <label><input type="radio" name="mcp-admin-route" value="proxy"><span data-i18n="http_proxy">HTTP proxy</span></label>
-                  <label><input type="radio" name="mcp-admin-route" value="direct"><span data-i18n="direct">Direct</span></label>
-                </div>
-              </div>
-              <div class="mcp-server-grid" id="mcp-server-grid"></div>
-            </div>
-          </details>
+          <details id="mcp-servers-details"><summary data-i18n="mcp_servers">MCP Servers</summary><div class="mcp-server-panel"><div class="mcp-server-toolbar"><div class="detail" data-i18n="mcp_admin_detail">HTTP MCP admin pages can load through LiveStageAssistant or directly from this browser.</div><div class="segmented" id="mcp-admin-route" role="radiogroup" aria-label="MCP admin route"><label><input type="radio" name="mcp-admin-route" value="proxy"><span data-i18n="http_proxy">HTTP proxy</span></label><label><input type="radio" name="mcp-admin-route" value="direct"><span data-i18n="direct">Direct</span></label></div></div><div class="mcp-server-grid" id="mcp-server-grid"></div></div></details>
         </section>
         <section>
           <details>
             <summary>STT/TTS</summary>
             <div class="config-controls">
-              <div class="field">
-                <label for="wake-word" data-i18n="wake_word">Wake Word</label>
-                <input id="wake-word" type="text" placeholder="Disabled" data-i18n-placeholder="disabled">
-              </div>
-              <div class="field full-row" id="classic-stt-prompt-field">
-                <label for="stt-prompt">STT_PROMPT</label>
-                <textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea>
-              </div>
-              <div class="field" id="classic-interrupt-field">
-                <label data-i18n="interrupt_conversation">Interrompre une conversation</label>
-                <div class="segmented" id="interrupt-conversation" role="radiogroup" aria-label="Interrompre une conversation">
-                  <label><input type="radio" name="interrupt-conversation" value="off">Off</label>
-                  <label><input type="radio" name="interrupt-conversation" value="on">On</label>
-                </div>
-                <div class="field-hint" data-i18n="interrupt_conversation_hint">Désactivé par défaut. Si un wake word est configuré, il doit être prononcé pour interrompre l'assistant.</div>
-              </div>
-              <div class="field hidden" id="realtime-voice-field">
-                <label for="realtime-voice">Realtime voice</label>
-                <input id="realtime-voice" type="text" autocomplete="off" spellcheck="false" placeholder="marin">
-                <div class="field-hint">Voice used by the active realtime speech engine.</div>
-              </div>
-              <div class="field" id="speech-output-gain-field">
-                <label for="speech-output-gain">Speech output gain <span id="speech-output-gain-label">1.00×</span></label>
-                <input id="speech-output-gain" type="range" min="0" max="2" step="0.05" value="1">
-                <div class="field-hint" id="speech-output-gain-hint">Cloud speech output.</div>
-              </div>
-              <div class="field cloud-audio-control">
-                <label for="cloud-tts-provider">TTS</label>
-                <select id="cloud-tts-provider"></select>
-              </div>
-              <div class="field cloud-audio-control">
-                <label data-i18n="tts_output">TTS Output</label>
-                <div class="segmented" id="tts-output" role="radiogroup" aria-label="TTS Output">
-                  <label><input type="radio" name="tts-output" value="browser"><span data-i18n="browser">Browser</span></label>
-                  <label><input type="radio" name="tts-output" value="backend"><span data-i18n="backend">Backend</span></label>
-                  <label><input type="radio" name="tts-output" value="silent"><span data-i18n="silent">Silent</span></label>
-                </div>
-              </div>
-              <div class="field" id="tts-speed-field">
-                <label for="openai-tts-speed"><span data-i18n="tts_speed">TTS Speed</span> <span id="openai-tts-speed-label">1.0x</span></label>
-                <input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1">
-              </div>
-              <div class="field" id="web-tts-volume-field">
-                <label for="web-tts-volume" title="WEB_TTS_VOLUME"><span data-i18n="web_tts_volume">Volume TTS navigateur</span> <span id="web-tts-volume-label">100%</span></label>
-                <input id="web-tts-volume" type="range" min="0" max="1" step="0.05" value="1">
-              </div>
-              <div class="field" id="stt-input-field">
-                <label data-i18n="stt_input">STT Input</label>
-                <div class="segmented" id="stt-input" role="radiogroup" aria-label="STT Input">
-                  <label><input type="radio" name="stt-input" value="both"><span data-i18n="both">Both</span></label>
-                  <label><input type="radio" name="stt-input" value="browser"><span data-i18n="browser">Browser</span></label>
-                  <label><input type="radio" name="stt-input" value="backend"><span data-i18n="backend">Backend</span></label>
-                  <label><input type="radio" name="stt-input" value="silent"><span data-i18n="silent">Silent</span></label>
-                </div>
-              </div>
+              <div class="field"><label for="wake-word" data-i18n="wake_word">Wake Word</label><input id="wake-word" type="text" placeholder="Disabled" data-i18n-placeholder="disabled"></div>
+              <div class="field full-row" id="classic-stt-prompt-field"><label for="stt-prompt">STT_PROMPT</label><textarea class="inspect" id="stt-prompt" spellcheck="false"></textarea></div>
+              <div class="field" id="classic-interrupt-field"><label data-i18n="interrupt_conversation">Interrompre une conversation</label><div class="segmented" id="interrupt-conversation" role="radiogroup" aria-label="Interrompre une conversation"><label><input type="radio" name="interrupt-conversation" value="off">Off</label><label><input type="radio" name="interrupt-conversation" value="on">On</label></div><div class="field-hint" data-i18n="interrupt_conversation_hint">Désactivé par défaut. Si un wake word est configuré, il doit être prononcé pour interrompre l'assistant.</div></div>
+              <div class="field hidden" id="realtime-voice-field"><label for="realtime-voice">Realtime voice</label><input id="realtime-voice" type="text" autocomplete="off" spellcheck="false" placeholder="marin"><div class="field-hint">Voice used by the active realtime speech engine.</div></div>
+              <div class="field" id="speech-output-gain-field"><label for="speech-output-gain">Speech output gain <span id="speech-output-gain-label">1.00×</span></label><input id="speech-output-gain" type="range" min="0" max="2" step="0.05" value="1"><div class="field-hint" id="speech-output-gain-hint">Cloud speech output.</div></div>
+              <div class="field cloud-audio-control"><label for="cloud-tts-provider">TTS</label><select id="cloud-tts-provider"></select></div>
+              <div class="field cloud-audio-control"><label data-i18n="tts_output">TTS Output</label><div class="segmented" id="tts-output" role="radiogroup" aria-label="TTS Output"><label><input type="radio" name="tts-output" value="browser"><span data-i18n="browser">Browser</span></label><label><input type="radio" name="tts-output" value="backend"><span data-i18n="backend">Backend</span></label><label><input type="radio" name="tts-output" value="silent"><span data-i18n="silent">Silent</span></label></div></div>
+              <div class="field" id="tts-speed-field"><label for="openai-tts-speed"><span data-i18n="tts_speed">TTS Speed</span> <span id="openai-tts-speed-label">1.0x</span></label><input id="openai-tts-speed" type="range" min="0.6" max="1.8" step="0.05" value="1"></div>
+              <div class="field hidden" id="web-tts-volume-field"><label for="web-tts-volume" title="WEB_TTS_VOLUME"><span data-i18n="web_tts_volume">Volume TTS navigateur</span> <span id="web-tts-volume-label">100%</span></label><input id="web-tts-volume" type="range" min="0" max="1" step="0.05" value="1"></div>
+              <div class="field" id="stt-input-field"><label data-i18n="stt_input">STT Input</label><div class="segmented" id="stt-input" role="radiogroup" aria-label="STT Input"><label><input type="radio" name="stt-input" value="both"><span data-i18n="both">Both</span></label><label><input type="radio" name="stt-input" value="browser"><span data-i18n="browser">Browser</span></label><label><input type="radio" name="stt-input" value="backend"><span data-i18n="backend">Backend</span></label><label><input type="radio" name="stt-input" value="silent"><span data-i18n="silent">Silent</span></label></div></div>
               <div class="offline-audio-summary hidden" id="offline-audio-summary">TTS: local Piper</div>
-              <div class="field" id="elevenlabs-voice-field">
-                <label for="elevenlabs-voice" data-i18n="elevenlabs_voice">ElevenLabs Voice</label>
-                <select id="elevenlabs-voice"></select>
-              </div>
-              <div class="field" id="openai-tts-voice-field">
-                <label for="openai-tts-voice" data-i18n="openai_voice">OpenAI Voice</label>
-                <select id="openai-tts-voice"></select>
-              </div>
-              <div class="field" id="backend-tts-volume-field">
-                <label for="backend-tts-volume" title="BACKEND_TTS_VOLUME"><span data-i18n="backend_tts_volume">Volume TTS backend</span> <span id="backend-tts-volume-label">100%</span></label>
-                <input id="backend-tts-volume" type="range" min="0" max="2" step="0.05" value="1">
-              </div>
-              <div class="field" id="tts-test-field">
-                <label data-i18n="voice_test">Voice Test</label>
-                <button class="small-button" id="tts-test" type="button" data-i18n="test">Test</button>
-              </div>
+              <div class="field" id="elevenlabs-voice-field"><label for="elevenlabs-voice" data-i18n="elevenlabs_voice">ElevenLabs Voice</label><select id="elevenlabs-voice"></select></div>
+              <div class="field" id="openai-tts-voice-field"><label for="openai-tts-voice" data-i18n="openai_voice">OpenAI Voice</label><select id="openai-tts-voice"></select></div>
+              <div class="field hidden" id="backend-tts-volume-field"><label for="backend-tts-volume" title="BACKEND_TTS_VOLUME"><span data-i18n="backend_tts_volume">Volume TTS backend</span> <span id="backend-tts-volume-label">100%</span></label><input id="backend-tts-volume" type="range" min="0" max="2" step="0.05" value="1"></div>
+              <div class="field" id="tts-test-field"><label data-i18n="voice_test">Voice Test</label><button class="small-button" id="tts-test" type="button" data-i18n="test">Test</button></div>
               <details class="nested-details" id="classic-vad-details">
                 <summary data-i18n="vad">Voice Activity Detection (VAD)</summary>
                 <div class="vad-groups">
                   <div class="vad-group">
-                    <div class="vad-group-title">
-                      <span>Silero</span>
-                      <span class="detail">Réglages communs au micro navigateur et au micro backend.</span>
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="vad-speech-threshold" title="VAD_SPEECH_THRESHOLD"><span>Seuil d'entrée voix</span><span class="vad-value" id="vad-speech-threshold-label">0.5</span></label>
-                      <div class="field-hint">Plus bas capte une voix faible; plus haut ignore mieux bruit, musique et souffle.</div>
-                      <input class="vad-control" id="vad-speech-threshold" type="range" min="0.05" max="0.95" step="0.01" value="0.5">
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="vad-negative-threshold" title="VAD_NEGATIVE_THRESHOLD"><span>Seuil de sortie silence</span><span class="vad-value" id="vad-negative-threshold-label">0.35</span></label>
-                      <div class="field-hint">Doit rester sous le seuil d'entrée; plus bas évite les coupures sur syllabes faibles.</div>
-                      <input class="vad-control" id="vad-negative-threshold" type="range" min="0.01" max="0.9" step="0.01" value="0.35">
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="vad-min-speech-ms" title="VAD_MIN_SPEECH_MS"><span>Durée minimale de voix</span><span class="vad-value" id="vad-min-speech-ms-label">120 ms</span></label>
-                      <div class="field-hint">Plus court accepte des commandes très brèves; plus long filtre mieux les faux départs.</div>
-                      <input class="vad-control" id="vad-min-speech-ms" type="range" min="0" max="1500" step="20" value="120">
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="vad-min-silence-ms" title="VAD_MIN_SILENCE_MS"><span>Silence qui termine la phrase</span><span class="vad-value" id="vad-min-silence-ms-label">650 ms</span></label>
-                      <div class="field-hint">Plus court envoie vite; plus long laisse le temps de parler lentement sans couper.</div>
-                      <input class="vad-control" id="vad-min-silence-ms" type="range" min="100" max="5000" step="50" value="650">
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="vad-speech-pad-ms" title="VAD_SPEECH_PAD_MS"><span>Marge avant la voix</span><span class="vad-value" id="vad-speech-pad-ms-label">100 ms</span></label>
-                      <div class="field-hint">Conserve un peu d'audio avant le déclenchement pour ne pas manger l'attaque du mot.</div>
-                      <input class="vad-control" id="vad-speech-pad-ms" type="range" min="0" max="1000" step="20" value="100">
-                    </div>
-                    <div class="field vad-field">
-                      <label class="vad-label" for="vad-max-speech-seconds" title="VAD_MAX_SPEECH_SECONDS"><span>Durée maximale d'une phrase</span><span class="vad-value" id="vad-max-speech-seconds-label">8 s</span></label>
-                      <div class="field-hint">Coupe un enregistrement trop long même si Silero pense entendre encore de la voix.</div>
-                      <input class="vad-control" id="vad-max-speech-seconds" type="range" min="1" max="30" step="0.5" value="8">
-                    </div>
+                    <div class="vad-group-title"><span>Silero</span><span class="detail">Réglages communs au micro navigateur et au micro backend.</span></div>
+                    <div class="field vad-field"><label class="vad-label" for="vad-speech-threshold" title="VAD_SPEECH_THRESHOLD"><span>Seuil d'entrée voix</span><span class="vad-value" id="vad-speech-threshold-label">0.5</span></label><div class="field-hint">Plus bas capte une voix faible; plus haut ignore mieux bruit, musique et souffle.</div><input class="vad-control" id="vad-speech-threshold" type="range" min="0.05" max="0.95" step="0.01" value="0.5"></div>
+                    <div class="field vad-field"><label class="vad-label" for="vad-negative-threshold" title="VAD_NEGATIVE_THRESHOLD"><span>Seuil de sortie silence</span><span class="vad-value" id="vad-negative-threshold-label">0.35</span></label><div class="field-hint">Doit rester sous le seuil d'entrée; plus bas évite les coupures sur syllabes faibles.</div><input class="vad-control" id="vad-negative-threshold" type="range" min="0.01" max="0.9" step="0.01" value="0.35"></div>
+                    <div class="field vad-field"><label class="vad-label" for="vad-min-speech-ms" title="VAD_MIN_SPEECH_MS"><span>Durée minimale de voix</span><span class="vad-value" id="vad-min-speech-ms-label">120 ms</span></label><div class="field-hint">Plus court accepte des commandes très brèves; plus long filtre mieux les faux départs.</div><input id="vad-min-speech-ms" type="range" min="0" max="1500" step="20" value="120"></div>
+                    <div class="field vad-field"><label class="vad-label" for="vad-min-silence-ms" title="VAD_MIN_SILENCE_MS"><span>Silence qui termine la phrase</span><span class="vad-value" id="vad-min-silence-ms-label">650 ms</span></label><div class="field-hint">Plus court envoie vite; plus long laisse le temps de parler lentement sans couper.</div><input id="vad-min-silence-ms" type="range" min="100" max="5000" step="50" value="650"></div>
+                    <div class="field vad-field"><label class="vad-label" for="vad-speech-pad-ms" title="VAD_SPEECH_PAD_MS"><span>Marge avant la voix</span><span class="vad-value" id="vad-speech-pad-ms-label">100 ms</span></label><div class="field-hint">Conserve un peu d'audio avant le déclenchement pour ne pas manger l'attaque du mot.</div><input id="vad-speech-pad-ms" type="range" min="0" max="1000" step="20" value="100"></div>
+                    <div class="field vad-field"><label class="vad-label" for="vad-max-speech-seconds" title="VAD_MAX_SPEECH_SECONDS"><span>Durée maximale d'une phrase</span><span class="vad-value" id="vad-max-speech-seconds-label">8 s</span></label><div class="field-hint">Coupe un enregistrement trop long même si Silero pense entendre encore de la voix.</div><input id="vad-max-speech-seconds" type="range" min="1" max="30" step="0.5" value="8"></div>
                   </div>
                   <div class="vad-group" id="backend-wake-word-group">
                     <div class="vad-group-title"><span data-i18n="backend_wake_word">Wake word backend</span><span class="detail" data-i18n="backend_wake_word_detail">Vide désactive le wake word. Renseigné, il utilise openWakeWord local avant STT.</span></div>
@@ -245,71 +105,20 @@
                     <div class="field vad-field"><label class="vad-label" for="backend-wake-word-vad-threshold" title="BACKEND_WAKE_WORD_VAD_THRESHOLD"><span>Filtre voix openWakeWord</span><span class="vad-value" id="backend-wake-word-vad-threshold-label">Off</span></label><div class="field-hint">0 désactive ce filtre interne. Monte-le si le wake word réagit au bruit ou à la musique.</div><input id="backend-wake-word-vad-threshold" type="range" min="0" max="1" step="0.01" value="0"></div>
                   </div>
                 </div>
-                <div class="vad-examples">
-                  <div class="vad-example"><div class="vad-example-title"><span>Mot rapide isolé, attaque nette</span><button class="small-button vad-preset" type="button" data-vad-preset="quick-word">Apply</button></div><div class="vad-example-values"><div>Entrée 0.42, sortie 0.25, voix minimale 80 ms, silence 450 ms, marge 120 ms, maximum 6 s</div></div></div>
-                  <div class="vad-example"><div class="vad-example-title"><span>Filtrer le souffle, quelques mots rapprochés</span><button class="small-button vad-preset" type="button" data-vad-preset="noise-filter">Apply</button></div><div class="vad-example-values"><div>Entrée 0.62, sortie 0.42, voix minimale 180 ms, silence 700 ms, marge 100 ms, maximum 8 s</div></div></div>
-                  <div class="vad-example"><div class="vad-example-title"><span>Longue phrase lente, voix faible</span><button class="small-button vad-preset" type="button" data-vad-preset="slow-soft">Apply</button></div><div class="vad-example-values"><div>Entrée 0.38, sortie 0.22, voix minimale 120 ms, silence 1600 ms, marge 180 ms, maximum 12 s</div></div></div>
-                </div>
+                <div class="vad-examples"><div class="vad-example"><div class="vad-example-title"><span>Mot rapide isolé, attaque nette</span><button class="small-button vad-preset" type="button" data-vad-preset="quick-word">Apply</button></div><div class="vad-example-values"><div>Entrée 0.42, sortie 0.25, voix minimale 80 ms, silence 450 ms, marge 120 ms, maximum 6 s</div></div></div><div class="vad-example"><div class="vad-example-title"><span>Filtrer le souffle, quelques mots rapprochés</span><button class="small-button vad-preset" type="button" data-vad-preset="noise-filter">Apply</button></div><div class="vad-example-values"><div>Entrée 0.62, sortie 0.42, voix minimale 180 ms, silence 700 ms, marge 100 ms, maximum 8 s</div></div></div><div class="vad-example"><div class="vad-example-title"><span>Longue phrase lente, voix faible</span><button class="small-button vad-preset" type="button" data-vad-preset="slow-soft">Apply</button></div><div class="vad-example-values"><div>Entrée 0.38, sortie 0.22, voix minimale 120 ms, silence 1600 ms, marge 180 ms, maximum 12 s</div></div></div></div>
               </details>
-              <details class="nested-details">
-                <summary data-i18n="speaker_profiles">Speaker profiles</summary>
-                <div class="vad-groups"><div class="vad-group" id="speaker-recognition-group"><div class="vad-group-title"><span data-i18n="speaker_recognition">Reconnaissance locuteur</span><span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span></div><div class="field-hint" title="Exemple à lire: Je suis &lt;prénom&gt;. QLC lecture aléatoire. QLC lecture pause. QLC rouge. Un, deux, trois, quatre, cinq, six, sept, huit, neuf, zero! Console, quel est le volume de la façade? Console, monte le volume principal de deux décibel. Console, baisse ma guitare dans mon retour. Console, coupe le clic dans mon retour. Régie, fais un fade out dans cinq secondes. Régie, monte le clic.">WAV conseillé: 10 à 30 s d'une seule voix, parole normale, même micro que le live si possible. Évite musique, souffle, réverb, saturation, longs silences et autres voix. Mono 16 kHz, 44.1 kHz ou 48 kHz convient.</div><div class="field"><label>Speaker recognition</label><div class="segmented" id="speaker-recognition" role="radiogroup" aria-label="Speaker recognition"><label><input type="radio" name="speaker-recognition" value="off">Off</label><label><input type="radio" name="speaker-recognition" value="on">On</label></div></div><div class="field"><label for="speaker-backend">Backend</label><select id="speaker-backend"><option value="resemblyzer">Resemblyzer</option></select></div><div class="field vad-field"><label class="vad-label" for="speaker-threshold" title="SPEAKER_THRESHOLD"><span>Confiance minimale</span><span class="vad-value" id="speaker-threshold-label">0.75</span></label><div class="field-hint">Plus haut évite les erreurs; plus bas reconnaît plus facilement.</div><input id="speaker-threshold" type="range" min="0" max="1" step="0.01" value="0.75"></div><div class="field vad-field"><label class="vad-label" for="speaker-margin" title="SPEAKER_MARGIN"><span>Écart entre deux voix</span><span class="vad-value" id="speaker-margin-label">0.10</span></label><div class="field-hint">Demande que la meilleure voix soit clairement au-dessus de la deuxième.</div><input id="speaker-margin" type="range" min="0" max="1" step="0.01" value="0.10"></div><div class="field full-row"><div class="speaker-profile-grid" id="speaker-profile-grid"></div></div></div></div>
-              </details>
+              <details class="nested-details"><summary data-i18n="speaker_profiles">Speaker profiles</summary><div class="vad-groups"><div class="vad-group" id="speaker-recognition-group"><div class="vad-group-title"><span data-i18n="speaker_recognition">Reconnaissance locuteur</span><span class="detail">Ajoute seulement speaker au contexte MCP; chaque MCP décide quoi en faire.</span></div><div class="field-hint">WAV conseillé: 10 à 30 s d'une seule voix, parole normale, même micro que le live si possible.</div><div class="field"><label>Speaker recognition</label><div class="segmented" id="speaker-recognition" role="radiogroup" aria-label="Speaker recognition"><label><input type="radio" name="speaker-recognition" value="off">Off</label><label><input type="radio" name="speaker-recognition" value="on">On</label></div></div><div class="field"><label for="speaker-backend">Backend</label><select id="speaker-backend"><option value="resemblyzer">Resemblyzer</option></select></div><div class="field vad-field"><label class="vad-label" for="speaker-threshold" title="SPEAKER_THRESHOLD"><span>Confiance minimale</span><span class="vad-value" id="speaker-threshold-label">0.75</span></label><input id="speaker-threshold" type="range" min="0" max="1" step="0.01" value="0.75"></div><div class="field vad-field"><label class="vad-label" for="speaker-margin" title="SPEAKER_MARGIN"><span>Écart entre deux voix</span><span class="vad-value" id="speaker-margin-label">0.10</span></label><input id="speaker-margin" type="range" min="0" max="1" step="0.01" value="0.10"></div><div class="field full-row"><div class="speaker-profile-grid" id="speaker-profile-grid"></div></div></div></div></details>
             </div>
           </details>
         </section>
+        <section><details id="cloud-api-details"><summary data-i18n="cloud_api">Cloud API</summary><div class="cloud-api-panel"><div class="cloud-api-header"><div class="detail" data-i18n="cloud_api_detail">API keys stay on the backend. OpenAI credit remaining is not exposed by the public API.</div><button class="small-button" id="cloud-api-refresh" type="button" data-i18n="refresh">Refresh</button></div><div class="cloud-api-grid" id="cloud-api-grid"></div></div></details></section>
         <section>
-          <details id="cloud-api-details">
-            <summary data-i18n="cloud_api">Cloud API</summary>
-            <div class="cloud-api-panel"><div class="cloud-api-header"><div class="detail" data-i18n="cloud_api_detail">API keys stay on the backend. OpenAI credit remaining is not exposed by the public API.</div><button class="small-button" id="cloud-api-refresh" type="button" data-i18n="refresh">Refresh</button></div><div class="cloud-api-grid" id="cloud-api-grid"></div></div>
-          </details>
+          <details><summary data-i18n="audio_in_out">Audio In/Out</summary><div class="config-controls"><div class="field" id="browser-audio-input-field"><label for="browser-audio-input">Browser Audio Input</label><div class="audio-test-row"><select id="browser-audio-input"></select><button class="small-button" id="browser-audio-test" type="button" data-i18n="test">Test</button><div class="vu-meter" id="browser-audio-meter" aria-hidden="true"><div class="vu-fill"></div></div></div></div><div class="field" id="browser-audio-output-field"><label for="browser-audio-output">Browser Audio Output</label><select id="browser-audio-output"></select></div><div class="field"><label>&nbsp;</label><button class="small-button" id="browser-audio-refresh" type="button" data-i18n="refresh">Refresh</button></div><div class="field" id="backend-audio-input-field"><label for="backend-audio-input">Backend Audio Input</label><div class="audio-test-row"><select id="backend-audio-input"></select><button class="small-button" id="backend-audio-test" type="button" data-i18n="test">Test</button></div></div><div class="field" id="backend-audio-input-gain-field" title="BACKEND_AUDIO_INPUT_GAIN"><label for="backend-audio-input-gain"><span data-i18n="backend_audio_input_gain">Gain entrée backend</span><span id="backend-audio-input-gain-label">1.00× (0 dB)</span></label><input id="backend-audio-input-gain" type="range" min="0.5" max="2" step="0.05" value="1"><span class="detail" data-i18n="backend_audio_input_gain_detail">Gain logiciel appliqué dès la capture, avant VAD, STT et profil vocal.</span></div><div class="field" id="backend-audio-output-field"><label for="backend-audio-output">Backend Audio Output</label><select id="backend-audio-output"></select></div><div class="field" id="backend-audio-monitor-mode-field" title="BACKEND_AUDIO_MONITOR_MODE"><label><span data-i18n="backend_audio_monitor">Monitoring micro backend</span><span class="inline-badge" data-i18n="experimental" data-i18n-title="backend_audio_monitor_experimental_detail">Expérimental</span></label><div class="segmented" id="backend-audio-monitor-mode" role="radiogroup" aria-label="Backend audio monitor mode"><label><input type="radio" name="backend-audio-monitor-mode" value="rejected">Rejected</label><label><input type="radio" name="backend-audio-monitor-mode" value="passthrough">Pass through</label><label><input type="radio" name="backend-audio-monitor-mode" value="off">Off</label></div></div><div class="field" id="backend-audio-monitor-volume-field" title="BACKEND_AUDIO_MONITOR_VOLUME"><label for="backend-audio-monitor-volume">Volume monitoring backend <span id="backend-audio-monitor-volume-label">100%</span></label><input id="backend-audio-monitor-volume" type="range" min="0" max="2" step="0.05" value="1"></div><div class="field" id="backend-audio-output-pan-field" title="BACKEND_AUDIO_OUTPUT_PAN"><label for="backend-audio-output-pan">Panoramique sortie backend <span id="backend-audio-output-pan-label">Centre</span></label><input id="backend-audio-output-pan" type="range" min="-1" max="1" step="0.05" value="0"></div></div></details>
         </section>
         <section>
-          <details>
-            <summary data-i18n="audio_in_out">Audio In/Out</summary>
-            <div class="config-controls">
-              <div class="field" id="browser-audio-input-field"><label for="browser-audio-input">Browser Audio Input</label><div class="audio-test-row"><select id="browser-audio-input"></select><button class="small-button" id="browser-audio-test" type="button" data-i18n="test">Test</button><div class="vu-meter" id="browser-audio-meter" aria-hidden="true"><div class="vu-fill"></div></div></div></div>
-              <div class="field" id="browser-audio-output-field"><label for="browser-audio-output">Browser Audio Output</label><select id="browser-audio-output"></select></div>
-              <div class="field"><label>&nbsp;</label><button class="small-button" id="browser-audio-refresh" type="button" data-i18n="refresh">Refresh</button></div>
-              <div class="field" id="backend-audio-input-field"><label for="backend-audio-input">Backend Audio Input</label><div class="audio-test-row"><select id="backend-audio-input"></select><button class="small-button" id="backend-audio-test" type="button" data-i18n="test">Test</button></div></div>
-              <div class="field" id="backend-audio-input-gain-field" title="BACKEND_AUDIO_INPUT_GAIN"><label for="backend-audio-input-gain"><span data-i18n="backend_audio_input_gain">Gain entrée backend</span><span id="backend-audio-input-gain-label">1.00× (0 dB)</span></label><input id="backend-audio-input-gain" type="range" min="0.5" max="2" step="0.05" value="1"><span class="detail" data-i18n="backend_audio_input_gain_detail">Gain logiciel appliqué dès la capture, avant VAD, STT et profil vocal.</span></div>
-              <div class="field" id="backend-audio-output-field"><label for="backend-audio-output">Backend Audio Output</label><select id="backend-audio-output"></select></div>
-              <div class="field" id="backend-audio-monitor-mode-field" title="BACKEND_AUDIO_MONITOR_MODE"><label><span data-i18n="backend_audio_monitor">Monitoring micro backend</span><span class="inline-badge" data-i18n="experimental" data-i18n-title="backend_audio_monitor_experimental_detail">Expérimental</span></label><div class="segmented" id="backend-audio-monitor-mode" role="radiogroup" aria-label="Backend audio monitor mode"><label><input type="radio" name="backend-audio-monitor-mode" value="rejected">Rejected</label><label><input type="radio" name="backend-audio-monitor-mode" value="passthrough">Pass through</label><label><input type="radio" name="backend-audio-monitor-mode" value="off">Off</label></div></div>
-              <div class="field" id="backend-audio-monitor-volume-field" title="BACKEND_AUDIO_MONITOR_VOLUME"><label for="backend-audio-monitor-volume">Volume monitoring backend <span id="backend-audio-monitor-volume-label">100%</span></label><input id="backend-audio-monitor-volume" type="range" min="0" max="2" step="0.05" value="1"></div>
-              <div class="field" id="backend-audio-output-pan-field" title="BACKEND_AUDIO_OUTPUT_PAN"><label for="backend-audio-output-pan">Panoramique sortie backend <span id="backend-audio-output-pan-label">Centre</span></label><input id="backend-audio-output-pan" type="range" min="-1" max="1" step="0.05" value="0"></div>
-            </div>
-          </details>
+          <details><summary data-i18n="ia_model">IA model</summary><div class="config-controls"><div class="field"><label for="voice-engine">Voice engine</label><select id="voice-engine"><option value="classic">Classic</option><option value="openai-realtime">OpenAI Realtime</option><option value="local">Local</option></select></div><div class="field hidden" id="realtime-model-field"><label for="realtime-model">Realtime model</label><input id="realtime-model" type="text" autocomplete="off" spellcheck="false" placeholder="gpt-realtime-2.1"></div><div class="field" id="llm-provider-field"><label for="llm-provider" data-i18n="provider">Provider</label><select id="llm-provider"></select></div><div class="field" id="llm-model-field"><label for="llm-model">LLM</label><select id="llm-model"></select></div><div class="field"><label for="session-context-size">Session Context <span id="session-context-size-label">6000</span></label><input id="session-context-size" type="range" min="0" max="12000" step="500" value="6000"></div><div class="field"><label for="mcp-agent-max-steps" title="MCP_AGENT_MAX_STEPS">MCP Steps <span id="mcp-agent-max-steps-label">20</span></label><input id="mcp-agent-max-steps" type="range" min="5" max="60" step="1" value="20"></div><div class="field"><label data-i18n="tool_routing">Tool Routing</label><div class="segmented" id="mcp-tool-routing" role="radiogroup" aria-label="Tool Routing"><label><input type="radio" name="mcp-tool-routing" value="false">Off</label><label><input type="radio" name="mcp-tool-routing" value="true">Routing</label></div></div><div class="field full-row"><button class="small-button" id="voice-config-save" type="button">Save voice settings</button><span class="detail" id="voice-config-message"></span></div></div></details>
         </section>
-        <section>
-          <details>
-            <summary data-i18n="ia_model">IA model</summary>
-            <div class="config-controls">
-              <div class="field">
-                <label for="voice-engine">Voice engine</label>
-                <select id="voice-engine"><option value="classic">Classic</option><option value="openai-realtime">OpenAI Realtime</option><option value="local">Local</option></select>
-              </div>
-              <div class="field hidden" id="realtime-model-field">
-                <label for="realtime-model">Realtime model</label>
-                <input id="realtime-model" type="text" autocomplete="off" spellcheck="false" placeholder="gpt-realtime-2.1">
-              </div>
-              <div class="field" id="llm-provider-field"><label for="llm-provider" data-i18n="provider">Provider</label><select id="llm-provider"></select></div>
-              <div class="field" id="llm-model-field"><label for="llm-model">LLM</label><select id="llm-model"></select></div>
-              <div class="field"><label for="session-context-size">Session Context <span id="session-context-size-label">6000</span></label><input id="session-context-size" type="range" min="0" max="12000" step="500" value="6000"></div>
-              <div class="field"><label for="mcp-agent-max-steps" title="MCP_AGENT_MAX_STEPS">MCP Steps <span id="mcp-agent-max-steps-label">20</span></label><input id="mcp-agent-max-steps" type="range" min="5" max="60" step="1" value="20"></div>
-              <div class="field"><label data-i18n="tool_routing">Tool Routing</label><div class="segmented" id="mcp-tool-routing" role="radiogroup" aria-label="Tool Routing"><label><input type="radio" name="mcp-tool-routing" value="false">Off</label><label><input type="radio" name="mcp-tool-routing" value="true">Routing</label></div></div>
-              <div class="field full-row"><button class="small-button" id="voice-config-save" type="button">Save voice settings</button><span class="detail" id="voice-config-message"></span></div>
-            </div>
-          </details>
-        </section>
-        <section>
-          <details>
-            <summary data-i18n="user_interface">Interface utilisateur</summary>
-            <div class="config-controls">
-              <div class="audio-sound-stack"><div class="field" id="command-ack-sound-field"><label for="command-ack-sound" title="COMMAND_ACK_SOUND_FILE" data-i18n="command_ack_sound">Command acknowledgement sound</label><div class="audio-sample-row"><select id="command-ack-sound"></select><button class="small-button audio-preview-button" id="command-ack-sound-play" type="button" title="Play sample" aria-label="Play command acknowledgement sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_command_ack_sample">&#9654;</button></div></div><div class="field"><label for="stt-language" title="STT_LANGUAGE" data-i18n="stt_language">Langue</label><select id="stt-language"></select></div></div>
-              <div class="audio-sound-stack"><div class="field" id="thinking-sound-field"><label for="thinking-sound" data-i18n="thinking_sound">Thinking Sound</label><div class="audio-sample-row"><select id="thinking-sound"></select><button class="small-button audio-preview-button" id="thinking-sound-play" type="button" title="Play sample" aria-label="Play thinking sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_thinking_sample">&#9654;</button></div></div><div class="field" id="listening-sound-field"><label for="listening-sound" title="LISTENING_SOUND_FILE" data-i18n="listening_sound">Listening sound</label><div class="audio-sample-row"><select id="listening-sound"></select><button class="small-button audio-preview-button" id="listening-sound-play" type="button" title="Play sample" aria-label="Play listening sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_listening_sample">&#9654;</button></div></div><div class="field" id="wake-detected-sound-field"><label for="wake-detected-sound" title="WAKE_DETECTED_SOUND_FILE" data-i18n="wake_detected_sound">Wake detected sound</label><div class="audio-sample-row"><select id="wake-detected-sound"></select><button class="small-button audio-preview-button" id="wake-detected-sound-play" type="button" title="Play sample" aria-label="Play wake detected sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_wake_detected_sample">&#9654;</button></div></div><div class="field" id="startup-loader-sound-field"><label for="startup-loader-sound" data-i18n="startup_loader_sound">Startup loader sound</label><div class="audio-sample-row"><select id="startup-loader-sound"></select><button class="small-button audio-preview-button" id="startup-loader-sound-play" type="button" title="Play sample" aria-label="Play startup loader sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_startup_loader_sample">&#9654;</button></div></div></div>
-            </div>
-          </details>
-        </section>
+        <section><details><summary data-i18n="user_interface">Interface utilisateur</summary><div class="config-controls"><div class="audio-sound-stack"><div class="field" id="command-ack-sound-field"><label for="command-ack-sound" title="COMMAND_ACK_SOUND_FILE" data-i18n="command_ack_sound">Command acknowledgement sound</label><div class="audio-sample-row"><select id="command-ack-sound"></select><button class="small-button audio-preview-button" id="command-ack-sound-play" type="button" title="Play sample" aria-label="Play command acknowledgement sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_command_ack_sample">&#9654;</button></div></div><div class="field"><label for="stt-language" title="STT_LANGUAGE" data-i18n="stt_language">Langue</label><select id="stt-language"></select></div></div><div class="audio-sound-stack"><div class="field" id="thinking-sound-field"><label for="thinking-sound" data-i18n="thinking_sound">Thinking Sound</label><div class="audio-sample-row"><select id="thinking-sound"></select><button class="small-button audio-preview-button" id="thinking-sound-play" type="button" title="Play sample" aria-label="Play thinking sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_thinking_sample">&#9654;</button></div></div><div class="field" id="listening-sound-field"><label for="listening-sound" title="LISTENING_SOUND_FILE" data-i18n="listening_sound">Listening sound</label><div class="audio-sample-row"><select id="listening-sound"></select><button class="small-button audio-preview-button" id="listening-sound-play" type="button" title="Play sample" aria-label="Play listening sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_listening_sample">&#9654;</button></div></div><div class="field" id="wake-detected-sound-field"><label for="wake-detected-sound" title="WAKE_DETECTED_SOUND_FILE" data-i18n="wake_detected_sound">Wake detected sound</label><div class="audio-sample-row"><select id="wake-detected-sound"></select><button class="small-button audio-preview-button" id="wake-detected-sound-play" type="button" title="Play sample" aria-label="Play wake detected sound sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_wake_detected_sample">&#9654;</button></div></div><div class="field" id="startup-loader-sound-field"><label for="startup-loader-sound" data-i18n="startup_loader_sound">Startup loader sound</label><div class="audio-sample-row"><select id="startup-loader-sound"></select><button class="small-button audio-preview-button" id="startup-loader-sound-play" type="button" title="Play startup loader sample" aria-label="Play startup loader sample" aria-pressed="false" data-i18n-title="play_audio_sample" data-i18n-aria-label="play_startup_loader_sample">&#9654;</button></div></div></div></div></details></section>
         <section><details><summary data-i18n="prompt">Prompt</summary><div class="prompt-fields"><div class="field"><label for="assistant-system-prompt">ASSISTANT_SYSTEM_PROMPT</label><textarea class="inspect" id="assistant-system-prompt" spellcheck="false"></textarea></div><div class="field"><label for="prompt" data-i18n="final_prompt">Final Prompt</label><textarea class="inspect" id="prompt" readonly spellcheck="false"></textarea></div></div></details></section>
         <section><details><summary data-i18n="env_file">Env file</summary><textarea class="inspect" id="config" readonly spellcheck="false"></textarea></details></section>
         <div class="config-footer"><div class="config-message" id="llm-message"></div><button id="llm-save" type="button" data-i18n="save">Save</button></div>
@@ -344,28 +153,18 @@
       let currentConnectivity = "online";
       let currentCloudGain = 1;
       let currentLocalGain = 1;
+      let currentClassicCloudSpeech = true;
       let lastSnapshot = null;
 
-      function envOf(snapshot) {
-        return snapshot && snapshot.config && snapshot.config.env ? snapshot.config.env : {};
-      }
-
-      function numberOr(value, fallback) {
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : fallback;
-      }
-
-      function setHidden(id, hidden) {
-        const element = byId(id);
-        if (element) element.classList.toggle("hidden", Boolean(hidden));
-      }
+      function envOf(snapshot) { return snapshot && snapshot.config && snapshot.config.env ? snapshot.config.env : {}; }
+      function numberOr(value, fallback) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback; }
+      function setHidden(id, hidden) { const element = byId(id); if (element) element.classList.toggle("hidden", Boolean(hidden)); }
+      function displayTransport(value) { return String(value || "").toLowerCase() === "native" ? "HTTPS" : String(value || "").toUpperCase(); }
 
       function syncGainLabel() {
         const locality = currentConnectivity === "offline" ? "Local" : "Cloud";
         speechGainLabel.textContent = `${locality} · ${Number(speechGain.value || 1).toFixed(2)}×`;
-        speechGainHint.textContent = currentConnectivity === "offline"
-          ? "Gain applied to fully local speech output."
-          : "Gain applied to cloud-generated speech, including Realtime.";
+        speechGainHint.textContent = currentConnectivity === "offline" ? "Gain applied to fully local speech output." : "Gain applied to cloud-generated speech, including Realtime.";
       }
 
       function syncCapabilities() {
@@ -380,12 +179,11 @@
         setHidden("stt-input-field", realtime);
         setHidden("classic-vad-details", realtime);
         for (const element of document.querySelectorAll(".cloud-audio-control")) element.classList.toggle("hidden", realtime || offline);
-        for (const id of ["tts-speed-field", "web-tts-volume-field", "elevenlabs-voice-field", "openai-tts-voice-field", "backend-tts-volume-field", "tts-test-field"]) {
-          setHidden(id, realtime);
-        }
-        for (const option of voiceEngine.options) {
-          option.disabled = offline ? option.value !== "local" : option.value === "local";
-        }
+        for (const id of ["tts-speed-field", "elevenlabs-voice-field", "openai-tts-voice-field", "tts-test-field"]) setHidden(id, realtime);
+        setHidden("web-tts-volume-field", true);
+        setHidden("backend-tts-volume-field", true);
+        setHidden("speech-output-gain-field", !(realtime || offline || currentClassicCloudSpeech));
+        for (const option of voiceEngine.options) option.disabled = offline ? option.value !== "local" : option.value === "local";
         voiceEngine.disabled = offline;
         syncGainLabel();
       }
@@ -394,11 +192,13 @@
         if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) return null;
         seen.add(value);
         if (value.mcpServers && typeof value.mcpServers === "object" && !Array.isArray(value.mcpServers)) return value.mcpServers;
-        for (const child of Object.values(value)) {
-          const found = findMcpServers(child, depth + 1, seen);
-          if (found) return found;
-        }
+        for (const child of Object.values(value)) { const found = findMcpServers(child, depth + 1, seen); if (found) return found; }
         return null;
+      }
+
+      function runtimeMcp(snapshot, name) {
+        const items = snapshot?.runtime_status?.mcp;
+        return Array.isArray(items) ? items.find((item) => String(item?.name || "") === name) || null : null;
       }
 
       function mcpPolicies(snapshot) {
@@ -409,22 +209,12 @@
           const native = raw.native && typeof raw.native === "object" ? raw.native : {};
           const realtime = raw.realtime && typeof raw.realtime === "object" ? raw.realtime : {};
           const permissions = realtime.permissions && typeof realtime.permissions === "object" ? realtime.permissions : {};
-          result[name] = {
-            transport: String(realtime.transport || "auto").toLowerCase(),
-            permission: String(permissions.mode || realtime.permission || "open").toLowerCase() === "approval" ? "approval" : "open",
-            httpsUrl: String(native.url || "")
-          };
+          result[name] = { transport: String(realtime.transport || "auto").toLowerCase(), permission: String(permissions.mode || realtime.permission || "open").toLowerCase() === "approval" ? "approval" : "open", httpsUrl: String(native.url || "") };
         }
         return result;
       }
 
-      function option(label, value, selected) {
-        const item = document.createElement("option");
-        item.textContent = label;
-        item.value = value;
-        item.selected = value === selected;
-        return item;
-      }
+      function option(label, value, selected) { const item = document.createElement("option"); item.textContent = label; item.value = value; item.selected = value === selected; return item; }
 
       function renderMcpTransportControls(snapshot) {
         const policies = mcpPolicies(snapshot);
@@ -432,9 +222,18 @@
           const name = card.querySelector(".mcp-server-name")?.textContent?.trim() || "";
           if (!name || !policies[name] || card.querySelector(".cfg9-mcp-transport")) continue;
           const policy = policies[name];
+          const runtime = runtimeMcp(snapshot, name);
           const section = document.createElement("div");
           section.className = "cfg9-mcp-transport";
           section.style.cssText = "margin-top:10px;padding-top:10px;border-top:1px solid var(--border,#d7dde5);display:grid;gap:8px";
+          if (runtime) {
+            const status = document.createElement("div");
+            status.className = "detail";
+            const configured = displayTransport(runtime.configured_transport || policy.transport);
+            const effective = displayTransport(runtime.effective_transport || "");
+            status.textContent = effective ? `Configured ${configured} · Effective ${effective}${runtime.healthy === true ? " · healthy" : runtime.healthy === false ? " · unavailable" : ""}` : `Configured ${configured}`;
+            section.append(status);
+          }
           const transport = document.createElement("select");
           transport.append(option("Auto", "auto", policy.transport), option("HTTPS", "native", policy.transport), option("STDIO", "stdio", policy.transport));
           const permission = document.createElement("select");
@@ -443,43 +242,33 @@
           url.type = "url";
           url.placeholder = "https://…/mcp";
           url.value = policy.httpsUrl;
-          const save = document.createElement("button");
-          save.type = "button";
-          save.className = "small-button";
-          save.textContent = "Save MCP";
-          const message = document.createElement("span");
-          message.className = "detail";
-          const makeField = (label, control) => {
-            const field = document.createElement("label");
-            field.className = "field";
-            const text = document.createElement("span");
-            text.textContent = label;
-            field.append(text, control);
-            return field;
+          const save = document.createElement("button"); save.type = "button"; save.className = "small-button"; save.textContent = "Save MCP";
+          const message = document.createElement("span"); message.className = "detail";
+          const makeField = (label, control) => { const field = document.createElement("label"); field.className = "field"; const text = document.createElement("span"); text.textContent = label; field.append(text, control); return field; };
+          const urlField = makeField("Provider HTTPS URL", url);
+          const syncPolicy = () => {
+            urlField.classList.toggle("hidden", transport.value === "stdio");
+            const approval = Array.from(permission.options).find((item) => item.value === "approval");
+            if (approval) approval.disabled = transport.value === "stdio";
+            if (transport.value === "stdio" && permission.value === "approval") permission.value = "open";
           };
-          const syncUrl = () => url.closest("label").classList.toggle("hidden", transport.value === "stdio");
-          transport.addEventListener("change", syncUrl);
+          transport.addEventListener("change", syncPolicy);
           save.addEventListener("click", async () => {
-            save.disabled = true;
-            message.textContent = "Saving…";
+            save.disabled = true; message.textContent = "Saving…";
             try {
-              const response = await fetch("/api/mcp-realtime-policy", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ server: name, policy: { realtime_transport: transport.value, permission_mode: permission.value, native_url: url.value.trim() } })
-              });
+              const candidateUrl = url.value.trim();
+              if (transport.value === "native" && !candidateUrl.startsWith("https://")) throw new Error("HTTPS transport requires a valid https:// URL");
+              if (candidateUrl && !candidateUrl.startsWith("https://")) throw new Error("Provider URL must use https://");
+              const response = await fetch("/api/mcp-realtime-policy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ server: name, policy: { realtime_transport: transport.value === "native" ? "https" : transport.value, permission_mode: permission.value, https_url: candidateUrl } }) });
               const data = await response.json().catch(() => ({}));
               if (!response.ok || data.ok === false) throw new Error(data?.error?.message || data?.message || `HTTP ${response.status}`);
               message.textContent = "Saved. Restart required.";
-            } catch (error) {
-              message.textContent = `Save failed: ${error.message || error}`;
-            } finally {
-              save.disabled = false;
-            }
+            } catch (error) { message.textContent = `Save failed: ${error.message || error}`; }
+            finally { save.disabled = false; }
           });
-          section.append(makeField("Transport", transport), makeField("Provider HTTPS URL", url), makeField("Permission", permission), save, message);
+          section.append(makeField("Transport", transport), urlField, makeField("Permission", permission), save, message);
           card.append(section);
-          syncUrl();
+          syncPolicy();
         }
       }
 
@@ -494,56 +283,39 @@
         const legacy = numberOr(env.BACKEND_TTS_VOLUME, 1);
         currentCloudGain = numberOr(env.CLOUD_TTS_OUTPUT_GAIN, legacy);
         currentLocalGain = numberOr(env.LOCAL_TTS_OUTPUT_GAIN, legacy);
+        const backendProvider = String(env.TTS_PROVIDER || "none").toLowerCase();
+        const browserProvider = String(env.WEB_TTS_PROVIDER || "none").toLowerCase();
+        currentClassicCloudSpeech = currentConnectivity === "online" && (["openai", "elevenlabs"].includes(backendProvider) || ["openai", "elevenlabs"].includes(browserProvider));
         speechGain.value = String(currentConnectivity === "offline" ? currentLocalGain : currentCloudGain);
         syncCapabilities();
         window.setTimeout(() => renderMcpTransportControls(snapshot), 0);
       }
 
-      async function loadCfg9() {
-        try {
-          const response = await fetch("/api/snapshot", { cache: "no-store" });
-          if (!response.ok) return;
-          applySnapshot(await response.json());
-        } catch (_error) {
-        }
-      }
+      async function loadCfg9() { try { const response = await fetch("/api/snapshot", { cache: "no-store" }); if (!response.ok) return; applySnapshot(await response.json()); } catch (_error) {} }
 
       voiceEngine.addEventListener("change", syncCapabilities);
       speechGain.addEventListener("input", syncGainLabel);
       voiceSave.addEventListener("click", async () => {
-        voiceSave.disabled = true;
-        voiceMessage.textContent = "Saving…";
+        voiceSave.disabled = true; voiceMessage.textContent = "Saving…";
         try {
           const gain = numberOr(speechGain.value, 1);
           const cloudGain = currentConnectivity === "offline" ? currentCloudGain : gain;
           const localGain = currentConnectivity === "offline" ? gain : currentLocalGain;
-          const engineResponse = await fetch("/api/voice-engine", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ voice_engine: voiceEngine.value, realtime_model: realtimeModel.value.trim(), realtime_voice: realtimeVoice.value.trim() })
-          });
+          const engineResponse = await fetch("/api/voice-engine", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice_engine: voiceEngine.value, realtime_model: realtimeModel.value.trim(), realtime_voice: realtimeVoice.value.trim() }) });
           const engineData = await engineResponse.json().catch(() => ({}));
           if (!engineResponse.ok || engineData.ok === false) throw new Error(engineData?.error?.message || engineData?.message || `HTTP ${engineResponse.status}`);
-          const gainResponse = await fetch("/api/voice-output-gains", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ cloud_gain: cloudGain, local_gain: localGain })
-          });
+          const gainResponse = await fetch("/api/voice-output-gains", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cloud_gain: cloudGain, local_gain: localGain }) });
           const gainData = await gainResponse.json().catch(() => ({}));
           if (!gainResponse.ok || gainData.ok === false) throw new Error(gainData?.error?.message || gainData?.message || `HTTP ${gainResponse.status}`);
           voiceMessage.textContent = "Saved. Restart required.";
           await loadCfg9();
-        } catch (error) {
-          voiceMessage.textContent = `Save failed: ${error.message || error}`;
-        } finally {
-          voiceSave.disabled = false;
-        }
+        } catch (error) { voiceMessage.textContent = `Save failed: ${error.message || error}`; }
+        finally { voiceSave.disabled = false; }
       });
 
       byId("settings-open")?.addEventListener("click", () => window.setTimeout(loadCfg9, 0));
-      mcpDetails?.addEventListener("toggle", () => {
-        if (mcpDetails.open && lastSnapshot) window.setTimeout(() => renderMcpTransportControls(lastSnapshot), 0);
-      });
+      mcpDetails?.addEventListener("toggle", () => { if (mcpDetails.open && lastSnapshot) window.setTimeout(() => renderMcpTransportControls(lastSnapshot), 0); });
+      for (const input of document.querySelectorAll('input[name="connectivity-mode"]')) input.addEventListener("change", () => window.setTimeout(loadCfg9, 0));
       loadCfg9();
     })();
   </script>
