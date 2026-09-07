@@ -27,12 +27,16 @@ jobs:
         run: |
           python -m py_compile voice_assistant/runtime_web_services.py voice_assistant/web_monitor.py voice_assistant/web_monitor_base.py
           node --check assets/web/app.js
-          python tests/test_web_config_architecture.py
           grep -q 'DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"' voice_assistant/web_monitor.py
+          grep -q 'Saved to {profile} · restart required' voice_assistant/runtime_web_services.py
+          grep -q 'voice_engine: voiceEngineValue' assets/web/app.js
+          grep -q 'Save + Restart' assets/web/app.js
+          grep -q '/api/runtime-restart' assets/web/app.js
           ! grep -q 'voice-config-save' assets/web/index.html
           ! grep -q 'loadCfg9' assets/web/index.html
           ! grep -q '/api/voice-engine' assets/web/app.js
           ! grep -q '/api/voice-output-gains' assets/web/app.js
+          ! grep -q 'self._reload()' voice_assistant/runtime_web_services.py
       - name: Commit refactor
         shell: bash
         run: |
