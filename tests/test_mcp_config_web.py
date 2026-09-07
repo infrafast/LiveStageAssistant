@@ -34,51 +34,86 @@ class MCPConfigWebTests(unittest.TestCase):
                     "args": ["qlc.js"],
                     "realtime": {
                         "transport": "stdio",
-                        "permissions": {"mode": "approval"},
+                        "permissions": {"mode": "open"},
                     },
                 },
             }
         }, indent=2), encoding="utf-8")
         return path
 
-    def test_load_payload_hides_header_values(self):
+    def test_load_payload_uses_https_vocabulary_and_hides_header_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             policies = load_web_mcp_policies(self._config(Path(tmp)))
             mixer = next(item for item in policies if item["name"] == "mixer")
-            self.assertEqual(mixer["native_url"], "https://example.test/mcp")
-            self.assertTrue(mixer["native_headers_configured"])
+            self.assertEqual(mixer["https_url"], "https://example.test/mcp")
+            self.assertEqual(mixer["realtime_transport"], "auto")
+            self.assertTrue(mixer["auth_configured"])
             self.assertNotIn("headers", mixer)
             self.assertNotIn("Authorization", json.dumps(mixer))
             self.assertNotIn("secret", json.dumps(mixer))
-            self.assertNotIn("allowed_tools", mixer)
-            self.assertNotIn("discovered_tools", mixer)
 
-    def test_update_preserves_secret_headers_and_unrelated_fields(self):
+    def test_https_update_maps_to_existing_native_storage_and_preserves_secrets(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._config(Path(tmp))
             result = update_web_mcp_policy(path, "mixer", {
-                "realtime_transport": "native",
+                "realtime_transport": "https",
                 "permission_mode": "approval",
-                "native_url": "https://new.example.test/mcp",
+                "https_url": "https://new.example.test/mcp",
             })
-            self.assertEqual(result["realtime_transport"], "native")
+            self.assertEqual(result["realtime_transport"], "https")
             self.assertEqual(result["permission_mode"], "approval")
             payload = json.loads(path.read_text(encoding="utf-8"))
             mixer = payload["mcpServers"]["mixer"]
+            self.assertEqual(mixer["realtime"]["transport"], "native")
+            self.assertEqual(mixer["native"]["url"], "https://new.example.test/mcp")
             self.assertEqual(mixer["native"]["headers"]["Authorization"], "Bearer secret")
             self.assertEqual(mixer["assistantOptions"], {"routing": "mix"})
             self.assertEqual(payload["mcpServers"]["qlcplus"]["args"], ["qlc.js"])
 
-    def test_open_mode_round_trip(self):
+    def test_legacy_native_input_remains_accepted_but_returns_https(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._config(Path(tmp))
+            result = update_web_mcp_policy(path, "mixer", {
+                "realtime_transport": "native",
+                "permission_mode": "open",
+                "native_url": "https://example.test/mcp",
+            })
+            self.assertEqual(result["realtime_transport"], "https")
+
+    def test_stdio_open_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._config(Path(tmp))
             result = update_web_mcp_policy(path, "qlcplus", {
                 "realtime_transport": "stdio",
                 "permission_mode": "open",
             })
+            self.assertEqual(result["realtime_transport"], "stdio")
             self.assertEqual(result["permission_mode"], "open")
 
-    def test_restricted_mode_is_rejected_before_write(self):
+    def test_stdio_approval_is_rejected_before_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._config(Path(tmp))
+            before = path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "approval.*STDIO"):
+                update_web_mcp_policy(path, "qlcplus", {
+                    "realtime_transport": "stdio",
+                    "permission_mode": "approval",
+                })
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_https_transport_requires_valid_https_url(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._config(Path(tmp))
+            before = path.read_text(encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "https://"):
+                update_web_mcp_policy(path, "mixer", {
+                    "realtime_transport": "https",
+                    "permission_mode": "open",
+                    "https_url": "http://not-secure.example/mcp",
+                })
+            self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_invalid_permission_is_rejected_before_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._config(Path(tmp))
             before = path.read_text(encoding="utf-8")
