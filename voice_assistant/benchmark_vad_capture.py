@@ -18,6 +18,7 @@ from voice_assistant.realtime.audio import Pcm16MonoResampler, downmix_pcm16
 from voice_assistant.realtime.service import open_configured_input
 
 TARGET_RATE = 24000
+BENCHMARK_PROMPT = "Quel est le volume de vocal-clode ?"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -61,13 +62,7 @@ async def capture_vad_utterance(
     *,
     wait_timeout: float = 15.0,
 ) -> tuple[bytes, dict[str, Any]]:
-    """Capture one utterance with Silero VAD using LSA profile thresholds.
-
-    Startup detection deliberately allows short sub-threshold gaps between
-    positive Silero windows. Natural speech often contains unvoiced consonants
-    and brief dips; requiring VAD >= threshold on every window can reject a
-    clearly spoken phrase even when Silero reaches a very high confidence.
-    """
+    """Capture one utterance with Silero VAD using LSA profile thresholds."""
     pa = pyaudio.PyAudio()
     stream = None
     try:
@@ -85,8 +80,6 @@ async def capture_vad_utterance(
         input_gain = max(0.5, min(2.0, _env_float("BACKEND_AUDIO_INPUT_GAIN", 1.0)))
         to_target = Pcm16MonoResampler(source_rate, TARGET_RATE)
         chunk_ms = frames / float(source_rate) * 1000.0
-        # Keep at least 600 ms while waiting so the benchmark does not lose the
-        # beginning of the fixed question when speech confirmation arrives late.
         pre_roll_ms = max(float(vad.speech_pad_ms), 600.0)
         pre_roll_count = max(1, int((pre_roll_ms / max(chunk_ms, 1.0)) + 0.999))
         pre_roll: deque[bytes] = deque(maxlen=pre_roll_count)
@@ -98,11 +91,6 @@ async def capture_vad_utterance(
         next_diag = started_at + 1.0
         max_vad_seen = 0.0
         max_peak_dbfs = -120.0
-
-        # Speech-start evidence is accumulated over a short rolling window
-        # rather than requiring consecutive positive frames. Two strong Silero
-        # hits within 700 ms are sufficient; alternatively enough cumulative
-        # positive duration matching the configured min_speech_ms starts capture.
         evidence: deque[tuple[float, float]] = deque()
         evidence_window_s = 0.7
         strong_hits_required = 2
@@ -114,7 +102,7 @@ async def capture_vad_utterance(
             f"input_gain={input_gain:.2f}",
             flush=True,
         )
-        print("RV2E_VAD waiting for speech: Quel est le volume de Claude ?", flush=True)
+        print(f"RV2E_VAD waiting for speech: {BENCHMARK_PROMPT}", flush=True)
 
         while True:
             if not speech_started and time.monotonic() - started_at > wait_timeout:
