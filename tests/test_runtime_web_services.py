@@ -16,6 +16,8 @@ class DummyMonitor:
         self.dialogue = []
         self.context = None
 
+    def set_llm_config_handlers(self, **kwargs): self.handlers.update({"llm_options": kwargs["options_handler"], "llm_save": kwargs["save_handler"]})
+    def set_cloud_api_status_handler(self, handler): self.handlers["cloud_status"] = handler
     def set_env_profile_handlers(self, **kwargs): self.handlers.update(kwargs)
     def set_remote_screen_handler(self, handler): self.handlers["remote"] = handler
     def set_mcp_routing_save_handler(self, handler): self.handlers["routing"] = handler
@@ -44,9 +46,30 @@ class RuntimeWebServicesTests(unittest.TestCase):
         )
         self.online = self.root / ".env.online"
         self.offline = self.root / ".env.offline"
-        common = f"MCP_CONFIG={self.mcp_file}\nSESSION_CONTEXT_DIR={self.context_dir}\nSESSION_CONTEXT_SIZE=4000\nWEB_PASSWORD=secret\n"
-        self.online.write_text("CONNECTIVITY_MODE=online\n" + common, encoding="utf-8")
-        self.offline.write_text("CONNECTIVITY_MODE=offline\n" + common, encoding="utf-8")
+        common = (
+            f"MCP_CONFIG={self.mcp_file}\n"
+            f"SESSION_CONTEXT_DIR={self.context_dir}\n"
+            "SESSION_CONTEXT_SIZE=4000\n"
+            "WEB_PASSWORD=secret\n"
+            "STT_LANGUAGE=fr\n"
+            "BACKEND_AUDIO_INPUT_DEVICE=pipewire:source:test-input\n"
+            "BACKEND_AUDIO_OUTPUT_DEVICE=pipewire:sink:test-output\n"
+        )
+        self.online.write_text(
+            "CONNECTIVITY_MODE=online\n"
+            "LLM_PROVIDER=openai\n"
+            "OPENAI_MODEL=gpt-4.1-mini\n"
+            "VOICE_ENGINE=openai-realtime\n"
+            + common,
+            encoding="utf-8",
+        )
+        self.offline.write_text(
+            "CONNECTIVITY_MODE=offline\n"
+            "LLM_PROVIDER=ollama\n"
+            "OLLAMA_MODEL=mistral:7b-instruct-q4_K_M\n"
+            + common,
+            encoding="utf-8",
+        )
         self.active = [self.online]
         self.monitor = DummyMonitor()
         self.services = RuntimeWebServices(
@@ -60,10 +83,29 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_handlers_are_bound_without_engine_dependency(self):
+        self.assertIn("llm_options", self.monitor.handlers)
+        self.assertIn("llm_save", self.monitor.handlers)
+        self.assertIn("cloud_status", self.monitor.handlers)
         self.assertIn("routing", self.monitor.handlers)
         self.assertIn("options", self.monitor.handlers)
         self.assertIn("list_handler", self.monitor.handlers)
         self.assertIn("new_handler", self.monitor.handlers)
+
+    def test_llm_options_are_available_from_active_profile(self):
+        result = self.services.llm_options()
+        self.assertEqual(result["provider"], "openai")
+        self.assertEqual(result["selected_model"], "gpt-4.1-mini")
+        self.assertEqual(result["selected_connectivity_mode"], "online")
+        self.assertEqual(result["selected_stt_language"], "fr")
+        self.assertEqual(result["selected_backend_audio_input_device"], "pipewire:source:test-input")
+        self.assertEqual(result["selected_backend_audio_output_device"], "pipewire:sink:test-output")
+        self.assertTrue(result["models"])
+
+        self.active[0] = self.offline
+        offline = self.services.llm_options("openai")
+        self.assertEqual(offline["provider"], "ollama")
+        self.assertEqual(offline["selected_model"], "mistral:7b-instruct-q4_K_M")
+        self.assertEqual(offline["selected_connectivity_mode"], "offline")
 
     def test_auto_profile_list_is_locked_to_connectivity(self):
         result = self.services.list_env_profiles()
