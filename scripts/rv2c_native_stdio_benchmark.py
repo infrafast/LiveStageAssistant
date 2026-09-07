@@ -77,7 +77,7 @@ async def wait_ready(engine: OpenAIRealtimeEngine, timeout: float, *, label: str
 
 
 async def wait_native_ready_and_discovery(engine: OpenAIRealtimeEngine, tool: str, timeout: float) -> None:
-    """Wait for provider READY and native MCP discovery regardless of event order."""
+    """Wait for provider READY and native MCP discovery regardless of event shape/order."""
     ready = False
     discovered = False
     deadline = time.monotonic() + timeout
@@ -86,9 +86,7 @@ async def wait_native_ready_and_discovery(engine: OpenAIRealtimeEngine, tool: st
         try:
             event = await asyncio.wait_for(engine.next_event(), timeout=remaining)
         except asyncio.TimeoutError as exc:
-            raise RuntimeError(
-                f"native startup timeout: ready={ready} discovery={discovered}"
-            ) from exc
+            raise RuntimeError(f"native startup timeout: ready={ready} discovery={discovered}") from exc
 
         if event.type == "ready":
             ready = True
@@ -101,9 +99,16 @@ async def wait_native_ready_and_discovery(engine: OpenAIRealtimeEngine, tool: st
                 for candidate in item.get("tools") or []
                 if isinstance(candidate, dict)
             }
-            if tool not in names:
+            if names and tool not in names:
                 raise RuntimeError(f"native MCP did not expose {tool!r}; got {sorted(names)}")
             discovered = True
+        elif event.type == "mcp_event":
+            event_type = str(event.data.get("event_type") or "")
+            raw = event.data.get("event") or event.data
+            if "mcp_list_tools" in event_type and event_type.endswith(".failed"):
+                raise RuntimeError(f"native discovery failed: {raw}")
+            if "mcp_list_tools" in event_type and event_type.endswith(".completed"):
+                discovered = True
         elif event.type in {"provider_error", "connection_error", "connection_closed"}:
             raise RuntimeError(f"native startup failed: {event.type} {event.data}")
 
