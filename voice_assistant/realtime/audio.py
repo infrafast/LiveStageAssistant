@@ -49,6 +49,18 @@ class Pcm16MonoResampler:
         return np.clip(np.rint(output), -32768, 32767).astype(np.int16).tobytes()
 
 
+def apply_pcm16_gain(pcm: bytes, gain: float) -> bytes:
+    """Apply bounded software gain to PCM16 while preventing integer clipping."""
+    if not pcm:
+        return pcm
+    bounded = max(0.0, min(2.0, float(gain)))
+    if bounded == 1.0:
+        return pcm
+    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    scaled = samples * bounded
+    return np.clip(np.rint(scaled), -32768, 32767).astype(np.int16).tobytes()
+
+
 def downmix_pcm16(pcm: bytes, channels: int) -> bytes:
     if channels <= 0:
         raise ValueError("channels must be positive")
