@@ -97,6 +97,16 @@ def _load_piper_voice(values: Mapping[str, object] | None = None):
         return voice
 
 
+def _local_output_gain(values: Mapping[str, object] | None = None) -> float:
+    """Return local speech gain while preserving legacy BACKEND_TTS_VOLUME profiles."""
+    legacy = _value(values, "BACKEND_TTS_VOLUME", "1.0") or "1.0"
+    try:
+        gain = float(_value(values, "LOCAL_TTS_OUTPUT_GAIN", legacy) or legacy)
+    except ValueError:
+        gain = 1.0
+    return max(0.0, min(2.0, gain))
+
+
 def render_piper_wav(
     text: str,
     output_path: str | Path,
@@ -115,11 +125,7 @@ def render_piper_wav(
         length_scale = float(_value(values, "PIPER_LENGTH_SCALE", "1.0") or "1.0")
     except ValueError:
         length_scale = 1.0
-    try:
-        volume = float(_value(values, "BACKEND_TTS_VOLUME", "1.0") or "1.0")
-    except ValueError:
-        volume = 1.0
-    volume = max(0.0, min(2.0, volume))
+    volume = _local_output_gain(values)
 
     try:
         from piper import SynthesisConfig
@@ -173,7 +179,7 @@ def speak_local_status(text: str, values: Mapping[str, object] | None = None) ->
             temp_path = temp_file.name
         render_piper_wav(message, temp_path, values)
         print(
-            f"LSA local TTS: provider=piper voice={piper_voice_name(values)} model={piper_model_path(values)}",
+            f"LSA local TTS: provider=piper voice={piper_voice_name(values)} model={piper_model_path(values)} gain={_local_output_gain(values):.2f}",
             flush=True,
         )
         play_local_wav(temp_path, values)
