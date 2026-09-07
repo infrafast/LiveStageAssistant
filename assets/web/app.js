@@ -10,10 +10,10 @@
   }
 
   // Common config controls must exist before app-main captures DOM references.
-  loadClassicScript("/assets/web/config-bootstrap.js?v=rv2d-20260907d", () => {
-    loadClassicScript("/assets/web/app-main.js?v=rv2d-20260907d", () => {
-      loadClassicScript("/assets/web/mcp-realtime.js?v=rv2d-20260907d", () => {
-        loadClassicScript("/assets/web/config-unified.js?v=rv2d-20260907d");
+  loadClassicScript("/assets/web/config-bootstrap.js?v=cfg9-20260907e", () => {
+    loadClassicScript("/assets/web/app-main.js?v=cfg9-20260907e", () => {
+      loadClassicScript("/assets/web/mcp-realtime.js?v=cfg9-20260907e", () => {
+        loadClassicScript("/assets/web/config-unified.js?v=cfg9-20260907e");
       });
     });
   });
