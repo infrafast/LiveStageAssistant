@@ -1,4 +1,4 @@
-"""Web monitor compatibility wrapper for RV2D/RV8 common controls."""
+"""Runtime-owned WebMonitor wrapper for common RV2D/RV8 controls."""
 
 from __future__ import annotations
 
@@ -157,34 +157,46 @@ def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> di
 
 
 class WebMonitor(_BaseWebMonitor):
-    """Historical WebMonitor plus RV2D/RV8 common runtime controls."""
+    """Single runtime-owned WebMonitor with common runtime controls."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._mcp_realtime_policy_save_handler: Callable[[str, dict[str, Any]], dict[str, Any]] = self._save_mcp_realtime_policy
+        self._runtime_restart_handler: Callable[[], None] | None = None
 
     def set_mcp_realtime_policy_save_handler(self, handler: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
         with self._lock:
             self._mcp_realtime_policy_save_handler = handler
 
+    def set_runtime_restart_handler(self, handler: Callable[[], None] | None) -> None:
+        with self._lock:
+            self._runtime_restart_handler = handler
+
     def snapshot(self) -> dict[str, Any]:
         snapshot = super().snapshot()
         config = snapshot.get("config")
         if isinstance(config, dict):
-            # Re-apply redaction at the final public boundary. Some save paths
-            # intentionally keep raw MCP headers internally for proxy use; no
-            # secret may ever escape through /api/snapshot.
             snapshot["config"] = _base.redact_mapping(config)
             snapshot["config_text"] = __import__("json").dumps(snapshot["config"], ensure_ascii=False, indent=2)
         payload = self._runtime_status()
         if not payload.get("available"):
             return snapshot
         runtime = payload.get("runtime") or {}
+        stale = bool(payload.get("stale"))
         snapshot["runtime_status"] = runtime
-        snapshot["runtime_status_stale"] = bool(payload.get("stale"))
+        snapshot["runtime_status_stale"] = stale
         services = dict(snapshot.get("services") or {})
-        services.update(_runtime_service_tiles(runtime, stale=bool(payload.get("stale"))))
+        services.update(_runtime_service_tiles(runtime, stale=stale))
         snapshot["services"] = services
+
+        semantic_state = str(runtime.get("semantic_state") or "").strip().lower()
+        if not stale and semantic_state == "starting":
+            snapshot["environment_loading"] = {
+                "active": True,
+                "title": "Application de la configuration",
+            }
+        elif not stale and bool(runtime.get("ready")):
+            snapshot["environment_loading"] = {"active": False, "title": ""}
         return snapshot
 
     def _save_mcp_realtime_policy(self, server_name: str, policy: dict[str, Any]) -> dict[str, Any]:
@@ -279,6 +291,15 @@ class WebMonitor(_BaseWebMonitor):
             "message": "Cloud and Local speech output gains saved. Restart LiveStageAssistant to apply them.",
         }
 
+    def _request_runtime_restart(self) -> dict[str, Any]:
+        with self._lock:
+            handler = self._runtime_restart_handler
+        if handler is None:
+            raise RuntimeError("runtime restart is not available")
+        self.set_environment_loading(True, "Application de la configuration")
+        handler()
+        return {"ok": True, "restart_requested": True, "message": "Runtime engine reload requested."}
+
     def start(self, host: str = "127.0.0.1", port: int = 8765) -> tuple[str, int]:
         monitor = self
         with _START_PATCH_LOCK:
@@ -298,7 +319,7 @@ class WebMonitor(_BaseWebMonitor):
 
                     def do_POST(self) -> None:
                         parsed = _base.urlparse(self.path)
-                        if parsed.path not in {"/api/mcp-realtime-policy", "/api/voice-engine", "/api/voice-output-gains"}:
+                        if parsed.path not in {"/api/mcp-realtime-policy", "/api/voice-engine", "/api/voice-output-gains", "/api/runtime-restart"}:
                             super().do_POST()
                             return
                         if self._auth_required(parsed.path):
@@ -309,6 +330,9 @@ class WebMonitor(_BaseWebMonitor):
                             return
                         if parsed.path == "/api/voice-output-gains":
                             self._handle_voice_output_gains_save()
+                            return
+                        if parsed.path == "/api/runtime-restart":
+                            self._handle_runtime_restart()
                             return
                         self._handle_mcp_realtime_policy_save()
 
@@ -341,6 +365,18 @@ class WebMonitor(_BaseWebMonitor):
                             return
                         except Exception as error:  # pragma: no cover
                             self._send_json_error(500, {"ok": False, "error": {"message": f"Could not save voice output gains: {error}"}})
+                            return
+                        self._send_json(result)
+
+                    def _handle_runtime_restart(self) -> None:
+                        payload = self._read_json_body(max_bytes=4 * 1024)
+                        if payload is None:
+                            return
+                        try:
+                            result = monitor._request_runtime_restart()
+                        except Exception as error:
+                            monitor.set_environment_loading(False)
+                            self._send_json_error(503, {"ok": False, "error": {"message": str(error)}})
                             return
                         self._send_json(result)
 
