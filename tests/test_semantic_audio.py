@@ -38,10 +38,17 @@ class SemanticAudioTests(unittest.TestCase):
         self.assertEqual(gains.cloud, 1.35)
         self.assertEqual(gains.local, 0.80)
 
-    def test_legacy_backend_volume_is_cloud_fallback(self) -> None:
+    def test_legacy_backend_volume_migrates_both_until_split_keys_exist(self) -> None:
         gains = VoiceOutputGains.from_env({"BACKEND_TTS_VOLUME": "1.20"})
         self.assertEqual(gains.cloud, 1.20)
-        self.assertEqual(gains.local, 1.0)
+        self.assertEqual(gains.local, 1.20)
+
+    def test_one_new_gain_can_split_from_legacy_without_affecting_the_other(self) -> None:
+        gains = VoiceOutputGains.from_env(
+            {"BACKEND_TTS_VOLUME": "1.20", "LOCAL_TTS_OUTPUT_GAIN": "0.85"}
+        )
+        self.assertEqual(gains.cloud, 1.20)
+        self.assertEqual(gains.local, 0.85)
 
     def test_gains_are_bounded(self) -> None:
         gains = VoiceOutputGains.from_env(
