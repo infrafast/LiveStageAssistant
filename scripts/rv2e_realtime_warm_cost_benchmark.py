@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """RV2E OpenAI Realtime cold-vs-warm cost benchmark.
 
-Captures one spoken mixer read request with the production-like VAD helper, then
-replays the exact same PCM twice through ONE Realtime session. This isolates the
+Captures one spoken read request with the production-like VAD helper, then replays
+the exact same PCM twice through ONE Realtime session. This isolates the
 cold/session-setup turn from the marginal warm-turn cost while keeping the MCP
 transport, audio, target, and user intent identical.
 
-The benchmark is read-only and uses the configured local STDIO bridge.
+The benchmark is read-only and uses the configured local STDIO bridge. Prompt
+composition is the same provider-neutral path used by the production Realtime
+service; this file adds only a benchmark-specific read-only constraint.
 """
 
 from __future__ import annotations
@@ -34,16 +36,20 @@ from voice_assistant.realtime.engine import RealtimeEngineConfig
 from voice_assistant.realtime.mcp_bridge import RealtimeMCPBridge
 from voice_assistant.realtime.metrics import realtime_usage_cost_usd
 from voice_assistant.realtime.openai_realtime import OpenAIRealtimeEngine
+from voice_assistant.realtime.prompts import compose_realtime_instructions
 from voice_assistant.realtime.service import open_configured_output, read_secret
 
 RATE = 24000
 DEFAULT_SERVICE_ENV = "/etc/livestageassistant/.env.online"
 
-WARM_SYSTEM_PROMPT = """You are Live Stage Assistant in a strictly read-only benchmark.
-Reply in French and keep the spoken answer short. Read current mixer state through the available
-function tools before answering. Never perform a write or mutation. Reuse a unique canonical target
-returned by a resolver directly for the requested read; do not re-resolve or re-read identity unless
-ambiguity remains. Call only the minimum tools necessary, silently, then answer once.
+BENCHMARK_ADDENDUM = """This is a strictly read-only validation turn.
+Reply in French and keep the spoken answer short. Use the available function tools to obtain
+current external state before answering. Never perform a write or mutation. Prefer the narrowest
+targeted resolver/read path that answers the request. Do not add a broad health/status/inventory
+call when a successful targeted read already establishes both the requested state and live MCP
+connectivity. Reuse a unique canonical target returned by a resolver directly; do not re-resolve
+or re-read identity unless ambiguity remains. Call only the minimum tools necessary, silently,
+then answer once.
 """
 
 
@@ -185,6 +191,7 @@ async def run(args) -> int:
         "mcp_target": base.local_mcp_target(raw_config, args.server),
         "input_selector": input_selector or "<default>",
         "output_selector": output_selector or "<default>",
+        "prompt_path": "production-compose_realtime_instructions+read-only-benchmark-addendum",
     }, ensure_ascii=False, separators=(",", ":")), flush=True)
 
     pcm, recording = await capture_vad_utterance(0.0, input_selector)
@@ -200,11 +207,12 @@ async def run(args) -> int:
             raise RuntimeError(f"Realtime bridge discovered no tools for {args.server!r}")
         model = str(os.getenv("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip()
         voice = str(os.getenv("OPENAI_REALTIME_VOICE") or "marin").strip()
+        instructions = compose_realtime_instructions(base_prompt=BENCHMARK_ADDENDUM)
         engine = OpenAIRealtimeEngine(RealtimeEngineConfig(
             provider="openai",
             model=model,
             voice=voice,
-            instructions=WARM_SYSTEM_PROMPT,
+            instructions=instructions,
             server_vad=True,
             function_tools=tuple(function_tools),
         ), api_key=api_key)
@@ -235,7 +243,7 @@ async def run(args) -> int:
                 "warm_tool_calls": warm["usage"]["tool_calls"],
                 "warm_per_100_requests_usd": warm_cost * 100.0,
                 "warm_per_1000_requests_usd": warm_cost * 1000.0,
-                "note": "Same PCM, same Realtime session, same local STDIO MCP. Warm cost is the marginal second-turn measurement, not a new session estimate.",
+                "note": "Same PCM, same Realtime session, same local STDIO MCP, production prompt composition. Warm cost is the marginal second-turn measurement, not a new session estimate.",
             },
         }
         print("RV2E_REALTIME_COLD_RESULT " + json.dumps(cold, ensure_ascii=False, separators=(",", ":")), flush=True)
