@@ -36,7 +36,6 @@ from voice_assistant.realtime.engine import RealtimeEngineConfig
 from voice_assistant.realtime.mcp_bridge import RealtimeMCPBridge
 from voice_assistant.realtime.metrics import realtime_usage_cost_usd
 from voice_assistant.realtime.openai_realtime import OpenAIRealtimeEngine
-from voice_assistant.realtime.prompts import compose_realtime_instructions
 from voice_assistant.realtime.service import open_configured_output, read_secret
 
 RATE = 24000
@@ -191,7 +190,7 @@ async def run(args) -> int:
         "mcp_target": base.local_mcp_target(raw_config, args.server),
         "input_selector": input_selector or "<default>",
         "output_selector": output_selector or "<default>",
-        "prompt_path": "production-compose_realtime_instructions+read-only-benchmark-addendum",
+        "prompt_path": "RealtimeEngineConfig production composition + read-only benchmark addendum",
     }, ensure_ascii=False, separators=(",", ":")), flush=True)
 
     pcm, recording = await capture_vad_utterance(0.0, input_selector)
@@ -207,12 +206,11 @@ async def run(args) -> int:
             raise RuntimeError(f"Realtime bridge discovered no tools for {args.server!r}")
         model = str(os.getenv("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip()
         voice = str(os.getenv("OPENAI_REALTIME_VOICE") or "marin").strip()
-        instructions = compose_realtime_instructions(base_prompt=BENCHMARK_ADDENDUM)
         engine = OpenAIRealtimeEngine(RealtimeEngineConfig(
             provider="openai",
             model=model,
             voice=voice,
-            instructions=instructions,
+            instructions=BENCHMARK_ADDENDUM,
             server_vad=True,
             function_tools=tuple(function_tools),
         ), api_key=api_key)
