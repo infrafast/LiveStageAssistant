@@ -32,11 +32,19 @@ jobs:
           end = source.index(end_marker, start)
           raw = source[start:end]
           script = "\n".join(line[10:] if line.startswith("          ") else line for line in raw.splitlines())
+
           brittle = "js = replace_once(js, old, new, 'loaded action state')"
           robust = '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    clean_old = \"\"\"        if (shouldMarkClean) {\n          markConfigClean();\n        }\"\"\"\n    clean_new = \"\"\"        if (shouldMarkClean) {\n          markConfigClean();\n          syncConfigActionState();\n        }\"\"\"\n    js = replace_once(js, clean_old, clean_new, 'loaded action state')'''
           if brittle not in script:
               raise SystemExit('runner could not find loaded action state patch')
           script = script.replace(brittle, robust, 1)
+
+          brittle = "js = replace_once(js, old, new, 'restart completion')"
+          robust = '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    restart_marker = \"        const envProfileChanged = await loadEnvProfiles();\"\n    restart_logic = \"\"\"        if (runtimeRestarting) {\n          if (environmentLoading.active) restartLoadingSeen = true;\n          if (restartLoadingSeen && !environmentLoading.active && data.runtime_status?.ready) {\n            runtimeRestarting = false;\n            restartRequired = false;\n            restartLoadingSeen = false;\n            llmMessage.textContent = \\\"Restart complete.\\\";\n            llmControlsInitialized = false;\n            configBaseline = configSignature();\n            syncConfigActionState();\n          }\n        }\n\"\"\"\n    js = replace_once(js, restart_marker, restart_logic + restart_marker, 'restart completion')'''
+          if brittle not in script:
+              raise SystemExit('runner could not find restart completion patch')
+          script = script.replace(brittle, robust, 1)
+
           exec(compile(script, '<cfg-refactor>', 'exec'))
           PY
       - name: Validate
