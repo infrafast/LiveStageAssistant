@@ -41,15 +41,20 @@ class RealtimeWakeGateTests(unittest.TestCase):
         self.assertTrue(gate.waiting)
 
     def test_rearm_returns_to_wait_wake(self):
+        now = [10.0]
         gate = RealtimeWakeGate(
-            RealtimeWakeConfig(wake_word="momo", threshold=0.6),
+            RealtimeWakeConfig(wake_word="momo", threshold=0.6, post_tts_suppression_ms=350),
             predictor=lambda _samples: {"momo": 0.9},
+            clock=lambda: now[0],
         )
         pcm24k = np.zeros(1920, dtype=np.int16).tobytes()
         self.assertTrue(gate.feed(pcm24k))
         self.assertTrue(gate.authorized)
         gate.rearm()
         self.assertTrue(gate.waiting)
+        self.assertFalse(gate.feed(pcm24k))
+        now[0] += 0.36
+        self.assertTrue(gate.feed(pcm24k))
 
     def test_env_config_uses_existing_keys(self):
         config = RealtimeWakeConfig.from_env({
@@ -58,12 +63,14 @@ class RealtimeWakeGateTests(unittest.TestCase):
             "BACKEND_WAKE_WORD_MODEL_NAMES": "hey_jarvis",
             "BACKEND_WAKE_WORD_THRESHOLD": "0.61",
             "BACKEND_WAKE_WORD_COOLDOWN_MS": "1500",
+            "WAKE_WORD_POST_TTS_SUPPRESSION_MS": "400",
         })
         self.assertTrue(config.enabled)
         self.assertEqual(config.model_paths, ("a.onnx", "b.onnx"))
         self.assertEqual(config.model_names, ("hey_jarvis",))
         self.assertEqual(config.threshold, 0.61)
         self.assertEqual(config.cooldown_ms, 1500)
+        self.assertEqual(config.post_tts_suppression_ms, 400)
 
 
 if __name__ == "__main__":
