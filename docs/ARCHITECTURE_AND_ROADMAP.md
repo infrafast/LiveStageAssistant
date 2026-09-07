@@ -10,9 +10,9 @@ Developer reference: https://deepwiki.com/infrafast/LiveStageAssistant
 
 # 1. Current Architecture
 
-LiveStageAssistant now has one common runtime that owns engine selection, continuous connectivity supervision and the engine-independent startup loader lifecycle. `VOICE_ENGINE=classic` keeps the historical STT -> LLM -> TTS path; `VOICE_ENGINE=openai-realtime` starts the integrated OpenAI Realtime runtime directly. Offline mode remains local/cloud-independent and is a separate connectivity axis from the online engine choice.
+LiveStageAssistant now has one common runtime that owns engine selection, continuous connectivity supervision, the engine-independent startup loader lifecycle and the single production WebMonitor. `VOICE_ENGINE=classic` keeps the historical STT -> LLM -> TTS path; `VOICE_ENGINE=openai-realtime` starts the integrated OpenAI Realtime runtime directly. Offline mode remains local/cloud-independent and is a separate connectivity axis from the online engine choice.
 
-The common runtime selects an explicit `.env.online` or `.env.offline` profile before starting a child engine. Individual engines no longer receive `--env-file auto` when launched by the service runtime, so the historical Classic auto-connectivity watcher is no longer active in the supervised path.
+The common runtime selects an explicit `.env.online` or `.env.offline` profile before starting a child engine. Individual engines no longer receive `--env-file auto` when launched by the service runtime, so the historical Classic auto-connectivity watcher is no longer active in the supervised path. Supervised child engines must not bind their own WebMonitor; the parent runtime owns the one production HTTP/GUI endpoint across Classic, Realtime and Local.
 
 Common control plane:
 
@@ -37,9 +37,11 @@ Common control plane:
                  +---------------+---------------+
                                  |
                               READY
+                                 |
+                        Common WebMonitor
 ```
 
-Future engines such as Gemini Live plug into `EngineSupervisor` without implementing their own network watcher or startup-loader policy.
+Future engines such as Gemini Live plug into `EngineSupervisor` without implementing their own network watcher or WebMonitor ownership.
 
 Classic remains a first-class supported path. Realtime is production-facing on the dedicated branch but still under staged validation; it is not yet the final default.
 
@@ -86,6 +88,7 @@ startup
   -> detect connectivity
   -> emit ONLINE or OFFLINE state
   -> choose explicit profile
+  -> start common WebMonitor
   -> start loader
   -> start selected engine
   -> wait for READY
@@ -100,6 +103,7 @@ Internet loss while a cloud engine is active:
 ONLINE
   -> connectivity loss detected by common ConnectivityManager
   -> stop outgoing engine cleanly with bounded shutdown
+  -> common WebMonitor remains alive
   -> announce loss/offline transition using guaranteed-local speech
   -> activate .env.offline
   -> force local engine
@@ -115,6 +119,7 @@ Internet restoration:
 ```text
 OFFLINE
   -> common ConnectivityManager emits ONLINE
+  -> common WebMonitor remains alive
   -> activate .env.online
   -> choose configured online VOICE_ENGINE
   -> loader during initialization
@@ -216,7 +221,8 @@ MCP_CONFIG JSON
   -> per-server realtime transport: native / stdio / auto
   -> per-server permission policy
 
-Web GUI
+Common WebMonitor / GUI
+  -> one production server owned by runtime
   -> edits the same canonical profile + MCP JSON model
   -> one common configuration surface, not duplicated per engine
   -> engine-specific controls appear conditionally only when genuinely specific
@@ -326,7 +332,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2B STDIO bridge is validated on Pi5. RV2C AUTO safety is validated and AUTO now prefers a healthy local STDIO path when one is configured; native remains an explicit/remote capability and safe alternate path. RV2E cost characterization is complete for the current representative read scenario, including cold/warm separation. RV2D health/status is implemented and waiting for consolidated Pi/browser validation. Semantic audio feedback parity is now a priority before RV3 wake-word completion.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2B STDIO bridge is validated on Pi5. RV2C AUTO safety is validated and AUTO now prefers a healthy local STDIO path when one is configured; native remains an explicit/remote capability and safe alternate path. RV2E cost characterization is complete for the current representative read scenario, including cold/warm separation. RV2D health/status and single-runtime WebMonitor ownership are implemented and waiting for consolidated Pi/browser validation. Semantic audio feedback parity remains a priority before RV3 wake-word completion.
 
 **Goal:** add selectable low-latency realtime voice beside Classic without decommissioning Classic, while preserving MCP transport flexibility, wake-word behavior, semantic user feedback, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -359,6 +365,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 25. Loss of Internet while a cloud engine is active must be announced through a guaranteed-local speech path before/while switching to offline.
 26. Low-level ALSA/JACK probe noise should be suppressed while real audio failures remain visible as concise LSA errors.
 27. For stage-local MCP servers, measured latency takes precedence over provider-native elegance: AUTO prefers a healthy local/STDIO execution path when available while preserving explicit native mode.
+28. Production exposes exactly one WebMonitor owned by the common runtime. Child engines must never bind a second GUI/server; remaining legacy handlers are migration sources only, not a second runtime architecture.
 
 ## RV target architecture
 
@@ -379,6 +386,8 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
            existing MCP     native/bridge  local MCP
                   |             |             |
                   +-------------+-------------+
+                                |
+                       Common WebMonitor
 ```
 
 ## RV prompt and spoken-language policy
@@ -506,7 +515,8 @@ Interpretation: local STDIO is faster and materially more deterministic for stag
 - [x] Realtime audio probe noise cleaned;
 - [x] common connectivity supervision and basic online/offline engine/profile round trips Pi-validated under OR2;
 - [~] server health/status shows configured/effective transport and permission; implementation complete, consolidated Pi/browser validation pending;
-- [~] WebMonitor runtime integration without importing Classic; implementation complete, consolidated Pi/browser validation pending;
+- [~] one common production WebMonitor owned by `runtime.py`; child Classic/Local monitor binding suppressed under supervision, consolidated Pi/browser validation pending;
+- [~] migrate remaining configuration/session/audio-diagnostic handlers out of `agent.py` into common runtime services; no second WebMonitor is permitted during migration;
 - [ ] STDIO approval completion;
 - [~] cloud/local independent output gains through one common configuration surface;
 - [ ] final inventory consolidation/plugin-style GUI.
@@ -544,10 +554,10 @@ Interpretation: the cost request is closed for the current representative transa
 
 - [~] define provider/engine-neutral semantic states in `voice_assistant/semantic_audio.py`;
 - [~] define shared cue mapping for startup, ready, listening, wake-detected, thinking and result-ready states;
-- [ ] add common semantic-audio controller/lifecycle independent of engine/provider;
-- [ ] Realtime emits/uses semantic `READY`, `LISTENING`/`WAIT_WAKE`, `PROCESSING`, `RESULT_READY`, `SPEAKING`, `IDLE` events;
+- [~] common semantic-audio controller/lifecycle independent of engine/provider implemented;
+- [~] Realtime emits/uses semantic `READY`, `LISTENING`/`WAIT_WAKE`, `PROCESSING`, `RESULT_READY`, `SPEAKING`, `IDLE` events; initial Pi logs validate wake-OFF transitions;
 - [ ] Classic behavior is adapted to the shared contract without regressing its validated wake-word behavior;
-- [ ] semantic thinking loop starts only after command acceptance and always stops before result-ready/speech;
+- [~] semantic thinking loop starts only after command acceptance and stops before result-ready/speech in Realtime; audible validation pending;
 - [ ] `WAIT_WAKE` remains silent; ambient speech must not trigger listening/processing cues;
 - [ ] `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event;
 - [ ] preserve Classic-style post-TTS suppression/re-arm behavior before returning to wake listening;
@@ -626,6 +636,7 @@ MCP_CONFIG=mcp_servers.json
 - [~] health/status identifies active connectivity/engine/provider/MCP transport; implementation complete, functional validation pending;
 - [~] independent Cloud/Local output gain contract implemented; runtime/GUI wiring in progress;
 - [~] common semantic feedback configuration defined; runtime/GUI wiring in progress;
+- [~] single common runtime-owned WebMonitor architecture implemented; remaining child-owned handlers still need extraction into common services, not a second GUI;
 - [ ] no duplicated engine-specific configuration screens; consolidate any remaining temporary RV2D controls into the common sections;
 - [ ] all Classic/Realtime + wake ON/OFF combinations tested.
 
@@ -755,7 +766,8 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 - [x] Internet restoration relaunches configured online engine;
 - [x] MCP profile/config selection preserved structurally;
 - [x] audio-device ownership stable across tested engine replacements;
-- [~] expose current connectivity state and active engine to WebMonitor/health status; implemented, consolidated functional validation pending;
+- [~] expose current connectivity state and active engine to common WebMonitor/health status; implemented, consolidated functional validation pending;
+- [~] common WebMonitor remains parent-owned across engine/profile replacements; implementation complete, Pi/browser validation pending;
 - [x] Online Realtime -> Offline Local -> Online Realtime Pi validation;
 - [x] Online Classic -> Offline Local -> Online Classic Pi validation;
 - [ ] recovery when Internet flaps repeatedly;
@@ -779,7 +791,7 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 
 # 7. Evolution GUI
 
-**Status:** active design/implementation roadmap tied to RV2D/RV8. Canonical MCP normalization, per-server realtime controls, global online voice-engine selection and integrated Realtime service exist. Runtime health tiles and Realtime model/voice controls are implemented and awaiting consolidated functional validation.
+**Status:** active design/implementation roadmap tied to RV2D/RV8. Canonical MCP normalization, per-server realtime controls, global online voice-engine selection and integrated Realtime service exist. Production WebMonitor ownership has moved to the common runtime; remaining configuration handlers still embedded in `agent.py` must now be extracted into common services. Runtime health tiles and Realtime model/voice controls are implemented and awaiting consolidated functional validation.
 
 ## 7.1 UX principles
 
@@ -795,6 +807,7 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 10. **Do not duplicate equivalent configuration screens per voice engine.** Common audio, wake, semantic cues, MCP, connectivity and gain settings live once in stable common sections.
 11. Engine/provider-specific fields are conditional children of the common controls, not separate configuration pages.
 12. Cloud/Local output gains are common locality-level controls and remain independent of the selected engine.
+13. **Exactly one production WebMonitor is allowed.** It is owned by the common runtime and survives engine/profile replacement; child-engine GUI ownership is legacy code to migrate, never a supported parallel architecture.
 
 ## 7.2 Target configuration ownership
 
@@ -817,6 +830,12 @@ runtime state
   -> configured/effective MCP transport
   -> last error/probe/capabilities
   -> semantic audio state
+
+common WebMonitor services
+  -> canonical config read/write
+  -> runtime status
+  -> diagnostics/session operations
+  -> no engine-specific server duplication
 ```
 
 ## 7.3-7.14 Target GUI/API direction
@@ -894,8 +913,10 @@ runtime state
 - [~] common Voice/AI engine selector + model + voice controls implemented;
 - [~] Cloud/Local independent output-gain contract implemented;
 - [~] semantic feedback cue contract implemented;
+- [~] one common runtime-owned WebMonitor server implemented; legacy child server binding suppressed under supervision;
+- [ ] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services;
 - [ ] wire Cloud/Local gains into all relevant speech outputs;
-- [ ] render Cloud/Local gain controls once in the common GUI;
+- [~] render Cloud/Local gain controls once in the common GUI;
 - [ ] render semantic cue controls once in the common GUI;
 - [ ] ensure wake-word options do not move to a separate engine-specific page;
 - [ ] remove/reconcile temporary duplicate RV2D controls;
@@ -917,12 +938,12 @@ runtime state
 
 # 9. Current Next Actions
 
-1. **RV2F / CFG-9 — semantic audio feedback parity:** implement the common semantic-audio controller and wire Realtime first, preserving the Classic wake-word semantics as the reference contract.
-2. **CFG-9 / RV8 — Cloud vs Local speech gains:** wire `CLOUD_TTS_OUTPUT_GAIN` and `LOCAL_TTS_OUTPUT_GAIN` through runtime speech paths and expose the two controls once in the common GUI.
-3. **RV2F / RV3 — wake compatibility:** integrate wake-detected/listening/thinking/result-ready/idle transitions without false feedback during `WAIT_WAKE`; preserve post-TTS suppression/re-arm behavior.
-4. **RV2D / OR2 / RV8 — consolidated functional validation:** one Pi/browser recette should validate health/status, active/effective transport, model/voice controls, semantic cues and Cloud/Local gains so multiple `[~]` entries can move to `[x]` together.
-5. **RV3 — optional Realtime wake-word lifecycle:** finish local openWakeWord integration after the semantic feedback state machine is shared.
-6. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the functional UX/audio milestone.
-7. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI, without duplicating engine configuration screens.
-8. **Nice-to-have validation:** representative MCP corpus and second-native-MCP fixtures remain useful but non-blocking.
-9. **Backlog/non-blocking:** MCP-specific raw/bulk/automation optimizations and further fallback tuning are recorded but must not interrupt completion of the current LSA roadmap.
+1. **RV2D / CFG-9 — finish the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; migrate remaining configuration, session and audio-diagnostic handlers out of `agent.py` into common services. No historical/second WebMonitor is allowed in the supervised architecture.
+2. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** once the common handlers are migrated, run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
+3. **RV2F / CFG-9 — semantic audio feedback parity:** finish the shared semantic-audio contract across Realtime, Classic and Local, including READY cue, listening/wake/thinking/result-ready/speaking transitions and one common GUI configuration surface.
+4. **CFG-9 / RV8 — Cloud vs Local speech gains:** finish wiring `CLOUD_TTS_OUTPUT_GAIN` and `LOCAL_TTS_OUTPUT_GAIN` through all relevant speech paths, including Classic cloud output, while keeping feedback-cue levels semantically separate from TTS gain.
+5. **RV2F / RV3 — wake compatibility:** integrate wake-detected/listening/thinking/result-ready/idle transitions without false feedback during `WAIT_WAKE`; preserve Classic post-TTS suppression/re-arm behavior as the reference contract.
+6. **RV3 — optional Realtime wake-word lifecycle:** finish local openWakeWord integration after the semantic feedback state machine is shared.
+7. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the common WebMonitor and functional UX/audio milestones are stable.
+8. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI, without duplicating engine configuration screens or Web servers.
+9. **Nice-to-have / backlog:** representative MCP corpus, second-native-MCP fixtures, MCP-specific raw/bulk/automation optimizations and further fallback tuning remain useful but non-blocking and must not interrupt completion of the current LSA roadmap.
