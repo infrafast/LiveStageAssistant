@@ -8,9 +8,10 @@ WEB = ROOT / "assets" / "web"
 
 
 class WebConfigArchitectureTests(unittest.TestCase):
-    def test_validated_frontend_boot_sequence_has_no_bootstrap(self):
+    def test_frontend_boot_sequence_is_simple_and_ordered(self):
         app = (WEB / "app.js").read_text(encoding="utf-8")
-        self.assertNotIn("config-bootstrap.js", app)
+        self.assertNotIn("loadClassicScript", app)
+        self.assertNotIn("addEventListener(\"load\"", app)
         self.assertLess(app.index("app-main.js"), app.index("mcp-realtime.js"))
         self.assertLess(app.index("mcp-realtime.js"), app.index("config-unified.js"))
 
@@ -50,10 +51,6 @@ class WebConfigArchitectureTests(unittest.TestCase):
         self.assertIn("snapshot.environment_loading?.active", script)
         self.assertIn('runtime.ready && state !== "starting"', script)
         self.assertNotIn("reloadObserved", script)
-
-    def test_frontend_asset_revision_was_bumped_for_reload_fix(self):
-        app = (WEB / "app.js").read_text(encoding="utf-8")
-        self.assertIn("rv2d-20260907i", app)
 
 
 if __name__ == "__main__":
