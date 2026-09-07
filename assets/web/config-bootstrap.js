@@ -27,6 +27,12 @@
     disabled.textContent = "Disabled";
     select.appendChild(disabled);
 
+    // app-main listens to the canonical #wake-word control. Keep its dependent
+    // controls updated from the select itself; there is no hidden legacy field.
+    select.addEventListener("change", () => {
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
     current.replaceWith(select);
     return select;
   }
@@ -55,6 +61,7 @@
       }
       appendWakeOption(select, selected, selected);
       select.value = selected;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
 
       window.dispatchEvent(new CustomEvent("lsa:wake-options-ready", {
         detail: { value: selected }
