@@ -1715,6 +1715,15 @@ class WebMonitor:
                     speaker_recognition_enabled = bool(payload.get("speaker_recognition_enabled"))
                     speaker_backend = str(payload.get("speaker_backend") or "resemblyzer").strip().lower()
                     speaker_profiles = payload.get("speaker_profiles") or []
+                    voice_engine = str(payload.get("voice_engine") or "").strip().lower()
+                    realtime_model = str(payload.get("realtime_model") or "").strip()
+                    realtime_voice = str(payload.get("realtime_voice") or "").strip()
+                    try:
+                        cloud_tts_output_gain = float(payload.get("cloud_tts_output_gain") if payload.get("cloud_tts_output_gain") is not None else 1.0)
+                        local_tts_output_gain = float(payload.get("local_tts_output_gain") if payload.get("local_tts_output_gain") is not None else 1.0)
+                    except (TypeError, ValueError):
+                        self.send_error(400, "Speech output gains must be numbers")
+                        return
                     if not isinstance(speaker_profiles, list):
                         self.send_error(400, "speaker_profiles must be a list")
                         return
@@ -1768,6 +1777,11 @@ class WebMonitor:
                             speaker_threshold,
                             speaker_margin,
                             speaker_profiles,
+                            voice_engine,
+                            realtime_model,
+                            realtime_voice,
+                            cloud_tts_output_gain,
+                            local_tts_output_gain,
                         )
                     except ValueError as e:
                         self.send_error(400, str(e))

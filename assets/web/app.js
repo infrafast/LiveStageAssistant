@@ -191,6 +191,23 @@
     const commandAckSoundPlay = document.querySelector("#command-ack-sound-play");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
+    const panelConfig = document.querySelector("#panel-config");
+    const voiceEngine = document.querySelector("#voice-engine");
+    const realtimeModel = document.querySelector("#realtime-model");
+    const realtimeModelField = document.querySelector("#realtime-model-field");
+    const realtimeVoice = document.querySelector("#realtime-voice");
+    const realtimeVoiceField = document.querySelector("#realtime-voice-field");
+    const speechOutputGain = document.querySelector("#speech-output-gain");
+    const speechOutputGainField = document.querySelector("#speech-output-gain-field");
+    const speechOutputGainLabel = document.querySelector("#speech-output-gain-label");
+    const speechOutputGainHint = document.querySelector("#speech-output-gain-hint");
+    const classicSttPromptField = document.querySelector("#classic-stt-prompt-field");
+    const classicInterruptField = document.querySelector("#classic-interrupt-field");
+    const classicVadDetails = document.querySelector("#classic-vad-details");
+    const llmProviderField = document.querySelector("#llm-provider-field");
+    const llmModelField = document.querySelector("#llm-model-field");
+    const sttInputField = document.querySelector("#stt-input-field");
+    const mcpDetails = document.querySelector("#mcp-servers-details");
     const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
     const speakerEmbeddingPreparationMessage = window.LSA_SPEAKER_EMBEDDING_PREPARATION_MESSAGE || "";
     const composerTextUploadMaxBytes = 64 * 1024;
@@ -229,6 +246,13 @@
     let envProfileSwitchingEnabled = false;
     let connectivityLocked = false;
     let configBaseline = "";
+    let restartRequired = false;
+    let runtimeRestarting = false;
+    let restartLoadingSeen = false;
+    let currentCloudGain = 1;
+    let currentLocalGain = 1;
+    let currentClassicCloudSpeech = true;
+    let lastSnapshot = null;
     let speakerRecognitionUnavailableReason = "";
     let speakerRecognitionEnvEnabled = false;
     let speakerRecognitionRuntimeEnabled = false;
@@ -710,7 +734,7 @@
         });
         const data = await fetchJsonOrThrow(response);
         if (messageEl) messageEl.textContent = data.message || "Routing saved.";
-        setEnvironmentLoading(true);
+        setRestartRequired(data.restart_required, "Routing saved · restart required.");
         mcpServersSignature = "";
         await refresh();
       } catch (error) {
@@ -744,7 +768,7 @@
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         if (messageEl) messageEl.textContent = data.message || "MCP server options saved.";
-        setEnvironmentLoading(true);
+        setRestartRequired(data.restart_required, "MCP options saved · restart required.");
         mcpServersSignature = "";
         await refresh();
       } catch (error) {
@@ -2934,6 +2958,10 @@
       return JSON.stringify({
         env_profile: activeEnvProfile,
         connectivity_mode: selectedConnectivityMode(),
+        voice_engine: voiceEngine?.value || "classic",
+        realtime_model: realtimeModel?.value.trim() || "",
+        realtime_voice: realtimeVoice?.value.trim() || "",
+        speech_output_gain: Number(speechOutputGain?.value || 1),
         provider: llmProvider.value || "",
         model: llmModel.value || "",
         session_context_size: Number(sessionContextSize.value || 0),
@@ -2993,6 +3021,264 @@
 
     function hasUnsavedConfigChanges() {
       return Boolean(configBaseline) && configSignature() !== configBaseline;
+    }
+
+    function syncSpeechOutputGainLabel() {
+      if (!speechOutputGain) return;
+      const offline = selectedConnectivityMode() === "offline";
+      const locality = offline ? "Local" : "Cloud";
+      speechOutputGainLabel.textContent = `${locality} · ${Number(speechOutputGain.value || 1).toFixed(2)}×`;
+      speechOutputGainHint.textContent = offline
+        ? "Gain applied to fully local speech output."
+        : "Gain applied to cloud-generated speech, including Realtime.";
+    }
+
+    function syncVoiceEngineControls() {
+      if (!voiceEngine) return;
+      const offline = selectedConnectivityMode() === "offline";
+      if (offline) voiceEngine.value = "local";
+      const realtime = !offline && voiceEngine.value === "openai-realtime";
+      voiceEngine.disabled = offline;
+      for (const item of voiceEngine.options) item.disabled = offline ? item.value !== "local" : item.value === "local";
+      realtimeModelField.classList.toggle("hidden", !realtime);
+      realtimeVoiceField.classList.toggle("hidden", !realtime);
+      llmProviderField.classList.toggle("hidden", realtime);
+      llmModelField.classList.toggle("hidden", realtime);
+      classicSttPromptField.classList.toggle("hidden", realtime);
+      classicInterruptField.classList.toggle("hidden", realtime);
+      sttInputField.classList.toggle("hidden", realtime);
+      classicVadDetails.classList.toggle("hidden", realtime);
+      for (const element of cloudAudioControls) element.classList.toggle("hidden", realtime || offline);
+      for (const field of [ttsSpeedField, elevenlabsVoiceField, openaiTtsVoiceField, ttsTestField]) field.classList.toggle("hidden", realtime);
+      webTtsVolumeField.classList.add("hidden");
+      backendTtsVolumeField.classList.add("hidden");
+      currentClassicCloudSpeech = !offline && ["openai", "elevenlabs"].includes(String(cloudTtsProvider.value || "").toLowerCase());
+      speechOutputGainField.classList.toggle("hidden", !(realtime || offline || currentClassicCloudSpeech));
+      syncSpeechOutputGainLabel();
+    }
+
+    function syncConfigActionState() {
+      if (runtimeRestarting) {
+        llmSave.textContent = "Restarting…";
+        llmSave.disabled = true;
+        return;
+      }
+      const dirty = hasUnsavedConfigChanges();
+      llmSave.disabled = false;
+      if (dirty && restartRequired) llmSave.textContent = "Save + Restart";
+      else if (!dirty && restartRequired) llmSave.textContent = "Restart";
+      else llmSave.textContent = "Save";
+    }
+
+    function setRestartRequired(value, message = "") {
+      restartRequired = restartRequired || Boolean(value);
+      if (restartRequired && message) llmMessage.textContent = message;
+      syncConfigActionState();
+    }
+
+    async function requestRuntimeRestart() {
+      if (runtimeRestarting) return;
+      runtimeRestarting = true;
+      restartLoadingSeen = false;
+      llmMessage.textContent = "Restarting…";
+      syncConfigActionState();
+      try {
+        const response = await fetch("/api/runtime-restart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        await fetchJsonOrThrow(response);
+      } catch (error) {
+        runtimeRestarting = false;
+        llmMessage.textContent = `Restart failed: ${error.message || error}`;
+        syncConfigActionState();
+      }
+    }
+
+    function findMcpConfigServers(value, depth = 0, seen = new Set()) {
+      if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) return null;
+      seen.add(value);
+      if (value.mcpServers && typeof value.mcpServers === "object" && !Array.isArray(value.mcpServers)) return value.mcpServers;
+      for (const child of Object.values(value)) {
+        const found = findMcpConfigServers(child, depth + 1, seen);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function mcpPolicyMap(snapshot) {
+      const servers = findMcpConfigServers(snapshot) || {};
+      const result = {};
+      for (const [name, raw] of Object.entries(servers)) {
+        if (!raw || typeof raw !== "object") continue;
+        const native = raw.native && typeof raw.native === "object" ? raw.native : {};
+        const realtime = raw.realtime && typeof raw.realtime === "object" ? raw.realtime : {};
+        const permissions = realtime.permissions && typeof realtime.permissions === "object" ? realtime.permissions : {};
+        result[name] = {
+          transport: String(realtime.transport || "auto").toLowerCase(),
+          permission: String(permissions.mode || realtime.permission || "open").toLowerCase() === "approval" ? "approval" : "open",
+          httpsUrl: String(native.url || ""),
+          command: String(raw.command || ""),
+          args: Array.isArray(raw.args) ? raw.args.map(String) : [],
+          localUrl: String(raw.url || "")
+        };
+      }
+      return result;
+    }
+
+    function runtimeMcpStatus(snapshot, name) {
+      const items = snapshot?.runtime_status?.mcp;
+      return Array.isArray(items) ? items.find((item) => String(item?.name || "") === name) || null : null;
+    }
+
+    function displayMcpTransport(value) {
+      const normalized = String(value || "").toLowerCase();
+      return normalized === "native" ? "HTTPS" : normalized.toUpperCase();
+    }
+
+    function makeCfgField(label, control) {
+      const field = document.createElement("label");
+      field.className = "field";
+      const text = document.createElement("span");
+      text.textContent = label;
+      field.append(text, control);
+      return field;
+    }
+
+    function makeMcpPolicyControls(policy) {
+      const transport = document.createElement("select");
+      transport.append(
+        option("Auto", "auto", false, policy.transport === "auto"),
+        option("HTTPS", "native", false, policy.transport === "native"),
+        option("STDIO", "stdio", false, policy.transport === "stdio")
+      );
+      const permission = document.createElement("select");
+      permission.append(
+        option("Open", "open", false, policy.permission === "open"),
+        option("Require approval", "approval", false, policy.permission === "approval")
+      );
+      const https = document.createElement("input");
+      https.type = "url";
+      https.placeholder = "https://…/mcp";
+      https.value = policy.httpsUrl || "";
+      const httpsField = makeCfgField("Provider HTTPS URL", https);
+      const sync = () => {
+        httpsField.classList.toggle("hidden", transport.value === "stdio");
+        const approval = [...permission.options].find((item) => item.value === "approval");
+        if (approval) approval.disabled = transport.value === "stdio";
+        if (transport.value === "stdio" && permission.value === "approval") permission.value = "open";
+      };
+      transport.addEventListener("change", sync);
+      sync();
+      return { transport, permission, https, httpsField };
+    }
+
+    async function saveMcpDefinition(action, body) {
+      const response = await fetch("/api/mcp-server", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...body })
+      });
+      return fetchJsonOrThrow(response);
+    }
+
+    function ensureAddMcpControl() {
+      const toolbar = mcpDetails?.querySelector(".mcp-server-toolbar");
+      if (!toolbar || document.querySelector("#cfg-add-mcp")) return;
+      const add = document.createElement("button");
+      add.id = "cfg-add-mcp";
+      add.type = "button";
+      add.className = "small-button";
+      add.textContent = "+ Add MCP";
+      const form = document.createElement("div");
+      form.className = "hidden";
+      form.style.cssText = "display:grid;gap:8px;margin-top:10px;padding:10px;border:1px solid var(--border,#d7dde5);border-radius:8px";
+      const name = document.createElement("input"); name.placeholder = "name";
+      const command = document.createElement("input"); command.placeholder = "STDIO command (optional)";
+      const args = document.createElement("input"); args.placeholder = '["arg1","arg2"]';
+      const localUrl = document.createElement("input"); localUrl.placeholder = "Local MCP URL http://… (optional)";
+      const controls = makeMcpPolicyControls({ transport: "auto", permission: "open", httpsUrl: "" });
+      const create = document.createElement("button"); create.type = "button"; create.className = "small-button"; create.textContent = "Create MCP";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "small-button"; cancel.textContent = "Cancel";
+      const message = document.createElement("span"); message.className = "detail";
+      form.append(makeCfgField("Name", name), makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), create, cancel, message);
+      toolbar.append(add, form);
+      add.addEventListener("click", () => form.classList.remove("hidden"));
+      cancel.addEventListener("click", () => form.classList.add("hidden"));
+      create.addEventListener("click", async () => {
+        create.disabled = true;
+        message.textContent = "Creating…";
+        try {
+          const data = await saveMcpDefinition("create", { server: {
+            name: name.value.trim(), command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
+            realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
+            https_url: controls.https.value.trim(), permission_mode: controls.permission.value
+          }});
+          setRestartRequired(data.restart_required, "MCP created · restart required.");
+          form.classList.add("hidden");
+          mcpServersSignature = "";
+          await refresh();
+        } catch (error) {
+          message.textContent = `Create failed: ${error.message || error}`;
+        } finally { create.disabled = false; }
+      });
+    }
+
+    function renderMcpCrud(snapshot) {
+      ensureAddMcpControl();
+      for (const old of document.querySelectorAll(".cfg-mcp-editor")) old.remove();
+      const policies = mcpPolicyMap(snapshot);
+      for (const card of document.querySelectorAll(".mcp-server-card")) {
+        const name = card.querySelector(".mcp-server-name")?.textContent?.trim() || "";
+        const policy = policies[name];
+        if (!name || !policy) continue;
+        const section = document.createElement("div");
+        section.className = "cfg-mcp-editor";
+        section.style.cssText = "margin-top:10px;padding-top:10px;border-top:1px solid var(--border,#d7dde5);display:grid;gap:8px";
+        const runtime = runtimeMcpStatus(snapshot, name);
+        if (runtime) {
+          const status = document.createElement("div");
+          status.className = "detail";
+          const configured = displayMcpTransport(runtime.configured_transport || policy.transport);
+          const effective = displayMcpTransport(runtime.effective_transport || "");
+          status.textContent = effective ? `Configured ${configured} · Effective ${effective}${runtime.healthy === true ? " · healthy" : runtime.healthy === false ? " · unavailable" : ""}` : `Configured ${configured}`;
+          section.append(status);
+        }
+        const command = document.createElement("input"); command.value = policy.command; command.placeholder = "STDIO command";
+        const args = document.createElement("input"); args.value = JSON.stringify(policy.args); args.placeholder = '["arg1"]';
+        const localUrl = document.createElement("input"); localUrl.value = policy.localUrl; localUrl.placeholder = "Local MCP URL";
+        const controls = makeMcpPolicyControls(policy);
+        const save = document.createElement("button"); save.type = "button"; save.className = "small-button"; save.textContent = "Save MCP";
+        const del = document.createElement("button"); del.type = "button"; del.className = "small-button"; del.textContent = "Delete MCP";
+        const message = document.createElement("span"); message.className = "detail";
+        save.addEventListener("click", async () => {
+          save.disabled = true; message.textContent = "Saving…";
+          try {
+            const data = await saveMcpDefinition("update", { existing_name: name, server: {
+              name, command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
+              realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
+              https_url: controls.https.value.trim(), permission_mode: controls.permission.value
+            }});
+            setRestartRequired(data.restart_required, "MCP saved · restart required.");
+            message.textContent = "Saved · restart required.";
+          } catch (error) { message.textContent = `Save failed: ${error.message || error}`; }
+          finally { save.disabled = false; }
+        });
+        del.addEventListener("click", async () => {
+          if (!window.confirm(`Delete MCP "${name}"?`)) return;
+          del.disabled = true;
+          try {
+            const data = await saveMcpDefinition("delete", { server: name });
+            setRestartRequired(data.restart_required, "MCP deleted · restart required.");
+            mcpServersSignature = "";
+            await refresh();
+          } catch (error) { message.textContent = `Delete failed: ${error.message || error}`; }
+          finally { del.disabled = false; }
+        });
+        section.append(makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), save, del, message);
+        card.append(section);
+      }
     }
 
     async function loadEnvProfiles() {
@@ -4606,6 +4892,12 @@
 
 	        const selectedProvider = data.provider || provider || "";
         setSelectedConnectivityMode(connectivityOverride || data.selected_connectivity_mode || "online");
+        voiceEngine.value = data.selected_voice_engine || (selectedConnectivityMode() === "offline" ? "local" : "classic");
+        realtimeModel.value = data.selected_realtime_model || "gpt-realtime-2.1";
+        realtimeVoice.value = data.selected_realtime_voice || "marin";
+        currentCloudGain = Number(data.selected_cloud_tts_output_gain ?? 1);
+        currentLocalGain = Number(data.selected_local_tts_output_gain ?? 1);
+        speechOutputGain.value = String(selectedConnectivityMode() === "offline" ? currentLocalGain : currentCloudGain);
 	        llmProvider.replaceChildren();
         for (const item of data.providers || []) {
           const label = item.available === false && item.reason
@@ -4850,9 +5142,11 @@
         }
         syncAudioSampleControls();
 
+        syncVoiceEngineControls();
         llmMessage.textContent = data.message || "";
         if (shouldMarkClean) {
           markConfigClean();
+          syncConfigActionState();
         }
       } catch (error) {
         llmMessage.textContent = `LLM options unavailable: ${error}`;
@@ -4909,6 +5203,7 @@
       try {
         const response = await fetch("/api/snapshot", { cache: "no-store" });
         const data = await response.json();
+        lastSnapshot = data;
         const snapshotEnv = (data.config && data.config.env) || {};
         if (Object.prototype.hasOwnProperty.call(snapshotEnv, "SPEAKER_RECOGNITION_ENABLED")) {
           speakerRecognitionEnvEnabled = envFlag(snapshotEnv.SPEAKER_RECOGNITION_ENABLED, speakerRecognitionEnvEnabled);
@@ -4930,6 +5225,7 @@
         configEl.value = data.config_text || "";
         renderMcpServers(data.mcp_servers || []);
         syncMcpRoutingEditors();
+        window.setTimeout(() => renderMcpCrud(data), 0);
         const remoteScreen = data.remote_screen || {};
         if (!vncUrlDirty && snapshotEnvChanged && currentVncFrameUrl) {
           disconnectVnc("reconnexion VNC...");
@@ -4957,6 +5253,18 @@
           Boolean(environmentLoading.active),
           environmentLoading.title || tr("environment_refresh", "rafraichissement de l'environnement")
         );
+        if (runtimeRestarting) {
+          if (environmentLoading.active) restartLoadingSeen = true;
+          if (restartLoadingSeen && !environmentLoading.active && data.runtime_status?.ready) {
+            runtimeRestarting = false;
+            restartRequired = false;
+            restartLoadingSeen = false;
+            llmMessage.textContent = "Restart complete.";
+            llmControlsInitialized = false;
+            configBaseline = configSignature();
+            syncConfigActionState();
+          }
+        }
         const envProfileChanged = await loadEnvProfiles();
         if (envProfileChanged) {
           llmControlsInitialized = false;
@@ -5402,8 +5710,18 @@
       if (cloudApiDetails.open) loadCloudApiStatus();
     });
     cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
+    voiceEngine.addEventListener("change", () => { syncVoiceEngineControls(); syncConfigActionState(); });
+    realtimeModel.addEventListener("input", syncConfigActionState);
+    realtimeVoice.addEventListener("input", syncConfigActionState);
+    speechOutputGain.addEventListener("input", () => { syncSpeechOutputGainLabel(); syncConfigActionState(); });
+    cloudTtsProvider.addEventListener("change", syncVoiceEngineControls);
+    panelConfig.addEventListener("input", syncConfigActionState);
+    panelConfig.addEventListener("change", syncConfigActionState);
+    mcpDetails.addEventListener("toggle", () => { if (mcpDetails.open && lastSnapshot) window.setTimeout(() => renderMcpCrud(lastSnapshot), 0); });
 
     llmSave.addEventListener("click", async () => {
+      if (!hasUnsavedConfigChanges() && restartRequired) { await requestRuntimeRestart(); return; }
+      const restartAfterSave = restartRequired;
       const provider = llmProvider.value;
       const model = llmModel.value;
       const sessionContextSizeValue = Number(sessionContextSize.value || 0);
@@ -5451,6 +5769,12 @@
       const speakerThresholdValue = Number(speakerThreshold.value || 0.75);
       const speakerMarginValue = Number(speakerMargin.value || 0.10);
       const speakerProfilesValue = collectSpeakerProfiles();
+      const voiceEngineValue = voiceEngine.value || (connectivityModeValue === "offline" ? "local" : "classic");
+      const realtimeModelValue = realtimeModel.value.trim() || "gpt-realtime-2.1";
+      const realtimeVoiceValue = realtimeVoice.value.trim() || "marin";
+      const speechGainValue = Number(speechOutputGain.value || 1);
+      const cloudGainValue = connectivityModeValue === "offline" ? currentCloudGain : speechGainValue;
+      const localGainValue = connectivityModeValue === "offline" ? speechGainValue : currentLocalGain;
       if (!provider) return;
 
       llmSave.disabled = true;
@@ -5506,26 +5830,32 @@
             speaker_backend: speakerBackendValue,
             speaker_threshold: speakerThresholdValue,
             speaker_margin: speakerMarginValue,
-            speaker_profiles: speakerProfilesValue
+            speaker_profiles: speakerProfilesValue,
+            voice_engine: voiceEngineValue,
+            realtime_model: realtimeModelValue,
+            realtime_voice: realtimeVoiceValue,
+            cloud_tts_output_gain: cloudGainValue,
+            local_tts_output_gain: localGainValue
           })
         });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         llmMessage.textContent = data.message || tr("saved", "Saved.");
         cloudApiLoaded = false;
-        setEnvironmentLoading(true);
+        currentCloudGain = cloudGainValue;
+        currentLocalGain = localGainValue;
         markConfigClean();
-        llmControlsInitialized = false;
+        restartRequired = restartRequired || Boolean(data.restart_required);
+        syncConfigActionState();
         if ((data.stt_language || sttLanguageValue) !== i18nPayload.locale) {
           window.setTimeout(() => window.location.reload(), 250);
           return;
         }
-        await refresh();
+        if (restartAfterSave) await requestRuntimeRestart();
       } catch (error) {
-        setEnvironmentLoading(false);
         llmMessage.textContent = trf("save_failed", "Save failed: {error}", { error });
       } finally {
-        llmSave.disabled = !llmProvider.value;
+        if (!runtimeRestarting) syncConfigActionState();
       }
     });
 

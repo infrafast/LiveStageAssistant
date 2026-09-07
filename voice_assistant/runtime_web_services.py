@@ -383,6 +383,11 @@ class RuntimeWebServices:
             "selected_wake_detected_sound_file": str(values.get("WAKE_DETECTED_SOUND_FILE") or "").strip(),
             "selected_startup_loader_sound_file": startup_file,
             "selected_command_ack_sound_file": command_ack,
+            "selected_voice_engine": str(values.get("VOICE_ENGINE") or ("local" if connectivity == "offline" else "classic")).strip().lower(),
+            "selected_realtime_model": str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
+            "selected_realtime_voice": str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
+            "selected_cloud_tts_output_gain": self._float(values, "CLOUD_TTS_OUTPUT_GAIN", 1.0),
+            "selected_local_tts_output_gain": self._float(values, "LOCAL_TTS_OUTPUT_GAIN", 1.0),
             "message": f"Common runtime options loaded from active profile: {self.active_profile()}",
         }
 
@@ -435,6 +440,11 @@ class RuntimeWebServices:
         speaker_threshold: float,
         speaker_margin: float,
         speaker_profiles: list[dict[str, Any]],
+        voice_engine: str,
+        realtime_model: str,
+        realtime_voice: str,
+        cloud_tts_output_gain: float,
+        local_tts_output_gain: float,
     ) -> dict[str, Any]:
         """Persist the legacy GUI form into the active runtime profile."""
         values = self._values()
@@ -492,7 +502,22 @@ class RuntimeWebServices:
         if backend_audio_monitor_mode == "rejected" and not wake_word:
             backend_audio_monitor_mode = "off"
 
+        requested_engine = str(voice_engine or ("local" if active_connectivity == "offline" else "classic")).strip().lower()
+        allowed_engines = {"local"} if active_connectivity == "offline" else {"classic", "openai-realtime"}
+        if requested_engine not in allowed_engines:
+            raise ValueError(f"voice_engine must be one of: {', '.join(sorted(allowed_engines))}")
+        cloud_tts_output_gain = max(0.0, min(2.0, float(cloud_tts_output_gain)))
+        local_tts_output_gain = max(0.0, min(2.0, float(local_tts_output_gain)))
+        if requested_engine == "openai-realtime":
+            realtime_model = str(realtime_model or "gpt-realtime-2.1").strip()
+            realtime_voice = str(realtime_voice or "marin").strip()
+            if not realtime_model or not realtime_voice:
+                raise ValueError("Realtime model and voice are required")
+
         updates = {
+            "VOICE_ENGINE": requested_engine,
+            "CLOUD_TTS_OUTPUT_GAIN": f"{cloud_tts_output_gain:.2f}",
+            "LOCAL_TTS_OUTPUT_GAIN": f"{local_tts_output_gain:.2f}",
             "LLM_PROVIDER": provider,
             "STT_INPUT": stt_input,
             "STT_LANGUAGE": normalize_locale(stt_language),
@@ -541,6 +566,9 @@ class RuntimeWebServices:
             "TTS_PROVIDER": tts_provider,
             "WEB_TTS_PROVIDER": web_tts_provider,
         }
+        if requested_engine == "openai-realtime":
+            updates["OPENAI_REALTIME_MODEL"] = realtime_model
+            updates["OPENAI_REALTIME_VOICE"] = realtime_voice
         if provider == "ollama":
             updates["OLLAMA_MODEL"] = model
             updates["OFFLINE_MODEL"] = model
@@ -555,16 +583,18 @@ class RuntimeWebServices:
             updates[f"SPEAKER_PROFILE_{index}_ENABLED"] = "true" if bool(entry.get("enabled")) else "false"
 
         with self._lock:
-            self._write_env(self.active_profile(), updates)
+            profile = self.active_profile()
+            self._write_env(profile, updates)
             self._refresh_monitor_config()
-            self._reload()
         return {
             "saved": True,
             "provider": provider,
             "model": model,
+            "voice_engine": requested_engine,
             "connectivity_mode": active_connectivity,
+            "profile": str(profile),
             "restart_required": True,
-            "message": "Configuration saved. Restart LiveStageAssistant to apply it.",
+            "message": f"Saved to {profile} · restart required.",
         }
 
     def cloud_api_status(self) -> dict[str, Any]:
@@ -666,7 +696,6 @@ class RuntimeWebServices:
                 options["routing"] = normalized[str(server_name)]
             self._write_json_atomic(path, config)
             self._refresh_monitor_config(mcp_config=config)
-            self._reload()
         return {"ok": True, "mcp_config": str(path), "routing": normalized, "restart_required": True}
 
     @staticmethod
@@ -703,7 +732,6 @@ class RuntimeWebServices:
                     server["env"] = normalized[str(server_name)]
             self._write_json_atomic(path, config)
             self._refresh_monitor_config(mcp_config=config)
-            self._reload()
         return {"ok": True, "mcp_config": str(path), "options": normalized, "restart_required": True}
 
     def _session_store(self) -> SessionContextStore:
