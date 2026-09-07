@@ -11,9 +11,11 @@ from typing import Any, Callable
 try:
     from . import web_monitor_base as _base
     from .mcp_realtime_web_endpoint import save_mcp_realtime_policy_from_snapshot
+    from .runtime_status import read_status_file
 except ImportError:  # pragma: no cover - direct script fallback
     import web_monitor_base as _base
     from mcp_realtime_web_endpoint import save_mcp_realtime_policy_from_snapshot
+    from runtime_status import read_status_file
 
 for _name in dir(_base):
     if not _name.startswith("_") and _name != "WebMonitor":
@@ -23,6 +25,7 @@ _BaseWebMonitor = _base.WebMonitor
 _START_PATCH_LOCK = threading.Lock()
 VOICE_ENGINE_ONLINE = {"classic", "openai-realtime"}
 VOICE_ENGINE_OFFLINE = {"local"}
+DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"
 
 
 def _active_env_file_from_snapshot(snapshot: dict[str, Any]) -> Path:
@@ -33,6 +36,10 @@ def _active_env_file_from_snapshot(snapshot: dict[str, Any]) -> Path:
     if mode == "offline":
         return env_dir / ".env.offline"
     return env_dir / ".env.online"
+
+
+def _runtime_status_file() -> Path:
+    return Path(os.getenv("LSA_RUNTIME_STATUS_FILE", DEFAULT_RUNTIME_STATUS_FILE)).expanduser()
 
 
 def _write_env_value(path: Path, key: str, value: str) -> None:
@@ -67,7 +74,7 @@ def _write_env_value(path: Path, key: str, value: str) -> None:
 
 
 class WebMonitor(_BaseWebMonitor):
-    """Historical WebMonitor plus RV2D realtime policy and voice-engine routes."""
+    """Historical WebMonitor plus RV2D realtime policy, engine and runtime-status routes."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -81,6 +88,31 @@ class WebMonitor(_BaseWebMonitor):
         safe_policy, refreshed_config = save_mcp_realtime_policy_from_snapshot(self.snapshot(), server_name, policy)
         self.update(mcp_config=refreshed_config)
         return {"ok": True, "server": server_name, "policy": safe_policy}
+
+    def _runtime_status(self) -> dict[str, Any]:
+        path = _runtime_status_file()
+        if not path.is_file():
+            return {
+                "ok": False,
+                "available": False,
+                "status_file": str(path),
+                "error": "runtime status is not available yet",
+            }
+        try:
+            status = read_status_file(path)
+        except Exception as error:
+            return {
+                "ok": False,
+                "available": False,
+                "status_file": str(path),
+                "error": f"could not read runtime status: {error}",
+            }
+        return {
+            "ok": True,
+            "available": True,
+            "status_file": str(path),
+            "runtime": status,
+        }
 
     def _save_voice_engine(self, engine: str) -> dict[str, Any]:
         snapshot = self.snapshot()
@@ -111,6 +143,16 @@ class WebMonitor(_BaseWebMonitor):
 
             def server_factory(server_address, handler_class):
                 class RealtimePolicyHandler(handler_class):
+                    def do_GET(self) -> None:
+                        parsed = _base.urlparse(self.path)
+                        if parsed.path != "/api/runtime-status":
+                            super().do_GET()
+                            return
+                        if self._auth_required(parsed.path):
+                            self._send_auth_required()
+                            return
+                        self._send_json(monitor._runtime_status())
+
                     def do_POST(self) -> None:
                         parsed = _base.urlparse(self.path)
                         if parsed.path not in {"/api/mcp-realtime-policy", "/api/voice-engine"}:
