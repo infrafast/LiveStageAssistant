@@ -1,4 +1,4 @@
-"""Web monitor compatibility wrapper for RV2D realtime controls."""
+"""Web monitor compatibility wrapper for RV2D/RV8 common controls."""
 
 from __future__ import annotations
 
@@ -40,6 +40,13 @@ def _active_env_file_from_snapshot(snapshot: dict[str, Any]) -> Path:
     if mode == "offline":
         return env_dir / ".env.offline"
     return env_dir / ".env.online"
+
+
+def _profile_env_files() -> tuple[Path, ...]:
+    env_dir = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "."))
+    candidates = (env_dir / ".env.online", env_dir / ".env.offline")
+    existing = tuple(path for path in candidates if path.is_file())
+    return existing or candidates[:1]
 
 
 def _runtime_status_file() -> Path:
@@ -87,6 +94,16 @@ def _write_env_values(path: Path, values: dict[str, str]) -> None:
 
 def _write_env_value(path: Path, key: str, value: str) -> None:
     _write_env_values(path, {key: value})
+
+
+def _bounded_gain(value: Any) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("output gain must be a number")
+    if parsed < 0.0 or parsed > 2.0:
+        raise ValueError("output gain must be between 0.0 and 2.0")
+    return parsed
 
 
 def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> dict[str, dict[str, Any]]:
@@ -140,7 +157,7 @@ def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> di
 
 
 class WebMonitor(_BaseWebMonitor):
-    """Historical WebMonitor plus RV2D realtime policy, engine and runtime-status routes."""
+    """Historical WebMonitor plus RV2D/RV8 common runtime controls."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -151,7 +168,6 @@ class WebMonitor(_BaseWebMonitor):
             self._mcp_realtime_policy_save_handler = handler
 
     def snapshot(self) -> dict[str, Any]:
-        """Augment the legacy snapshot with generic runtime/transport observability."""
         snapshot = super().snapshot()
         payload = self._runtime_status()
         if not payload.get("available"):
@@ -172,23 +188,13 @@ class WebMonitor(_BaseWebMonitor):
     def _runtime_status(self) -> dict[str, Any]:
         path = _runtime_status_file()
         if not path.is_file():
-            return {
-                "ok": False,
-                "available": False,
-                "status_file": str(path),
-                "error": "runtime status is not available yet",
-            }
+            return {"ok": False, "available": False, "status_file": str(path), "error": "runtime status is not available yet"}
         try:
             stat = path.stat()
             age_seconds = max(0.0, time.time() - stat.st_mtime)
             status = read_status_file(path)
         except Exception as error:
-            return {
-                "ok": False,
-                "available": False,
-                "status_file": str(path),
-                "error": f"could not read runtime status: {error}",
-            }
+            return {"ok": False, "available": False, "status_file": str(path), "error": f"could not read runtime status: {error}"}
         stale = age_seconds > _runtime_status_stale_seconds()
         return {
             "ok": not stale,
@@ -237,6 +243,35 @@ class WebMonitor(_BaseWebMonitor):
             "message": "Voice engine settings saved. Restart LiveStageAssistant to apply them.",
         }
 
+    def _save_voice_output_gains(self, cloud_gain: Any, local_gain: Any) -> dict[str, Any]:
+        cloud = _bounded_gain(cloud_gain)
+        local = _bounded_gain(local_gain)
+        updates = {
+            "CLOUD_TTS_OUTPUT_GAIN": f"{cloud:.2f}",
+            "LOCAL_TTS_OUTPUT_GAIN": f"{local:.2f}",
+        }
+        written: list[str] = []
+        for env_file in _profile_env_files():
+            if not env_file.is_file():
+                continue
+            _write_env_values(env_file, updates)
+            written.append(str(env_file))
+        if not written:
+            raise ValueError("no online/offline env profile exists for output-gain persistence")
+
+        snapshot = self.snapshot()
+        env_values = dict(((snapshot.get("config") or {}).get("env") or {}))
+        env_values.update(updates)
+        self.update(env_values=env_values)
+        return {
+            "ok": True,
+            "cloud_gain": cloud,
+            "local_gain": local,
+            "profiles": written,
+            "restart_required": True,
+            "message": "Cloud and Local speech output gains saved. Restart LiveStageAssistant to apply them.",
+        }
+
     def start(self, host: str = "127.0.0.1", port: int = 8765) -> tuple[str, int]:
         monitor = self
         with _START_PATCH_LOCK:
@@ -256,7 +291,7 @@ class WebMonitor(_BaseWebMonitor):
 
                     def do_POST(self) -> None:
                         parsed = _base.urlparse(self.path)
-                        if parsed.path not in {"/api/mcp-realtime-policy", "/api/voice-engine"}:
+                        if parsed.path not in {"/api/mcp-realtime-policy", "/api/voice-engine", "/api/voice-output-gains"}:
                             super().do_POST()
                             return
                         if self._auth_required(parsed.path):
@@ -264,6 +299,9 @@ class WebMonitor(_BaseWebMonitor):
                             return
                         if parsed.path == "/api/voice-engine":
                             self._handle_voice_engine_save()
+                            return
+                        if parsed.path == "/api/voice-output-gains":
+                            self._handle_voice_output_gains_save()
                             return
                         self._handle_mcp_realtime_policy_save()
 
@@ -282,6 +320,20 @@ class WebMonitor(_BaseWebMonitor):
                             return
                         except Exception as error:  # pragma: no cover
                             self._send_json_error(500, {"ok": False, "error": {"message": f"Could not save voice engine: {error}"}})
+                            return
+                        self._send_json(result)
+
+                    def _handle_voice_output_gains_save(self) -> None:
+                        payload = self._read_json_body(max_bytes=16 * 1024)
+                        if payload is None:
+                            return
+                        try:
+                            result = monitor._save_voice_output_gains(payload.get("cloud_gain"), payload.get("local_gain"))
+                        except ValueError as error:
+                            self._send_json_error(400, {"ok": False, "error": {"message": str(error)}})
+                            return
+                        except Exception as error:  # pragma: no cover
+                            self._send_json_error(500, {"ok": False, "error": {"message": f"Could not save voice output gains: {error}"}})
                             return
                         self._send_json(result)
 
