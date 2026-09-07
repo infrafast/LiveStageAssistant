@@ -276,7 +276,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC native fixture validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C native-first AUTO behavior now includes both validated pre-dispatch HTTPS failure -> STDIO fallback and a real provider-native post-dispatch mutation failure on Pi5 where the mutation committed exactly once, the provider received HTTP 502, and AUTO suppressed all STDIO replay. RV2D canonical configuration, GUI persistence, common startup-loader lifecycle and basic common connectivity round trips are materially implemented and Pi-validated. OR2 basic Classic and Realtime Online -> Offline -> Online round trips are Pi-validated. OR3 Piper offline speech is functionally Pi-validated and is now Piper-only.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC native fixture validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C AUTO safety is validated for pre-dispatch fallback and ambiguous post-dispatch write suppression, while a 20-sample Pi5 benchmark on the same XR16 now shows local STDIO materially faster and more stable than provider-native HTTPS/Funnel for the representative read path. The target AUTO policy is therefore changing to prefer healthy local STDIO when available, with native retained as explicit/remote capability and safe fallback path. RV2D canonical configuration, GUI persistence, common startup-loader lifecycle and basic common connectivity round trips are materially implemented and Pi-validated. OR2 basic Classic and Realtime Online -> Offline -> Online round trips are Pi-validated. OR3 Piper offline speech is functionally Pi-validated and is now Piper-only.
 
 **Goal:** add selectable low-latency realtime voice beside Classic without decommissioning Classic, while preserving MCP transport flexibility, wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -306,6 +306,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 22. Loss of Internet while a cloud engine is active must be announced through the guaranteed-local Piper speech path before/while switching to the offline profile and local engine.
 23. Low-level ALSA/JACK probe noise should be suppressed while real audio failures remain visible as concise LSA errors.
 24. Piper is the implicit and only local TTS implementation; offline profiles have no local-provider selector, and backend cloud-TTS failures fall back to Piper.
+25. For stage-local MCP servers, measured latency takes precedence over provider-native elegance: AUTO should prefer a healthy local/STDIO execution path when available, while preserving explicit `native` mode for remote/provider-native use.
 
 ## RV target architecture
 
@@ -347,17 +348,20 @@ A tool-required turn must produce no spoken narration before tool execution; the
 ```text
 native
   -> provider-native remote MCP only
+  -> useful when the provider must reach the MCP directly or no healthy local bridge is available
 
 stdio
   -> LSA bridge / existing MCP client only
+  -> preferred for stage-local execution when available and healthy
 
-auto
-  -> native first
-  -> bridge/STDIO fallback only on clearly safe failure
+auto   <- target policy after Pi5 latency benchmark
+  -> prefer local STDIO/bridge when it is configured and healthy
+  -> use native when local execution is unavailable/unhealthy or when explicitly selected
+  -> cross-transport fallback only on clearly safe failure
   -> never blindly replay an ambiguous write
 ```
 
-For write/control operations, fallback is allowed only when non-execution of the native write is established. Ambiguous post-dispatch outcomes are not retried automatically.
+For write/control operations, fallback is allowed only when non-execution of the previous write is established. Ambiguous post-dispatch outcomes are not retried automatically. The current runtime still needs the AUTO priority change implemented and revalidated; this section records the target policy chosen from measured stage latency.
 
 ## RV MCP permission strategy
 
@@ -412,14 +416,15 @@ Require approval
 #### RV2C - Auto mode and transport fallback — IN PROGRESS
 
 - [x] per-server AUTO startup selection;
-- [x] native-first behavior;
+- [x] native-first behavior implemented and validated as the original policy;
 - [x] MCP prompt parity across native/bridge;
 - [x] pre-dispatch native failure -> STDIO fallback;
 - [x] safe fallback policy blocks ambiguous write replay;
 - [x] integrated-service 502 -> STDIO fallback validated;
-- [~] auth/timeout/post-dispatch deterministic fault matrix implemented; standalone Pi unit/matrix execution still pending;
+- [x] auth/timeout/post-dispatch deterministic unit tests and fault matrix executed on Pi5: 10/10 unit tests pass and the full matrix confirms no automatic replay of ambiguous post-dispatch writes;
 - [x] real provider-native post-dispatch fault injection validated on Pi5 with one committed mutation, HTTP 502 after dispatch, `fallback=false`, no STDIO switch and counter remaining exactly 1;
-- [~] direct native-vs-STDIO comparison pending;
+- [x] direct native-vs-STDIO read-only comparison completed on the same Pi5/XR16 with 20 samples;
+- [~] change AUTO selection priority from native-first to healthy local-STDIO-first when a local execution path is available; implementation + regression validation pending;
 - [ ] representative Classic-vs-Realtime tool corpus;
 - [ ] arbitrary unrelated MCP proof without engine changes.
 
@@ -427,7 +432,39 @@ Validation note (Pi5, 2026-09-06): mixer=`auto/open` with a native HTTP 502 fell
 
 Validation note (Pi5, 2026-09-07): `scripts/rv2c_event_fault_probe.py` validated the real AUTO event-loop policy using synthetic post-dispatch events: read-only failures may replay safely, while mutation/unknown failures suppress replay. `scripts/rv2c_native_postdispatch_probe.py` then exercised a real provider-native HTTPS/Funnel failure against an isolated MCP fixture: `mutate_then_disconnect` persisted counter=1 before terminating, OpenAI received HTTP 502, AUTO classified `ambiguous_mutation_or_unknown`, `fallback=false`, and no STDIO replay occurred during the observation window.
 
-Implementation note (2026-09-06): `scripts/rv2c_fault_matrix.py` and the extended `tests/test_realtime_mcp_auto.py` cover auth failures, pre-dispatch timeouts, post-dispatch read failures, ambiguous write/unknown failures and explicit non-execution. Their standalone Pi execution remains useful regression coverage even though the provider-native ambiguous-write case is now physically validated.
+Validation note (Pi5, 2026-09-07): `tests/test_realtime_mcp_auto.py` executed directly on Pi5 with 10/10 passing tests. `scripts/rv2c_fault_matrix.py` also passed all auth, timeout, connection, read-only, write, unknown and explicit-not-executed cases, ending with `RV2C fault matrix OK: ambiguous post-dispatch writes are never replayed automatically.`
+
+### RV2C direct native-vs-STDIO latency benchmark — PI5 VALIDATED
+
+Benchmark command:
+
+```bash
+.venv/bin/python scripts/rv2c_native_stdio_benchmark.py --samples 20
+```
+
+Conditions were held constant for both paths:
+
+- Pi5 running LiveStageAssistant benchmark runner;
+- OpenAI Realtime model `gpt-realtime-2.1`;
+- same read-only MCP tool: `osc_get_mixer_status`;
+- same XR16: `192.168.100.16:10024`;
+- same OSC protocol: `OSCXR`;
+- native path: provider-native MCP over HTTPS/Tailscale Funnel;
+- STDIO path: local LSA bridge to the same XMSeries MCP implementation;
+- 20 samples per transport.
+
+| Metric | Native HTTPS/Funnel | STDIO/local | STDIO advantage |
+|---|---:|---:|---:|
+| MCP tool execution — min | 195.803 ms | 8.835 ms | 186.968 ms |
+| MCP tool execution — median | 1,152.550 ms | 12.151 ms | 1,140.399 ms (~94.9x faster tool execution) |
+| MCP tool execution — p95 | 2,830.382 ms | 21.398 ms | 2,808.984 ms |
+| MCP tool execution — max | 3,326.370 ms | 21.654 ms | 3,304.716 ms |
+| Request -> tool done — min | 885.409 ms | 542.950 ms | 342.459 ms |
+| Request -> tool done — median | 1,736.432 ms | 695.502 ms | 1,040.930 ms saved (~59.9% lower latency) |
+| Request -> tool done — p95 | 3,361.784 ms | 806.767 ms | 2,555.017 ms (~4.17x lower p95) |
+| Request -> tool done — max | 3,816.945 ms | 854.498 ms | 2,962.447 ms |
+
+Interpretation: local STDIO is not only faster on the median but materially more deterministic. Native HTTPS/Funnel exhibited large tail latency (p95 3.36 s and max 3.82 s), while STDIO remained below 0.86 s end-to-tool across all 20 samples and below 22 ms for MCP execution itself. For stage control, this result is strong enough to choose healthy local STDIO as the preferred AUTO path when it exists. Native remains valuable for remote/provider-direct access and as an alternate execution capability, but it is no longer the target first choice for local stage latency.
 
 #### RV2D - Canonical config, runtime and per-MCP GUI policy — IN PROGRESS
 
@@ -448,15 +485,38 @@ Implementation note (2026-09-06): `scripts/rv2c_fault_matrix.py` and the extende
 - [ ] add an independent Realtime output-gain control so Realtime speech can be raised to match the preferred Piper level; non-blocking audio polish;
 - [ ] final inventory consolidation/plugin-style GUI.
 
-### RV2E - Realtime MCP latency and tool-call efficiency
+### RV2E - Realtime MCP latency, tool-call efficiency and cost
 
 - [ ] representative MCP command corpus;
 - [ ] quantify redundant calls;
 - [ ] compare full realtime models;
-- [ ] locate latency ownership correctly;
+- [~] locate latency ownership correctly; single-tool native-vs-STDIO data now exists, broader corpus pending;
 - [ ] optimize prompt/schema only at the correct ownership layer;
-- [ ] benchmark native vs bridge after semantics are frozen;
-- [ ] define p50/p95 production targets.
+- [x] benchmark native vs bridge for representative read-only `osc_get_mixer_status` on identical Pi5/XR16 conditions (20 samples);
+- [ ] define p50/p95 production targets across a representative command corpus;
+- [ ] benchmark Classic vs Realtime end-to-end cost on the same simple mixer read request and record actual provider usage/cost from both paths;
+- [ ] separate fixed/session overhead from marginal per-request cost, especially for Realtime cached context/audio tokens;
+- [ ] estimate per-100 and per-1,000 request operating cost from measured per-request data.
+
+Planned cost benchmark fixture: use the same short spoken request, for example `Quel est le volume ?` (or a fixed named target when needed for deterministic routing), query the same mixer state, require one verified MCP read, and produce one concise spoken answer. Run enough repetitions to expose warm-session effects rather than comparing only one cold request.
+
+Target cost table to fill from measured logs:
+
+| Cost component | Classic online | OpenAI Realtime | Measurement source |
+|---|---:|---:|---|
+| Speech input / STT | TBD | included as Realtime audio input tokens | Classic STT usage + Realtime `input_token_details.audio_tokens` |
+| LLM text input | TBD | TBD | provider usage / input text tokens |
+| Cached input/context | n/a or provider-specific | TBD | Realtime cached token details |
+| LLM/tool-decision output | TBD | TBD | output text/tool tokens |
+| MCP execution | local/no provider token cost except tool context | local STDIO preferred; provider token/tool context cost measured separately | LSA MCP + provider usage logs |
+| Speech output / TTS | TBD | Realtime audio output tokens | Classic TTS usage + Realtime `output_token_details.audio_tokens` |
+| Total variable cost per request | **TBD** | **TBD** | sum of measured provider charges |
+| Median end-to-end latency | TBD | TBD | same benchmark run |
+| p95 end-to-end latency | TBD | TBD | same benchmark run |
+| Cost per 100 requests | TBD | TBD | measured total x100 |
+| Cost per 1,000 requests | TBD | TBD | measured total x1000 |
+
+The cost comparison must be end-to-end and apples-to-apples: same user intent, same target, same one-read MCP behavior, equivalent concise spoken answer and the production model/provider settings actually selected in `.env.online`.
 
 ### RV3 - Optional wake word and realtime session lifecycle
 
@@ -771,7 +831,8 @@ runtime state
 - [ ] mixed permissions;
 - [ ] complete STDIO approval or explicitly keep unsupported;
 - [x] pre-dispatch AUTO fallback parity;
-- [ ] native-vs-STDIO benchmark.
+- [x] native-vs-STDIO read-only benchmark on identical Pi5/XR16 conditions;
+- [~] adapt AUTO effective-transport selection to prefer healthy local STDIO when available.
 
 ---
 
@@ -788,12 +849,12 @@ runtime state
 
 # 9. Current Next Actions
 
-1. **RV2C — standalone deterministic regression:** run `tests.test_realtime_mcp_auto` and `scripts/rv2c_fault_matrix.py` on Pi5; the real provider-native ambiguous-write case is already validated, but these remain useful deterministic coverage.
-2. **RV2C / RV2E — direct native-vs-STDIO comparison:** run the same representative read-only MCP command(s) through native and bridge paths and compare tool-call latency/behavior without changing semantics.
-3. **OR2 / RV2D — health exposure:** expose common connectivity state + active engine to WebMonitor/health.
-4. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the basic Classic/Realtime round trips already validated.
-5. **RV2D / RV8 — Realtime output gain:** add a simple independent Realtime output gain control when convenient; non-blocking because current speech is usable and Piper's higher level is preferred.
-6. **RV2D / RV8:** restore WebMonitor into Realtime after OR2 round trips are stable.
-7. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI.
-8. **RV2E:** latency/tool-efficiency benchmark after runtime/connectivity semantics are stable.
+1. **RV2C — implement STDIO-first AUTO priority:** when a local/STDIO execution path is configured and healthy, prefer it for stage-local MCP calls; retain native as explicit mode and safe alternate path. Re-run AUTO failure/replay regression after the priority change.
+2. **RV2E — Classic vs Realtime end-to-end cost benchmark:** run the same simple mixer read (for example `Quel est le volume ?`) through Classic and Realtime, capture all STT/LLM/TTS or Realtime audio/text usage, and fill the cost/latency comparison table above.
+3. **RV2E — representative command corpus:** extend beyond `osc_get_mixer_status` to reads and safe controlled writes before freezing production p50/p95 targets.
+4. **OR2 / RV2D — health exposure:** expose common connectivity state + active engine to WebMonitor/health.
+5. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the basic Classic/Realtime round trips already validated.
+6. **RV2D / RV8 — Realtime output gain:** add a simple independent Realtime output gain control when convenient; non-blocking because current speech is usable and Piper's higher level is preferred.
+7. **RV2D / RV8:** restore WebMonitor into Realtime after OR2 round trips are stable.
+8. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI.
 9. **RV3:** optional wake lifecycle after common engine/connectivity supervision is stable.
