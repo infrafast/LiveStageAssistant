@@ -86,10 +86,11 @@ def configured_mcp_statuses(values: Mapping[str, object], *, profile: Path, root
         configured = str(realtime.get("transport") or "stdio").strip().lower()
         permissions = realtime.get("permissions") if isinstance(realtime.get("permissions"), dict) else {}
         permission = str(permissions.get("mode") or "open").strip().lower()
+        effective = configured if configured in {"stdio", "native"} else ""
         result.append(MCPRuntimeStatus(
             name=str(name),
             configured_transport=configured,
-            effective_transport="",
+            effective_transport=effective,
             permission=permission,
             healthy=None,
             detail="configured",
