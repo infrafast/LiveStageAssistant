@@ -43,7 +43,12 @@ class RealtimeWakeGateTests(unittest.TestCase):
     def test_rearm_returns_to_wait_wake(self):
         now = [10.0]
         gate = RealtimeWakeGate(
-            RealtimeWakeConfig(wake_word="momo", threshold=0.6, post_tts_suppression_ms=350),
+            RealtimeWakeConfig(
+                wake_word="momo",
+                threshold=0.6,
+                cooldown_ms=0,
+                post_tts_suppression_ms=350,
+            ),
             predictor=lambda _samples: {"momo": 0.9},
             clock=lambda: now[0],
         )
