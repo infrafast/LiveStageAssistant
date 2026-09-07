@@ -73,6 +73,52 @@ def _write_env_value(path: Path, key: str, value: str) -> None:
     tmp_path.replace(path)
 
 
+def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Translate the provider/MCP-neutral runtime contract into existing monitor tiles."""
+    if not isinstance(status, dict) or not status:
+        return {}
+
+    engine = str(status.get("engine") or "unknown")
+    provider = str(status.get("provider") or "").strip()
+    model = str(status.get("model") or "").strip()
+    voice = str(status.get("voice") or "").strip()
+    ready = bool(status.get("ready"))
+    identity = " / ".join(part for part in (provider, model, voice) if part)
+
+    services: dict[str, dict[str, Any]] = {
+        "Voice engine": {
+            "status": "ready" if ready else "starting",
+            "detail": f"{engine}{(' · ' + identity) if identity else ''}",
+        }
+    }
+
+    for entry in status.get("mcp") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "MCP").strip() or "MCP"
+        configured = str(entry.get("configured_transport") or "").strip()
+        effective = str(entry.get("effective_transport") or "").strip()
+        permission = str(entry.get("permission") or "").strip()
+        healthy = entry.get("healthy")
+        detail = str(entry.get("detail") or "").strip()
+        transport = effective or configured or "unknown"
+        if healthy is True:
+            state = "online"
+        elif healthy is False:
+            state = "offline"
+        else:
+            state = "unknown"
+        parts = [f"transport={transport}"]
+        if configured and configured != transport:
+            parts.append(f"configured={configured}")
+        if permission:
+            parts.append(f"permission={permission}")
+        if detail:
+            parts.append(detail)
+        services[f"MCP · {name}"] = {"status": state, "detail": " · ".join(parts)}
+    return services
+
+
 class WebMonitor(_BaseWebMonitor):
     """Historical WebMonitor plus RV2D realtime policy, engine and runtime-status routes."""
 
@@ -83,6 +129,19 @@ class WebMonitor(_BaseWebMonitor):
     def set_mcp_realtime_policy_save_handler(self, handler: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
         with self._lock:
             self._mcp_realtime_policy_save_handler = handler
+
+    def snapshot(self) -> dict[str, Any]:
+        """Augment the legacy snapshot with generic runtime/transport observability."""
+        snapshot = super().snapshot()
+        payload = self._runtime_status()
+        if not payload.get("available"):
+            return snapshot
+        runtime = payload.get("runtime") or {}
+        snapshot["runtime_status"] = runtime
+        services = dict(snapshot.get("services") or {})
+        services.update(_runtime_service_tiles(runtime))
+        snapshot["services"] = services
+        return snapshot
 
     def _save_mcp_realtime_policy(self, server_name: str, policy: dict[str, Any]) -> dict[str, Any]:
         safe_policy, refreshed_config = save_mcp_realtime_policy_from_snapshot(self.snapshot(), server_name, policy)
