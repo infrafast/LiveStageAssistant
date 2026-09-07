@@ -21,6 +21,7 @@ CLASSIC_READY_MARKER = "LSA Classic ready:"
 
 def run_classic(env_file: str) -> int:
     from voice_assistant import agent
+    from voice_assistant import classic_engine
 
     values = dict(dotenv_values(env_file)) if str(env_file).lower() != "auto" else {}
     online = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower() != "offline"
@@ -55,9 +56,7 @@ def run_classic(env_file: str) -> int:
 
         agent.VoiceAssistant.announce_startup_ready = announce_ready_with_connectivity
 
-    sys.argv = [sys.argv[0], "--env-file", env_file]
-    asyncio.run(agent.main())
-    return 0
+    return classic_engine.run(env_file)
 
 
 def run_openai_realtime(env_file: str) -> int:
