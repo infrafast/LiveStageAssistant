@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 from typing import Any, Callable
 
 try:
@@ -26,6 +27,7 @@ _START_PATCH_LOCK = threading.Lock()
 VOICE_ENGINE_ONLINE = {"classic", "openai-realtime"}
 VOICE_ENGINE_OFFLINE = {"local"}
 DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"
+DEFAULT_RUNTIME_STATUS_STALE_SECONDS = 30.0
 
 
 def _active_env_file_from_snapshot(snapshot: dict[str, Any]) -> Path:
@@ -40,6 +42,13 @@ def _active_env_file_from_snapshot(snapshot: dict[str, Any]) -> Path:
 
 def _runtime_status_file() -> Path:
     return Path(os.getenv("LSA_RUNTIME_STATUS_FILE", DEFAULT_RUNTIME_STATUS_FILE)).expanduser()
+
+
+def _runtime_status_stale_seconds() -> float:
+    try:
+        return max(1.0, float(os.getenv("LSA_RUNTIME_STATUS_STALE_SECONDS", str(DEFAULT_RUNTIME_STATUS_STALE_SECONDS)) or DEFAULT_RUNTIME_STATUS_STALE_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_RUNTIME_STATUS_STALE_SECONDS
 
 
 def _write_env_value(path: Path, key: str, value: str) -> None:
@@ -73,7 +82,7 @@ def _write_env_value(path: Path, key: str, value: str) -> None:
     tmp_path.replace(path)
 
 
-def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _runtime_service_tiles(status: dict[str, Any], *, stale: bool = False) -> dict[str, dict[str, Any]]:
     """Translate the provider/MCP-neutral runtime contract into existing monitor tiles."""
     if not isinstance(status, dict) or not status:
         return {}
@@ -82,13 +91,13 @@ def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
     provider = str(status.get("provider") or "").strip()
     model = str(status.get("model") or "").strip()
     voice = str(status.get("voice") or "").strip()
-    ready = bool(status.get("ready"))
+    ready = bool(status.get("ready")) and not stale
     identity = " / ".join(part for part in (provider, model, voice) if part)
 
     services: dict[str, dict[str, Any]] = {
         "Voice engine": {
-            "status": "ready" if ready else "starting",
-            "detail": f"{engine}{(' · ' + identity) if identity else ''}",
+            "status": "ready" if ready else ("offline" if stale else "starting"),
+            "detail": f"{engine}{(' · ' + identity) if identity else ''}{' · stale status' if stale else ''}",
         }
     }
 
@@ -102,7 +111,9 @@ def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
         healthy = entry.get("healthy")
         detail = str(entry.get("detail") or "").strip()
         transport = effective or configured or "unknown"
-        if healthy is True:
+        if stale:
+            state = "offline"
+        elif healthy is True:
             state = "online"
         elif healthy is False:
             state = "offline"
@@ -115,6 +126,8 @@ def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
             parts.append(f"permission={permission}")
         if detail:
             parts.append(detail)
+        if stale:
+            parts.append("stale runtime status")
         services[f"MCP · {name}"] = {"status": state, "detail": " · ".join(parts)}
     return services
 
@@ -138,8 +151,9 @@ class WebMonitor(_BaseWebMonitor):
             return snapshot
         runtime = payload.get("runtime") or {}
         snapshot["runtime_status"] = runtime
+        snapshot["runtime_status_stale"] = bool(payload.get("stale"))
         services = dict(snapshot.get("services") or {})
-        services.update(_runtime_service_tiles(runtime))
+        services.update(_runtime_service_tiles(runtime, stale=bool(payload.get("stale"))))
         snapshot["services"] = services
         return snapshot
 
@@ -158,6 +172,8 @@ class WebMonitor(_BaseWebMonitor):
                 "error": "runtime status is not available yet",
             }
         try:
+            stat = path.stat()
+            age_seconds = max(0.0, time.time() - stat.st_mtime)
             status = read_status_file(path)
         except Exception as error:
             return {
@@ -166,9 +182,12 @@ class WebMonitor(_BaseWebMonitor):
                 "status_file": str(path),
                 "error": f"could not read runtime status: {error}",
             }
+        stale = age_seconds > _runtime_status_stale_seconds()
         return {
-            "ok": True,
+            "ok": not stale,
             "available": True,
+            "stale": stale,
+            "age_seconds": age_seconds,
             "status_file": str(path),
             "runtime": status,
         }
