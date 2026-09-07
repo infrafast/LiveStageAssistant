@@ -37,6 +37,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
         self._events: asyncio.Queue[RealtimeEvent] = asyncio.Queue()
         self._response_active = False
         self._native_mcp_followup_pending = False
+        self._function_followup_pending = False
         self._cancelled_response_ids: set[str] = set()
 
     def _session_tools(self) -> list[dict[str, Any]]:
@@ -145,6 +146,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                 pass
         self._response_active = False
         self._native_mcp_followup_pending = False
+        self._function_followup_pending = False
         self._cancelled_response_ids.clear()
         self.state = RealtimeEngineState.STOPPED
 
@@ -202,7 +204,10 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                 "item": {"type": "function_call_output", "call_id": call_id, "output": output},
             }
         )
-        await self._send({"type": "response.create"})
+        if self._response_active:
+            self._function_followup_pending = True
+        else:
+            await self._send({"type": "response.create"})
 
     async def _send(self, payload: dict[str, Any]) -> None:
         self._require_connection()
@@ -212,7 +217,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
         if self._ws is None:
             raise RuntimeError("realtime connection is not active")
 
-    async def _maybe_continue_after_native_mcp(self, translated: RealtimeEvent) -> None:
+    async def _maybe_continue_after_tools(self, translated: RealtimeEvent) -> None:
         if translated.type == "mcp_call" and translated.data.get("phase") == "done":
             response_id = str(translated.data.get("response_id") or "")
             if response_id and response_id in self._cancelled_response_ids:
@@ -224,15 +229,17 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             if response_id:
                 self._cancelled_response_ids.add(response_id)
             self._native_mcp_followup_pending = False
+            self._function_followup_pending = False
             return
 
-        should_continue = self._native_mcp_followup_pending and not self._response_active
+        should_continue = (self._native_mcp_followup_pending or self._function_followup_pending) and not self._response_active
         if not should_continue:
             return
 
         self._native_mcp_followup_pending = False
+        self._function_followup_pending = False
         await self._send({"type": "response.create"})
-        await self._events.put(RealtimeEvent("mcp_followup_requested", {}))
+        await self._events.put(RealtimeEvent("tool_followup_requested", {}))
 
     async def _receive_loop(self) -> None:
         try:
@@ -244,7 +251,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                 translated = self._translate_event(event)
                 if translated is not None:
                     await self._events.put(translated)
-                    await self._maybe_continue_after_native_mcp(translated)
+                    await self._maybe_continue_after_tools(translated)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
