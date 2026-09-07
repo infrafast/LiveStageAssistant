@@ -32,6 +32,11 @@ jobs:
           end = source.index(end_marker, start)
           raw = source[start:end]
           script = "\n".join(line[10:] if line.startswith("          ") else line for line in raw.splitlines())
+          brittle = "js = replace_once(js, old, new, 'loaded action state')"
+          robust = '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    clean_old = \"\"\"        if (shouldMarkClean) {\n          markConfigClean();\n        }\"\"\"\n    clean_new = \"\"\"        if (shouldMarkClean) {\n          markConfigClean();\n          syncConfigActionState();\n        }\"\"\"\n    js = replace_once(js, clean_old, clean_new, 'loaded action state')'''
+          if brittle not in script:
+              raise SystemExit('runner could not find loaded action state patch')
+          script = script.replace(brittle, robust, 1)
           exec(compile(script, '<cfg-refactor>', 'exec'))
           PY
       - name: Validate
