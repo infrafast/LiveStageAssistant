@@ -86,12 +86,23 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                     controller = semantic_ref.get("controller")
                     if controller is not None:
                         original_transition(controller, SemanticAudioState.WAKE_DETECTED)
+                    pre_roll = gate.consume_pre_roll()
                     print(
-                        f"LSA Realtime wake detected: word={config.wake_word} threshold={config.threshold:.2f}",
+                        f"LSA Realtime wake detected: word={config.wake_word} threshold={config.threshold:.2f} "
+                        f"pre_roll_bytes={len(pre_roll)}",
                         flush=True,
                     )
-                # Never forward the frame that caused wake detection. The cue
-                # marks the point after which the user can give the command.
+                    # Preserve the phrase around the wake boundary so commands
+                    # such as "momo monte le clic" can remain a single utterance.
+                    # The provider may receive the wake word itself; wake remains
+                    # authorization metadata, not a provider-side security gate.
+                    if pre_roll:
+                        try:
+                            await engine.send_audio(pre_roll)
+                        except Exception as exc:
+                            print(f"Realtime send error: {exc}", flush=True)
+                            stop_event.set()
+                            return
                 continue
 
             try:
@@ -105,7 +116,8 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
     print(
         "LSA Realtime wake enabled: "
         f"word={config.wake_word} threshold={config.threshold:.2f} "
-        f"cooldown_ms={config.cooldown_ms} post_tts_ms={config.post_tts_suppression_ms} "
+        f"pre_roll_ms={config.pre_roll_ms} cooldown_ms={config.cooldown_ms} "
+        f"post_tts_ms={config.post_tts_suppression_ms} "
         f"interrupt={'on' if interrupt_enabled else 'off'}",
         flush=True,
     )
