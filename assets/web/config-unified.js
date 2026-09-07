@@ -278,7 +278,6 @@
 
   async function waitUntilReady(timeoutMs = 60000) {
     const deadline = Date.now() + timeoutMs;
-    let reloadObserved = false;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       try {
@@ -287,8 +286,8 @@
         const snapshot = await response.json();
         const runtime = snapshot.runtime_status || {};
         const state = String(runtime.semantic_state || "").toLowerCase();
-        if (!runtime.ready || state === "starting") reloadObserved = true;
-        if (reloadObserved && runtime.ready && state !== "starting") return true;
+        const loading = Boolean(snapshot.environment_loading?.active);
+        if (!loading && runtime.ready && state !== "starting") return true;
       } catch (_error) {
       }
     }
