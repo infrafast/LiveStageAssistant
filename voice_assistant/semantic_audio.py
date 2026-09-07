@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import os
-from typing import Mapping
+from typing import Callable, Mapping
 
 
 class SemanticAudioState(str, Enum):
@@ -58,6 +58,69 @@ class SemanticAudioConfig:
             SemanticAudioState.PROCESSING: self.thinking,
             SemanticAudioState.RESULT_READY: self.result_ready,
         }.get(state, "")
+
+
+class SemanticAudioController:
+    """State machine that maps semantic states to cue-player callbacks.
+
+    The controller is deliberately audio-backend neutral. The caller provides:
+    - ``play_once(cue)`` for one-shot cues;
+    - ``start_loop(cue)`` for loader/thinking loops;
+    - ``stop_loop()`` for the currently active loop.
+
+    Repeating the same state is a no-op. Leaving STARTING or PROCESSING always
+    stops the active loop before any one-shot cue is emitted.
+    """
+
+    def __init__(
+        self,
+        config: SemanticAudioConfig,
+        *,
+        play_once: Callable[[str], None],
+        start_loop: Callable[[str], None],
+        stop_loop: Callable[[], None],
+        on_state: Callable[[SemanticAudioState], None] | None = None,
+    ) -> None:
+        self.config = config
+        self._play_once = play_once
+        self._start_loop = start_loop
+        self._stop_loop = stop_loop
+        self._on_state = on_state
+        self.state: SemanticAudioState | None = None
+        self._loop_state: SemanticAudioState | None = None
+
+    def transition(self, state: SemanticAudioState) -> bool:
+        if state == self.state:
+            return False
+
+        if self._loop_state is not None and state != self._loop_state:
+            self._stop_loop()
+            self._loop_state = None
+
+        self.state = state
+        if self._on_state is not None:
+            self._on_state(state)
+
+        cue = self.config.cue_for(state)
+        if not cue:
+            return True
+
+        if state in {SemanticAudioState.STARTING, SemanticAudioState.PROCESSING}:
+            self._start_loop(cue)
+            self._loop_state = state
+        elif state in {
+            SemanticAudioState.READY,
+            SemanticAudioState.WAKE_DETECTED,
+            SemanticAudioState.LISTENING,
+            SemanticAudioState.RESULT_READY,
+        }:
+            self._play_once(cue)
+        return True
+
+    def close(self) -> None:
+        if self._loop_state is not None:
+            self._stop_loop()
+            self._loop_state = None
 
 
 @dataclass(frozen=True)
