@@ -39,12 +39,14 @@
   function voiceEngineState(snapshot) {
     const env = snapshotEnv(snapshot);
     const connectivity = String(env.CONNECTIVITY_MODE || "online").trim().toLowerCase();
+    const realtimeModel = String(env.OPENAI_REALTIME_MODEL || "gpt-realtime-2.1").trim() || "gpt-realtime-2.1";
+    const realtimeVoice = String(env.OPENAI_REALTIME_VOICE || "marin").trim() || "marin";
     if (connectivity === "offline") {
-      return { connectivity, engine: "local", locked: true };
+      return { connectivity, engine: "local", locked: true, realtimeModel, realtimeVoice };
     }
     const configured = String(env.VOICE_ENGINE || "classic").trim().toLowerCase();
     const engine = configured === "openai-realtime" ? "openai-realtime" : "classic";
-    return { connectivity: "online", engine, locked: false };
+    return { connectivity: "online", engine, locked: false, realtimeModel, realtimeVoice };
   }
 
   function canonicalPolicies(snapshot) {
@@ -96,8 +98,17 @@
     message.style.color = isError ? "var(--bad, #b3261e)" : "";
   }
 
+  function syncRealtimeFields(section) {
+    const select = section.querySelector(".rv2d-voice-engine-select");
+    const fields = [...section.querySelectorAll(".rv2d-realtime-setting")];
+    const realtime = select?.value === "openai-realtime";
+    for (const field of fields) field.classList.toggle("hidden", !realtime);
+  }
+
   async function saveVoiceEngine(section) {
     const select = section.querySelector(".rv2d-voice-engine-select");
+    const model = section.querySelector(".rv2d-realtime-model");
+    const voice = section.querySelector(".rv2d-realtime-voice");
     const button = section.querySelector(".rv2d-voice-engine-save");
     if (!select || !button || button.disabled) return;
     button.disabled = true;
@@ -106,13 +117,20 @@
       const response = await fetch(VOICE_ENGINE_SAVE_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ voice_engine: select.value })
+        body: JSON.stringify({
+          voice_engine: select.value,
+          realtime_model: model?.value.trim() || "",
+          realtime_voice: voice?.value.trim() || ""
+        })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.ok === false) {
         throw new Error(data?.error?.message || data?.message || response.statusText || `HTTP ${response.status}`);
       }
       select.value = data.voice_engine || select.value;
+      if (model && data.realtime_model) model.value = data.realtime_model;
+      if (voice && data.realtime_voice) voice.value = data.realtime_voice;
+      syncRealtimeFields(section);
       setVoiceMessage(section, "Saved. Restart required.");
       lastVoiceEngineSignature = "";
     } catch (error) {
@@ -143,6 +161,25 @@
       );
     }
 
+    const model = document.createElement("input");
+    model.type = "text";
+    model.className = "input rv2d-realtime-model";
+    model.value = state.realtimeModel || "gpt-realtime-2.1";
+    model.autocomplete = "off";
+    model.spellcheck = false;
+
+    const voice = document.createElement("input");
+    voice.type = "text";
+    voice.className = "input rv2d-realtime-voice";
+    voice.value = state.realtimeVoice || "marin";
+    voice.autocomplete = "off";
+    voice.spellcheck = false;
+
+    const modelField = makeField("Realtime model", model);
+    modelField.classList.add("rv2d-realtime-setting");
+    const voiceField = makeField("Realtime voice", voice);
+    voiceField.classList.add("rv2d-realtime-setting");
+
     const actions = document.createElement("div");
     actions.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
     const save = document.createElement("button");
@@ -159,7 +196,9 @@
       : "Applies after livestageassistant restart.";
     actions.append(save, message);
 
-    section.append(title, makeField("Engine", select), actions);
+    select.addEventListener("change", () => syncRealtimeFields(section));
+    section.append(title, makeField("Engine", select), modelField, voiceField, actions);
+    syncRealtimeFields(section);
     return section;
   }
 
@@ -175,7 +214,12 @@
     }
     const select = section.querySelector(".rv2d-voice-engine-select");
     const save = section.querySelector(".rv2d-voice-engine-save");
-    if (!select || !save) return;
+    const model = section.querySelector(".rv2d-realtime-model");
+    const voice = section.querySelector(".rv2d-realtime-voice");
+    if (!select || !save || !model || !voice) {
+      section.replaceWith(buildVoiceEngineSection(state));
+      return;
+    }
     const needsLocked = state.locked;
     const isLocked = select.disabled;
     if (needsLocked !== isLocked) {
@@ -183,6 +227,9 @@
       return;
     }
     if (document.activeElement !== select) select.value = state.engine;
+    if (document.activeElement !== model) model.value = state.realtimeModel;
+    if (document.activeElement !== voice) voice.value = state.realtimeVoice;
+    syncRealtimeFields(section);
   }
 
   async function saveSection(section) {
