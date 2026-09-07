@@ -21,7 +21,10 @@ from .audio import Pcm16MonoResampler
 OWW_RATE = 16000
 OWW_FRAME_SAMPLES = 1280
 OWW_FRAME_BYTES = OWW_FRAME_SAMPLES * 2
+REALTIME_RATE = 24000
+PCM16_BYTES_PER_SAMPLE = 2
 DEFAULT_POST_TTS_SUPPRESSION_MS = 350
+DEFAULT_PRE_ROLL_MS = 1600
 
 
 def _float(values: Mapping[str, object], key: str, default: float) -> float:
@@ -69,6 +72,7 @@ class RealtimeWakeConfig:
     model_paths: tuple[str, ...] = ()
     model_names: tuple[str, ...] = ()
     threshold: float = 0.5
+    pre_roll_ms: int = DEFAULT_PRE_ROLL_MS
     cooldown_ms: int = 1200
     post_tts_suppression_ms: int = DEFAULT_POST_TTS_SUPPRESSION_MS
 
@@ -84,6 +88,7 @@ class RealtimeWakeConfig:
             model_paths=_csv(env.get("BACKEND_WAKE_WORD_MODEL_PATHS")),
             model_names=_csv(env.get("BACKEND_WAKE_WORD_MODEL_NAMES")),
             threshold=max(0.01, min(0.99, _float(env, "BACKEND_WAKE_WORD_THRESHOLD", 0.5))),
+            pre_roll_ms=max(0, min(5000, _int(env, "BACKEND_WAKE_WORD_PRE_ROLL_MS", DEFAULT_PRE_ROLL_MS))),
             cooldown_ms=max(0, min(10000, _int(env, "BACKEND_WAKE_WORD_COOLDOWN_MS", 1200))),
             post_tts_suppression_ms=max(
                 0,
@@ -105,8 +110,10 @@ class RealtimeWakeGate:
     ) -> None:
         self.config = config
         self._clock = clock
-        self._resampler = Pcm16MonoResampler(24000, OWW_RATE)
+        self._resampler = Pcm16MonoResampler(REALTIME_RATE, OWW_RATE)
         self._buffer = bytearray()
+        self._pre_roll = bytearray()
+        self._pre_roll_limit = int(REALTIME_RATE * PCM16_BYTES_PER_SAMPLE * (config.pre_roll_ms / 1000.0))
         self._last_detection = -1e9
         self._not_before = -1e9
         self._waiting = config.enabled
@@ -148,6 +155,20 @@ class RealtimeWakeGate:
         reset = getattr(self._model, "reset", None)
         self._reset_predictor = reset if callable(reset) else None
 
+    def _remember_pre_roll(self, pcm24k: bytes) -> None:
+        if self._pre_roll_limit <= 0 or not pcm24k:
+            return
+        self._pre_roll.extend(pcm24k)
+        overflow = len(self._pre_roll) - self._pre_roll_limit
+        if overflow > 0:
+            del self._pre_roll[:overflow]
+
+    def consume_pre_roll(self) -> bytes:
+        """Return and clear the retained 24 kHz PCM preceding wake authorization."""
+        payload = bytes(self._pre_roll)
+        self._pre_roll.clear()
+        return payload
+
     def rearm(self, *, suppress_ms: int | None = None) -> None:
         if not self.enabled:
             return
@@ -155,7 +176,8 @@ class RealtimeWakeGate:
         delay_ms = self.config.post_tts_suppression_ms if suppress_ms is None else max(0, int(suppress_ms))
         self._not_before = self._clock() + (delay_ms / 1000.0)
         self._buffer.clear()
-        self._resampler = Pcm16MonoResampler(24000, OWW_RATE)
+        self._pre_roll.clear()
+        self._resampler = Pcm16MonoResampler(REALTIME_RATE, OWW_RATE)
         if self._reset_predictor is not None:
             try:
                 self._reset_predictor()
@@ -173,6 +195,7 @@ class RealtimeWakeGate:
         if self._clock() < self._not_before:
             return False
 
+        self._remember_pre_roll(pcm24k)
         converted = self._resampler.process(pcm24k)
         if converted:
             self._buffer.extend(converted)
