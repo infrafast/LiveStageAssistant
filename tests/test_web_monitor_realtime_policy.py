@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from urllib import request as urllib_request
@@ -40,6 +41,29 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
         self.assertIn("configured=auto", tiles["MCP · alpha"]["detail"])
         self.assertIn("permission=open", tiles["MCP · alpha"]["detail"])
 
+    def test_stale_runtime_status_forces_unhealthy_tiles(self) -> None:
+        tiles = _runtime_service_tiles(
+            {
+                "engine": "openai-realtime",
+                "provider": "openai",
+                "model": "gpt-realtime-2.1",
+                "ready": True,
+                "mcp": [
+                    {
+                        "name": "alpha",
+                        "configured_transport": "auto",
+                        "effective_transport": "stdio",
+                        "permission": "open",
+                        "healthy": True,
+                    }
+                ],
+            },
+            stale=True,
+        )
+        self.assertEqual(tiles["Voice engine"]["status"], "offline")
+        self.assertEqual(tiles["MCP · alpha"]["status"], "offline")
+        self.assertIn("stale", tiles["Voice engine"]["detail"])
+
     def test_snapshot_includes_runtime_status_tiles_when_status_file_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             status_path = Path(temp_dir) / "runtime-status.json"
@@ -63,6 +87,25 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
                 snapshot = monitor.snapshot()
             self.assertEqual(snapshot["runtime_status"]["engine"], "classic")
             self.assertEqual(snapshot["services"]["Voice engine"]["status"], "ready")
+
+    def test_runtime_status_endpoint_marks_old_file_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status_path = Path(temp_dir) / "runtime-status.json"
+            status_path.write_text(json.dumps({"engine": "classic", "ready": True, "mcp": []}), encoding="utf-8")
+            old = time.time() - 120
+            os.utime(status_path, (old, old))
+            with patch.dict(
+                os.environ,
+                {
+                    "LSA_RUNTIME_STATUS_FILE": str(status_path),
+                    "LSA_RUNTIME_STATUS_STALE_SECONDS": "30",
+                },
+            ):
+                monitor = WebMonitor()
+                payload = monitor._runtime_status()
+            self.assertTrue(payload["available"])
+            self.assertTrue(payload["stale"])
+            self.assertFalse(payload["ok"])
 
     def test_post_updates_policy_and_preserves_native_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
