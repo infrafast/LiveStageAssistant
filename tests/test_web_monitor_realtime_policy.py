@@ -107,6 +107,40 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
             self.assertTrue(payload["stale"])
             self.assertFalse(payload["ok"])
 
+    def test_voice_engine_route_persists_realtime_model_and_voice_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env.online"
+            env_path.write_text(
+                "CONNECTIVITY_MODE=online\nVOICE_ENGINE=classic\nOPENAI_REALTIME_MODEL=old-model\nOPENAI_REALTIME_VOICE=old-voice\n",
+                encoding="utf-8",
+            )
+            monitor = WebMonitor()
+            monitor.update(
+                env_values={
+                    "CONNECTIVITY_MODE": "online",
+                    "VOICE_ENGINE": "classic",
+                    "OPENAI_REALTIME_MODEL": "old-model",
+                    "OPENAI_REALTIME_VOICE": "old-voice",
+                }
+            )
+            with patch.dict(os.environ, {"ASSISTANT_AUTO_ENV_DIR": temp_dir}):
+                result = monitor._save_voice_engine(
+                    "openai-realtime",
+                    realtime_model="gpt-realtime-2.1",
+                    realtime_voice="marin",
+                )
+            saved = env_path.read_text(encoding="utf-8")
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["voice_engine"], "openai-realtime")
+            self.assertEqual(result["realtime_model"], "gpt-realtime-2.1")
+            self.assertEqual(result["realtime_voice"], "marin")
+            self.assertIn("VOICE_ENGINE=openai-realtime", saved)
+            self.assertIn("OPENAI_REALTIME_MODEL=gpt-realtime-2.1", saved)
+            self.assertIn("OPENAI_REALTIME_VOICE=marin", saved)
+            self.assertEqual(saved.count("VOICE_ENGINE="), 1)
+            self.assertEqual(saved.count("OPENAI_REALTIME_MODEL="), 1)
+            self.assertEqual(saved.count("OPENAI_REALTIME_VOICE="), 1)
+
     def test_post_updates_policy_and_preserves_native_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "mcp.json"
