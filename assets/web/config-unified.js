@@ -31,6 +31,38 @@
     return data;
   }
 
+  function visibleWakeValue() {
+    const select = document.querySelector("#wake-word-select");
+    if (select) return String(select.value || "").trim();
+    const legacy = document.querySelector("#wake-word");
+    return String(legacy?.value || "").trim();
+  }
+
+  // app-main.js still owns the legacy /api/llm-config request. Until that form is
+  // fully migrated, make the visible common selector authoritative at the final
+  // request boundary so a stale hidden #wake-word value can never overwrite it.
+  if (!window.__lsaWakeCanonicalFetchInstalled) {
+    window.__lsaWakeCanonicalFetchInstalled = true;
+    const baseFetch = window.fetch.bind(window);
+    window.fetch = (input, init = undefined) => {
+      const rawUrl = typeof input === "string" ? input : String(input?.url || "");
+      let parsedPath = rawUrl;
+      try {
+        parsedPath = new URL(rawUrl, window.location.href).pathname;
+      } catch (_error) {
+      }
+      if (parsedPath === "/api/llm-config" && init && typeof init.body === "string") {
+        try {
+          const payload = JSON.parse(init.body);
+          payload.wake_word = visibleWakeValue();
+          init = { ...init, body: JSON.stringify(payload) };
+        } catch (_error) {
+        }
+      }
+      return baseFetch(input, init);
+    };
+  }
+
   function setRestartRequired(required) {
     restartRequired = Boolean(required);
     saveButton.dataset.restartRequired = restartRequired ? "1" : "0";
@@ -176,6 +208,18 @@
     return false;
   }
 
+  async function verifyWakePersistence() {
+    const expected = visibleWakeValue();
+    const response = await fetch(LLM_OPTIONS_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error(`wake persistence verification failed: HTTP ${response.status}`);
+    const data = await response.json();
+    const actual = String(data.selected_wake_word || "").trim();
+    if (actual !== expected) {
+      throw new Error(`wake word was not persisted (expected ${expected || "Disabled"}, got ${actual || "Disabled"})`);
+    }
+    return true;
+  }
+
   async function waitUntilReady(timeoutMs = 60000) {
     const deadline = Date.now() + timeoutMs;
     let reloadObserved = false;
@@ -237,7 +281,14 @@
       .then(async (required) => {
         if (!required) return;
         const globalSaveOk = await waitForGlobalSaveResult();
-        if (globalSaveOk) setRestartRequired(true);
+        if (!globalSaveOk) return;
+        try {
+          await verifyWakePersistence();
+          setRestartRequired(true);
+        } catch (error) {
+          setRestartRequired(false);
+          if (message) message.textContent = `Save failed: ${error.message || error}`;
+        }
       })
       .catch((error) => {
         if (message) message.textContent = `Save failed: ${error.message || error}`;
