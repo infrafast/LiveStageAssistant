@@ -263,8 +263,9 @@ def run_engine_session(
     online: bool,
     connectivity: ConnectivityManager,
     stop_event: threading.Event,
+    reload_event: threading.Event,
     status_tracker: RuntimeStatusTracker,
-) -> tuple[int | None, ConnectivityEvent | None]:
+) -> tuple[int | None, ConnectivityEvent | None, bool]:
     print(f"LSA runtime: engine={engine} connectivity={'online' if online else 'offline'} env={env_file}", flush=True)
 
     if engine != "openai-realtime":
@@ -273,7 +274,7 @@ def run_engine_session(
 
     loader = StartupLoader(ROOT, values)
     loader.start()
-    status_tracker.set_runtime(semantic_state="starting")
+    status_tracker.set_runtime(ready=False, semantic_state="starting")
 
     child_env = os.environ.copy()
     child_env["LSA_COMMON_STARTUP_LIFECYCLE"] = "1"
@@ -326,6 +327,14 @@ def run_engine_session(
 
     try:
         while not stop_event.wait(0.2):
+            if reload_event.is_set():
+                print("LSA runtime reload requested from common WebMonitor", flush=True)
+                status_tracker.set_runtime(ready=False, semantic_state="starting")
+                loader.stop()
+                _terminate_process(process)
+                output_done.wait(timeout=2.0)
+                return None, None, True
+
             if not online and ready_seen.is_set() and not local_ready_announced:
                 speak_local("Assistant vocal prêt à exécuter des commandes.", values)
                 local_ready_announced = True
@@ -348,16 +357,16 @@ def run_engine_session(
                 loader.stop()
                 _terminate_process(process)
                 output_done.wait(timeout=2.0)
-                return None, event
+                return None, event, False
             if process.poll() is not None:
                 output_done.wait(timeout=2.0)
                 status_tracker.set_runtime(ready=False, semantic_state="")
-                return int(process.returncode or 0), None
+                return int(process.returncode or 0), None, False
         loader.stop()
         _terminate_process(process)
         output_done.wait(timeout=2.0)
         status_tracker.set_runtime(ready=False, semantic_state="")
-        return 0, None
+        return 0, None, False
     finally:
         if not ready_seen.is_set():
             loader.stop()
@@ -371,6 +380,7 @@ def main() -> int:
     args = parser.parse_args()
 
     stop_event = threading.Event()
+    reload_event = threading.Event()
     connectivity = ConnectivityManager(interval=CONNECTIVITY_INTERVAL)
 
     def request_stop(_signum, _frame) -> None:
@@ -417,6 +427,8 @@ def main() -> int:
             active_profile_ref=active_profile_ref,
             automatic_profiles=automatic,
         )
+        if monitor is not None:
+            monitor.set_runtime_restart_handler(reload_event.set)
 
         while not stop_event.is_set():
             if not env_file.is_file():
@@ -451,15 +463,23 @@ def main() -> int:
                 flush=True,
             )
 
-            code, event = run_engine_session(
+            code, event, reload_requested = run_engine_session(
                 engine=engine,
                 env_file=env_file,
                 values=values,
                 online=online,
                 connectivity=connectivity,
                 stop_event=stop_event,
+                reload_event=reload_event,
                 status_tracker=tracker,
             )
+
+            if reload_requested:
+                reload_event.clear()
+                engine_override = ""
+                failed_engines.clear()
+                time.sleep(0.20)
+                continue
 
             if event is None:
                 if stop_event.is_set():
@@ -501,6 +521,7 @@ def main() -> int:
     finally:
         connectivity.stop()
         if monitor is not None:
+            monitor.set_runtime_restart_handler(None)
             monitor.stop()
             monitor.restore_console_capture()
         for sig, handler in previous_handlers.items():
