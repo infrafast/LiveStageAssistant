@@ -51,6 +51,38 @@ def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
     return engine
 
 
+def fallback_engine_candidates(values: Mapping[str, object], *, online: bool) -> tuple[str, ...]:
+    """Return generic online-engine fallback candidates in configured order."""
+    if not online:
+        return ()
+    raw = str(values.get("VOICE_ENGINE_FALLBACK") or "classic").strip().lower()
+    if raw in {"", "none", "off", "disabled", "false", "0"}:
+        return ()
+    result: list[str] = []
+    for item in raw.split(","):
+        name = item.strip()
+        if name not in {"classic", "openai-realtime"}:
+            print(f"Ignoring invalid VOICE_ENGINE_FALLBACK entry {name!r}.", flush=True)
+            continue
+        if name not in result:
+            result.append(name)
+    return tuple(result)
+
+
+def select_fallback_engine(
+    values: Mapping[str, object],
+    *,
+    online: bool,
+    failed_engine: str,
+    failed_engines: set[str],
+) -> str:
+    for candidate in fallback_engine_candidates(values, online=online):
+        if candidate == failed_engine or candidate in failed_engines:
+            continue
+        return candidate
+    return ""
+
+
 def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str, str]:
     """Resolve generic provider/model/voice status from the selected profile."""
     if engine == "openai-realtime":
@@ -270,6 +302,8 @@ def main() -> int:
     try:
         raw_env_arg = str(args.env_file or "auto").strip()
         automatic = raw_env_arg.lower() == "auto"
+        engine_override = ""
+        failed_engines: set[str] = set()
 
         if automatic:
             online = connectivity.detect()
@@ -291,7 +325,7 @@ def main() -> int:
                 return 2
 
             values = _load_values(env_file)
-            engine = normalize_engine(values, online=online)
+            engine = engine_override or normalize_engine(values, online=online)
             provider, model, voice = engine_identity(engine, values)
             tracker = RuntimeStatusTracker(
                 STATUS_FILE,
@@ -324,6 +358,24 @@ def main() -> int:
             )
 
             if event is None:
+                if stop_event.is_set():
+                    return int(code or 0)
+                failed_engines.add(engine)
+                fallback = select_fallback_engine(
+                    values,
+                    online=online,
+                    failed_engine=engine,
+                    failed_engines=failed_engines,
+                )
+                if fallback:
+                    print(
+                        f"LSA runtime engine failure: {engine} exited with code {int(code or 0)}; "
+                        f"falling back to {fallback}",
+                        flush=True,
+                    )
+                    engine_override = fallback
+                    time.sleep(0.35)
+                    continue
                 return int(code or 0)
 
             if not automatic:
@@ -331,6 +383,8 @@ def main() -> int:
                 return int(code or 0)
 
             online = event.online
+            engine_override = ""
+            failed_engines.clear()
             if not online:
                 # This must never depend on the cloud engine that just became
                 # unavailable. Announce locally before starting the offline path.
