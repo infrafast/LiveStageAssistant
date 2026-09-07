@@ -209,6 +209,38 @@ async def native_server(server: CanonicalMCPServerConfig, *, strict_probe: bool 
     )
 
 
+def _has_local_mcp_route(server: CanonicalMCPServerConfig) -> bool:
+    entry = server.local_entry
+    command = str(entry.get("command") or "").strip()
+    url = str(entry.get("url") or "").strip()
+    return bool(command or (url and not url.lower().startswith("https://")))
+
+
+async def probe_local_stdio(raw_config: dict[str, Any], server: CanonicalMCPServerConfig) -> tuple[bool, str]:
+    """Probe one AUTO server through the local bridge without executing a tool.
+
+    AUTO prefers this route when it is configured and tool discovery succeeds.
+    Approval-mode STDIO remains unsupported, so those servers fall through to
+    provider-native selection when available.
+    """
+    if server.realtime.permissions.mode == "approval":
+        return False, "stdio approval is not implemented"
+    if not _has_local_mcp_route(server):
+        return False, "no local command/private HTTP route configured"
+
+    probe = RealtimeMCPBridge(raw_config, server_names=(server.name,))
+    try:
+        tools = await probe.start()
+        count = len(tools)
+        if count < 1:
+            return False, "local bridge discovered no tools"
+        return True, f"local bridge discovered {count} tool(s)"
+    except Exception as exc:
+        return False, f"local bridge probe failed: {exc}"
+    finally:
+        await probe.close()
+
+
 async def capture_loop(engine, stream, source_rate: int, channels: int, frames: int, stop_event: asyncio.Event) -> None:
     resampler = Pcm16MonoResampler(source_rate, REALTIME_RATE)
     while not stop_event.is_set():
@@ -410,6 +442,14 @@ async def run(args) -> int:
     for server in inventory.values():
         transport = server.realtime.transport
         if transport == "auto":
+            print(f"Realtime MCP auto selection: {server.name} -> probing local STDIO/bridge first", flush=True)
+            local_ok, local_reason = await probe_local_stdio(raw_config, server)
+            if local_ok:
+                bridge_names.append(server.name)
+                print(f"Realtime MCP auto selection: {server.name} -> stdio ({local_reason})", flush=True)
+                continue
+
+            print(f"Realtime MCP auto local unavailable: {server.name} ({local_reason})", flush=True)
             if server.native.url:
                 print(f"Realtime MCP auto selection: {server.name} -> probing native", flush=True)
                 try:
@@ -418,11 +458,9 @@ async def run(args) -> int:
                     continue
                 except Exception as exc:
                     decision = classify_auto_fallback(dispatched=False, read_only=None)
-                    print("Realtime MCP auto fallback " + json.dumps({"server":server.name,"fallback":decision.fallback,"classification":decision.classification,"reason":decision.reason,"native_error":str(exc)}, ensure_ascii=False, separators=(",", ":")), flush=True)
-                    if not decision.fallback:
-                        raise
-            transport = "stdio"
-            print(f"Realtime MCP auto selection: {server.name} -> stdio", flush=True)
+                    print("Realtime MCP auto native unavailable " + json.dumps({"server":server.name,"fallback":decision.fallback,"classification":decision.classification,"reason":decision.reason,"native_error":str(exc)}, ensure_ascii=False, separators=(",", ":")), flush=True)
+            raise RuntimeError(f"AUTO MCP {server.name!r} has no healthy local route and no healthy native route")
+
         if transport == "native":
             native_servers.append(await native_server(server))
         elif transport == "stdio":
