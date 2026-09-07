@@ -276,7 +276,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC native fixture validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C native-first AUTO behavior includes a validated forced HTTPS-down -> STDIO fallback in the integrated service and deterministic auth/timeout/post-dispatch safety probes implemented pending Pi execution. RV2D canonical configuration, GUI persistence, common startup-loader lifecycle and basic common connectivity round trips are materially implemented and Pi-validated. OR2 basic Classic and Realtime Online -> Offline -> Online round trips are Pi-validated. OR3 Piper offline speech is functionally Pi-validated and is now Piper-only.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2A native read/follow-up is validated on Pi5 with QLC native fixture validation still pending. RV2B STDIO bridge is validated on Pi5. RV2C native-first AUTO behavior now includes both validated pre-dispatch HTTPS failure -> STDIO fallback and a real provider-native post-dispatch mutation failure on Pi5 where the mutation committed exactly once, the provider received HTTP 502, and AUTO suppressed all STDIO replay. RV2D canonical configuration, GUI persistence, common startup-loader lifecycle and basic common connectivity round trips are materially implemented and Pi-validated. OR2 basic Classic and Realtime Online -> Offline -> Online round trips are Pi-validated. OR3 Piper offline speech is functionally Pi-validated and is now Piper-only.
 
 **Goal:** add selectable low-latency realtime voice beside Classic without decommissioning Classic, while preserving MCP transport flexibility, wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -417,15 +417,17 @@ Require approval
 - [x] pre-dispatch native failure -> STDIO fallback;
 - [x] safe fallback policy blocks ambiguous write replay;
 - [x] integrated-service 502 -> STDIO fallback validated;
-- [~] auth/timeout/post-dispatch deterministic fault matrix implemented; Pi execution pending;
-- [~] real native post-dispatch fault injection pending after deterministic probe validation;
+- [~] auth/timeout/post-dispatch deterministic fault matrix implemented; standalone Pi unit/matrix execution still pending;
+- [x] real provider-native post-dispatch fault injection validated on Pi5 with one committed mutation, HTTP 502 after dispatch, `fallback=false`, no STDIO switch and counter remaining exactly 1;
 - [~] direct native-vs-STDIO comparison pending;
 - [ ] representative Classic-vs-Realtime tool corpus;
 - [ ] arbitrary unrelated MCP proof without engine changes.
 
 Validation note (Pi5, 2026-09-06): mixer=`auto/open` with a native HTTP 502 fell back before dispatch to STDIO; mixer + QLCPlus exposed 43 bridge tools and a live `Quel est le volume de Claude ?` query resolved/read the real bus and returned the correct value.
 
-Implementation note (2026-09-06): `scripts/rv2c_fault_matrix.py` and the extended `tests/test_realtime_mcp_auto.py` cover auth failures, pre-dispatch timeouts, post-dispatch read failures, ambiguous write/unknown failures and explicit non-execution. The Pi probe remains required before those deterministic cases are considered validated.
+Validation note (Pi5, 2026-09-07): `scripts/rv2c_event_fault_probe.py` validated the real AUTO event-loop policy using synthetic post-dispatch events: read-only failures may replay safely, while mutation/unknown failures suppress replay. `scripts/rv2c_native_postdispatch_probe.py` then exercised a real provider-native HTTPS/Funnel failure against an isolated MCP fixture: `mutate_then_disconnect` persisted counter=1 before terminating, OpenAI received HTTP 502, AUTO classified `ambiguous_mutation_or_unknown`, `fallback=false`, and no STDIO replay occurred during the observation window.
+
+Implementation note (2026-09-06): `scripts/rv2c_fault_matrix.py` and the extended `tests/test_realtime_mcp_auto.py` cover auth failures, pre-dispatch timeouts, post-dispatch read failures, ambiguous write/unknown failures and explicit non-execution. Their standalone Pi execution remains useful regression coverage even though the provider-native ambiguous-write case is now physically validated.
 
 #### RV2D - Canonical config, runtime and per-MCP GUI policy — IN PROGRESS
 
@@ -786,8 +788,8 @@ runtime state
 
 # 9. Current Next Actions
 
-1. **RV2C — deterministic Pi fault probe:** run `tests.test_realtime_mcp_auto` and `scripts/rv2c_fault_matrix.py` on Pi5; confirm ambiguous post-dispatch writes never replay.
-2. **RV2C — real fault injection:** after the deterministic probe passes, validate at least one real native post-dispatch failure without duplicate stage write.
+1. **RV2C — standalone deterministic regression:** run `tests.test_realtime_mcp_auto` and `scripts/rv2c_fault_matrix.py` on Pi5; the real provider-native ambiguous-write case is already validated, but these remain useful deterministic coverage.
+2. **RV2C / RV2E — direct native-vs-STDIO comparison:** run the same representative read-only MCP command(s) through native and bridge paths and compare tool-call latency/behavior without changing semantics.
 3. **OR2 / RV2D — health exposure:** expose common connectivity state + active engine to WebMonitor/health.
 4. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the basic Classic/Realtime round trips already validated.
 5. **RV2D / RV8 — Realtime output gain:** add a simple independent Realtime output gain control when convenient; non-blocking because current speech is usable and Piper's higher level is preferred.
