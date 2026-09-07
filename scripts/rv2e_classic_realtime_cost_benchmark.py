@@ -2,18 +2,18 @@
 """RV2E functional Classic-vs-Realtime cost/latency benchmark.
 
 One microphone recording is reused for both pipelines. Both paths use the same
-configured local MCP server. The script performs read-oriented voice queries;
-do not use it with a mutation request.
+configured local MCP server and the same configured LSA audio output. The
+benchmark is deliberately read-only and is intended for a query such as
+"Quel est le volume de Claude ?".
 
-Classic path:
-  recorded PCM -> OpenAI Whisper -> gpt-4.1-mini + MCPAgent/STDIO -> OpenAI TTS
-Realtime path:
-  same recorded PCM -> gpt-realtime-2.1 + Realtime STDIO bridge -> audio output
+Classic:
+  configured mic -> Whisper -> gpt-4.1-mini + MCP STDIO -> OpenAI TTS -> configured output
+Realtime:
+  exact same PCM -> gpt-realtime-2.1 + same MCP STDIO -> configured output
 
-Realtime costs use provider response usage. Classic LLM costs use actual
-LangChain/OpenAI token usage, Whisper uses measured input duration, and Classic
-TTS is explicitly estimated from measured generated WAV duration because the
-speech endpoint used here does not expose per-request token usage.
+Realtime cost uses provider response usage. Classic LLM cost uses actual token
+usage, Whisper uses measured recorded duration, and Classic TTS is estimated
+from the exact PCM duration returned by the speech endpoint.
 """
 
 from __future__ import annotations
@@ -41,35 +41,30 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts import rv2_stdio_mcp as stdio_runner
-from voice_assistant.cost_metrics import (
-    estimate_openai_tts_cost_usd,
-    text_usage_cost_usd,
-    transcription_cost_usd,
-)
-from voice_assistant.realtime.audio import Pcm16MonoResampler, downmix_pcm16
+from voice_assistant.cost_metrics import estimate_openai_tts_cost_usd, text_usage_cost_usd, transcription_cost_usd
+from voice_assistant.realtime.audio import Pcm16MonoResampler, downmix_pcm16, expand_pcm16_channels
 from voice_assistant.realtime.engine import RealtimeEngineConfig
 from voice_assistant.realtime.mcp_bridge import RealtimeMCPBridge
 from voice_assistant.realtime.metrics import realtime_usage_cost_usd
 from voice_assistant.realtime.openai_realtime import OpenAIRealtimeEngine
-from voice_assistant.realtime.service import open_configured_input, read_secret
+from voice_assistant.realtime.service import open_configured_input, open_configured_output, read_secret
 
 RATE = 24000
+TTS_PCM_RATE = 24000
 DEFAULT_QUERY_HINT = "Quel est le volume de Claude ?"
-CLASSIC_SYSTEM_PROMPT = """You are Live Stage Assistant. Reply in French. Keep the answer short.
+CLASSIC_SYSTEM_PROMPT = """You are Live Stage Assistant. Reply in French and keep the answer short.
 Current external mixer state must be read through the available MCP tools before answering.
-For this benchmark perform read-only inspection only. Never change a level, mute, routing, scene,
-or any other external state. Do not invent a tool result.
+This benchmark is strictly read-only. Never change a level, mute, routing, scene, effect, or any
+other external state. Do not invent a tool result.
 """
-REALTIME_SYSTEM_PROMPT = """You are Live Stage Assistant in a read-only cost benchmark.
-Reply in French and keep the spoken answer short. Use the available function tools to read the
-current mixer state before answering. Never perform a write, level change, mute, routing change,
-or any other mutation. Do not invent a tool result. Call tools silently, then answer once.
+REALTIME_SYSTEM_PROMPT = """You are Live Stage Assistant in a strictly read-only benchmark.
+Reply in French and keep the spoken answer short. Read the current mixer state through the
+available function tools before answering. Never perform a write, level change, mute, routing
+change, scene/effect change, or any other mutation. Call tools silently, then answer once.
 """
 
 
 class UsageCallback(BaseCallbackHandler):
-    """Accumulate token usage reported by ChatOpenAI across agent/tool turns."""
-
     def __init__(self) -> None:
         self.input_tokens = 0
         self.cached_input_tokens = 0
@@ -105,25 +100,49 @@ def wav_bytes(pcm: bytes, *, rate: int = RATE) -> bytes:
     return buffer.getvalue()
 
 
-def wav_duration_seconds(data: bytes) -> float:
-    with wave.open(io.BytesIO(data), "rb") as handle:
-        return handle.getnframes() / float(handle.getframerate())
-
-
 def approx_text_tokens(text: str) -> int:
-    # Used only for the tiny TTS text-input estimate; LLM tokens are measured.
     return max(1, round(len(text) / 4.0)) if text else 0
 
 
-async def capture_once(seconds: float) -> tuple[bytes, dict[str, Any]]:
+def validate_fixed_query_transcript(text: str) -> None:
+    normalized = text.casefold()
+    if "volume" not in normalized or "claude" not in normalized:
+        raise RuntimeError(
+            "recorded speech was not recognized as the benchmark query; "
+            f"got {text!r}. No cost comparison produced."
+        )
+
+
+def filtered_mcp_config(config: dict, server: str) -> dict:
+    servers = config.get("mcpServers") or {}
+    if server not in servers:
+        raise RuntimeError(f"MCP server {server!r} not found")
+    entry = dict(servers[server])
+    entry.pop("native", None)
+    entry.pop("realtime", None)
+    return {"mcpServers": {server: entry}}
+
+
+def local_mcp_target(config: dict, server: str) -> dict[str, str]:
+    entry = (config.get("mcpServers") or {}).get(server) or {}
+    env = entry.get("env") or {}
+    return {
+        "host": str(env.get("OSC_HOST") or ""),
+        "port": str(env.get("OSC_PORT") or ""),
+        "protocol": str(env.get("OSC_PROTOCOL") or ""),
+        "transport": "stdio/local",
+    }
+
+
+async def capture_once(seconds: float, selected: str) -> tuple[bytes, dict[str, Any]]:
     pa = pyaudio.PyAudio()
     stream = None
     try:
-        selected = str(os.getenv("BACKEND_AUDIO_INPUT_DEVICE") or "")
         stream, source_rate, channels, frames, name = open_configured_input(pa, selected)
         resampler = Pcm16MonoResampler(source_rate, RATE)
         chunks: list[bytes] = []
         deadline = time.monotonic() + seconds
+        print(f"RV2E_AUDIO input_selector={selected or '<default>'} resolved_input={name}", flush=True)
         print(f"RV2E_RECORD Speak now for {seconds:.1f}s: {DEFAULT_QUERY_HINT}", flush=True)
         while time.monotonic() < deadline:
             raw = await asyncio.to_thread(stream.read, frames, False)
@@ -133,7 +152,7 @@ async def capture_once(seconds: float) -> tuple[bytes, dict[str, Any]]:
         pcm = b"".join(chunks)
         duration = len(pcm) / 2.0 / RATE
         print(f"RV2E_RECORD done duration_s={duration:.3f} device={name}", flush=True)
-        return pcm, {"duration_s": duration, "device": name, "rate": RATE}
+        return pcm, {"duration_s": duration, "device": name, "selector": selected, "rate": RATE}
     finally:
         if stream is not None:
             try:
@@ -144,33 +163,45 @@ async def capture_once(seconds: float) -> tuple[bytes, dict[str, Any]]:
         pa.terminate()
 
 
-def filtered_mcp_config(config: dict, server: str) -> dict:
-    servers = config.get("mcpServers") or {}
-    if server not in servers:
-        raise RuntimeError(f"MCP server {server!r} not found")
-    entry = dict(servers[server])
-    # mcp-use/local Classic must not consume realtime/native policy blocks.
-    entry.pop("native", None)
-    entry.pop("realtime", None)
-    return {"mcpServers": {server: entry}}
+async def write_pcm(stream, pcm: bytes, source_rate: int, output_rate: int, output_channels: int) -> None:
+    if not pcm:
+        return
+    resampler = Pcm16MonoResampler(source_rate, output_rate)
+    converted = resampler.process(pcm)
+    converted = expand_pcm16_channels(converted, output_channels)
+    if converted:
+        await asyncio.to_thread(stream.write, converted)
 
 
-async def run_classic(api_key: str, env_file: Path, raw_config: dict, server: str, pcm: bytes, audio_seconds: float) -> dict:
+async def run_classic(
+    api_key: str,
+    raw_config: dict,
+    server: str,
+    pcm: bytes,
+    audio_seconds: float,
+    output_stream,
+    output_rate: int,
+    output_channels: int,
+) -> dict:
     started = time.perf_counter()
     client = openai.OpenAI(api_key=api_key)
-    wav = wav_bytes(pcm)
+    stt_kwargs: dict[str, Any] = {
+        "model": "whisper-1",
+        "file": ("rv2e.wav", wav_bytes(pcm), "audio/wav"),
+        "language": str(os.getenv("STT_LANGUAGE") or "fr").strip(),
+    }
+    stt_prompt = str(os.getenv("STT_PROMPT") or "").strip()
+    if stt_prompt:
+        stt_kwargs["prompt"] = stt_prompt
+
     stt_started = time.perf_counter()
-    stt_response = await asyncio.to_thread(
-        client.audio.transcriptions.create,
-        model="whisper-1",
-        file=("rv2e.wav", wav, "audio/wav"),
-        language="fr",
-    )
+    stt_response = await asyncio.to_thread(client.audio.transcriptions.create, **stt_kwargs)
     transcript = str(stt_response.text or "").strip()
     stt_ms = (time.perf_counter() - stt_started) * 1000.0
     if not transcript:
         raise RuntimeError("Classic STT returned an empty transcript")
     print(f"RV2E_CLASSIC transcript={transcript!r}", flush=True)
+    validate_fixed_query_transcript(transcript)
 
     usage = UsageCallback()
     model = str(os.getenv("OPENAI_MODEL") or "gpt-4.1-mini").strip()
@@ -200,14 +231,14 @@ async def run_classic(api_key: str, env_file: Path, raw_config: dict, server: st
         model=tts_model,
         voice=tts_voice,
         input=answer,
-        response_format="wav",
+        response_format="pcm",
     )
-    if hasattr(speech, "read"):
-        generated_wav = speech.read()
-    else:
-        generated_wav = bytes(getattr(speech, "content", b""))
-    tts_ms = (time.perf_counter() - tts_started) * 1000.0
-    generated_seconds = wav_duration_seconds(generated_wav)
+    generated_pcm = speech.read() if hasattr(speech, "read") else bytes(getattr(speech, "content", b""))
+    tts_api_ms = (time.perf_counter() - tts_started) * 1000.0
+    generated_seconds = len(generated_pcm) / 2.0 / TTS_PCM_RATE
+    playback_started = time.perf_counter()
+    await write_pcm(output_stream, generated_pcm, TTS_PCM_RATE, output_rate, output_channels)
+    playback_ms = (time.perf_counter() - playback_started) * 1000.0
 
     stt_cost = transcription_cost_usd("whisper-1", audio_seconds) or 0.0
     llm_cost = text_usage_cost_usd(
@@ -220,7 +251,7 @@ async def run_classic(api_key: str, env_file: Path, raw_config: dict, server: st
         text_input_tokens=approx_text_tokens(answer),
         generated_audio_seconds=generated_seconds,
     )
-    known_total = stt_cost + (llm_cost or 0.0) + float(tts_cost["cost_usd"])
+    total = stt_cost + (llm_cost or 0.0) + float(tts_cost["cost_usd"])
     return {
         "pipeline": "classic",
         "transcript": transcript,
@@ -229,7 +260,8 @@ async def run_classic(api_key: str, env_file: Path, raw_config: dict, server: st
         "latency_ms": {
             "stt": round(stt_ms, 3),
             "llm_mcp": round(llm_mcp_ms, 3),
-            "tts": round(tts_ms, 3),
+            "tts_api": round(tts_api_ms, 3),
+            "tts_playback": round(playback_ms, 3),
             "post_capture_total": round((time.perf_counter() - started) * 1000.0, 3),
         },
         "usage": {
@@ -243,8 +275,8 @@ async def run_classic(api_key: str, env_file: Path, raw_config: dict, server: st
         "cost_usd": {
             "stt_measured_duration": stt_cost,
             "llm_measured_tokens": llm_cost,
-            "tts_estimated": tts_cost,
-            "total_with_tts_estimate": known_total,
+            "tts_estimated_from_exact_pcm_duration": tts_cost,
+            "total_with_tts_estimate": total,
         },
     }
 
@@ -258,8 +290,17 @@ async def wait_ready(engine: OpenAIRealtimeEngine, timeout: float = 20.0) -> Non
             raise RuntimeError(f"Realtime failed before ready: {event.type} {event.data}")
 
 
-async def run_realtime(api_key: str, raw_config: dict, server: str, pcm: bytes) -> dict:
-    bridge = RealtimeMCPBridge(raw_config, server_names=(server,))
+async def run_realtime(
+    api_key: str,
+    raw_config: dict,
+    server: str,
+    pcm: bytes,
+    output_stream,
+    output_rate: int,
+    output_channels: int,
+) -> dict:
+    bridge_config = filtered_mcp_config(raw_config, server)
+    bridge = RealtimeMCPBridge(bridge_config, server_names=(server,))
     engine: OpenAIRealtimeEngine | None = None
     started = time.perf_counter()
     try:
@@ -282,8 +323,6 @@ async def run_realtime(api_key: str, raw_config: dict, server: str, pcm: bytes) 
         await engine.start()
         await wait_ready(engine)
 
-        # Feed the exact same recorded PCM at natural timing, then enough silence
-        # for provider VAD to close the turn.
         chunk_bytes = int(RATE * 0.02) * 2
         for offset in range(0, len(pcm), chunk_bytes):
             await engine.send_audio(pcm[offset : offset + chunk_bytes])
@@ -300,13 +339,17 @@ async def run_realtime(api_key: str, raw_config: dict, server: str, pcm: bytes) 
         response_costs: list[float] = []
         usages: list[dict[str, Any]] = []
         audio_output_bytes = 0
+        first_audio_ms: float | None = None
         final_response_seen = False
+        output_resampler = Pcm16MonoResampler(RATE, output_rate)
         deadline = time.monotonic() + 30.0
         while time.monotonic() < deadline:
             event = await asyncio.wait_for(engine.next_event(), timeout=max(0.1, deadline - time.monotonic()))
             if event.type == "user_transcript_done":
                 transcript = str(event.data.get("text") or "").strip()
                 print(f"RV2E_REALTIME transcript={transcript!r}", flush=True)
+                if transcript:
+                    validate_fixed_query_transcript(transcript)
             elif event.type == "tool_call":
                 tool_calls += 1
                 name = str(event.data.get("name") or "")
@@ -320,7 +363,15 @@ async def run_realtime(api_key: str, raw_config: dict, server: str, pcm: bytes) 
                     raise RuntimeError(f"Realtime MCP tool failed: {result}")
                 await engine.submit_tool_result(call_id, result)
             elif event.type == "audio_delta":
-                audio_output_bytes += len(event.data.get("audio") or b"")
+                audio = event.data.get("audio") or b""
+                if audio:
+                    if first_audio_ms is None:
+                        first_audio_ms = (time.perf_counter() - post_audio_started) * 1000.0
+                    audio_output_bytes += len(audio)
+                    converted = output_resampler.process(audio)
+                    converted = expand_pcm16_channels(converted, output_channels)
+                    if converted:
+                        await asyncio.to_thread(output_stream.write, converted)
             elif event.type == "transcript_done":
                 text = str(event.data.get("text") or "").strip()
                 if text:
@@ -340,27 +391,25 @@ async def run_realtime(api_key: str, raw_config: dict, server: str, pcm: bytes) 
 
         if not final_response_seen:
             raise RuntimeError("Realtime benchmark did not reach a final tool-backed spoken response")
+        if not transcript:
+            raise RuntimeError("Realtime did not return a user transcript")
         post_audio_ms = (time.perf_counter() - post_audio_started) * 1000.0
         audio_seconds = audio_output_bytes / 2.0 / RATE
-
-        aggregate = {
-            "input_tokens": sum(int(item.get("input_tokens") or 0) for item in usages),
-            "output_tokens": sum(int(item.get("output_tokens") or 0) for item in usages),
-        }
         return {
             "pipeline": "realtime",
             "transcript": transcript,
             "answer": answer,
             "models": {"realtime": model},
             "latency_ms": {
+                "post_audio_to_first_audio": round(first_audio_ms, 3) if first_audio_ms is not None else None,
                 "post_audio_to_final_response": round(post_audio_ms, 3),
                 "session_work_total": round((time.perf_counter() - started) * 1000.0, 3),
             },
             "usage": {
                 "responses": len(usages),
                 "tool_calls": tool_calls,
-                "input_tokens": aggregate["input_tokens"],
-                "output_tokens": aggregate["output_tokens"],
+                "input_tokens": sum(int(item.get("input_tokens") or 0) for item in usages),
+                "output_tokens": sum(int(item.get("output_tokens") or 0) for item in usages),
                 "audio_output_seconds": round(audio_seconds, 3),
                 "responses_detail": usages,
             },
@@ -387,7 +436,7 @@ def comparison(classic: dict, realtime: dict) -> dict:
         "per_1000_requests_usd": {"classic": classic_total * 1000.0, "realtime": realtime_total * 1000.0},
         "classic_post_capture_ms": classic["latency_ms"]["post_capture_total"],
         "realtime_post_audio_ms": realtime["latency_ms"]["post_audio_to_final_response"],
-        "note": "Classic TTS component is estimated from generated audio duration; all Realtime cost uses provider usage.",
+        "note": "Classic TTS is estimated from exact returned PCM duration; Realtime uses provider-reported usage.",
     }
 
 
@@ -403,23 +452,62 @@ async def run(args) -> int:
         mcp_server = args.server
 
     config_path, raw_config = stdio_runner.load_mcp_config(BridgeArgs(), env_file)
+    input_selector = args.input_device if args.input_device is not None else str(os.getenv("BACKEND_AUDIO_INPUT_DEVICE") or "")
+    output_selector = args.output_device if args.output_device is not None else str(os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE") or "")
     print(
         "RV2E_CONFIG "
         + json.dumps(
-            {"server": args.server, "mcp_config": str(config_path), "record_seconds": args.record_seconds},
+            {
+                "server": args.server,
+                "mcp_config": str(config_path),
+                "mcp_target": local_mcp_target(raw_config, args.server),
+                "record_seconds": args.record_seconds,
+                "input_selector": input_selector or "<default>",
+                "output_selector": output_selector or "<default>",
+            },
+            ensure_ascii=False,
             separators=(",", ":"),
         ),
         flush=True,
     )
 
-    pcm, recording = await capture_once(args.record_seconds)
-    classic = await run_classic(api_key, env_file, raw_config, args.server, pcm, recording["duration_s"])
-    print("RV2E_CLASSIC_RESULT " + json.dumps(classic, ensure_ascii=False, separators=(",", ":")), flush=True)
-    realtime = await run_realtime(api_key, raw_config, args.server, pcm)
-    print("RV2E_REALTIME_RESULT " + json.dumps(realtime, ensure_ascii=False, separators=(",", ":")), flush=True)
-    report = {"recording": recording, "classic": classic, "realtime": realtime, "comparison": comparison(classic, realtime)}
-    print("RV2E_COST_COMPARISON " + json.dumps(report, ensure_ascii=False, separators=(",", ":")), flush=True)
-    return 0
+    pcm, recording = await capture_once(args.record_seconds, input_selector)
+
+    pa = pyaudio.PyAudio()
+    output_stream = None
+    try:
+        output_stream, output_rate, output_channels, output_name = open_configured_output(pa, output_selector)
+        print(
+            f"RV2E_AUDIO output_selector={output_selector or '<default>'} resolved_output={output_name} "
+            f"channels={output_channels} rate={output_rate}",
+            flush=True,
+        )
+        classic = await run_classic(
+            api_key, raw_config, args.server, pcm, recording["duration_s"], output_stream, output_rate, output_channels
+        )
+        print("RV2E_CLASSIC_RESULT " + json.dumps(classic, ensure_ascii=False, separators=(",", ":")), flush=True)
+        realtime = await run_realtime(
+            api_key, raw_config, args.server, pcm, output_stream, output_rate, output_channels
+        )
+        print("RV2E_REALTIME_RESULT " + json.dumps(realtime, ensure_ascii=False, separators=(",", ":")), flush=True)
+        report = {
+            "recording": recording,
+            "audio_output": {"device": output_name, "selector": output_selector, "rate": output_rate, "channels": output_channels},
+            "mcp_target": local_mcp_target(raw_config, args.server),
+            "classic": classic,
+            "realtime": realtime,
+            "comparison": comparison(classic, realtime),
+        }
+        print("RV2E_COST_COMPARISON " + json.dumps(report, ensure_ascii=False, separators=(",", ":")), flush=True)
+        return 0
+    finally:
+        if output_stream is not None:
+            try:
+                output_stream.stop_stream()
+                output_stream.close()
+            except Exception:
+                pass
+        pa.terminate()
 
 
 def main() -> int:
@@ -428,6 +516,8 @@ def main() -> int:
     parser.add_argument("--mcp-config", default=None)
     parser.add_argument("--server", default="mixer")
     parser.add_argument("--record-seconds", type=float, default=3.5)
+    parser.add_argument("--input-device", default=None, help="override BACKEND_AUDIO_INPUT_DEVICE for this benchmark only")
+    parser.add_argument("--output-device", default=None, help="override BACKEND_AUDIO_OUTPUT_DEVICE for this benchmark only")
     args = parser.parse_args()
     if args.record_seconds < 1.0:
         parser.error("--record-seconds must be >= 1")
