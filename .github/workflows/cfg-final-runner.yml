@@ -1,0 +1,51 @@
+name: CFG canonical refactor runner
+
+on:
+  push:
+    branches:
+      - realtime-voice-architecture
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: "${{ !contains(github.event.head_commit.message, '[cfg-refactor]') }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: realtime-voice-architecture
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Execute refactor script
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+          source = Path('.github/workflows/cfg-final-refactor.yml').read_text(encoding='utf-8')
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "\n          PY\n"
+          start = source.index(start_marker) + len(start_marker)
+          end = source.index(end_marker, start)
+          script = textwrap.dedent(source[start:end])
+          exec(compile(script, '<cfg-refactor>', 'exec'))
+          PY
+      - name: Validate
+        shell: bash
+        run: |
+          python -m py_compile voice_assistant/runtime_web_services.py voice_assistant/web_monitor.py voice_assistant/web_monitor_base.py
+          node --check assets/web/app.js
+          python tests/test_web_config_architecture.py
+      - name: Commit refactor
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add assets/web/app.js assets/web/index.html voice_assistant/runtime_web_services.py voice_assistant/web_monitor_base.py voice_assistant/web_monitor.py
+          git diff --cached --quiet && exit 0
+          git commit -m "cfg: canonicalize save and restart state [cfg-refactor]"
+          git push origin HEAD:realtime-voice-architecture
