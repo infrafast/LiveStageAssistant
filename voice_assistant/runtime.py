@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Single LiveStageAssistant runtime and engine supervisor.
 
-The runtime owns engine-independent connectivity, startup lifecycle and the
-single production WebMonitor. It selects the active profile, launches exactly
-one voice engine, watches Internet availability, switches between online and
-offline profiles when connectivity changes, and keeps loader/process/signal
-handling common across Classic, Local and realtime providers.
+The runtime owns connectivity, startup lifecycle, runtime status and the single
+production WebMonitor. Voice engines are child processes: they never bind HTTP
+or own GUI configuration.
 """
 
 from __future__ import annotations
@@ -28,6 +26,7 @@ from voice_assistant.connectivity_manager import ConnectivityEvent, Connectivity
 from voice_assistant.engine_entry import CLASSIC_READY_MARKER
 from voice_assistant.local_tts import speak_local_status
 from voice_assistant.runtime_status import RuntimeStatus, RuntimeStatusTracker, configured_mcp_statuses
+from voice_assistant.runtime_web_services import RuntimeWebServices
 from voice_assistant.startup_lifecycle import StartupLoader
 from voice_assistant.web_monitor import WebMonitor
 
@@ -75,53 +74,6 @@ def _mcp_config_for_monitor(values: Mapping[str, object], profile: Path) -> dict
     return payload if isinstance(payload, dict) else {}
 
 
-def _refresh_common_web_monitor(
-    monitor: WebMonitor | None,
-    values: Mapping[str, object],
-    env_file: Path,
-    *,
-    online: bool,
-) -> None:
-    if monitor is None:
-        return
-    monitor.set_web_password(str(values.get("WEB_PASSWORD") or "").strip())
-    monitor.update(
-        mode="auto-runtime",
-        env_file=env_file,
-        internet=online,
-        env_values=dict(values),
-        mcp_config=_mcp_config_for_monitor(values, env_file),
-    )
-
-
-def _start_common_web_monitor(
-    values: Mapping[str, object],
-    env_file: Path,
-    *,
-    online: bool,
-) -> WebMonitor | None:
-    """Start the one production WebMonitor owned by the common runtime."""
-    if not _env_bool(values, "WEB_MONITOR_ENABLED", True):
-        return None
-    host = str(values.get("WEB_MONITOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
-    try:
-        port = int(str(values.get("WEB_MONITOR_PORT") or "8765").strip())
-    except ValueError:
-        print(f"Invalid WEB_MONITOR_PORT={values.get('WEB_MONITOR_PORT')!r}; WebMonitor disabled", flush=True)
-        return None
-    monitor = WebMonitor(web_password=str(values.get("WEB_PASSWORD") or "").strip())
-    _refresh_common_web_monitor(monitor, values, env_file, online=online)
-    monitor.install_console_capture()
-    try:
-        actual_host, actual_port = monitor.start(host, port)
-    except OSError as error:
-        monitor.restore_console_capture()
-        print(f"Web monitor unavailable on {host}:{port}: {error}", flush=True)
-        return None
-    print(f"Web monitor available at http://{actual_host}:{actual_port}", flush=True)
-    return monitor
-
-
 def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
     if not online:
         return "local"
@@ -133,7 +85,6 @@ def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
 
 
 def fallback_engine_candidates(values: Mapping[str, object], *, online: bool) -> tuple[str, ...]:
-    """Return generic online-engine fallback candidates in configured order."""
     if not online:
         return ()
     raw = str(values.get("VOICE_ENGINE_FALLBACK") or "classic").strip().lower()
@@ -165,7 +116,6 @@ def select_fallback_engine(
 
 
 def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str, str]:
-    """Resolve generic provider/model/voice status from the selected profile."""
     if engine == "openai-realtime":
         return (
             "openai",
@@ -173,11 +123,7 @@ def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str
             str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
         )
     provider = str(values.get("LLM_PROVIDER") or ("ollama" if engine == "local" else "openai")).strip().lower()
-    model_keys = {
-        "openai": "OPENAI_MODEL",
-        "anthropic": "ANTHROPIC_MODEL",
-        "ollama": "OLLAMA_MODEL",
-    }
+    model_keys = {"openai": "OPENAI_MODEL", "anthropic": "ANTHROPIC_MODEL", "ollama": "OLLAMA_MODEL"}
     model = str(values.get(model_keys.get(provider, "MODEL")) or "").strip()
     return provider, model, ""
 
@@ -195,13 +141,10 @@ def engine_command(engine: str, env_file: Path) -> list[str]:
 
 
 def ready_marker(engine: str) -> str:
-    if engine == "openai-realtime":
-        return "LSA Realtime ready:"
-    return CLASSIC_READY_MARKER
+    return "LSA Realtime ready:" if engine == "openai-realtime" else CLASSIC_READY_MARKER
 
 
 def speak_local(text: str, values: Mapping[str, object] | None = None) -> None:
-    """Speak critical status locally through Piper, with emergency fallback."""
     message = str(text or "").strip()
     if not message:
         return
@@ -238,9 +181,6 @@ def _update_mcp_status_from_line(tracker: RuntimeStatusTracker, line: str) -> No
     if line.startswith(local_prefix):
         server = line[len(local_prefix):].split(" ", 1)[0].strip()
         tracker.set_mcp(server, detail="local route unavailable; evaluating alternate transport")
-        return
-    if line.startswith("Realtime MCP auto native unavailable "):
-        return
 
 
 def _update_semantic_status_from_line(tracker: RuntimeStatusTracker, line: str) -> None:
@@ -249,6 +189,70 @@ def _update_semantic_status_from_line(tracker: RuntimeStatusTracker, line: str) 
     state = line[len(SEMANTIC_STATE_PREFIX):].strip().lower()
     if state in VALID_SEMANTIC_STATES:
         tracker.set_runtime(semantic_state=state)
+
+
+def _monitor_host_port(values: Mapping[str, object]) -> tuple[str, int]:
+    host = str(values.get("WEB_MONITOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(str(values.get("WEB_MONITOR_PORT") or "8765").strip())
+    except ValueError:
+        raise ValueError(f"invalid WEB_MONITOR_PORT={values.get('WEB_MONITOR_PORT')!r}") from None
+    if port < 1 or port > 65535:
+        raise ValueError("WEB_MONITOR_PORT must be between 1 and 65535")
+    return host, port
+
+
+def refresh_common_web_monitor(
+    monitor: WebMonitor,
+    *,
+    values: Mapping[str, object],
+    env_file: Path,
+    online: bool,
+) -> None:
+    monitor.set_web_password(str(values.get("WEB_PASSWORD") or "").strip())
+    monitor.update(
+        mode="auto-runtime",
+        env_file=env_file,
+        internet=online,
+        env_values=dict(values),
+        mcp_config=_mcp_config_for_monitor(values, env_file),
+    )
+
+
+def start_common_web_monitor(
+    *,
+    values: Mapping[str, object],
+    env_file: Path,
+    online: bool,
+    active_profile_ref: list[Path],
+    automatic_profiles: bool,
+) -> tuple[WebMonitor | None, RuntimeWebServices | None]:
+    if not _env_bool(values, "WEB_MONITOR_ENABLED", True):
+        print("Web monitor disabled by runtime profile", flush=True)
+        return None, None
+    try:
+        host, port = _monitor_host_port(values)
+    except ValueError as error:
+        print(f"Web monitor disabled: {error}", flush=True)
+        return None, None
+
+    monitor = WebMonitor(web_password=str(values.get("WEB_PASSWORD") or "").strip())
+    refresh_common_web_monitor(monitor, values=values, env_file=env_file, online=online)
+    services = RuntimeWebServices(
+        monitor=monitor,
+        active_profile=lambda: active_profile_ref[0],
+        automatic_profiles=automatic_profiles,
+    )
+    services.bind()
+    monitor.install_console_capture()
+    try:
+        actual_host, actual_port = monitor.start(host, port)
+    except OSError as error:
+        monitor.restore_console_capture()
+        print(f"Web monitor unavailable on {host}:{port}: {error}", flush=True)
+        return None, None
+    print(f"LSA common WebMonitor: http://{actual_host}:{actual_port}", flush=True)
+    return monitor, services
 
 
 def run_engine_session(
@@ -261,10 +265,7 @@ def run_engine_session(
     stop_event: threading.Event,
     status_tracker: RuntimeStatusTracker,
 ) -> tuple[int | None, ConnectivityEvent | None]:
-    print(
-        f"LSA runtime: engine={engine} connectivity={'online' if online else 'offline'} env={env_file}",
-        flush=True,
-    )
+    print(f"LSA runtime: engine={engine} connectivity={'online' if online else 'offline'} env={env_file}", flush=True)
 
     if engine != "openai-realtime":
         for item in status_tracker.status.mcp:
@@ -276,7 +277,6 @@ def run_engine_session(
 
     child_env = os.environ.copy()
     child_env["LSA_COMMON_STARTUP_LIFECYCLE"] = "1"
-    child_env["LSA_COMMON_WEB_MONITOR"] = "1"
     child_env["PYTHONUNBUFFERED"] = "1"
 
     process = subprocess.Popen(
@@ -321,10 +321,8 @@ def run_engine_session(
             except queue.Full:
                 pass
 
-    reader = threading.Thread(target=read_output, name="lsa-engine-output", daemon=True)
-    watcher = threading.Thread(target=watch_connectivity, name="lsa-connectivity-watch", daemon=True)
-    reader.start()
-    watcher.start()
+    threading.Thread(target=read_output, name="lsa-engine-output", daemon=True).start()
+    threading.Thread(target=watch_connectivity, name="lsa-connectivity-watch", daemon=True).start()
 
     try:
         while not stop_event.wait(0.2):
@@ -374,7 +372,6 @@ def main() -> int:
 
     stop_event = threading.Event()
     connectivity = ConnectivityManager(interval=CONNECTIVITY_INTERVAL)
-    common_web_monitor: WebMonitor | None = None
 
     def request_stop(_signum, _frame) -> None:
         stop_event.set()
@@ -387,6 +384,9 @@ def main() -> int:
             signal.signal(sig, request_stop)
         except Exception:
             pass
+
+    monitor: WebMonitor | None = None
+    active_profile_ref: list[Path] = []
 
     try:
         raw_env_arg = str(args.env_file or "auto").strip()
@@ -408,18 +408,26 @@ def main() -> int:
             values = _load_values(env_file)
             online = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower() != "offline"
 
-        if not env_file.is_file():
-            print(f"Active env file not found: {env_file}", file=sys.stderr, flush=True)
-            return 2
-        common_web_monitor = _start_common_web_monitor(_load_values(env_file), env_file, online=online)
+        active_profile_ref[:] = [env_file]
+        initial_values = _load_values(env_file) if env_file.is_file() else {}
+        monitor, _services = start_common_web_monitor(
+            values=initial_values,
+            env_file=env_file,
+            online=online,
+            active_profile_ref=active_profile_ref,
+            automatic_profiles=automatic,
+        )
 
         while not stop_event.is_set():
             if not env_file.is_file():
                 print(f"Active env file not found: {env_file}", file=sys.stderr, flush=True)
                 return 2
 
+            active_profile_ref[0] = env_file
             values = _load_values(env_file)
-            _refresh_common_web_monitor(common_web_monitor, values, env_file, online=online)
+            if monitor is not None:
+                refresh_common_web_monitor(monitor, values=values, env_file=env_file, online=online)
+
             engine = engine_override or normalize_engine(values, online=online)
             provider, model, voice = engine_identity(engine, values)
             tracker = RuntimeStatusTracker(
@@ -465,8 +473,7 @@ def main() -> int:
                 )
                 if fallback:
                     print(
-                        f"LSA runtime engine failure: {engine} exited with code {int(code or 0)}; "
-                        f"falling back to {fallback}",
+                        f"LSA runtime engine failure: {engine} exited with code {int(code or 0)}; falling back to {fallback}",
                         flush=True,
                     )
                     engine_override = fallback
@@ -487,15 +494,15 @@ def main() -> int:
                 env_file = OFFLINE_ENV
             else:
                 env_file = ONLINE_ENV
-
+            active_profile_ref[0] = env_file
             time.sleep(0.35)
 
         return 0
     finally:
         connectivity.stop()
-        if common_web_monitor is not None:
-            common_web_monitor.stop()
-            common_web_monitor.restore_console_capture()
+        if monitor is not None:
+            monitor.stop()
+            monitor.restore_console_capture()
         for sig, handler in previous_handlers.items():
             try:
                 signal.signal(sig, handler)
