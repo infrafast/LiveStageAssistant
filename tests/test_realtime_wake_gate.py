@@ -61,12 +61,38 @@ class RealtimeWakeGateTests(unittest.TestCase):
         now[0] += 0.36
         self.assertTrue(gate.feed(pcm24k))
 
+    def test_preroll_is_bounded_and_consumed_after_detection(self):
+        gate = RealtimeWakeGate(
+            RealtimeWakeConfig(wake_word="momo", threshold=0.6, pre_roll_ms=100),
+            predictor=lambda _samples: {"momo": 0.9},
+        )
+        # 100 ms at 24 kHz mono PCM16 = 4800 bytes. Feed enough audio to
+        # trigger openWakeWord while verifying the retained payload is bounded.
+        pcm24k = np.arange(2400, dtype=np.int16).tobytes()
+        self.assertTrue(gate.feed(pcm24k))
+        preroll = gate.consume_pre_roll()
+        self.assertLessEqual(len(preroll), 4800)
+        self.assertGreater(len(preroll), 0)
+        self.assertEqual(gate.consume_pre_roll(), b"")
+
+    def test_rearm_clears_old_preroll(self):
+        gate = RealtimeWakeGate(
+            RealtimeWakeConfig(wake_word="momo", threshold=0.6, pre_roll_ms=100, cooldown_ms=0),
+            predictor=lambda _samples: {"momo": 0.9},
+        )
+        pcm24k = np.zeros(1920, dtype=np.int16).tobytes()
+        self.assertTrue(gate.feed(pcm24k))
+        self.assertGreater(len(gate.consume_pre_roll()), 0)
+        gate.rearm(suppress_ms=0)
+        self.assertEqual(gate.consume_pre_roll(), b"")
+
     def test_env_config_uses_existing_keys(self):
         config = RealtimeWakeConfig.from_env({
             "WAKE_WORD": "momo",
             "BACKEND_WAKE_WORD_MODEL_PATHS": "a.onnx,b.onnx",
             "BACKEND_WAKE_WORD_MODEL_NAMES": "hey_jarvis",
             "BACKEND_WAKE_WORD_THRESHOLD": "0.61",
+            "BACKEND_WAKE_WORD_PRE_ROLL_MS": "1750",
             "BACKEND_WAKE_WORD_COOLDOWN_MS": "1500",
             "WAKE_WORD_POST_TTS_SUPPRESSION_MS": "400",
         })
@@ -74,6 +100,7 @@ class RealtimeWakeGateTests(unittest.TestCase):
         self.assertEqual(config.model_paths, ("a.onnx", "b.onnx"))
         self.assertEqual(config.model_names, ("hey_jarvis",))
         self.assertEqual(config.threshold, 0.61)
+        self.assertEqual(config.pre_roll_ms, 1750)
         self.assertEqual(config.cooldown_ms, 1500)
         self.assertEqual(config.post_tts_suppression_ms, 400)
 
