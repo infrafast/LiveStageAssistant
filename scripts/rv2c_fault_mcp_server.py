@@ -15,6 +15,9 @@ Typical local use:
 The MCP endpoint is http://127.0.0.1:8799/mcp by default. For a provider-native
 test, expose only this fixture endpoint through the same trusted HTTPS/Funnel
 mechanism used for remote MCP. Never point the fixture at mixer/QLC endpoints.
+
+When serving behind a reverse proxy/Funnel, set RV2C_FAULT_ALLOWED_HOSTS to the
+public hostname (comma-separated if needed). Localhost/loopback remain allowed.
 """
 
 from __future__ import annotations
@@ -27,10 +30,26 @@ import tempfile
 import time
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 DEFAULT_HOST = os.getenv("RV2C_FAULT_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.getenv("RV2C_FAULT_PORT", "8799"))
 COUNTER_PATH = Path(os.getenv("RV2C_FAULT_COUNTER", "/tmp/lsa-rv2c-fault-counter.json"))
+EXTRA_ALLOWED_HOSTS = [
+    value.strip()
+    for value in os.getenv("RV2C_FAULT_ALLOWED_HOSTS", "").split(",")
+    if value.strip()
+]
+ALLOWED_HOSTS = [
+    "127.0.0.1:*",
+    "localhost:*",
+    "[::1]:*",
+]
+for allowed_host in EXTRA_ALLOWED_HOSTS:
+    if allowed_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(allowed_host)
+    if ":" not in allowed_host and f"{allowed_host}:*" not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(f"{allowed_host}:*")
 
 
 def read_state() -> dict:
@@ -74,6 +93,10 @@ mcp = FastMCP(
     port=DEFAULT_PORT,
     stateless_http=True,
     json_response=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=ALLOWED_HOSTS,
+    ),
 )
 
 
@@ -122,7 +145,7 @@ def main() -> int:
 
     print(
         f"RV2C_FAULT serving http://{DEFAULT_HOST}:{DEFAULT_PORT}/mcp "
-        f"counter={COUNTER_PATH}",
+        f"counter={COUNTER_PATH} allowed_hosts={ALLOWED_HOSTS}",
         flush=True,
     )
     mcp.run(transport="streamable-http")
