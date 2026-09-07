@@ -6,12 +6,21 @@
         "../XMSeries-MCP/dist/index.js"
       ],
       "env": {
-        "OSC_HOST": "192.168.0.1",
-        "OSC_PORT": "10023",
-        "OSC_PROTOCOL": "OSCX32M32",
+        "OSC_HOST": "192.168.100.16",
+        "OSC_PORT": "10024",
+        "OSC_PROTOCOL": "OSCXR",
         "MCP_PROMPT_FILE": "../XMSeries-MCP/PROMPT.md",
         "DEBUG": "${DEBUG}",
         "XMS_SPEAKER_MAP": "{\"laurent\":{\"bus\":\"Laurent\",\"channel\":\"Guitar-loran\"},\"thomas\":{\"bus\":\"Laurent\",\"channel\":\"Guitar-loran\"}}"
+      },
+      "native": {
+        "url": "https://raspberrypi-1.tail70348.ts.net/xm/mcp"
+      },
+      "realtime": {
+        "transport": "auto",
+        "permissions": {
+          "mode": "open"
+        }
       },
       "assistantOptions": {
         "routing": "mixer,mix,mixage,volume,façade,moniteur,retour,bus,db,tranche"
@@ -24,12 +33,18 @@
       ],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "QLC_NATIVE_HOST": "192.168.0.160",
+        "QLC_NATIVE_HOST": "127.0.0.1",
         "QLC_NATIVE_PORT": "9998",
         "QLC_NATIVE_CLIENT_NAME": "QLCPlus-MCP",
         "QLC_DRY_RUN": "false",
         "LOG_LEVEL": "info",
         "NODE_ENV": "production"
+      },
+      "realtime": {
+        "transport": "stdio",
+        "permissions": {
+          "mode": "open"
+        }
       },
       "assistantOptions": {
         "routing": "qlc,qlcplus,lumière,light,éclairage,scène,dmx,fixture,projecteur,couleur"
