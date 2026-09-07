@@ -97,6 +97,11 @@ def _bounded_gain(value: Any) -> float:
     return parsed
 
 
+def _display_transport(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return "https" if normalized == "native" else normalized
+
+
 def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Translate the provider/MCP-neutral runtime contract into existing monitor tiles."""
     if not isinstance(status, dict) or not status:
@@ -132,9 +137,9 @@ def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
             state = "offline"
         else:
             state = "unknown"
-        parts = [f"transport={transport}"]
+        parts = [f"transport={_display_transport(transport)}"]
         if configured and configured != transport:
-            parts.append(f"configured={configured}")
+            parts.append(f"configured={_display_transport(configured)}")
         if permission:
             parts.append(f"permission={permission}")
         if detail:
@@ -296,6 +301,11 @@ class WebMonitor(_BaseWebMonitor):
 
             def server_factory(server_address, handler_class):
                 class RealtimePolicyHandler(handler_class):
+                    def _send_isolation_headers(self) -> None:
+                        # This UI does not use SharedArrayBuffer/crossOriginIsolated.
+                        # Omitting COOP/COEP keeps ordinary LAN HTTP origins warning-free.
+                        return
+
                     def do_GET(self) -> None:
                         parsed = _base.urlparse(self.path)
                         if parsed.path != "/api/runtime-status":
