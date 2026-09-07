@@ -163,6 +163,8 @@ class WebMonitor(_BaseWebMonitor):
         super().__init__(*args, **kwargs)
         self._mcp_realtime_policy_save_handler: Callable[[str, dict[str, Any]], dict[str, Any]] = self._save_mcp_realtime_policy
         self._runtime_restart_handler: Callable[[], None] | None = None
+        self._runtime_reload_pending = False
+        self._runtime_reload_started = False
 
     def set_mcp_realtime_policy_save_handler(self, handler: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
         with self._lock:
@@ -190,13 +192,26 @@ class WebMonitor(_BaseWebMonitor):
         snapshot["services"] = services
 
         semantic_state = str(runtime.get("semantic_state") or "").strip().lower()
-        if not stale and semantic_state == "starting":
-            snapshot["environment_loading"] = {
-                "active": True,
-                "title": "Application de la configuration",
-            }
-        elif not stale and bool(runtime.get("ready")):
-            snapshot["environment_loading"] = {"active": False, "title": ""}
+        ready = bool(runtime.get("ready"))
+        loading = False
+        with self._lock:
+            if not stale and self._runtime_reload_pending:
+                if semantic_state == "starting":
+                    self._runtime_reload_started = True
+                if self._runtime_reload_started and (ready or semantic_state in {"ready", "listening", "wait_wake", "idle"}):
+                    self._runtime_reload_pending = False
+                    self._runtime_reload_started = False
+                else:
+                    loading = True
+            elif not stale and semantic_state == "starting" and not ready:
+                loading = True
+
+        snapshot["environment_loading"] = {
+            "active": loading,
+            "title": "Application de la configuration" if loading else "",
+        }
+        if not loading:
+            self.set_environment_loading(False)
         return snapshot
 
     def _save_mcp_realtime_policy(self, server_name: str, policy: dict[str, Any]) -> dict[str, Any]:
@@ -294,7 +309,11 @@ class WebMonitor(_BaseWebMonitor):
     def _request_runtime_restart(self) -> dict[str, Any]:
         with self._lock:
             handler = self._runtime_restart_handler
+            self._runtime_reload_pending = True
+            self._runtime_reload_started = False
         if handler is None:
+            with self._lock:
+                self._runtime_reload_pending = False
             raise RuntimeError("runtime restart is not available")
         self.set_environment_loading(True, "Application de la configuration")
         handler()
@@ -375,6 +394,9 @@ class WebMonitor(_BaseWebMonitor):
                         try:
                             result = monitor._request_runtime_restart()
                         except Exception as error:
+                            with monitor._lock:
+                                monitor._runtime_reload_pending = False
+                                monitor._runtime_reload_started = False
                             monitor.set_environment_loading(False)
                             self._send_json_error(503, {"ok": False, "error": {"message": str(error)}})
                             return
