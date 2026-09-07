@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 try:
-    from .mcp_config_web import delete_web_mcp_server, save_web_mcp_server, update_web_mcp_policy
+    from .mcp_config_web import delete_web_mcp_server, load_web_mcp_policies, save_web_mcp_server, test_web_mcp_server, update_web_mcp_policy
 except ImportError:  # pragma: no cover - direct script fallback
-    from mcp_config_web import delete_web_mcp_server, save_web_mcp_server, update_web_mcp_policy
+    from mcp_config_web import delete_web_mcp_server, load_web_mcp_policies, save_web_mcp_server, test_web_mcp_server, update_web_mcp_policy
 
 
 def mcp_config_path_from_snapshot(snapshot: Mapping[str, Any]) -> Path:
@@ -67,3 +67,11 @@ def delete_mcp_server_from_snapshot(snapshot: Mapping[str, Any], server_name: st
     path = mcp_config_path_from_snapshot(snapshot)
     deleted = delete_web_mcp_server(path, server_name)
     return deleted, _refreshed(path)
+
+
+def mcp_registry_from_snapshot(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return load_web_mcp_policies(mcp_config_path_from_snapshot(snapshot))
+
+
+def test_mcp_server_from_snapshot(snapshot: Mapping[str, Any], server_name: str) -> dict[str, Any]:
+    return test_web_mcp_server(mcp_config_path_from_snapshot(snapshot), server_name)

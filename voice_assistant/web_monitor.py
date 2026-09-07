@@ -12,13 +12,15 @@ try:
     from . import web_monitor_base as _base
     from .mcp_realtime_web_endpoint import (
         delete_mcp_server_from_snapshot,
+        mcp_registry_from_snapshot,
         save_mcp_realtime_policy_from_snapshot,
         save_mcp_server_from_snapshot,
+        test_mcp_server_from_snapshot,
     )
     from .runtime_status import read_status_file
 except ImportError:  # pragma: no cover - direct script fallback
     import web_monitor_base as _base
-    from mcp_realtime_web_endpoint import delete_mcp_server_from_snapshot, save_mcp_realtime_policy_from_snapshot, save_mcp_server_from_snapshot
+    from mcp_realtime_web_endpoint import delete_mcp_server_from_snapshot, mcp_registry_from_snapshot, save_mcp_realtime_policy_from_snapshot, save_mcp_server_from_snapshot, test_mcp_server_from_snapshot
     from runtime_status import read_status_file
 
 for _name in dir(_base):
@@ -83,13 +85,14 @@ def _runtime_service_tiles(status: dict[str, Any]) -> dict[str, dict[str, Any]]:
             continue
         name = str(entry.get("name") or "MCP").strip() or "MCP"
         configured = str(entry.get("configured_transport") or "").strip()
+        enabled = entry.get("enabled", True) is not False
         effective = str(entry.get("effective_transport") or "").strip()
         permission = str(entry.get("permission") or "").strip()
         healthy = entry.get("healthy")
         detail = str(entry.get("detail") or "").strip()
         transport = effective or configured or "unknown"
-        state = "online" if healthy is True else "offline" if healthy is False else "unknown"
-        parts = [f"transport={_display_transport(transport)}"]
+        state = "disabled" if not enabled else "online" if healthy is True else "offline" if healthy is False else "unknown"
+        parts = ["disabled"] if not enabled else [f"transport={_display_transport(transport)}"]
         if configured and configured != transport:
             parts.append(f"configured={_display_transport(configured)}")
         if permission:
@@ -134,6 +137,10 @@ class WebMonitor(_BaseWebMonitor):
         snapshot["environment_loading"] = {"active": loading, "title": "Application de la configuration" if loading else ""}
         if not loading:
             self.set_environment_loading(False)
+        try:
+            snapshot["mcp_registry"] = mcp_registry_from_snapshot(snapshot)
+        except Exception:
+            snapshot["mcp_registry"] = []
         payload = self._runtime_status()
         if not payload.get("available"):
             return snapshot
@@ -161,6 +168,9 @@ class WebMonitor(_BaseWebMonitor):
         deleted, refreshed_config = delete_mcp_server_from_snapshot(self.snapshot(), server_name)
         self._refresh_mcp_snapshot(refreshed_config)
         return {"ok": True, "deleted": deleted, "restart_required": True}
+
+    def _test_mcp_server(self, server_name: str) -> dict[str, Any]:
+        return test_mcp_server_from_snapshot(self.snapshot(), server_name)
 
     def _runtime_status(self) -> dict[str, Any]:
         path = _runtime_status_file()
@@ -202,7 +212,7 @@ class WebMonitor(_BaseWebMonitor):
 
                     def do_POST(self) -> None:
                         parsed = _base.urlparse(self.path)
-                        routes = {"/api/mcp-realtime-policy", "/api/mcp-server", "/api/runtime-restart"}
+                        routes = {"/api/mcp-realtime-policy", "/api/mcp-server", "/api/mcp-test", "/api/runtime-restart"}
                         if parsed.path not in routes:
                             super().do_POST()
                             return
@@ -213,6 +223,8 @@ class WebMonitor(_BaseWebMonitor):
                             self._handle_runtime_restart(); return
                         if parsed.path == "/api/mcp-server":
                             self._handle_mcp_server(); return
+                        if parsed.path == "/api/mcp-test":
+                            self._handle_mcp_test(); return
                         self._handle_mcp_realtime_policy_save()
 
                     def _handle_runtime_restart(self) -> None:
@@ -222,6 +234,20 @@ class WebMonitor(_BaseWebMonitor):
                             result = monitor._request_runtime_restart()
                         except Exception as error:
                             self._send_json_error(503, {"ok": False, "error": {"message": str(error)}}); return
+                        self._send_json(result)
+
+                    def _handle_mcp_test(self) -> None:
+                        payload = self._read_json_body(max_bytes=8 * 1024)
+                        if payload is None: return
+                        name = str(payload.get("server") or "").strip()
+                        if not name:
+                            self._send_json_error(400, {"ok": False, "error": {"message": "server is required"}}); return
+                        try:
+                            result = monitor._test_mcp_server(name)
+                        except ValueError as error:
+                            self._send_json_error(400, {"ok": False, "error": {"message": str(error)}}); return
+                        except Exception as error:
+                            self._send_json_error(500, {"ok": False, "error": {"message": f"MCP test failed: {error}"}}); return
                         self._send_json(result)
 
                     def _handle_mcp_server(self) -> None:

@@ -76,6 +76,10 @@ def _mcp_config(values: dict[str, Any], env_file: Path) -> dict[str, Any] | None
         raise RuntimeError(f"invalid JSON in MCP_CONFIG '{path}': {error}") from error
     if not isinstance(payload, dict):
         raise RuntimeError(f"MCP_CONFIG '{path}' must contain a JSON object")
+    servers = payload.get("mcpServers")
+    if isinstance(servers, dict):
+        payload = dict(payload)
+        payload["mcpServers"] = {name: entry for name, entry in servers.items() if not isinstance(entry, dict) or entry.get("enabled", True) is not False}
     return payload
 
 

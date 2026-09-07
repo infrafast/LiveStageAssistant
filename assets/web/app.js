@@ -3106,20 +3106,19 @@
     }
 
     function mcpPolicyMap(snapshot) {
-      const servers = findMcpConfigServers(snapshot) || {};
       const result = {};
-      for (const [name, raw] of Object.entries(servers)) {
-        if (!raw || typeof raw !== "object") continue;
-        const native = raw.native && typeof raw.native === "object" ? raw.native : {};
-        const realtime = raw.realtime && typeof raw.realtime === "object" ? raw.realtime : {};
-        const permissions = realtime.permissions && typeof realtime.permissions === "object" ? realtime.permissions : {};
+      for (const item of snapshot?.mcp_registry || []) {
+        const name = String(item?.name || "").trim();
+        if (!name) continue;
         result[name] = {
-          transport: String(realtime.transport || "auto").toLowerCase(),
-          permission: String(permissions.mode || realtime.permission || "open").toLowerCase() === "approval" ? "approval" : "open",
-          httpsUrl: String(native.url || ""),
-          command: String(raw.command || ""),
-          args: Array.isArray(raw.args) ? raw.args.map(String) : [],
-          localUrl: String(raw.url || "")
+          enabled: item.enabled !== false,
+          transport: String(item.transport || item.realtime_transport || "auto").toLowerCase().replace("https", "native"),
+          permission: String(item.permission_mode || "open").toLowerCase() === "approval" ? "approval" : "open",
+          httpsUrl: String(item.https_url || ""),
+          command: String(item.command || ""),
+          args: Array.isArray(item.args) ? item.args.map(String) : [],
+          localUrl: String(item.local_url || ""),
+          authConfigured: Boolean(item.auth_configured)
         };
       }
       return result;
@@ -3196,11 +3195,12 @@
       const command = document.createElement("input"); command.placeholder = "STDIO command (optional)";
       const args = document.createElement("input"); args.placeholder = '["arg1","arg2"]';
       const localUrl = document.createElement("input"); localUrl.placeholder = "Local MCP URL http://… (optional)";
+      const enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.checked = true;
       const controls = makeMcpPolicyControls({ transport: "auto", permission: "open", httpsUrl: "" });
       const create = document.createElement("button"); create.type = "button"; create.className = "small-button"; create.textContent = "Create MCP";
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "small-button"; cancel.textContent = "Cancel";
       const message = document.createElement("span"); message.className = "detail";
-      form.append(makeCfgField("Name", name), makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), create, cancel, message);
+      form.append(makeCfgField("Name", name), makeCfgField("Enabled", enabled), makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), create, cancel, message);
       toolbar.append(add, form);
       add.addEventListener("click", () => form.classList.remove("hidden"));
       cancel.addEventListener("click", () => form.classList.add("hidden"));
@@ -3209,7 +3209,7 @@
         message.textContent = "Creating…";
         try {
           const data = await saveMcpDefinition("create", { server: {
-            name: name.value.trim(), command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
+            name: name.value.trim(), enabled: enabled.checked, command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
             realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
             https_url: controls.https.value.trim(), permission_mode: controls.permission.value
           }});
@@ -3240,13 +3240,16 @@
           status.className = "detail";
           const configured = displayMcpTransport(runtime.configured_transport || policy.transport);
           const effective = displayMcpTransport(runtime.effective_transport || "");
-          status.textContent = effective ? `Configured ${configured} · Effective ${effective}${runtime.healthy === true ? " · healthy" : runtime.healthy === false ? " · unavailable" : ""}` : `Configured ${configured}`;
+          status.textContent = policy.enabled === false ? `Disabled · Configured ${configured}` : effective ? `Configured ${configured} · Effective ${effective}${runtime.healthy === true ? " · healthy" : runtime.healthy === false ? " · unavailable" : ""}` : `Configured ${configured}`;
           section.append(status);
         }
+        const enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.checked = policy.enabled !== false;
         const command = document.createElement("input"); command.value = policy.command; command.placeholder = "STDIO command";
         const args = document.createElement("input"); args.value = JSON.stringify(policy.args); args.placeholder = '["arg1"]';
         const localUrl = document.createElement("input"); localUrl.value = policy.localUrl; localUrl.placeholder = "Local MCP URL";
         const controls = makeMcpPolicyControls(policy);
+        const auth = document.createElement("div"); auth.className = "detail"; auth.textContent = `HTTPS auth: ${policy.authConfigured ? "Configured" : "Missing / not required"}`;
+        const test = document.createElement("button"); test.type = "button"; test.className = "small-button"; test.textContent = "Test";
         const save = document.createElement("button"); save.type = "button"; save.className = "small-button"; save.textContent = "Save MCP";
         const del = document.createElement("button"); del.type = "button"; del.className = "small-button"; del.textContent = "Delete MCP";
         const message = document.createElement("span"); message.className = "detail";
@@ -3254,7 +3257,7 @@
           save.disabled = true; message.textContent = "Saving…";
           try {
             const data = await saveMcpDefinition("update", { existing_name: name, server: {
-              name, command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
+              name, enabled: enabled.checked, command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
               realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
               https_url: controls.https.value.trim(), permission_mode: controls.permission.value
             }});
@@ -3262,6 +3265,15 @@
             message.textContent = "Saved · restart required.";
           } catch (error) { message.textContent = `Save failed: ${error.message || error}`; }
           finally { save.disabled = false; }
+        });
+        test.addEventListener("click", async () => {
+          test.disabled = true; message.textContent = "Testing…";
+          try {
+            const response = await fetch("/api/mcp-test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ server: name }) });
+            const data = await fetchJsonOrThrow(response);
+            message.textContent = `${data.healthy ? "Healthy" : "Unavailable"} · ${displayMcpTransport(data.tested_transport || data.configured_transport)} · ${data.detail || ""}`;
+          } catch (error) { message.textContent = `Test failed: ${error.message || error}`; }
+          finally { test.disabled = false; }
         });
         del.addEventListener("click", async () => {
           if (!window.confirm(`Delete MCP "${name}"?`)) return;
@@ -3274,7 +3286,7 @@
           } catch (error) { message.textContent = `Delete failed: ${error.message || error}`; }
           finally { del.disabled = false; }
         });
-        section.append(makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), save, del, message);
+        section.append(makeCfgField("Enabled", enabled), makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), auth, test, save, del, message);
         card.append(section);
       }
     }

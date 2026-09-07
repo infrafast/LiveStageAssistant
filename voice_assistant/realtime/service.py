@@ -472,7 +472,11 @@ async def run(args) -> int:
     semantic_config = SemanticAudioConfig.from_env()
     config_path = resolve_path(str(os.getenv("MCP_CONFIG") or "mcp_servers.json").strip(), env_file)
     raw_config = json.loads(config_path.read_text(encoding="utf-8"))
-    inventory = load_mcp_inventory(config_path)
+    raw_servers = raw_config.get("mcpServers") if isinstance(raw_config, dict) else None
+    if isinstance(raw_servers, dict):
+        raw_config = dict(raw_config)
+        raw_config["mcpServers"] = {name: entry for name, entry in raw_servers.items() if not isinstance(entry, dict) or entry.get("enabled", True) is not False}
+    inventory = {name: server for name, server in load_mcp_inventory(config_path).items() if server.raw_entry.get("enabled", True) is not False}
 
     native_servers: list[RealtimeMCPServer] = []
     bridge_names: list[str] = []

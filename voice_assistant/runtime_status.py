@@ -16,6 +16,7 @@ class MCPRuntimeStatus:
     configured_transport: str
     effective_transport: str
     permission: str
+    enabled: bool = True
     healthy: bool | None = None
     detail: str = ""
 
@@ -83,6 +84,7 @@ def configured_mcp_statuses(values: Mapping[str, object], *, profile: Path, root
     for name, entry in servers.items():
         if not isinstance(entry, dict):
             continue
+        enabled = entry.get("enabled", True) is not False
         realtime = entry.get("realtime") if isinstance(entry.get("realtime"), dict) else {}
         configured = str(realtime.get("transport") or "stdio").strip().lower()
         permissions = realtime.get("permissions") if isinstance(realtime.get("permissions"), dict) else {}
@@ -91,10 +93,11 @@ def configured_mcp_statuses(values: Mapping[str, object], *, profile: Path, root
         result.append(MCPRuntimeStatus(
             name=str(name),
             configured_transport=configured,
-            effective_transport=effective,
+            effective_transport=effective if enabled else "",
             permission=permission,
+            enabled=enabled,
             healthy=None,
-            detail="configured",
+            detail="configured" if enabled else "disabled",
         ))
     return tuple(result)
 

@@ -11,9 +11,13 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import tempfile
+import time
 from typing import Any, Mapping
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 try:
     from .realtime.mcp_config import CanonicalMCPServerConfig, load_mcp_inventory, normalize_mcp_server, update_mcp_realtime_policy
@@ -88,6 +92,7 @@ def server_web_payload(server: CanonicalMCPServerConfig) -> dict[str, Any]:
     routing = server.assistant_options.get("routing", "") if isinstance(server.assistant_options, dict) else ""
     return {
         "name": server.name,
+        "enabled": server.raw_entry.get("enabled", True) is not False,
         "command": str(local.get("command") or ""),
         "args": [str(item) for item in args],
         "local_url": str(local.get("url") or ""),
@@ -142,6 +147,7 @@ def save_web_mcp_server(path: str | Path, payload: Mapping[str, Any], *, existin
     if not creating and name != current_name and name in servers:
         raise ValueError(f"MCP server {name!r} already exists")
     entry = dict(servers.get(current_name) or {})
+    entry["enabled"] = bool(payload.get("enabled", entry.get("enabled", True)))
     command = str(payload.get("command") or "").strip()
     local_url = _validated_local_url(payload.get("local_url"))
     raw_args = payload.get("args") or []
@@ -190,3 +196,90 @@ def delete_web_mcp_server(path: str | Path, server_name: str) -> str:
         raise ValueError(f"MCP server {name!r} does not exist")
     servers.pop(name); root["mcpServers"] = servers; _write_raw(config_path, root)
     return name
+
+
+def _probe_http(url: str, headers: Mapping[str, Any] | None, timeout: float) -> tuple[bool, str]:
+    if not url:
+        return False, "no URL configured"
+    request = Request(url, method="GET", headers={str(k): str(v) for k, v in (headers or {}).items()})
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return True, f"HTTP {getattr(response, 'status', 200)}"
+    except HTTPError as exc:
+        return True, f"HTTP {exc.code} (endpoint reachable)"
+    except (URLError, TimeoutError, OSError) as exc:
+        return False, str(exc)
+
+
+def _probe_stdio(entry: Mapping[str, Any], timeout: float) -> tuple[bool, str]:
+    command = str(entry.get("command") or "").strip()
+    if not command:
+        local_url = str(entry.get("url") or "").strip()
+        if local_url:
+            headers = entry.get("headers") if isinstance(entry.get("headers"), Mapping) else None
+            return _probe_http(local_url, headers, timeout)
+        return False, "no local STDIO/private HTTP route configured"
+    args = entry.get("args") if isinstance(entry.get("args"), list) else []
+    env = os.environ.copy()
+    raw_env = entry.get("env") if isinstance(entry.get("env"), Mapping) else {}
+    env.update({str(k): str(v) for k, v in raw_env.items()})
+    try:
+        process = subprocess.Popen([command, *[str(item) for item in args]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    except OSError as exc:
+        return False, f"could not start command: {exc}"
+    deadline = time.monotonic() + min(max(timeout, 0.2), 2.0)
+    try:
+        while time.monotonic() < deadline:
+            code = process.poll()
+            if code is not None:
+                return (code == 0), f"process exited with code {code}"
+            time.sleep(0.05)
+        return True, "process started and remained alive"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=0.5)
+
+
+def test_web_mcp_server(path: str | Path, server_name: str, *, timeout: float = 2.0) -> dict[str, Any]:
+    name = _server_name(server_name)
+    config_path, root = _read_raw(path)
+    raw = root["mcpServers"].get(name)
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"MCP server {name!r} does not exist")
+    server = normalize_mcp_server(name, raw)
+    enabled = raw.get("enabled", True) is not False
+    transport = server.realtime.transport
+    tested = ""
+    healthy = False
+    detail = ""
+    if transport == "native":
+        tested = "https"
+        healthy, detail = _probe_http(server.native.url, server.native.headers, timeout)
+    elif transport == "stdio":
+        tested = "stdio"
+        healthy, detail = _probe_stdio(server.local_entry, timeout)
+    else:
+        if server.local_entry.get("command") or server.local_entry.get("url"):
+            tested = "stdio"
+            healthy, detail = _probe_stdio(server.local_entry, timeout)
+        if not healthy and server.native.url:
+            tested = "https"
+            healthy, detail = _probe_http(server.native.url, server.native.headers, timeout)
+    if not tested:
+        detail = "no testable route configured"
+    return {
+        "ok": True,
+        "server": name,
+        "enabled": enabled,
+        "configured_transport": _web_transport(transport),
+        "tested_transport": tested,
+        "healthy": healthy,
+        "detail": detail,
+        "auth_configured": bool(server.native.headers),
+        "config_path": str(config_path),
+    }
