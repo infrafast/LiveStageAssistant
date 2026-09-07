@@ -14,6 +14,7 @@
   let restartRequired = false;
   let restartInFlight = false;
   let wakeSelectorReady = false;
+  let wakeSelectorDirty = false;
 
   function errorMessage(data, response) {
     return data?.error?.message || data?.message || response?.statusText || `HTTP ${response?.status || "?"}`;
@@ -75,11 +76,32 @@
     return { value, label: String(entry.label || entry.name || value).trim() || value };
   }
 
-  async function ensureWakeSelector() {
-    if (wakeSelectorReady) return;
+  function ensureWakeOption(select, value) {
+    const normalized = String(value || "").trim();
+    if (!normalized) return;
+    if ([...select.options].some((option) => option.value === normalized)) return;
+    const option = document.createElement("option");
+    option.value = normalized;
+    option.textContent = normalized;
+    select.append(option);
+  }
+
+  function syncWakeSelectorFromCanonical() {
+    if (!wakeSelectorReady || wakeSelectorDirty) return;
     const legacy = document.querySelector("#wake-word");
-    if (!legacy || legacy.dataset.unifiedWake === "1") {
-      wakeSelectorReady = Boolean(legacy?.dataset.unifiedWake === "1");
+    const select = document.querySelector("#wake-word-select");
+    if (!legacy || !select) return;
+    const canonical = String(legacy.value || "").trim();
+    ensureWakeOption(select, canonical);
+    if (select.value !== canonical) select.value = canonical;
+  }
+
+  async function ensureWakeSelector() {
+    const legacy = document.querySelector("#wake-word");
+    if (!legacy) return;
+    if (legacy.dataset.unifiedWake === "1") {
+      wakeSelectorReady = true;
+      syncWakeSelectorFromCanonical();
       return;
     }
 
@@ -117,6 +139,7 @@
     }
     select.value = selected;
     select.addEventListener("change", () => {
+      wakeSelectorDirty = true;
       legacy.value = select.value;
       legacy.dispatchEvent(new Event("input", { bubbles: true }));
       legacy.dispatchEvent(new Event("change", { bubbles: true }));
@@ -128,6 +151,7 @@
     legacy.tabIndex = -1;
     legacy.insertAdjacentElement("afterend", select);
     wakeSelectorReady = true;
+    syncWakeSelectorFromCanonical();
   }
 
   async function saveExtendedConfig() {
@@ -182,7 +206,9 @@
       const ready = await waitUntilReady();
       if (!ready) throw new Error("runtime did not become ready before timeout");
       setRestartRequired(false);
+      wakeSelectorDirty = false;
       if (message) message.textContent = "Configuration applied.";
+      setTimeout(syncWakeSelectorFromCanonical, 0);
     } catch (error) {
       if (message) message.textContent = `Restart failed: ${error.message || error}`;
       setRestartRequired(true);
@@ -202,7 +228,11 @@
     }
     const wakeSelect = document.querySelector("#wake-word-select");
     const legacyWake = document.querySelector("#wake-word");
-    if (wakeSelect && legacyWake) legacyWake.value = wakeSelect.value;
+    if (wakeSelect && legacyWake) {
+      legacyWake.value = wakeSelect.value;
+      legacyWake.dispatchEvent(new Event("input", { bubbles: true }));
+      legacyWake.dispatchEvent(new Event("change", { bubbles: true }));
+    }
     saveExtendedConfig()
       .then(async (required) => {
         if (!required) return;
@@ -221,4 +251,5 @@
   observer.observe(document.documentElement, { childList: true, subtree: true });
   hideDuplicateButtons();
   ensureWakeSelector();
+  window.setInterval(syncWakeSelectorFromCanonical, 500);
 })();
