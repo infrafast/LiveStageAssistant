@@ -11,6 +11,7 @@ and realtime providers.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import queue
@@ -28,6 +29,7 @@ from voice_assistant.engine_entry import CLASSIC_READY_MARKER
 from voice_assistant.local_tts import speak_local_status
 from voice_assistant.runtime_status import RuntimeStatus, RuntimeStatusTracker, configured_mcp_statuses
 from voice_assistant.startup_lifecycle import StartupLoader
+from voice_assistant.web_monitor import WebMonitor
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTO_ENV_DIR = Path(os.getenv("ASSISTANT_AUTO_ENV_DIR", "/etc/livestageassistant"))
@@ -51,6 +53,26 @@ VALID_SEMANTIC_STATES = {
 
 def _load_values(path: Path) -> dict[str, object]:
     return dict(dotenv_values(path))
+
+
+def _env_bool(values: Mapping[str, object], key: str, default: bool = False) -> bool:
+    raw = values.get(key)
+    if raw in (None, ""):
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _mcp_config_for_monitor(values: Mapping[str, object], profile: Path) -> dict[str, object]:
+    raw = str(values.get("MCP_CONFIG") or "mcp_servers.json").strip()
+    path = Path(os.path.expandvars(raw)).expanduser()
+    if not path.is_absolute():
+        candidates = (profile.parent / path, ROOT / path)
+        path = next((candidate for candidate in candidates if candidate.is_file()), candidates[-1])
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
@@ -182,6 +204,35 @@ def _update_semantic_status_from_line(tracker: RuntimeStatusTracker, line: str) 
         tracker.set_runtime(semantic_state=state)
 
 
+def _start_realtime_web_monitor(values: Mapping[str, object], env_file: Path) -> WebMonitor | None:
+    """Expose the common monitor while Realtime is active without importing Classic."""
+    if not _env_bool(values, "WEB_MONITOR_ENABLED", True):
+        return None
+    host = str(values.get("WEB_MONITOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(str(values.get("WEB_MONITOR_PORT") or "8765").strip())
+    except ValueError:
+        print(f"Invalid WEB_MONITOR_PORT={values.get('WEB_MONITOR_PORT')!r}; WebMonitor disabled", flush=True)
+        return None
+    monitor = WebMonitor(web_password=str(values.get("WEB_PASSWORD") or "").strip())
+    monitor.update(
+        mode="auto-runtime",
+        env_file=env_file,
+        internet=True,
+        env_values=dict(values),
+        mcp_config=_mcp_config_for_monitor(values, env_file),
+    )
+    monitor.install_console_capture()
+    try:
+        actual_host, actual_port = monitor.start(host, port)
+    except OSError as error:
+        monitor.restore_console_capture()
+        print(f"Web monitor unavailable on {host}:{port}: {error}", flush=True)
+        return None
+    print(f"Web monitor available at http://{actual_host}:{actual_port}", flush=True)
+    return monitor
+
+
 def run_engine_session(
     *,
     engine: str,
@@ -201,6 +252,7 @@ def run_engine_session(
         for item in status_tracker.status.mcp:
             status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=None, detail="local MCP path selected")
 
+    realtime_web_monitor = _start_realtime_web_monitor(values, env_file) if engine == "openai-realtime" else None
     loader = StartupLoader(ROOT, values)
     loader.start()
     status_tracker.set_runtime(semantic_state="starting")
@@ -295,6 +347,9 @@ def run_engine_session(
             loader.stop()
         if process.poll() is None:
             _terminate_process(process)
+        if realtime_web_monitor is not None:
+            realtime_web_monitor.stop()
+            realtime_web_monitor.restore_console_capture()
 
 
 def main() -> int:
