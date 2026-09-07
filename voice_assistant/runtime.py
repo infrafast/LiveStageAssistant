@@ -35,6 +35,18 @@ ONLINE_ENV = AUTO_ENV_DIR / ".env.online"
 OFFLINE_ENV = AUTO_ENV_DIR / ".env.offline"
 CONNECTIVITY_INTERVAL = float(os.getenv("LSA_CONNECTIVITY_CHECK_INTERVAL", "10") or "10")
 STATUS_FILE = Path(os.getenv("LSA_RUNTIME_STATUS_FILE", "/tmp/livestageassistant-runtime-status.json"))
+SEMANTIC_STATE_PREFIX = "LSA semantic state: "
+VALID_SEMANTIC_STATES = {
+    "starting",
+    "ready",
+    "wait_wake",
+    "wake_detected",
+    "listening",
+    "processing",
+    "result_ready",
+    "speaking",
+    "idle",
+}
 
 
 def _load_values(path: Path) -> dict[str, object]:
@@ -102,9 +114,6 @@ def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str
 
 
 def engine_command(engine: str, env_file: Path) -> list[str]:
-    # The common runtime owns connectivity/profile switching. Engines always
-    # receive one explicit profile and therefore never start their legacy auto
-    # connectivity watcher.
     return [
         sys.executable,
         "-m",
@@ -149,7 +158,6 @@ def _terminate_process(process: subprocess.Popen, *, timeout: float = 6.0) -> No
 
 
 def _update_mcp_status_from_line(tracker: RuntimeStatusTracker, line: str) -> None:
-    """Consume provider-neutral transport selection logs emitted by Realtime."""
     prefix = "Realtime MCP auto selection: "
     if line.startswith(prefix) and " -> " in line:
         server, result = line[len(prefix):].strip().split(" -> ", 1)
@@ -162,11 +170,16 @@ def _update_mcp_status_from_line(tracker: RuntimeStatusTracker, line: str) -> No
         server = line[len(local_prefix):].split(" ", 1)[0].strip()
         tracker.set_mcp(server, detail="local route unavailable; evaluating alternate transport")
         return
-    native_prefix = "Realtime MCP auto native unavailable "
-    if line.startswith(native_prefix):
-        # The following JSON/error line is diagnostic; leave the final health
-        # decision to a subsequent successful selection or process failure.
+    if line.startswith("Realtime MCP auto native unavailable "):
         return
+
+
+def _update_semantic_status_from_line(tracker: RuntimeStatusTracker, line: str) -> None:
+    if not line.startswith(SEMANTIC_STATE_PREFIX):
+        return
+    state = line[len(SEMANTIC_STATE_PREFIX):].strip().lower()
+    if state in VALID_SEMANTIC_STATES:
+        tracker.set_runtime(semantic_state=state)
 
 
 def run_engine_session(
@@ -186,12 +199,11 @@ def run_engine_session(
 
     if engine != "openai-realtime":
         for item in status_tracker.status.mcp:
-            # Classic/local use the existing local MCP client path. This is a
-            # transport fact only; no MCP/domain semantics are inferred here.
             status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=None, detail="local MCP path selected")
 
     loader = StartupLoader(ROOT, values)
     loader.start()
+    status_tracker.set_runtime(semantic_state="starting")
 
     child_env = os.environ.copy()
     child_env["LSA_COMMON_STARTUP_LIFECYCLE"] = "1"
@@ -220,10 +232,14 @@ def run_engine_session(
                 print(line, end="", flush=True)
                 stripped = line.strip()
                 _update_mcp_status_from_line(status_tracker, stripped)
+                _update_semantic_status_from_line(status_tracker, stripped)
                 if not ready_seen.is_set() and marker and marker in line:
                     loader.stop()
                     ready_seen.set()
-                    status_tracker.set_runtime(ready=True)
+                    if not status_tracker.status.semantic_state or status_tracker.status.semantic_state == "starting":
+                        status_tracker.set_runtime(ready=True, semantic_state="ready")
+                    else:
+                        status_tracker.set_runtime(ready=True)
         finally:
             output_done.set()
 
@@ -243,8 +259,6 @@ def run_engine_session(
     try:
         while not stop_event.wait(0.2):
             if not online and ready_seen.is_set() and not local_ready_announced:
-                # Offline READY feedback belongs to the common runtime and uses
-                # the same guaranteed-local Piper path as connectivity loss.
                 speak_local("Assistant vocal prêt à exécuter des commandes.", values)
                 local_ready_announced = True
 
@@ -258,19 +272,23 @@ def run_engine_session(
                     f"(previous={'online' if event.previous_online else 'offline'})",
                     flush=True,
                 )
-                status_tracker.set_runtime(ready=False, connectivity="online" if event.online else "offline")
+                status_tracker.set_runtime(
+                    ready=False,
+                    semantic_state="starting",
+                    connectivity="online" if event.online else "offline",
+                )
                 loader.stop()
                 _terminate_process(process)
                 output_done.wait(timeout=2.0)
                 return None, event
             if process.poll() is not None:
                 output_done.wait(timeout=2.0)
-                status_tracker.set_runtime(ready=False)
+                status_tracker.set_runtime(ready=False, semantic_state="")
                 return int(process.returncode or 0), None
         loader.stop()
         _terminate_process(process)
         output_done.wait(timeout=2.0)
-        status_tracker.set_runtime(ready=False)
+        status_tracker.set_runtime(ready=False, semantic_state="")
         return 0, None
     finally:
         if not ready_seen.is_set():
@@ -336,6 +354,7 @@ def main() -> int:
                     model=model,
                     voice=voice,
                     ready=False,
+                    semantic_state="starting",
                     profile=str(env_file),
                     mcp=configured_mcp_statuses(values, profile=env_file, root=ROOT),
                 ),
@@ -386,18 +405,12 @@ def main() -> int:
             engine_override = ""
             failed_engines.clear()
             if not online:
-                # This must never depend on the cloud engine that just became
-                # unavailable. Announce locally before starting the offline path.
                 offline_values = _load_values(OFFLINE_ENV) if OFFLINE_ENV.is_file() else {}
                 speak_local("Connexion internet perdue. Assistant fonctionne localement.", offline_values)
                 env_file = OFFLINE_ENV
             else:
-                # The newly selected online engine owns the normal online voice
-                # announcement; connectivity detection itself remains here.
                 env_file = ONLINE_ENV
 
-            # Give child processes/audio nodes a brief deterministic release
-            # window before starting the replacement engine.
             time.sleep(0.35)
 
         return 0
