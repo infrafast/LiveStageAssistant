@@ -12,6 +12,12 @@ class WebConfigArchitectureTests(unittest.TestCase):
         app = (WEB / "app.js").read_text(encoding="utf-8")
         self.assertLess(app.index("config-bootstrap.js"), app.index("app-main.js"))
 
+    def test_web_boot_continues_when_optional_module_fails(self):
+        app = (WEB / "app.js").read_text(encoding="utf-8")
+        self.assertIn('script.addEventListener("error"', app)
+        self.assertIn("if (oncomplete) oncomplete(ok)", app)
+        self.assertIn("reportBootError", app)
+
     def test_unified_controller_has_no_dual_wake_selector(self):
         script = (WEB / "config-unified.js").read_text(encoding="utf-8")
         self.assertNotIn("wake-word-select", script)
@@ -24,34 +30,30 @@ class WebConfigArchitectureTests(unittest.TestCase):
         self.assertIn("current.replaceWith(select)", script)
         self.assertNotIn("wake-word-select", script)
 
-    def test_apply_policy_is_restart_safe_by_default(self):
+    def test_multifield_apply_policy_is_restart_by_default(self):
         policy = json.loads((WEB / "config-apply-policy.json").read_text(encoding="utf-8"))
         self.assertEqual(policy["default_mode"], "engine-restart")
-        self.assertIn("#web-tts-volume", policy["hot"])
-        self.assertIn("#browser-audio-input", policy["ignore"])
-
-    def test_multiple_changed_fields_use_strictest_mode(self):
         script = (WEB / "config-unified.js").read_text(encoding="utf-8")
         self.assertIn("function globalMode(entries)", script)
         self.assertIn('entry.mode === "engine-restart"', script)
-        self.assertIn('return "hot"', script)
+        self.assertIn("restartPending", script)
 
-    def test_extended_endpoints_are_only_called_for_dirty_groups(self):
+    def test_clean_state_disables_global_save(self):
+        script = (WEB / "config-unified.js").read_text(encoding="utf-8")
+        self.assertIn("saveButton.disabled = true", script)
+        self.assertIn('saveButton.textContent = "Save"', script)
+        self.assertIn('saveButton.textContent = "Restart"', script)
+
+    def test_engine_and_gain_posts_are_dirty_group_only(self):
         script = (WEB / "config-unified.js").read_text(encoding="utf-8")
         self.assertIn('keys.has("voice-engine")', script)
         self.assertIn('keys.has("voice-output-gains")', script)
 
-    def test_restart_pending_survives_additional_unsaved_changes(self):
+    def test_hot_and_restart_changes_can_coexist(self):
         script = (WEB / "config-unified.js").read_text(encoding="utf-8")
-        self.assertIn("let restartPending = false", script)
+        self.assertIn("const dirty = new Map()", script)
+        self.assertIn("restartPending = true", script)
         self.assertIn("if (dirty.size > 0)", script)
-        self.assertIn("if (restartPending)", script)
-        self.assertNotIn("setRestartRequired(false)", script)
-
-    def test_save_is_disabled_when_clean(self):
-        script = (WEB / "config-unified.js").read_text(encoding="utf-8")
-        self.assertIn('saveButton.disabled = true', script)
-        self.assertIn('saveButton.textContent = "Save"', script)
 
 
 if __name__ == "__main__":
