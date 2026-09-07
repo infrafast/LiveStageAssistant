@@ -61,10 +61,12 @@ async def capture_vad_utterance(
     *,
     wait_timeout: float = 15.0,
 ) -> tuple[bytes, dict[str, Any]]:
-    """Capture one utterance using the same Silero thresholds as Classic LSA.
+    """Capture one utterance with Silero VAD using LSA profile thresholds.
 
-    The first positional argument is intentionally ignored for compatibility with
-    the original fixed-window RV2E benchmark capture callback.
+    Startup detection deliberately allows short sub-threshold gaps between
+    positive Silero windows. Natural speech often contains unvoiced consonants
+    and brief dips; requiring VAD >= threshold on every window can reject a
+    clearly spoken phrase even when Silero reaches a very high confidence.
     """
     pa = pyaudio.PyAudio()
     stream = None
@@ -83,11 +85,12 @@ async def capture_vad_utterance(
         input_gain = max(0.5, min(2.0, _env_float("BACKEND_AUDIO_INPUT_GAIN", 1.0)))
         to_target = Pcm16MonoResampler(source_rate, TARGET_RATE)
         chunk_ms = frames / float(source_rate) * 1000.0
-        pre_roll_count = max(1, int((vad.speech_pad_ms / max(chunk_ms, 1.0)) + 0.999))
+        # Keep at least 600 ms while waiting so the benchmark does not lose the
+        # beginning of the fixed question when speech confirmation arrives late.
+        pre_roll_ms = max(float(vad.speech_pad_ms), 600.0)
+        pre_roll_count = max(1, int((pre_roll_ms / max(chunk_ms, 1.0)) + 0.999))
         pre_roll: deque[bytes] = deque(maxlen=pre_roll_count)
-        candidate: list[bytes] = []
         captured: list[bytes] = []
-        candidate_ms = 0.0
         speech_ms = 0.0
         silence_ms = 0.0
         speech_started = False
@@ -95,6 +98,14 @@ async def capture_vad_utterance(
         next_diag = started_at + 1.0
         max_vad_seen = 0.0
         max_peak_dbfs = -120.0
+
+        # Speech-start evidence is accumulated over a short rolling window
+        # rather than requiring consecutive positive frames. Two strong Silero
+        # hits within 700 ms are sufficient; alternatively enough cumulative
+        # positive duration matching the configured min_speech_ms starts capture.
+        evidence: deque[tuple[float, float]] = deque()
+        evidence_window_s = 0.7
+        strong_hits_required = 2
 
         print(
             f"RV2E_VAD input_selector={selected or '<default>'} resolved_input={name} "
@@ -126,9 +137,10 @@ async def capture_vad_utterance(
 
             now = time.monotonic()
             if not speech_started and now >= next_diag:
+                positive_ms = sum(ms for _, ms in evidence)
                 print(
                     f"RV2E_VAD_DIAG peak_dbfs={peak_dbfs:.1f} max_peak_dbfs={max_peak_dbfs:.1f} "
-                    f"vad={probability:.3f} max_vad={max_vad_seen:.3f}",
+                    f"vad={probability:.3f} max_vad={max_vad_seen:.3f} evidence_ms={positive_ms:.0f} hits={len(evidence)}",
                     flush=True,
                 )
                 next_diag = now + 1.0
@@ -149,22 +161,26 @@ async def capture_vad_utterance(
 
             if target:
                 pre_roll.append(target)
+
+            while evidence and now - evidence[0][0] > evidence_window_s:
+                evidence.popleft()
             if probability >= vad.threshold:
-                if target:
-                    candidate.append(target)
-                candidate_ms += probability_ms
-                if candidate_ms >= vad.min_speech_ms:
-                    speech_started = True
-                    captured = list(pre_roll) + candidate
-                    speech_ms = candidate_ms
-                    silence_ms = 0.0
-                    print(
-                        f"RV2E_VAD speech detected vad={probability:.3f} peak_dbfs={peak_dbfs:.1f}",
-                        flush=True,
-                    )
-            else:
-                candidate.clear()
-                candidate_ms = 0.0
+                evidence.append((now, probability_ms))
+
+            positive_ms = sum(ms for _, ms in evidence)
+            strong_hits = len(evidence)
+            if strong_hits >= strong_hits_required and (
+                positive_ms >= min(float(vad.min_speech_ms), 96.0) or max_vad_seen >= 0.85
+            ):
+                speech_started = True
+                captured = list(pre_roll)
+                speech_ms = max(positive_ms, probability_ms)
+                silence_ms = 0.0
+                print(
+                    f"RV2E_VAD speech detected vad={probability:.3f} max_vad={max_vad_seen:.3f} "
+                    f"peak_dbfs={peak_dbfs:.1f} evidence_ms={positive_ms:.0f} hits={strong_hits}",
+                    flush=True,
+                )
 
         pcm = b"".join(captured)
         duration = len(pcm) / 2.0 / TARGET_RATE
