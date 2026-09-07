@@ -20,22 +20,18 @@ try:
 except ImportError:  # pragma: no cover - direct script fallback
     from realtime.mcp_config import CanonicalMCPServerConfig, load_mcp_inventory, normalize_mcp_server, update_mcp_realtime_policy
 
-
 WEB_PERMISSION_MODES = {"open", "approval"}
 WEB_TRANSPORTS = {"auto", "https", "native", "stdio"}
 SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
-
 def _web_transport(storage_transport: str) -> str:
     return "https" if str(storage_transport).strip().lower() == "native" else str(storage_transport).strip().lower()
-
 
 def _storage_transport(web_transport: str) -> str:
     normalized = str(web_transport or "").strip().lower()
     if normalized not in WEB_TRANSPORTS:
         raise ValueError("realtime_transport must be 'auto', 'https', or 'stdio'")
     return "native" if normalized in {"https", "native"} else normalized
-
 
 def _validated_https_url(value: str | None) -> str | None:
     if value is None:
@@ -48,7 +44,6 @@ def _validated_https_url(value: str | None) -> str | None:
         raise ValueError("Provider MCP URL must be a valid https:// URL")
     return url
 
-
 def _validated_local_url(value: str | None) -> str:
     url = str(value or "").strip()
     if not url:
@@ -58,13 +53,11 @@ def _validated_local_url(value: str | None) -> str:
         raise ValueError("Local MCP URL must be a valid http:// or https:// URL")
     return url
 
-
 def _server_name(value: Any) -> str:
     name = str(value or "").strip()
     if not SERVER_NAME_RE.fullmatch(name):
         raise ValueError("MCP name must use only letters, numbers, '.', '_' or '-' (max 64 chars)")
     return name
-
 
 def _read_raw(path: str | Path) -> tuple[Path, dict[str, Any]]:
     config_path = Path(path)
@@ -78,7 +71,6 @@ def _read_raw(path: str | Path) -> tuple[Path, dict[str, Any]]:
         raise ValueError("MCP config has no mcpServers object")
     return config_path, payload
 
-
 def _write_raw(path: Path, payload: Mapping[str, Any]) -> None:
     original_mode = (path.stat().st_mode & 0o777) if path.exists() else 0o644
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,12 +81,8 @@ def _write_raw(path: Path, payload: Mapping[str, Any]) -> None:
     os.chmod(temporary, original_mode)
     temporary.replace(path)
 
-
 def server_web_payload(server: CanonicalMCPServerConfig) -> dict[str, Any]:
-    """Return editable, non-secret MCP configuration for one logical server."""
-    permission_mode = server.realtime.permissions.mode
-    if permission_mode not in WEB_PERMISSION_MODES:
-        permission_mode = "open"
+    permission_mode = server.realtime.permissions.mode if server.realtime.permissions.mode in WEB_PERMISSION_MODES else "open"
     local = server.local_entry
     args = local.get("args") if isinstance(local.get("args"), list) else []
     routing = server.assistant_options.get("routing", "") if isinstance(server.assistant_options, dict) else ""
@@ -113,43 +101,33 @@ def server_web_payload(server: CanonicalMCPServerConfig) -> dict[str, Any]:
         "permission_mode": permission_mode,
     }
 
-
 def load_web_mcp_policies(path: str | Path) -> list[dict[str, Any]]:
     inventory = load_mcp_inventory(path)
     return [server_web_payload(inventory[name]) for name in sorted(inventory)]
 
+def _validate_policy(transport: str, permission_mode: str, https_url: str | None) -> tuple[str, str, str | None]:
+    storage_transport = _storage_transport(transport)
+    permission = str(permission_mode or "").strip().lower()
+    if permission not in WEB_PERMISSION_MODES:
+        raise ValueError("permission_mode must be 'open' or 'approval'")
+    if storage_transport == "stdio" and permission == "approval":
+        raise ValueError("approval is not supported with explicit STDIO transport")
+    if storage_transport == "native" and not https_url:
+        raise ValueError("HTTPS transport requires a Provider MCP https:// URL")
+    if permission == "approval" and not https_url:
+        raise ValueError("approval requires a Provider MCP https:// URL")
+    return storage_transport, permission, https_url
 
 def update_web_mcp_policy(path: str | Path, server_name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate and atomically apply one browser MCP policy update."""
     if not isinstance(payload, Mapping):
         raise ValueError("MCP realtime policy payload must be an object")
-
-    storage_transport = _storage_transport(str(payload.get("realtime_transport") or payload.get("transport") or ""))
-    permission_mode = str(payload.get("permission_mode") or "").strip().lower()
-    if permission_mode not in WEB_PERMISSION_MODES:
-        raise ValueError("permission_mode must be 'open' or 'approval'")
-    if storage_transport == "stdio" and permission_mode == "approval":
-        raise ValueError("approval is not supported with explicit STDIO transport")
-
     raw_url = payload.get("https_url") if "https_url" in payload else payload.get("native_url")
     native_url = _validated_https_url(None if raw_url is None else str(raw_url))
-    if storage_transport == "native" and not native_url:
-        raise ValueError("HTTPS transport requires a Provider MCP https:// URL")
-
-    updated = update_mcp_realtime_policy(
-        path,
-        _server_name(server_name),
-        transport=storage_transport,
-        permission_mode=permission_mode,
-        allowed_tools=[],
-        native_url=native_url,
-        native_headers=None,
-    )
+    storage_transport, permission_mode, native_url = _validate_policy(str(payload.get("realtime_transport") or payload.get("transport") or ""), str(payload.get("permission_mode") or ""), native_url)
+    updated = update_mcp_realtime_policy(path, _server_name(server_name), transport=storage_transport, permission_mode=permission_mode, allowed_tools=[], native_url=native_url, native_headers=None)
     return server_web_payload(updated)
 
-
 def save_web_mcp_server(path: str | Path, payload: Mapping[str, Any], *, existing_name: str = "") -> dict[str, Any]:
-    """Create or update one MCP server while preserving unknown/secret fields."""
     if not isinstance(payload, Mapping):
         raise ValueError("MCP server payload must be an object")
     name = _server_name(payload.get("name"))
@@ -163,7 +141,6 @@ def save_web_mcp_server(path: str | Path, payload: Mapping[str, Any], *, existin
         raise ValueError(f"MCP server {current_name!r} does not exist")
     if not creating and name != current_name and name in servers:
         raise ValueError(f"MCP server {name!r} already exists")
-
     entry = dict(servers.get(current_name) or {})
     command = str(payload.get("command") or "").strip()
     local_url = _validated_local_url(payload.get("local_url"))
@@ -176,64 +153,34 @@ def save_web_mcp_server(path: str | Path, payload: Mapping[str, Any], *, existin
     if not isinstance(raw_args, list) or not all(isinstance(item, (str, int, float, bool)) for item in raw_args):
         raise ValueError("STDIO args must be a JSON array of scalar values")
     args = [str(item) for item in raw_args]
-
     if command:
-        entry["command"] = command
-        entry["args"] = args
-        entry.pop("url", None)
+        entry["command"] = command; entry["args"] = args; entry.pop("url", None)
     elif local_url:
-        entry["url"] = local_url
-        entry.pop("command", None)
-        entry.pop("args", None)
+        entry["url"] = local_url; entry.pop("command", None); entry.pop("args", None)
     else:
-        entry.pop("command", None)
-        entry.pop("args", None)
-        entry.pop("url", None)
-
+        entry.pop("command", None); entry.pop("args", None); entry.pop("url", None)
     routing = str(payload.get("routing") or "").strip()
     options = entry.get("assistantOptions") if isinstance(entry.get("assistantOptions"), dict) else {}
-    if routing:
-        options["routing"] = routing
-    else:
-        options.pop("routing", None)
-    if options:
-        entry["assistantOptions"] = options
-    else:
-        entry.pop("assistantOptions", None)
-
-    transport = str(payload.get("realtime_transport") or payload.get("transport") or "auto").strip().lower()
-    permission = str(payload.get("permission_mode") or "open").strip().lower()
+    if routing: options["routing"] = routing
+    else: options.pop("routing", None)
+    if options: entry["assistantOptions"] = options
+    else: entry.pop("assistantOptions", None)
     https_url = _validated_https_url(str(payload.get("https_url") or payload.get("native_url") or "")) or ""
-    storage_transport = _storage_transport(transport)
-    if permission not in WEB_PERMISSION_MODES:
-        raise ValueError("permission_mode must be 'open' or 'approval'")
-    if storage_transport == "stdio" and permission == "approval":
-        raise ValueError("approval is not supported with explicit STDIO transport")
-    if storage_transport == "native" and not https_url:
-        raise ValueError("HTTPS transport requires a Provider MCP https:// URL")
+    storage_transport, permission, _ = _validate_policy(str(payload.get("realtime_transport") or payload.get("transport") or "auto"), str(payload.get("permission_mode") or "open"), https_url)
     if not command and not local_url and not https_url:
         raise ValueError("Configure at least STDIO command, Local MCP URL, or Provider HTTPS URL")
-
     native = entry.get("native") if isinstance(entry.get("native"), dict) else {}
     if https_url:
-        native["url"] = https_url
-        entry["native"] = native
+        native["url"] = https_url; entry["native"] = native
     elif "native" in entry:
         native.pop("url", None)
-        if native:
-            entry["native"] = native
-        else:
-            entry.pop("native", None)
+        if native: entry["native"] = native
+        else: entry.pop("native", None)
     entry["realtime"] = {"transport": storage_transport, "permissions": {"mode": permission}}
     normalize_mcp_server(name, entry)
-
-    if current_name != name:
-        servers.pop(current_name, None)
-    servers[name] = entry
-    root["mcpServers"] = servers
-    _write_raw(config_path, root)
+    if current_name != name: servers.pop(current_name, None)
+    servers[name] = entry; root["mcpServers"] = servers; _write_raw(config_path, root)
     return server_web_payload(load_mcp_inventory(config_path)[name])
-
 
 def delete_web_mcp_server(path: str | Path, server_name: str) -> str:
     name = _server_name(server_name)
@@ -241,7 +188,5 @@ def delete_web_mcp_server(path: str | Path, server_name: str) -> str:
     servers = root["mcpServers"]
     if name not in servers:
         raise ValueError(f"MCP server {name!r} does not exist")
-    servers.pop(name)
-    root["mcpServers"] = servers
-    _write_raw(config_path, root)
+    servers.pop(name); root["mcpServers"] = servers; _write_raw(config_path, root)
     return name
