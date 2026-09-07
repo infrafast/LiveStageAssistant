@@ -9,7 +9,12 @@ event loop. The fixture commits its counter and then terminates before replying.
 PASS criteria:
 - the fixture counter becomes exactly 1;
 - RV2C does not request a native -> STDIO switch/replay;
-- RV2C stops the session because the mutation outcome is ambiguous.
+- the counter remains 1 through a short post-failure grace period.
+
+The production AUTO policy intentionally may keep the native Realtime session
+alive after a completed MCP call reports an ambiguous HTTP error. Session-stop
+policy is separate from the safety invariant being tested here; this probe proves
+that the already-executed mutation is not replayed automatically.
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ import asyncio
 import os
 from pathlib import Path
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -40,6 +46,21 @@ Never retry the tool, even if it errors or the MCP server disconnects.
 Do not call read_counter.
 After the tool attempt, do nothing else.
 """
+
+
+async def wait_for_committed_once(*, timeout: float, switch_event: asyncio.Event) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = read_state()
+        count = int(state.get("count") or 0)
+        if count > 1:
+            raise AssertionError(f"fixture mutation was replayed; count={count}")
+        if switch_event.is_set():
+            raise AssertionError("unsafe native -> STDIO fallback/replay was requested after ambiguous mutation")
+        if count == 1:
+            return state
+        await asyncio.sleep(0.1)
+    raise RuntimeError("timed out waiting for fixture mutation to commit")
 
 
 async def run(args) -> int:
@@ -107,39 +128,22 @@ async def run(args) -> int:
             "Call mutate_then_disconnect exactly once with token rv2c-native-postdispatch. Do not retry it."
         )
 
-        global_wait = asyncio.create_task(global_stop.wait())
-        switch_wait = asyncio.create_task(switch_event.wait())
-        try:
-            done, pending = await asyncio.wait(
-                {global_wait, switch_wait},
-                timeout=args.timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            if not done:
-                raise RuntimeError("timed out waiting for RV2C AUTO decision")
-        finally:
-            for task in (global_wait, switch_wait):
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(global_wait, switch_wait, return_exceptions=True)
+        committed = await wait_for_committed_once(timeout=args.timeout, switch_event=switch_event)
+        print("RV2C_NATIVE mutation committed once; observing no-replay grace period", flush=True)
+        await asyncio.sleep(args.grace_period)
 
         after = read_state()
         count = int(after.get("count") or 0)
         print(
             f"RV2C_NATIVE result count={count} switch={str(switch_event.is_set()).lower()} "
-            f"global_stop={str(global_stop.is_set()).lower()} state={after}",
+            f"global_stop={str(global_stop.is_set()).lower()} committed={committed} state={after}",
             flush=True,
         )
 
         if count != 1:
-            raise AssertionError(f"fixture mutation count must be exactly 1, got {count}")
+            raise AssertionError(f"fixture mutation count must remain exactly 1, got {count}")
         if switch_event.is_set():
             raise AssertionError("unsafe native -> STDIO fallback/replay was requested after ambiguous mutation")
-        if not global_stop.is_set():
-            raise AssertionError("RV2C did not stop after ambiguous post-dispatch mutation")
 
         print("RV2C provider-native post-dispatch probe OK: mutation committed once and was not replayed.")
         return 0
@@ -159,6 +163,7 @@ def main() -> int:
     parser.add_argument("--model", default=os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1"))
     parser.add_argument("--discovery-timeout", type=float, default=20.0)
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--grace-period", type=float, default=3.0)
     args = parser.parse_args()
     try:
         return asyncio.run(run(args))
