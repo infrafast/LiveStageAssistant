@@ -15,10 +15,24 @@ from voice_assistant.benchmark_vad_capture import capture_vad_utterance
 
 
 DEFAULT_SERVICE_ENV = "/etc/livestageassistant/.env.online"
+BENCHMARK_QUERY = "Quel est le volume de vocal-clode ?"
+
+
+def _validate_benchmark_transcript(text: str) -> None:
+    normalized = text.casefold().replace("-", " ")
+    has_volume = "volume" in normalized
+    has_target = "vocal" in normalized and ("clode" in normalized or "claude" in normalized)
+    if not (has_volume and has_target):
+        raise RuntimeError(
+            "recorded speech was not recognized as the fixed RV2E benchmark query; "
+            f"got {text!r}. Expected a transcription of {BENCHMARK_QUERY!r}. No cost comparison produced."
+        )
 
 
 def main() -> int:
     benchmark.capture_once = capture_vad_utterance
+    benchmark.DEFAULT_QUERY_HINT = BENCHMARK_QUERY
+    benchmark.validate_fixed_query_transcript = _validate_benchmark_transcript
     if "--env-file" not in sys.argv:
         sys.argv.extend(["--env-file", DEFAULT_SERVICE_ENV])
     return benchmark.main()
