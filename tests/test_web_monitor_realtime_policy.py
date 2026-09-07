@@ -1,15 +1,69 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib import request as urllib_request
 
-from voice_assistant.web_monitor import WebMonitor
+from voice_assistant.web_monitor import WebMonitor, _runtime_service_tiles
 
 
 class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
+    def test_runtime_service_tiles_are_provider_and_mcp_neutral(self) -> None:
+        tiles = _runtime_service_tiles(
+            {
+                "connectivity": "online",
+                "engine": "openai-realtime",
+                "provider": "openai",
+                "model": "gpt-realtime-2.1",
+                "voice": "marin",
+                "ready": True,
+                "mcp": [
+                    {
+                        "name": "alpha",
+                        "configured_transport": "auto",
+                        "effective_transport": "stdio",
+                        "permission": "open",
+                        "healthy": True,
+                        "detail": "selected and healthy",
+                    }
+                ],
+            }
+        )
+        self.assertEqual(tiles["Voice engine"]["status"], "ready")
+        self.assertIn("openai-realtime", tiles["Voice engine"]["detail"])
+        self.assertEqual(tiles["MCP · alpha"]["status"], "online")
+        self.assertIn("transport=stdio", tiles["MCP · alpha"]["detail"])
+        self.assertIn("configured=auto", tiles["MCP · alpha"]["detail"])
+        self.assertIn("permission=open", tiles["MCP · alpha"]["detail"])
+
+    def test_snapshot_includes_runtime_status_tiles_when_status_file_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            status_path = Path(temp_dir) / "runtime-status.json"
+            status_path.write_text(
+                json.dumps(
+                    {
+                        "connectivity": "online",
+                        "engine": "classic",
+                        "provider": "openai",
+                        "model": "gpt-4.1-mini",
+                        "voice": "",
+                        "ready": True,
+                        "profile": "/tmp/.env.online",
+                        "mcp": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"LSA_RUNTIME_STATUS_FILE": str(status_path)}):
+                monitor = WebMonitor()
+                snapshot = monitor.snapshot()
+            self.assertEqual(snapshot["runtime_status"]["engine"], "classic")
+            self.assertEqual(snapshot["services"]["Voice engine"]["status"], "ready")
+
     def test_post_updates_policy_and_preserves_native_headers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "mcp.json"
