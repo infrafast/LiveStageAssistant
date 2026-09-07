@@ -45,6 +45,12 @@ jobs:
               raise SystemExit('runner could not find restart completion patch')
           script = script.replace(brittle, robust, 1)
 
+          dangerous = '''wm = re.sub(r'\\nVOICE_ENGINE_ONLINE = .*?\\nDEFAULT_REALTIME_VOICE = "marin"\\n', '\\n', wm, count=1, flags=re.S)'''
+          safe = '''wm = re.sub(r'\\nVOICE_ENGINE_ONLINE = .*?\\nDEFAULT_REALTIME_VOICE = "marin"\\n', '\\nDEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"\\n', wm, count=1, flags=re.S)'''
+          if dangerous not in script:
+              raise SystemExit('runner could not protect DEFAULT_RUNTIME_STATUS_FILE')
+          script = script.replace(dangerous, safe, 1)
+
           exec(compile(script, '<cfg-refactor>', 'exec'))
           PY
       - name: Validate
@@ -53,6 +59,7 @@ jobs:
           python -m py_compile voice_assistant/runtime_web_services.py voice_assistant/web_monitor.py voice_assistant/web_monitor_base.py
           node --check assets/web/app.js
           python tests/test_web_config_architecture.py
+          grep -q 'DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"' voice_assistant/web_monitor.py
       - name: Commit refactor
         shell: bash
         run: |
