@@ -1,0 +1,727 @@
+name: CFG final refactor
+
+on:
+  push:
+    branches: [realtime-voice-architecture]
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    if: ${{ !contains(github.event.head_commit.message, '[cfg-refactor]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: realtime-voice-architecture
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Refactor CFG into canonical GUI
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 occurrence, got {count}")
+              return text.replace(old, new, 1)
+
+          # ---- index.html: pure markup only; all behavior lives in app.js ----
+          p = Path('assets/web/index.html')
+          html = p.read_text(encoding='utf-8')
+          html = re.sub(
+              r'<div class="field full-row"><button class="small-button" id="voice-config-save" type="button">Save voice settings</button><span class="detail" id="voice-config-message"></span></div>',
+              '', html, count=1,
+          )
+          pattern = re.compile(r'\n  <script>\n    \(\(\) => \{\n      "use strict";.*?\n    \}\)\(\);\n  </script>(?=\n</body>)', re.S)
+          html, n = pattern.subn('', html, count=1)
+          if n != 1:
+              raise SystemExit(f'index inline CFG removal: expected 1 block, got {n}')
+          if 'voice-config-save' in html or 'loadCfg9' in html:
+              raise SystemExit('index still contains old CFG controller')
+          p.write_text(html, encoding='utf-8')
+
+          # ---- app.js: canonical configuration controller ----
+          p = Path('assets/web/app.js')
+          js = p.read_text(encoding='utf-8')
+
+          old = '    const llmSave = document.querySelector("#llm-save");\n    const llmMessage = document.querySelector("#llm-message");'
+          new = '''    const llmSave = document.querySelector("#llm-save");
+    const llmMessage = document.querySelector("#llm-message");
+    const panelConfig = document.querySelector("#panel-config");
+    const voiceEngine = document.querySelector("#voice-engine");
+    const realtimeModel = document.querySelector("#realtime-model");
+    const realtimeModelField = document.querySelector("#realtime-model-field");
+    const realtimeVoice = document.querySelector("#realtime-voice");
+    const realtimeVoiceField = document.querySelector("#realtime-voice-field");
+    const speechOutputGain = document.querySelector("#speech-output-gain");
+    const speechOutputGainField = document.querySelector("#speech-output-gain-field");
+    const speechOutputGainLabel = document.querySelector("#speech-output-gain-label");
+    const speechOutputGainHint = document.querySelector("#speech-output-gain-hint");
+    const classicSttPromptField = document.querySelector("#classic-stt-prompt-field");
+    const classicInterruptField = document.querySelector("#classic-interrupt-field");
+    const classicVadDetails = document.querySelector("#classic-vad-details");
+    const llmProviderField = document.querySelector("#llm-provider-field");
+    const llmModelField = document.querySelector("#llm-model-field");
+    const sttInputField = document.querySelector("#stt-input-field");
+    const mcpDetails = document.querySelector("#mcp-servers-details");'''
+          js = replace_once(js, old, new, 'DOM refs')
+
+          old = '    let configBaseline = "";'
+          new = '''    let configBaseline = "";
+    let restartRequired = false;
+    let runtimeRestarting = false;
+    let restartLoadingSeen = false;
+    let currentCloudGain = 1;
+    let currentLocalGain = 1;
+    let currentClassicCloudSpeech = true;
+    let lastSnapshot = null;'''
+          js = replace_once(js, old, new, 'CFG state')
+
+          old = '''        env_profile: activeEnvProfile,
+        connectivity_mode: selectedConnectivityMode(),
+        provider: llmProvider.value || "",'''
+          new = '''        env_profile: activeEnvProfile,
+        connectivity_mode: selectedConnectivityMode(),
+        voice_engine: voiceEngine?.value || "classic",
+        realtime_model: realtimeModel?.value.trim() || "",
+        realtime_voice: realtimeVoice?.value.trim() || "",
+        speech_output_gain: Number(speechOutputGain?.value || 1),
+        provider: llmProvider.value || "",'''
+          js = replace_once(js, old, new, 'config signature')
+
+          marker = '''    function hasUnsavedConfigChanges() {
+      return Boolean(configBaseline) && configSignature() !== configBaseline;
+    }
+'''
+          insert = marker + r'''
+    function syncSpeechOutputGainLabel() {
+      if (!speechOutputGain || !speechOutputGainLabel || !speechOutputGainHint) return;
+      const offline = selectedConnectivityMode() === "offline";
+      const locality = offline ? "Local" : "Cloud";
+      speechOutputGainLabel.textContent = `${locality} · ${Number(speechOutputGain.value || 1).toFixed(2)}×`;
+      speechOutputGainHint.textContent = offline
+        ? "Gain applied to fully local speech output."
+        : "Gain applied to cloud-generated speech, including Realtime.";
+    }
+
+    function syncVoiceEngineControls() {
+      if (!voiceEngine) return;
+      const offline = selectedConnectivityMode() === "offline";
+      const realtime = !offline && voiceEngine.value === "openai-realtime";
+      if (offline) voiceEngine.value = "local";
+      voiceEngine.disabled = offline;
+      for (const optionEl of voiceEngine.options) {
+        optionEl.disabled = offline ? optionEl.value !== "local" : optionEl.value === "local";
+      }
+      realtimeModelField?.classList.toggle("hidden", !realtime);
+      realtimeVoiceField?.classList.toggle("hidden", !realtime);
+      llmProviderField?.classList.toggle("hidden", realtime);
+      llmModelField?.classList.toggle("hidden", realtime);
+      classicSttPromptField?.classList.toggle("hidden", realtime);
+      classicInterruptField?.classList.toggle("hidden", realtime);
+      sttInputField?.classList.toggle("hidden", realtime);
+      classicVadDetails?.classList.toggle("hidden", realtime);
+      for (const element of cloudAudioControls) element.classList.toggle("hidden", realtime || offline);
+      for (const field of [ttsSpeedField, elevenlabsVoiceField, openaiTtsVoiceField, ttsTestField]) {
+        field?.classList.toggle("hidden", realtime);
+      }
+      webTtsVolumeField?.classList.add("hidden");
+      backendTtsVolumeField?.classList.add("hidden");
+      currentClassicCloudSpeech = !offline && (
+        ["openai", "elevenlabs"].includes(String(cloudTtsProvider.value || "").toLowerCase())
+      );
+      speechOutputGainField?.classList.toggle("hidden", !(realtime || offline || currentClassicCloudSpeech));
+      syncSpeechOutputGainLabel();
+    }
+
+    function syncConfigActionState() {
+      if (!llmSave) return;
+      if (runtimeRestarting) {
+        llmSave.textContent = "Restarting…";
+        llmSave.disabled = true;
+        return;
+      }
+      const dirty = hasUnsavedConfigChanges();
+      llmSave.disabled = false;
+      if (dirty && restartRequired) llmSave.textContent = "Save + Restart";
+      else if (dirty) llmSave.textContent = "Save";
+      else if (restartRequired) llmSave.textContent = "Restart";
+      else llmSave.textContent = "Save";
+    }
+
+    function setRestartRequired(required, message = "") {
+      restartRequired = restartRequired || Boolean(required);
+      if (restartRequired && message) llmMessage.textContent = message;
+      syncConfigActionState();
+    }
+
+    async function requestRuntimeRestart() {
+      if (runtimeRestarting) return;
+      runtimeRestarting = true;
+      restartLoadingSeen = false;
+      llmMessage.textContent = "Restarting…";
+      syncConfigActionState();
+      try {
+        const response = await fetch("/api/runtime-restart", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        await fetchJsonOrThrow(response);
+      } catch (error) {
+        runtimeRestarting = false;
+        llmMessage.textContent = `Restart failed: ${error.message || error}`;
+        syncConfigActionState();
+      }
+    }
+
+    function findMcpConfigServers(value, depth = 0, seen = new Set()) {
+      if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) return null;
+      seen.add(value);
+      if (value.mcpServers && typeof value.mcpServers === "object" && !Array.isArray(value.mcpServers)) return value.mcpServers;
+      for (const child of Object.values(value)) {
+        const found = findMcpConfigServers(child, depth + 1, seen);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function mcpPolicyMap(snapshot) {
+      const servers = findMcpConfigServers(snapshot) || {};
+      const result = {};
+      for (const [name, raw] of Object.entries(servers)) {
+        if (!raw || typeof raw !== "object") continue;
+        const native = raw.native && typeof raw.native === "object" ? raw.native : {};
+        const realtime = raw.realtime && typeof raw.realtime === "object" ? raw.realtime : {};
+        const permissions = realtime.permissions && typeof realtime.permissions === "object" ? realtime.permissions : {};
+        result[name] = {
+          transport: String(realtime.transport || "auto").toLowerCase(),
+          permission: String(permissions.mode || realtime.permission || "open").toLowerCase() === "approval" ? "approval" : "open",
+          httpsUrl: String(native.url || ""),
+          command: String(raw.command || ""),
+          args: Array.isArray(raw.args) ? raw.args.map(String) : [],
+          localUrl: String(raw.url || "")
+        };
+      }
+      return result;
+    }
+
+    function runtimeMcpStatus(snapshot, name) {
+      const items = snapshot?.runtime_status?.mcp;
+      return Array.isArray(items) ? items.find((item) => String(item?.name || "") === name) || null : null;
+    }
+
+    function displayMcpTransport(value) {
+      const normalized = String(value || "").toLowerCase();
+      return normalized === "native" ? "HTTPS" : normalized.toUpperCase();
+    }
+
+    function makeCfgField(label, control) {
+      const field = document.createElement("label");
+      field.className = "field";
+      const text = document.createElement("span");
+      text.textContent = label;
+      field.append(text, control);
+      return field;
+    }
+
+    function makeMcpPolicyControls(policy) {
+      const transport = document.createElement("select");
+      transport.append(
+        option("Auto", "auto", false, policy.transport === "auto"),
+        option("HTTPS", "native", false, policy.transport === "native"),
+        option("STDIO", "stdio", false, policy.transport === "stdio")
+      );
+      const permission = document.createElement("select");
+      permission.append(
+        option("Open", "open", false, policy.permission === "open"),
+        option("Require approval", "approval", false, policy.permission === "approval")
+      );
+      const https = document.createElement("input");
+      https.type = "url";
+      https.placeholder = "https://…/mcp";
+      https.value = policy.httpsUrl || "";
+      const httpsField = makeCfgField("Provider HTTPS URL", https);
+      const sync = () => {
+        httpsField.classList.toggle("hidden", transport.value === "stdio");
+        const approval = [...permission.options].find((item) => item.value === "approval");
+        if (approval) approval.disabled = transport.value === "stdio";
+        if (transport.value === "stdio" && permission.value === "approval") permission.value = "open";
+      };
+      transport.addEventListener("change", sync);
+      sync();
+      return { transport, permission, https, httpsField };
+    }
+
+    async function saveMcpDefinition(action, body) {
+      const response = await fetch("/api/mcp-server", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...body })
+      });
+      return fetchJsonOrThrow(response);
+    }
+
+    function ensureAddMcpControl() {
+      const toolbar = mcpDetails?.querySelector(".mcp-server-toolbar");
+      if (!toolbar || document.querySelector("#cfg-add-mcp")) return;
+      const add = document.createElement("button");
+      add.id = "cfg-add-mcp";
+      add.type = "button";
+      add.className = "small-button";
+      add.textContent = "+ Add MCP";
+      const form = document.createElement("div");
+      form.className = "hidden";
+      form.style.cssText = "display:grid;gap:8px;margin-top:10px;padding:10px;border:1px solid var(--border,#d7dde5);border-radius:8px";
+      const name = document.createElement("input"); name.placeholder = "name";
+      const command = document.createElement("input"); command.placeholder = "STDIO command (optional)";
+      const args = document.createElement("input"); args.placeholder = '["arg1","arg2"]';
+      const localUrl = document.createElement("input"); localUrl.placeholder = "Local MCP URL http://… (optional)";
+      const controls = makeMcpPolicyControls({ transport: "auto", permission: "open", httpsUrl: "" });
+      const create = document.createElement("button"); create.type = "button"; create.className = "small-button"; create.textContent = "Create MCP";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "small-button"; cancel.textContent = "Cancel";
+      const message = document.createElement("span"); message.className = "detail";
+      form.append(
+        makeCfgField("Name", name), makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args),
+        makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField,
+        makeCfgField("Permission", controls.permission), create, cancel, message
+      );
+      toolbar.append(add, form);
+      add.addEventListener("click", () => form.classList.remove("hidden"));
+      cancel.addEventListener("click", () => form.classList.add("hidden"));
+      create.addEventListener("click", async () => {
+        create.disabled = true;
+        message.textContent = "Creating…";
+        try {
+          const data = await saveMcpDefinition("create", { server: {
+            name: name.value.trim(), command: command.value.trim(), args: args.value.trim() || "[]",
+            local_url: localUrl.value.trim(), realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
+            https_url: controls.https.value.trim(), permission_mode: controls.permission.value
+          }});
+          setRestartRequired(data.restart_required, "MCP created · restart required.");
+          form.classList.add("hidden");
+          mcpServersSignature = "";
+          await refresh();
+        } catch (error) {
+          message.textContent = `Create failed: ${error.message || error}`;
+        } finally {
+          create.disabled = false;
+        }
+      });
+    }
+
+    function renderMcpCrud(snapshot) {
+      ensureAddMcpControl();
+      for (const old of document.querySelectorAll(".cfg-mcp-editor")) old.remove();
+      const policies = mcpPolicyMap(snapshot);
+      for (const card of document.querySelectorAll(".mcp-server-card")) {
+        const name = card.querySelector(".mcp-server-name")?.textContent?.trim() || "";
+        const policy = policies[name];
+        if (!name || !policy) continue;
+        const section = document.createElement("div");
+        section.className = "cfg-mcp-editor";
+        section.style.cssText = "margin-top:10px;padding-top:10px;border-top:1px solid var(--border,#d7dde5);display:grid;gap:8px";
+        const runtime = runtimeMcpStatus(snapshot, name);
+        if (runtime) {
+          const status = document.createElement("div");
+          status.className = "detail";
+          const configured = displayMcpTransport(runtime.configured_transport || policy.transport);
+          const effective = displayMcpTransport(runtime.effective_transport || "");
+          status.textContent = effective ? `Configured ${configured} · Effective ${effective}${runtime.healthy === true ? " · healthy" : runtime.healthy === false ? " · unavailable" : ""}` : `Configured ${configured}`;
+          section.append(status);
+        }
+        const command = document.createElement("input"); command.value = policy.command; command.placeholder = "STDIO command";
+        const args = document.createElement("input"); args.value = JSON.stringify(policy.args); args.placeholder = '["arg1"]';
+        const localUrl = document.createElement("input"); localUrl.value = policy.localUrl; localUrl.placeholder = "Local MCP URL";
+        const controls = makeMcpPolicyControls(policy);
+        const save = document.createElement("button"); save.type = "button"; save.className = "small-button"; save.textContent = "Save MCP";
+        const del = document.createElement("button"); del.type = "button"; del.className = "small-button"; del.textContent = "Delete MCP";
+        const message = document.createElement("span"); message.className = "detail";
+        save.addEventListener("click", async () => {
+          save.disabled = true; message.textContent = "Saving…";
+          try {
+            const data = await saveMcpDefinition("update", { existing_name: name, server: {
+              name, command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
+              realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
+              https_url: controls.https.value.trim(), permission_mode: controls.permission.value
+            }});
+            setRestartRequired(data.restart_required, "MCP saved · restart required.");
+            message.textContent = "Saved · restart required.";
+          } catch (error) {
+            message.textContent = `Save failed: ${error.message || error}`;
+          } finally { save.disabled = false; }
+        });
+        del.addEventListener("click", async () => {
+          if (!window.confirm(`Delete MCP "${name}"?`)) return;
+          del.disabled = true;
+          try {
+            const data = await saveMcpDefinition("delete", { server: name });
+            setRestartRequired(data.restart_required, "MCP deleted · restart required.");
+            mcpServersSignature = "";
+            await refresh();
+          } catch (error) {
+            message.textContent = `Delete failed: ${error.message || error}`;
+          } finally { del.disabled = false; }
+        });
+        section.append(
+          makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl),
+          makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), save, del, message
+        );
+        card.append(section);
+      }
+    }
+'''
+          js = replace_once(js, marker, insert, 'canonical CFG helpers')
+
+          # Load engine/gain from the same options endpoint as all other config.
+          old = '''        const selectedProvider = data.provider || provider || "";
+        setSelectedConnectivityMode(connectivityOverride || data.selected_connectivity_mode || "online");'''
+          new = '''        const selectedProvider = data.provider || provider || "";
+        setSelectedConnectivityMode(connectivityOverride || data.selected_connectivity_mode || "online");
+        if (voiceEngine) voiceEngine.value = data.selected_voice_engine || (selectedConnectivityMode() === "offline" ? "local" : "classic");
+        if (realtimeModel) realtimeModel.value = data.selected_realtime_model || "gpt-realtime-2.1";
+        if (realtimeVoice) realtimeVoice.value = data.selected_realtime_voice || "marin";
+        currentCloudGain = Number(data.selected_cloud_tts_output_gain ?? 1);
+        currentLocalGain = Number(data.selected_local_tts_output_gain ?? 1);
+        if (speechOutputGain) speechOutputGain.value = String(selectedConnectivityMode() === "offline" ? currentLocalGain : currentCloudGain);'''
+          js = replace_once(js, old, new, 'load voice config')
+
+          old = '''        syncAudioSampleControls();
+
+        llmMessage.textContent = data.message || "";
+        if (shouldMarkClean) {
+          markConfigClean();
+        }'''
+          new = '''        syncAudioSampleControls();
+        syncVoiceEngineControls();
+
+        llmMessage.textContent = data.message || "";
+        if (shouldMarkClean) {
+          markConfigClean();
+          syncConfigActionState();
+        }'''
+          js = replace_once(js, old, new, 'loaded action state')
+
+          # Existing MCP saves must never restart implicitly or show the restart overlay.
+          js = js.replace('''        if (messageEl) messageEl.textContent = data.message || "Routing saved.";
+        setEnvironmentLoading(true);
+        mcpServersSignature = "";
+        await refresh();''', '''        if (messageEl) messageEl.textContent = data.message || "Routing saved.";
+        setRestartRequired(data.restart_required, "Routing saved · restart required.");
+        mcpServersSignature = "";
+        await refresh();''')
+          js = js.replace('''        if (messageEl) messageEl.textContent = data.message || "MCP server options saved.";
+        setEnvironmentLoading(true);
+        mcpServersSignature = "";
+        await refresh();''', '''        if (messageEl) messageEl.textContent = data.message || "MCP server options saved.";
+        setRestartRequired(data.restart_required, "MCP options saved · restart required.");
+        mcpServersSignature = "";
+        await refresh();''')
+
+          # Snapshot drives MCP editor and restart completion; no second polling loop.
+          old = '''        const data = await response.json();
+        const snapshotEnv = (data.config && data.config.env) || {};'''
+          new = '''        const data = await response.json();
+        lastSnapshot = data;
+        const snapshotEnv = (data.config && data.config.env) || {};'''
+          js = replace_once(js, old, new, 'snapshot capture')
+          old = '''        renderMcpServers(data.mcp_servers || []);
+        syncMcpRoutingEditors();'''
+          new = '''        renderMcpServers(data.mcp_servers || []);
+        syncMcpRoutingEditors();
+        window.setTimeout(() => renderMcpCrud(data), 0);'''
+          js = replace_once(js, old, new, 'MCP CRUD render')
+          old = '''        setEnvironmentLoading(
+          Boolean(environmentLoading.active),
+          environmentLoading.title || tr("environment_refresh", "rafraichissement de l'environnement")
+        );'''
+          new = '''        setEnvironmentLoading(
+          Boolean(environmentLoading.active),
+          environmentLoading.title || tr("environment_refresh", "rafraichissement de l'environnement")
+        );
+        if (runtimeRestarting) {
+          if (environmentLoading.active) restartLoadingSeen = true;
+          if (restartLoadingSeen && !environmentLoading.active && data.runtime_status?.ready) {
+            runtimeRestarting = false;
+            restartRequired = false;
+            restartLoadingSeen = false;
+            llmMessage.textContent = "Restart complete.";
+            llmControlsInitialized = false;
+            configBaseline = configSignature();
+            syncConfigActionState();
+          }
+        }'''
+          js = replace_once(js, old, new, 'restart completion')
+
+          # Add unified field listeners.
+          old = '''    cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
+
+    llmSave.addEventListener("click", async () => {'''
+          new = '''    cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
+    voiceEngine?.addEventListener("change", () => { syncVoiceEngineControls(); syncConfigActionState(); });
+    realtimeModel?.addEventListener("input", syncConfigActionState);
+    realtimeVoice?.addEventListener("input", syncConfigActionState);
+    speechOutputGain?.addEventListener("input", () => { syncSpeechOutputGainLabel(); syncConfigActionState(); });
+    panelConfig?.addEventListener("input", syncConfigActionState);
+    panelConfig?.addEventListener("change", syncConfigActionState);
+    mcpDetails?.addEventListener("toggle", () => { if (mcpDetails.open && lastSnapshot) window.setTimeout(() => renderMcpCrud(lastSnapshot), 0); });
+
+    llmSave.addEventListener("click", async () => {'''
+          js = replace_once(js, old, new, 'CFG listeners')
+
+          # Unified Save / Restart. Keep the existing payload, extend it with CFG fields,
+          # and remove the old automatic reload/loading behavior.
+          old = '''    llmSave.addEventListener("click", async () => {
+      const provider = llmProvider.value;'''
+          new = '''    llmSave.addEventListener("click", async () => {
+      if (!hasUnsavedConfigChanges() && restartRequired) {
+        await requestRuntimeRestart();
+        return;
+      }
+      const restartAfterSave = restartRequired;
+      const provider = llmProvider.value;'''
+          js = replace_once(js, old, new, 'save entry')
+
+          old = '''      const speakerProfilesValue = collectSpeakerProfiles();
+      if (!provider) return;'''
+          new = '''      const speakerProfilesValue = collectSpeakerProfiles();
+      const voiceEngineValue = voiceEngine?.value || (connectivityModeValue === "offline" ? "local" : "classic");
+      const realtimeModelValue = realtimeModel?.value.trim() || "gpt-realtime-2.1";
+      const realtimeVoiceValue = realtimeVoice?.value.trim() || "marin";
+      const speechGainValue = Number(speechOutputGain?.value || 1);
+      const cloudGainValue = connectivityModeValue === "offline" ? currentCloudGain : speechGainValue;
+      const localGainValue = connectivityModeValue === "offline" ? speechGainValue : currentLocalGain;
+      if (!provider) return;'''
+          js = replace_once(js, old, new, 'save CFG values')
+
+          old = '''            speaker_margin: speakerMarginValue,
+            speaker_profiles: speakerProfilesValue
+          })'''
+          new = '''            speaker_margin: speakerMarginValue,
+            speaker_profiles: speakerProfilesValue,
+            voice_engine: voiceEngineValue,
+            realtime_model: realtimeModelValue,
+            realtime_voice: realtimeVoiceValue,
+            cloud_tts_output_gain: cloudGainValue,
+            local_tts_output_gain: localGainValue
+          })'''
+          js = replace_once(js, old, new, 'save CFG payload')
+
+          old = '''        llmMessage.textContent = data.message || tr("saved", "Saved.");
+        cloudApiLoaded = false;
+        setEnvironmentLoading(true);
+        markConfigClean();
+        llmControlsInitialized = false;
+        if ((data.stt_language || sttLanguageValue) !== i18nPayload.locale) {
+          window.setTimeout(() => window.location.reload(), 250);
+          return;
+        }
+        await refresh();'''
+          new = '''        llmMessage.textContent = data.message || tr("saved", "Saved.");
+        cloudApiLoaded = false;
+        currentCloudGain = cloudGainValue;
+        currentLocalGain = localGainValue;
+        markConfigClean();
+        restartRequired = restartRequired || Boolean(data.restart_required);
+        syncConfigActionState();
+        if ((data.stt_language || sttLanguageValue) !== i18nPayload.locale) {
+          window.setTimeout(() => window.location.reload(), 250);
+          return;
+        }
+        if (restartAfterSave) await requestRuntimeRestart();'''
+          js = replace_once(js, old, new, 'save completion')
+
+          old = '''      } catch (error) {
+        setEnvironmentLoading(false);
+        llmMessage.textContent = trf("save_failed", "Save failed: {error}", { error });
+      } finally {
+        llmSave.disabled = !llmProvider.value;
+      }
+    });'''
+          new = '''      } catch (error) {
+        llmMessage.textContent = trf("save_failed", "Save failed: {error}", { error });
+      } finally {
+        if (!runtimeRestarting) syncConfigActionState();
+      }
+    });'''
+          js = replace_once(js, old, new, 'save finalizer')
+
+          if 'voice-config-save' in js or 'loadCfg9' in js:
+              raise SystemExit('app.js contains obsolete CFG controller names')
+          p.write_text(js, encoding='utf-8')
+
+          # ---- web_monitor_base.py: one canonical save endpoint owns all fields ----
+          p = Path('voice_assistant/web_monitor_base.py')
+          base = p.read_text(encoding='utf-8')
+          old = '''                    speaker_profiles = payload.get("speaker_profiles") or []
+                    if not isinstance(speaker_profiles, list):'''
+          new = '''                    speaker_profiles = payload.get("speaker_profiles") or []
+                    voice_engine = str(payload.get("voice_engine") or "").strip().lower()
+                    realtime_model = str(payload.get("realtime_model") or "").strip()
+                    realtime_voice = str(payload.get("realtime_voice") or "").strip()
+                    try:
+                        cloud_tts_output_gain = float(payload.get("cloud_tts_output_gain") if payload.get("cloud_tts_output_gain") is not None else 1.0)
+                        local_tts_output_gain = float(payload.get("local_tts_output_gain") if payload.get("local_tts_output_gain") is not None else 1.0)
+                    except (TypeError, ValueError):
+                        self.send_error(400, "Speech output gains must be numbers")
+                        return
+                    if not isinstance(speaker_profiles, list):'''
+          base = replace_once(base, old, new, 'base parse CFG')
+          old = '''                            speaker_margin,
+                            speaker_profiles,
+                        )'''
+          new = '''                            speaker_margin,
+                            speaker_profiles,
+                            voice_engine,
+                            realtime_model,
+                            realtime_voice,
+                            cloud_tts_output_gain,
+                            local_tts_output_gain,
+                        )'''
+          base = replace_once(base, old, new, 'base call CFG')
+          p.write_text(base, encoding='utf-8')
+
+          # ---- runtime_web_services.py: one atomic profile save, never auto-reload ----
+          p = Path('voice_assistant/runtime_web_services.py')
+          svc = p.read_text(encoding='utf-8')
+          old = '''            "selected_command_ack_sound_file": command_ack,
+            "message": f"Common runtime options loaded from active profile: {self.active_profile()}",
+        }'''
+          new = '''            "selected_command_ack_sound_file": command_ack,
+            "selected_voice_engine": str(values.get("VOICE_ENGINE") or ("local" if connectivity == "offline" else "classic")).strip().lower(),
+            "selected_realtime_model": str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
+            "selected_realtime_voice": str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
+            "selected_cloud_tts_output_gain": self._float(values, "CLOUD_TTS_OUTPUT_GAIN", 1.0),
+            "selected_local_tts_output_gain": self._float(values, "LOCAL_TTS_OUTPUT_GAIN", 1.0),
+            "message": f"Common runtime options loaded from active profile: {self.active_profile()}",
+        }'''
+          svc = replace_once(svc, old, new, 'options CFG')
+
+          old = '''        speaker_margin: float,
+        speaker_profiles: list[dict[str, Any]],
+    ) -> dict[str, Any]:'''
+          new = '''        speaker_margin: float,
+        speaker_profiles: list[dict[str, Any]],
+        voice_engine: str,
+        realtime_model: str,
+        realtime_voice: str,
+        cloud_tts_output_gain: float,
+        local_tts_output_gain: float,
+    ) -> dict[str, Any]:'''
+          svc = replace_once(svc, old, new, 'save signature CFG')
+
+          old = '''        updates = {
+            "LLM_PROVIDER": provider,'''
+          new = '''        requested_engine = str(voice_engine or ("local" if active_connectivity == "offline" else "classic")).strip().lower()
+        allowed_engines = {"local"} if active_connectivity == "offline" else {"classic", "openai-realtime"}
+        if requested_engine not in allowed_engines:
+            raise ValueError(f"voice_engine must be one of: {', '.join(sorted(allowed_engines))}")
+        cloud_tts_output_gain = max(0.0, min(2.0, float(cloud_tts_output_gain)))
+        local_tts_output_gain = max(0.0, min(2.0, float(local_tts_output_gain)))
+        if requested_engine == "openai-realtime":
+            realtime_model = str(realtime_model or "gpt-realtime-2.1").strip()
+            realtime_voice = str(realtime_voice or "marin").strip()
+            if not realtime_model or not realtime_voice:
+                raise ValueError("Realtime model and voice are required")
+
+        updates = {
+            "VOICE_ENGINE": requested_engine,
+            "CLOUD_TTS_OUTPUT_GAIN": f"{cloud_tts_output_gain:.2f}",
+            "LOCAL_TTS_OUTPUT_GAIN": f"{local_tts_output_gain:.2f}",
+            "LLM_PROVIDER": provider,'''
+          svc = replace_once(svc, old, new, 'save update CFG')
+
+          old = '''        if provider == "ollama":
+            updates["OLLAMA_MODEL"] = model'''
+          new = '''        if requested_engine == "openai-realtime":
+            updates["OPENAI_REALTIME_MODEL"] = realtime_model
+            updates["OPENAI_REALTIME_VOICE"] = realtime_voice
+        if provider == "ollama":
+            updates["OLLAMA_MODEL"] = model'''
+          svc = replace_once(svc, old, new, 'realtime fields')
+
+          old = '''        with self._lock:
+            self._write_env(self.active_profile(), updates)
+            self._refresh_monitor_config()
+            self._reload()
+        return {
+            "saved": True,
+            "provider": provider,
+            "model": model,
+            "connectivity_mode": active_connectivity,
+            "restart_required": True,
+            "message": "Configuration saved. Restart LiveStageAssistant to apply it.",
+        }'''
+          new = '''        with self._lock:
+            profile = self.active_profile()
+            self._write_env(profile, updates)
+            self._refresh_monitor_config()
+        return {
+            "saved": True,
+            "provider": provider,
+            "model": model,
+            "voice_engine": requested_engine,
+            "connectivity_mode": active_connectivity,
+            "profile": str(profile),
+            "restart_required": True,
+            "message": f"Saved to {profile} · restart required.",
+        }'''
+          svc = replace_once(svc, old, new, 'no auto reload')
+          svc = svc.replace('''            self._write_json_atomic(path, config)
+            self._refresh_monitor_config(mcp_config=config)
+            self._reload()
+        return {"ok": True, "mcp_config": str(path), "routing": normalized, "restart_required": True}''', '''            self._write_json_atomic(path, config)
+            self._refresh_monitor_config(mcp_config=config)
+        return {"ok": True, "mcp_config": str(path), "routing": normalized, "restart_required": True}''')
+          svc = svc.replace('''            self._write_json_atomic(path, config)
+            self._refresh_monitor_config(mcp_config=config)
+            self._reload()
+        return {"ok": True, "mcp_config": str(path), "options": normalized, "restart_required": True}''', '''            self._write_json_atomic(path, config)
+            self._refresh_monitor_config(mcp_config=config)
+        return {"ok": True, "mcp_config": str(path), "options": normalized, "restart_required": True}''')
+          p.write_text(svc, encoding='utf-8')
+
+          # ---- web_monitor.py: remove now-dead voice-specific persistence endpoints ----
+          p = Path('voice_assistant/web_monitor.py')
+          wm = p.read_text(encoding='utf-8')
+          wm = re.sub(r'\nVOICE_ENGINE_ONLINE = .*?\nDEFAULT_REALTIME_VOICE = "marin"\n', '\n', wm, count=1, flags=re.S)
+          wm = re.sub(r'\n\ndef _auto_env_dir\(\).*?\n\ndef _runtime_status_file\(\)', '\n\ndef _runtime_status_file()', wm, count=1, flags=re.S)
+          wm = re.sub(r'\n\ndef _bounded_gain\(.*?\n\ndef _display_transport\(', '\n\ndef _display_transport(', wm, count=1, flags=re.S)
+          wm = re.sub(r'\n    def _save_voice_engine\(.*?\n    def _request_runtime_restart\(', '\n    def _request_runtime_restart(', wm, count=1, flags=re.S)
+          wm = wm.replace('{"/api/mcp-realtime-policy", "/api/mcp-server", "/api/voice-engine", "/api/voice-output-gains", "/api/runtime-restart"}', '{"/api/mcp-realtime-policy", "/api/mcp-server", "/api/runtime-restart"}')
+          wm = re.sub(r'\n                        if parsed\.path == "/api/voice-engine":.*?if parsed\.path == "/api/runtime-restart":', '\n                        if parsed.path == "/api/runtime-restart":', wm, count=1, flags=re.S)
+          wm = re.sub(r'\n                    def _handle_voice_engine_save\(self\).*?\n                    def _handle_runtime_restart\(self\)', '\n                    def _handle_runtime_restart(self)', wm, count=1, flags=re.S)
+          if '/api/voice-engine' in wm or '/api/voice-output-gains' in wm or '_save_voice_engine' in wm or '_save_voice_output_gains' in wm:
+              raise SystemExit('web_monitor still contains dead voice persistence endpoints')
+          p.write_text(wm, encoding='utf-8')
+
+          # Structural assertions.
+          assert 'voice-config-save' not in Path('assets/web/index.html').read_text()
+          assert 'loadCfg9' not in Path('assets/web/index.html').read_text()
+          assert Path('assets/web/index.html').read_text().count('/assets/web/app.js') == 1
+          assert 'Save + Restart' in Path('assets/web/app.js').read_text()
+          assert '/api/runtime-restart' in Path('assets/web/app.js').read_text()
+          assert '/api/voice-engine' not in Path('assets/web/app.js').read_text()
+          PY
+      - name: Validate
+        shell: bash
+        run: |
+          python -m py_compile voice_assistant/runtime_web_services.py voice_assistant/web_monitor.py voice_assistant/web_monitor_base.py
+          node --check assets/web/app.js
+          python tests/test_web_config_architecture.py
+      - name: Commit refactor
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add assets/web/app.js assets/web/index.html voice_assistant/runtime_web_services.py voice_assistant/web_monitor_base.py voice_assistant/web_monitor.py
+          git diff --cached --quiet && exit 0
+          git commit -m "cfg: canonicalize save and restart state [cfg-refactor]"
+          git push origin HEAD:realtime-voice-architecture
