@@ -39,6 +39,37 @@ from voice_assistant.realtime.service import open_configured_output, read_secret
 DEFAULT_SERVICE_ENV = "/etc/livestageassistant/.env.online"
 
 
+def validate_series_transcript(text: str) -> None:
+    """Accept expected ASR variants of the fixed spoken benchmark target.
+
+    This is intentionally benchmark-local. It does not add domain semantics to
+    the production LSA runtime; it only protects an apples-to-apples repeated
+    measurement from harmless transcription spelling variants of the one fixed
+    utterance spoken by the operator.
+    """
+    normalized = " ".join(
+        text.casefold()
+        .replace("-", " ")
+        .replace("_", " ")
+        .replace("?", " ")
+        .replace(".", " ")
+        .replace(",", " ")
+        .split()
+    )
+    target_variants = ("vocal claude", "vocal clode", "vocal cloud")
+    if "volume" not in normalized or not any(variant in normalized for variant in target_variants):
+        raise RuntimeError(
+            "recorded speech was not recognized as the fixed transaction benchmark query; "
+            f"got {text!r}. No cost comparison produced."
+        )
+
+
+# Both base.run_classic() and warm.run_turn() call the shared validator from the
+# imported benchmark module. Override it only inside this benchmark process so
+# the exact same ASR acceptance rule applies to both pipelines.
+base.validate_fixed_query_transcript = validate_series_transcript
+
+
 def percentile(values: list[float], q: float) -> float | None:
     if not values:
         return None
