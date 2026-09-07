@@ -5,6 +5,7 @@
   const GAINS_URL = "/api/voice-output-gains";
   const RESTART_URL = "/api/runtime-restart";
   const SNAPSHOT_URL = "/api/snapshot";
+  const LLM_OPTIONS_URL = "/api/llm-options";
 
   const saveButton = document.querySelector("#llm-save");
   const message = document.querySelector("#llm-message");
@@ -12,6 +13,7 @@
 
   let restartRequired = false;
   let restartInFlight = false;
+  let wakeSelectorReady = false;
 
   function errorMessage(data, response) {
     return data?.error?.message || data?.message || response?.statusText || `HTTP ${response?.status || "?"}`;
@@ -63,6 +65,69 @@
     const local = section?.querySelector(".rv2d-local-gain");
     if (!cloud || !local) return null;
     return { cloud_gain: Number(cloud.value), local_gain: Number(local.value) };
+  }
+
+  function normalizeWakeOption(entry) {
+    if (typeof entry === "string") return { value: entry, label: entry };
+    if (!entry || typeof entry !== "object") return null;
+    const value = String(entry.id || entry.value || entry.name || entry.label || "").trim();
+    if (!value) return null;
+    return { value, label: String(entry.label || entry.name || value).trim() || value };
+  }
+
+  async function ensureWakeSelector() {
+    if (wakeSelectorReady) return;
+    const legacy = document.querySelector("#wake-word");
+    if (!legacy || legacy.dataset.unifiedWake === "1") {
+      wakeSelectorReady = Boolean(legacy?.dataset.unifiedWake === "1");
+      return;
+    }
+
+    let optionsData = {};
+    try {
+      const response = await fetch(LLM_OPTIONS_URL, { cache: "no-store" });
+      if (response.ok) optionsData = await response.json();
+    } catch (_error) {
+    }
+
+    const selected = String(optionsData.selected_wake_word || legacy.value || "").trim();
+    const known = Array.isArray(optionsData.wake_word_model_files) ? optionsData.wake_word_model_files : [];
+    const normalized = [];
+    const seen = new Set();
+    for (const raw of known) {
+      const item = normalizeWakeOption(raw);
+      if (!item || seen.has(item.value)) continue;
+      seen.add(item.value);
+      normalized.push(item);
+    }
+    if (selected && !seen.has(selected)) normalized.unshift({ value: selected, label: selected });
+
+    const select = document.createElement("select");
+    select.id = "wake-word-select";
+    select.className = legacy.className;
+    const disabled = document.createElement("option");
+    disabled.value = "";
+    disabled.textContent = "Disabled";
+    select.append(disabled);
+    for (const item of normalized) {
+      const option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      select.append(option);
+    }
+    select.value = selected;
+    select.addEventListener("change", () => {
+      legacy.value = select.value;
+      legacy.dispatchEvent(new Event("input", { bubbles: true }));
+      legacy.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    legacy.dataset.unifiedWake = "1";
+    legacy.classList.add("hidden");
+    legacy.setAttribute("aria-hidden", "true");
+    legacy.tabIndex = -1;
+    legacy.insertAdjacentElement("afterend", select);
+    wakeSelectorReady = true;
   }
 
   async function saveExtendedConfig() {
@@ -135,6 +200,9 @@
       restartRuntime();
       return;
     }
+    const wakeSelect = document.querySelector("#wake-word-select");
+    const legacyWake = document.querySelector("#wake-word");
+    if (wakeSelect && legacyWake) legacyWake.value = wakeSelect.value;
     saveExtendedConfig()
       .then(async (required) => {
         if (!required) return;
@@ -146,7 +214,11 @@
       });
   }, true);
 
-  const observer = new MutationObserver(() => hideDuplicateButtons());
+  const observer = new MutationObserver(() => {
+    hideDuplicateButtons();
+    ensureWakeSelector();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   hideDuplicateButtons();
+  ensureWakeSelector();
 })();
