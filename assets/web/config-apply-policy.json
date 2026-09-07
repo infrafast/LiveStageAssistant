@@ -1,0 +1,28 @@
+{
+  "default_mode": "engine-restart",
+  "hot": [
+    "#web-tts-volume",
+    "#openai-tts-speed"
+  ],
+  "ignore": [
+    "#browser-audio-input",
+    "#browser-audio-output",
+    "#browser-audio-refresh",
+    "#browser-audio-test",
+    "#backend-audio-test",
+    "#tts-test",
+    "#thinking-sound-play",
+    "#listening-sound-play",
+    "#wake-detected-sound-play",
+    "#startup-loader-sound-play",
+    "#command-ack-sound-play",
+    "#mcp-admin-route input",
+    "#vnc-url",
+    "#vnc-view-only",
+    "#vnc-connect"
+  ],
+  "groups": {
+    "voice-engine": ".rv2d-voice-engine",
+    "voice-output-gains": ".rv2d-voice-gains"
+  }
+}
