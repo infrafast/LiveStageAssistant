@@ -31,9 +31,7 @@
   function setRestartRequired(required) {
     restartRequired = Boolean(required);
     saveButton.dataset.restartRequired = restartRequired ? "1" : "0";
-    if (!restartInFlight) {
-      saveButton.textContent = restartRequired ? "Restart" : "Save";
-    }
+    if (!restartInFlight) saveButton.textContent = restartRequired ? "Restart" : "Save";
   }
 
   function hideDuplicateButtons() {
@@ -78,16 +76,30 @@
     return results.some((item) => item?.restart_required);
   }
 
-  async function waitUntilReady(timeoutMs = 60000) {
+  async function waitForGlobalSaveResult(timeoutMs = 15000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 750));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const text = String(message?.textContent || "").trim().toLowerCase();
+      if (text.includes("failed") || text.includes("error") || text.includes("échec") || text.includes("erreur")) return false;
+      if (!saveButton.disabled && !text.includes("saving") && !text.includes("enregistrement")) return true;
+    }
+    return false;
+  }
+
+  async function waitUntilReady(timeoutMs = 60000) {
+    const deadline = Date.now() + timeoutMs;
+    let reloadObserved = false;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
       try {
         const response = await fetch(SNAPSHOT_URL, { cache: "no-store" });
         if (!response.ok) continue;
         const snapshot = await response.json();
         const runtime = snapshot.runtime_status || {};
-        if (runtime.ready && String(runtime.semantic_state || "").toLowerCase() !== "starting") return true;
+        const state = String(runtime.semantic_state || "").toLowerCase();
+        if (!runtime.ready || state === "starting") reloadObserved = true;
+        if (reloadObserved && runtime.ready && state !== "starting") return true;
       } catch (_error) {
       }
     }
@@ -124,8 +136,10 @@
       return;
     }
     saveExtendedConfig()
-      .then((required) => {
-        if (required) setRestartRequired(true);
+      .then(async (required) => {
+        if (!required) return;
+        const globalSaveOk = await waitForGlobalSaveResult();
+        if (globalSaveOk) setRestartRequired(true);
       })
       .catch((error) => {
         if (message) message.textContent = `Save failed: ${error.message || error}`;
