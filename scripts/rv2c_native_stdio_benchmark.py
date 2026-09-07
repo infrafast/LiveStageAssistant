@@ -61,18 +61,60 @@ def summary(values: list[float]) -> dict:
     }
 
 
-async def wait_ready(engine: OpenAIRealtimeEngine, timeout: float) -> None:
+async def wait_ready(engine: OpenAIRealtimeEngine, timeout: float, *, label: str) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        event = await asyncio.wait_for(engine.next_event(), timeout=max(0.1, deadline - time.monotonic()))
+        remaining = max(0.1, deadline - time.monotonic())
+        try:
+            event = await asyncio.wait_for(engine.next_event(), timeout=remaining)
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(f"{label} realtime ready timeout") from exc
         if event.type == "ready":
             return
         if event.type in {"provider_error", "connection_error", "connection_closed"}:
-            raise RuntimeError(f"Realtime failed before ready: {event.type} {event.data}")
-    raise RuntimeError("Realtime ready timeout")
+            raise RuntimeError(f"{label} Realtime failed before ready: {event.type} {event.data}")
+    raise RuntimeError(f"{label} realtime ready timeout")
+
+
+async def wait_native_ready_and_discovery(engine: OpenAIRealtimeEngine, tool: str, timeout: float) -> None:
+    """Wait for provider READY and native MCP discovery regardless of event order."""
+    ready = False
+    discovered = False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        remaining = max(0.1, deadline - time.monotonic())
+        try:
+            event = await asyncio.wait_for(engine.next_event(), timeout=remaining)
+        except asyncio.TimeoutError as exc:
+            raise RuntimeError(
+                f"native startup timeout: ready={ready} discovery={discovered}"
+            ) from exc
+
+        if event.type == "ready":
+            ready = True
+        elif event.type == "mcp_list_tools" and event.data.get("phase") == "done":
+            item = event.data.get("item") or {}
+            if item.get("error"):
+                raise RuntimeError(f"native discovery error: {item.get('error')}")
+            names = {
+                str(candidate.get("name") or "")
+                for candidate in item.get("tools") or []
+                if isinstance(candidate, dict)
+            }
+            if tool not in names:
+                raise RuntimeError(f"native MCP did not expose {tool!r}; got {sorted(names)}")
+            discovered = True
+        elif event.type in {"provider_error", "connection_error", "connection_closed"}:
+            raise RuntimeError(f"native startup failed: {event.type} {event.data}")
+
+        if ready and discovered:
+            return
+
+    raise RuntimeError(f"native startup timeout: ready={ready} discovery={discovered}")
 
 
 async def run_native_sample(api_key: str, args, sample: int) -> dict:
+    print(f"RV2_BENCH native sample={sample} stage=start", flush=True)
     server = RealtimeMCPServer(
         label="mixer-bench",
         url=args.native_url,
@@ -92,32 +134,19 @@ async def run_native_sample(api_key: str, args, sample: int) -> dict:
     )
     try:
         await engine.start()
-        await wait_ready(engine, args.timeout)
-
-        discovered = False
-        deadline = time.monotonic() + args.timeout
-        while time.monotonic() < deadline:
-            event = await asyncio.wait_for(engine.next_event(), timeout=max(0.1, deadline - time.monotonic()))
-            if event.type == "mcp_list_tools" and event.data.get("phase") == "done":
-                item = event.data.get("item") or {}
-                if item.get("error"):
-                    raise RuntimeError(f"native discovery error: {item.get('error')}")
-                names = {str(tool.get("name") or "") for tool in item.get("tools") or [] if isinstance(tool, dict)}
-                if args.tool not in names:
-                    raise RuntimeError(f"native MCP did not expose {args.tool!r}; got {sorted(names)}")
-                discovered = True
-                break
-            if event.type in {"provider_error", "connection_error", "connection_closed"}:
-                raise RuntimeError(f"native discovery failed: {event.type} {event.data}")
-        if not discovered:
-            raise RuntimeError("native MCP discovery timeout")
+        await wait_native_ready_and_discovery(engine, args.tool, args.timeout)
+        print(f"RV2_BENCH native sample={sample} stage=ready+discovered", flush=True)
 
         sent_at = time.perf_counter()
         await engine.send_text(REQUEST)
         call_started = None
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
-            event = await asyncio.wait_for(engine.next_event(), timeout=max(0.1, deadline - time.monotonic()))
+            remaining = max(0.1, deadline - time.monotonic())
+            try:
+                event = await asyncio.wait_for(engine.next_event(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(f"native tool timeout sample={sample}") from exc
             if event.type == "mcp_call":
                 item = event.data.get("item") or {}
                 name = str(item.get("name") or "")
@@ -144,12 +173,14 @@ async def run_native_sample(api_key: str, args, sample: int) -> dict:
                     return result
             if event.type in {"provider_error", "connection_error", "connection_closed"}:
                 raise RuntimeError(f"native session failed: {event.type} {event.data}")
-        raise RuntimeError("native tool timeout")
+        raise RuntimeError(f"native tool timeout sample={sample}")
     finally:
         await engine.stop()
 
 
 async def run_stdio_sample(api_key: str, env_file: Path, args, sample: int) -> dict:
+    print(f"RV2_BENCH stdio sample={sample} stage=start", flush=True)
+
     class BridgeArgs:
         mcp_config = args.mcp_config
         mcp_server = args.server
@@ -163,7 +194,11 @@ async def run_stdio_sample(api_key: str, env_file: Path, args, sample: int) -> d
     engine = None
     try:
         function_tools = await bridge.start()
-        matching = [name for name, target in bridge.tool_targets.items() if target.server == args.server and target.tool == args.tool]
+        matching = [
+            name
+            for name, target in bridge.tool_targets.items()
+            if target.server == args.server and target.tool == args.tool
+        ]
         if len(matching) != 1:
             raise RuntimeError(f"STDIO bridge expected one mapping for {args.tool!r}, got {matching}")
         function_name = matching[0]
@@ -183,13 +218,19 @@ async def run_stdio_sample(api_key: str, env_file: Path, args, sample: int) -> d
             api_key=api_key,
         )
         await engine.start()
-        await wait_ready(engine, args.timeout)
+        await wait_ready(engine, args.timeout, label="stdio")
+        print(f"RV2_BENCH stdio sample={sample} stage=ready", flush=True)
+
         sent_at = time.perf_counter()
         await engine.send_text(REQUEST)
         seen_call = False
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
-            event = await asyncio.wait_for(engine.next_event(), timeout=max(0.1, deadline - time.monotonic()))
+            remaining = max(0.1, deadline - time.monotonic())
+            try:
+                event = await asyncio.wait_for(engine.next_event(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(f"STDIO tool timeout sample={sample}") from exc
             if event.type == "tool_call":
                 if seen_call:
                     raise RuntimeError("STDIO attempted more than one tool call")
@@ -212,7 +253,7 @@ async def run_stdio_sample(api_key: str, env_file: Path, args, sample: int) -> d
                 return record
             if event.type in {"provider_error", "connection_error", "connection_closed"}:
                 raise RuntimeError(f"STDIO session failed: {event.type} {event.data}")
-        raise RuntimeError("STDIO tool timeout")
+        raise RuntimeError(f"STDIO tool timeout sample={sample}")
     finally:
         if engine is not None:
             await engine.stop()
@@ -227,6 +268,22 @@ async def run(args) -> int:
         raise RuntimeError("OPENAI_API_KEY / OPENAI_API_KEY_FILE is not configured")
     if not args.native_url.lower().startswith("https://"):
         raise RuntimeError("--native-url must be an externally reachable HTTPS MCP URL")
+
+    print(
+        "RV2_BENCH_CONFIG "
+        + json.dumps(
+            {
+                "model": args.model,
+                "native_url": args.native_url,
+                "server": args.server,
+                "tool": args.tool,
+                "samples": args.samples,
+                "timeout": args.timeout,
+            },
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
 
     native: list[dict] = []
     stdio: list[dict] = []
@@ -247,7 +304,8 @@ async def run(args) -> int:
         },
     }
     report["median_delta_ms_native_minus_stdio"] = round(
-        report["native"]["request_to_tool_done"]["median_ms"] - report["stdio"]["request_to_tool_done"]["median_ms"],
+        report["native"]["request_to_tool_done"]["median_ms"]
+        - report["stdio"]["request_to_tool_done"]["median_ms"],
         3,
     )
     print("RV2_BENCH_SUMMARY " + json.dumps(report, separators=(",", ":"), ensure_ascii=False), flush=True)
@@ -272,7 +330,7 @@ def main() -> int:
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(f"RV2_BENCH failed: {exc}", file=sys.stderr)
+        print(f"RV2_BENCH failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
 
