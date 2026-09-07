@@ -33,22 +33,22 @@ jobs:
           raw = source[start:end]
           script = "\n".join(line[10:] if line.startswith("          ") else line for line in raw.splitlines())
 
-          brittle = "js = replace_once(js, old, new, 'loaded action state')"
-          robust = '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    clean_old = \"\"\"        if (shouldMarkClean) {\n          markConfigClean();\n        }\"\"\"\n    clean_new = \"\"\"        if (shouldMarkClean) {\n          markConfigClean();\n          syncConfigActionState();\n        }\"\"\"\n    js = replace_once(js, clean_old, clean_new, 'loaded action state')'''
-          if brittle not in script:
-              raise SystemExit('runner could not find loaded action state patch')
-          script = script.replace(brittle, robust, 1)
-
-          brittle = "js = replace_once(js, old, new, 'restart completion')"
-          robust = '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    restart_marker = \"        const envProfileChanged = await loadEnvProfiles();\"\n    restart_logic = \"\"\"        if (runtimeRestarting) {\n          if (environmentLoading.active) restartLoadingSeen = true;\n          if (restartLoadingSeen && !environmentLoading.active && data.runtime_status?.ready) {\n            runtimeRestarting = false;\n            restartRequired = false;\n            restartLoadingSeen = false;\n            llmMessage.textContent = \\\"Restart complete.\\\";\n            llmControlsInitialized = false;\n            configBaseline = configSignature();\n            syncConfigActionState();\n          }\n        }\n\"\"\"\n    js = replace_once(js, restart_marker, restart_logic + restart_marker, 'restart completion')'''
-          if brittle not in script:
-              raise SystemExit('runner could not find restart completion patch')
-          script = script.replace(brittle, robust, 1)
+          substitutions = {
+            "js = replace_once(js, old, new, 'loaded action state')": '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    clean_old = \"\"\"        if (shouldMarkClean) {\n          markConfigClean();\n        }\"\"\"\n    clean_new = \"\"\"        if (shouldMarkClean) {\n          markConfigClean();\n          syncConfigActionState();\n        }\"\"\"\n    js = replace_once(js, clean_old, clean_new, 'loaded action state')''',
+            "js = replace_once(js, old, new, 'restart completion')": '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    restart_marker = \"        const envProfileChanged = await loadEnvProfiles();\"\n    restart_logic = \"\"\"        if (runtimeRestarting) {\n          if (environmentLoading.active) restartLoadingSeen = true;\n          if (restartLoadingSeen && !environmentLoading.active && data.runtime_status?.ready) {\n            runtimeRestarting = false;\n            restartRequired = false;\n            restartLoadingSeen = false;\n            llmMessage.textContent = \\\"Restart complete.\\\";\n            llmControlsInitialized = false;\n            configBaseline = configSignature();\n            syncConfigActionState();\n          }\n        }\n\"\"\"\n    js = replace_once(js, restart_marker, restart_logic + restart_marker, 'restart completion')''',
+            "js = replace_once(js, old, new, 'save CFG payload')": '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    needle = \"            speaker_profiles: speakerProfilesValue\"\n    replacement = \"\"\"            speaker_profiles: speakerProfilesValue,\n            voice_engine: voiceEngineValue,\n            realtime_model: realtimeModelValue,\n            realtime_voice: realtimeVoiceValue,\n            cloud_tts_output_gain: cloudGainValue,\n            local_tts_output_gain: localGainValue\"\"\"\n    js = replace_once(js, needle, replacement, 'save CFG payload')''',
+            "js = replace_once(js, old, new, 'save completion')": '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    save_start = \"        llmMessage.textContent = data.message || tr(\\\"saved\\\", \\\"Saved.\\\");\"\n    save_end = \"        await refresh();\"\n    start_i = js.index(save_start)\n    end_i = js.index(save_end, start_i) + len(save_end)\n    replacement = \"\"\"        llmMessage.textContent = data.message || tr(\\\"saved\\\", \\\"Saved.\\\");\n        cloudApiLoaded = false;\n        currentCloudGain = cloudGainValue;\n        currentLocalGain = localGainValue;\n        markConfigClean();\n        restartRequired = restartRequired || Boolean(data.restart_required);\n        syncConfigActionState();\n        if ((data.stt_language || sttLanguageValue) !== i18nPayload.locale) {\n          window.setTimeout(() => window.location.reload(), 250);\n          return;\n        }\n        if (restartAfterSave) await requestRuntimeRestart();\"\"\"\n    js = js[:start_i] + replacement + js[end_i:]''',
+            "js = replace_once(js, old, new, 'save finalizer')": '''if js.count(old) == 1:\n    js = js.replace(old, new, 1)\nelse:\n    js = js.replace(\"      } catch (error) {\\n        setEnvironmentLoading(false);\\n        llmMessage.textContent = trf(\\\"save_failed\\\", \\\"Save failed: {error}\\\", { error });\\n      } finally {\\n        llmSave.disabled = !llmProvider.value;\\n      }\\n    });\", \"      } catch (error) {\\n        llmMessage.textContent = trf(\\\"save_failed\\\", \\\"Save failed: {error}\\\", { error });\\n      } finally {\\n        if (!runtimeRestarting) syncConfigActionState();\\n      }\\n    });\", 1)'''
+          }
+          for brittle, robust in substitutions.items():
+            if brittle not in script:
+              raise SystemExit(f'runner could not find patch line: {brittle}')
+            script = script.replace(brittle, robust, 1)
 
           dangerous = '''wm = re.sub(r'\\nVOICE_ENGINE_ONLINE = .*?\\nDEFAULT_REALTIME_VOICE = "marin"\\n', '\\n', wm, count=1, flags=re.S)'''
           safe = '''wm = re.sub(r'\\nVOICE_ENGINE_ONLINE = .*?\\nDEFAULT_REALTIME_VOICE = "marin"\\n', '\\nDEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"\\n', wm, count=1, flags=re.S)'''
           if dangerous not in script:
-              raise SystemExit('runner could not protect DEFAULT_RUNTIME_STATUS_FILE')
+            raise SystemExit('runner could not protect DEFAULT_RUNTIME_STATUS_FILE')
           script = script.replace(dangerous, safe, 1)
 
           exec(compile(script, '<cfg-refactor>', 'exec'))
@@ -60,6 +60,9 @@ jobs:
           node --check assets/web/app.js
           python tests/test_web_config_architecture.py
           grep -q 'DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"' voice_assistant/web_monitor.py
+          ! grep -q 'voice-config-save' assets/web/index.html
+          ! grep -q '/api/voice-engine' assets/web/app.js
+          ! grep -q '/api/voice-output-gains' assets/web/app.js
       - name: Commit refactor
         shell: bash
         run: |
