@@ -5479,10 +5479,13 @@
             return tile(`MCP ${item.name || ""}`.trim(), status, detail);
           })
           : [];
+        const serviceTiles = Object.entries(services)
+          .filter(([name]) => !(runtimeMcpTiles.length && String(name || "").startsWith("MCP ·")))
+          .map(([name, service]) => tile(name, service.status, service.detail));
         const rows = [
           tile("Internet", data.internet, data.mode === "auto" ? "auto profile detection" : "fixed profile"),
           tile("Profile", data.mode, data.env_file || ""),
-          ...Object.entries(services).map(([name, service]) => tile(name, service.status, service.detail)),
+          ...serviceTiles,
           ...runtimeMcpTiles
         ];
         stateEl.innerHTML = rows.join("");
