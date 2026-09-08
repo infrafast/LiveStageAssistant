@@ -1,0 +1,78 @@
+name: Prompt contract fix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: realtime-voice-architecture
+      - name: Apply prompt contract fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('voice_assistant/realtime/service.py')
+          s = p.read_text()
+          s = s.replace('from .prompts import DEFAULT_BASE_PROMPT\n', 'from .prompts import compose_realtime_instructions\n')
+          old = '''    bridge: RealtimeMCPBridge | None = None
+    function_tools = ()
+    if bridge_names:
+        bridge = RealtimeMCPBridge(raw_config, server_names=tuple(bridge_names))
+        function_tools = await bridge.start()
+        print(f"Realtime MCP stdio tools loaded: {len(function_tools)}", flush=True)
+'''
+          new = '''    bridge: RealtimeMCPBridge | None = None
+    function_tools = ()
+    loaded_mcp_prompts: list[tuple[str, str]] = []
+    for native in native_servers:
+        prompt = str(getattr(native, "context_instructions", "") or "").strip()
+        if prompt:
+            loaded_mcp_prompts.append((str(getattr(native, "label", "native") or "native"), prompt))
+    if bridge_names:
+        bridge = RealtimeMCPBridge(raw_config, server_names=tuple(bridge_names))
+        function_tools = await bridge.start()
+        print(f"Realtime MCP stdio tools loaded: {len(function_tools)}", flush=True)
+        for server_name in bridge_names:
+            prompt = str(await bridge.load_prompt_text(server_name) or "").strip()
+            if prompt:
+                loaded_mcp_prompts.append((server_name, prompt))
+
+    mcp_load_enabled = str(os.getenv("MCP_LOAD_SERVER_PROMPT", "true")).strip().lower() not in {"0", "false", "no", "off"}
+    if mcp_load_enabled:
+        if loaded_mcp_prompts:
+            loaded_summary = "; ".join(f"{name} via startup prompt" for name, _prompt in loaded_mcp_prompts)
+            print(
+                f"Loaded and merged {len(loaded_mcp_prompts)} MCP prompt source(s) "
+                f"with merge mode 'append': {loaded_summary}",
+                flush=True,
+            )
+        else:
+            print("⚠️ Warning: No MCP server instructions were loaded; keeping the local system prompt.", flush=True)
+    mcp_prompt = "\n\n".join(
+        f'Instructions loaded from MCP server "{name}":\n{prompt}'
+        for name, prompt in loaded_mcp_prompts
+    )
+    effective_instructions = compose_realtime_instructions(mcp_prompt=mcp_prompt)
+'''
+          if old not in s:
+              raise SystemExit('bridge block not found')
+          s = s.replace(old, new)
+          old2 = '        engine = create_realtime_engine(provider, RealtimeEngineConfig(provider=provider, model=model, voice=voice, instructions=DEFAULT_BASE_PROMPT, server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)'
+          new2 = '        engine = create_realtime_engine(provider, RealtimeEngineConfig(provider=provider, model=model, voice=voice, instructions=effective_instructions, server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)'
+          if old2 not in s:
+              raise SystemExit('engine config line not found')
+          s = s.replace(old2, new2)
+          p.write_text(s)
+          PY
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add voice_assistant/realtime/service.py
+          git commit -m "restore main prompt composition in realtime service"
+          git push origin HEAD:realtime-voice-architecture
