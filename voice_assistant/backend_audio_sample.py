@@ -1,4 +1,4 @@
-"""Backend preview playback for top-level WAV assets."""
+"""Backend preview playback for WAV assets and speaker-profile samples."""
 
 from __future__ import annotations
 
@@ -23,6 +23,16 @@ def _asset_wav(filename: str) -> Path:
     path = (assets_root / clean).resolve()
     if path.parent != assets_root or not path.is_file():
         raise ValueError(f"audio sample '{clean}' was not found in assets/")
+    return path
+
+
+def speaker_profile_sample_path(values: Mapping[str, object], profile_index: int, sample_index: int) -> Path:
+    if profile_index < 1 or profile_index > 5 or sample_index < 1 or sample_index > 3:
+        raise ValueError("invalid speaker profile sample")
+    profile_root = Path(str(values.get("SPEAKER_PROFILES_DIR") or "data/speaker_profiles").strip()).resolve()
+    path = (profile_root / f"profil{profile_index}_{sample_index}.wav").resolve()
+    if path.parent != profile_root or not path.is_file():
+        raise ValueError("speaker profile WAV is not available")
     return path
 
 
@@ -82,6 +92,21 @@ class BackendAudioSamplePlayer:
         if action not in {"play", "start"}:
             raise ValueError("unsupported backend audio sample action")
         path = _asset_wav(filename)
+        result = self.control_path(path, requested)
+        result["filename"] = path.name
+        return result
+
+    def control_path(self, path: Path, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        requested = options or {}
+        action = str(requested.get("action") or "play").strip().lower()
+        if action == "stop":
+            self.stop()
+            return {"ok": True, "action": "stop"}
+        if action not in {"play", "start"}:
+            raise ValueError("unsupported backend audio sample action")
+        resolved_path = path.resolve()
+        if resolved_path.suffix.lower() != ".wav" or not resolved_path.is_file():
+            raise ValueError("audio sample must be an existing WAV file")
         selector = str(
             requested.get("output_device")
             or self.values.get("BACKEND_AUDIO_OUTPUT_DEVICE")
@@ -90,9 +115,9 @@ class BackendAudioSamplePlayer:
         volume = max(0.0, min(2.0, _float(requested.get("volume"), _float(self.values.get("BACKEND_TTS_VOLUME"), 1.0))))
 
         if action == "play":
-            self._play_once(path, selector=selector, volume=volume, stop_event=None)
+            self._play_once(resolved_path, selector=selector, volume=volume, stop_event=None)
             return {"ok": True, "action": "play"}
-        self.start(path, selector=selector, volume=volume)
+        self.start(resolved_path, selector=selector, volume=volume)
         return {"ok": True, "action": "start"}
 
     def start(self, path: Path, *, selector: str, volume: float) -> None:

@@ -519,7 +519,7 @@ Interpretation: local STDIO is faster and materially more deterministic for stag
 - [x] common connectivity supervision and basic online/offline engine/profile round trips Pi-validated under OR2;
 - [~] server health/status shows configured/effective transport and permission; implementation complete, consolidated Pi/browser validation pending;
 - [~] one common production WebMonitor owned by `runtime.py`; child Classic/Local monitor binding suppressed under supervision, consolidated Pi/browser validation pending;
-- [~] migrate remaining configuration/session/audio-diagnostic handlers out of `agent.py` into common runtime services; no second WebMonitor is permitted during migration;
+- [~] migrate remaining configuration/session/audio-diagnostic handlers out of `agent.py` into common runtime services; session/config and backend WAV asset/profile-sample preview handlers are now runtime-owned; backend microphone diagnostic/capture and web STT/TTS still need a shared audio service or child-service bridge rather than duplicated `agent.py` code;
 - [ ] STDIO approval completion;
 - [~] cloud/local independent output gains through one common configuration surface;
 - [ ] final inventory consolidation/plugin-style GUI.
@@ -917,7 +917,7 @@ common WebMonitor services
 - [~] Cloud/Local independent output-gain contract implemented;
 - [~] semantic feedback cue contract implemented;
 - [~] one common runtime-owned WebMonitor server implemented; legacy child server binding suppressed under supervision;
-- [ ] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services;
+- [~] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services; runtime-owned profile-sample playback now reuses the common backend WAV preview player, while backend microphone diagnostic/capture and web STT/TTS still need extraction without importing the Classic engine stack;
 - [ ] wire Cloud/Local gains into all relevant speech outputs;
 - [~] render Cloud/Local gain controls once in the common GUI;
 - [ ] render semantic cue controls once in the common GUI;

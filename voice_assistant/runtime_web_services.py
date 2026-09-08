@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
-from .backend_audio_sample import BackendAudioSamplePlayer
+from .backend_audio_sample import BackendAudioSamplePlayer, speaker_profile_sample_path
 from .i18n import available_locales, normalize_locale
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
 
@@ -91,6 +91,7 @@ class RuntimeWebServices:
             delete_handler=self.delete_session,
         )
         self.monitor.set_backend_audio_sample_handler(self.backend_audio_sample)
+        self.monitor.set_speaker_profile_sample_handler(self.speaker_profile_sample)
 
     def _values(self, profile: Path | None = None) -> dict[str, Any]:
         return dict(dotenv_values(profile or self.active_profile()))
@@ -98,6 +99,36 @@ class RuntimeWebServices:
     def backend_audio_sample(self, filename: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         self._backend_audio_sample_player.update_values(self._values())
         return self._backend_audio_sample_player.control(filename, options)
+
+    def speaker_profile_sample(
+        self,
+        action: str,
+        profile_index: int,
+        sample_index: int,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        values = self._values()
+        self._backend_audio_sample_player.update_values(values)
+        normalized_action = str(action or "play").strip().lower()
+        if normalized_action == "stop":
+            self._backend_audio_sample_player.stop()
+            return {
+                "ok": True,
+                "action": "stop",
+                "profile_index": profile_index,
+                "sample_index": sample_index,
+            }
+        path = speaker_profile_sample_path(values, profile_index, sample_index)
+        payload = dict(options or {})
+        payload["action"] = normalized_action
+        result = self._backend_audio_sample_player.control_path(path, payload)
+        result.update(
+            {
+                "profile_index": profile_index,
+                "sample_index": sample_index,
+            }
+        )
+        return result
 
     @staticmethod
     def _bool(values: dict[str, Any], key: str, default: bool = False) -> bool:
