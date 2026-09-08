@@ -1,9 +1,9 @@
-"""JSON-line command/event channel between the runtime parent and engine children.
+"""Command/event channel between the runtime parent and engine children.
 
-The parent owns the WebMonitor and sends text commands to the active child over
-stdin. Children emit provider-neutral chat/busy events on stdout. This keeps the
-GUI/session contract in one place while allowing Classic, Local and Realtime
-engines to remain supervised child processes.
+The parent owns the WebMonitor. Supervised child engines consume composer
+commands from the parent and publish chat/busy events back to the same
+WebMonitor contract. The default supervised path uses local loopback HTTP so no
+browser-facing LAN/Tailscale URL or base path is involved.
 """
 
 from __future__ import annotations
@@ -16,14 +16,18 @@ import sys
 import threading
 import time
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 
-COMMAND_ENV = "LSA_CHILD_COMMAND_STDIN"
+STDIN_ENV = "LSA_CHILD_COMMAND_STDIN"
+HTTP_ENV = "LSA_CHILD_COMMAND_HTTP"
+HTTP_URL_ENV = "LSA_PARENT_WEB_URL"
 EVENT_PREFIX = "LSA_CHILD_EVENT "
 
 
-def enabled() -> bool:
-    return str(os.getenv(COMMAND_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
+def env_enabled(name: str, default: bool = False) -> bool:
+    return str(os.getenv(name) or ("1" if default else "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def emit_child_event(payload: dict[str, Any]) -> None:
@@ -31,6 +35,26 @@ def emit_child_event(payload: dict[str, Any]) -> None:
         print(EVENT_PREFIX + json.dumps(payload, ensure_ascii=False, separators=(",", ":")), flush=True)
     except Exception:
         pass
+
+
+def parent_web_url() -> str:
+    configured = str(os.getenv(HTTP_URL_ENV) or "").strip().rstrip("/")
+    if configured:
+        return configured
+    host = str(os.getenv("WEB_MONITOR_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    if host in {"0.0.0.0", "::", ""}:
+        host = "127.0.0.1"
+    port = str(os.getenv("WEB_MONITOR_PORT") or "8765").strip() or "8765"
+    return f"http://{host}:{port}"
+
+
+def post_json(url: str, payload: dict[str, Any], *, timeout: float = 0.8) -> dict[str, Any]:
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    req = urllib_request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    with urllib_request.urlopen(req, timeout=timeout) as response:
+        body = response.read().decode("utf-8")
+    parsed = json.loads(body or "{}")
+    return parsed if isinstance(parsed, dict) else {}
 
 
 class StdinCommandReader:
@@ -65,21 +89,9 @@ class StdinCommandReader:
                 continue
             if kind != "command":
                 continue
-            command = str(payload.get("text") or payload.get("command") or "").strip()
-            if not command:
-                continue
-            self._commands.put(
-                {
-                    "text": command,
-                    "speaker": str(payload.get("speaker") or "unknown").strip() or "unknown",
-                    "speaker_confidence": float(payload.get("speaker_confidence") or 0.0),
-                    "speaker_backend": str(payload.get("speaker_backend") or "none").strip() or "none",
-                    "speaker_second_confidence": float(payload.get("speaker_second_confidence") or 0.0),
-                    "speaker_reason": str(payload.get("speaker_reason") or "").strip(),
-                    "speaker_candidates": payload.get("speaker_candidates") if isinstance(payload.get("speaker_candidates"), list) else [],
-                    "session_id": str(payload.get("session_id") or "").strip(),
-                }
-            )
+            command = normalize_command_payload(payload)
+            if command:
+                self._commands.put(command)
 
     def pop_command(self) -> dict[str, Any] | None:
         try:
@@ -94,26 +106,85 @@ class StdinCommandReader:
         return True
 
 
+def normalize_command_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    command = str(payload.get("text") or payload.get("command") or "").strip()
+    if not command:
+        return None
+    return {
+        "text": command,
+        "speaker": str(payload.get("speaker") or "unknown").strip() or "unknown",
+        "speaker_confidence": float(payload.get("speaker_confidence") or 0.0),
+        "speaker_backend": str(payload.get("speaker_backend") or "none").strip() or "none",
+        "speaker_second_confidence": float(payload.get("speaker_second_confidence") or 0.0),
+        "speaker_reason": str(payload.get("speaker_reason") or "").strip(),
+        "speaker_candidates": payload.get("speaker_candidates") if isinstance(payload.get("speaker_candidates"), list) else [],
+        "session_id": str(payload.get("session_id") or "").strip(),
+    }
+
+
+class LocalHttpCommandClient:
+    """Loopback client used by supervised child engines."""
+
+    def __init__(self, base_url: str | None = None) -> None:
+        self.base_url = (base_url or parent_web_url()).rstrip("/")
+        self._cancel_requested = False
+
+    def pop_command(self) -> dict[str, Any] | None:
+        try:
+            data = post_json(f"{self.base_url}/api/child-command-next", {}, timeout=0.9)
+        except (OSError, urllib_error.URLError, TimeoutError, json.JSONDecodeError):
+            return None
+        if data.get("cancel"):
+            self._cancel_requested = True
+        command = data.get("command")
+        if isinstance(command, dict):
+            return normalize_command_payload(command)
+        return None
+
+    def pop_cancel_requested(self) -> bool:
+        if self._cancel_requested:
+            self._cancel_requested = False
+            return True
+        try:
+            data = post_json(f"{self.base_url}/api/child-command-next", {"command": False}, timeout=0.9)
+        except (OSError, urllib_error.URLError, TimeoutError, json.JSONDecodeError):
+            return False
+        return bool(data.get("cancel"))
+
+    def send_event(self, payload: dict[str, Any]) -> None:
+        try:
+            post_json(f"{self.base_url}/api/child-event", payload, timeout=0.9)
+        except (OSError, urllib_error.URLError, TimeoutError, json.JSONDecodeError):
+            emit_child_event({"type": "error", "message": "could not deliver child event to parent WebMonitor"})
+
+
 class ChildCommandMonitor:
     """Small WebMonitor-compatible adapter used inside supervised child engines."""
 
-    def __init__(self, reader: StdinCommandReader | None = None) -> None:
+    def __init__(self, reader: StdinCommandReader | LocalHttpCommandClient | None = None) -> None:
         self.reader = reader or StdinCommandReader()
-        self.reader.start()
+        if isinstance(self.reader, StdinCommandReader):
+            self.reader.start()
         self._messages: deque[dict[str, Any]] = deque(maxlen=80)
         self._next_message_id = 1
         self._assistant_busy = False
+
+    def _send_event(self, payload: dict[str, Any]) -> None:
+        if isinstance(self.reader, LocalHttpCommandClient):
+            self.reader.send_event(payload)
+        emit_child_event(payload)
 
     def pop_injected_command(self) -> dict[str, Any] | None:
         return self.reader.pop_command()
 
     def request_cancel(self) -> None:
-        self.reader._cancel_requested.set()
+        if isinstance(self.reader, StdinCommandReader):
+            self.reader._cancel_requested.set()
 
     def pop_cancel_requested(self) -> bool:
         return self.reader.pop_cancel_requested()
 
-    def append_dialogue(self, role: str, text: str, *, speak: bool = False) -> None:
+    def append_dialogue(self, role: str, text: str, *, speak: bool = False, persisted_by_child: bool = True) -> None:
         cleaned = str(text or "").strip()
         if not cleaned:
             return
@@ -127,12 +198,12 @@ class ChildCommandMonitor:
         }
         self._next_message_id += 1
         self._messages.append(message)
-        emit_child_event({
+        self._send_event({
             "type": "message",
             "role": normalized_role,
             "text": cleaned,
             "speak": bool(speak),
-            "persisted_by_child": True,
+            "persisted_by_child": bool(persisted_by_child),
         })
 
     def replace_dialogue(self, messages: list[dict[str, Any]]) -> None:
@@ -161,7 +232,7 @@ class ChildCommandMonitor:
         if self._assistant_busy == busy:
             return
         self._assistant_busy = busy
-        emit_child_event({"type": "busy", "assistant_busy": busy})
+        self._send_event({"type": "busy", "assistant_busy": busy})
 
     def set_environment_loading(self, *_args: Any, **_kwargs: Any) -> None:
         return
@@ -178,6 +249,8 @@ class ChildCommandMonitor:
 
 
 def child_monitor_from_env() -> ChildCommandMonitor | None:
-    if not enabled():
-        return None
-    return ChildCommandMonitor()
+    if env_enabled(STDIN_ENV):
+        return ChildCommandMonitor(StdinCommandReader())
+    if env_enabled(HTTP_ENV) or env_enabled("LSA_COMMON_STARTUP_LIFECYCLE"):
+        return ChildCommandMonitor(LocalHttpCommandClient())
+    return None
