@@ -152,6 +152,17 @@ class WebMonitor(_BaseWebMonitor):
         with self._lock:
             self._runtime_reload_state_provider = provider or (lambda: False)
 
+    def _refresh_session_context_from_store(self) -> dict[str, Any]:
+        store = self._session_store_for_realtime_chat()
+        context_snapshot = store.snapshot()
+        self.replace_dialogue(context_snapshot.get("messages") or [])
+        try:
+            size = int(str(self._active_env_values().get("SESSION_CONTEXT_SIZE") or "6000"))
+        except (TypeError, ValueError):
+            size = 6000
+        self.set_context_state(context_snapshot, session_context_size=size)
+        return context_snapshot
+
     def _hydrate_session_context_if_needed(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         context = snapshot.get("session_context") if isinstance(snapshot, dict) else None
         sessions = context.get("sessions") if isinstance(context, dict) else None
@@ -159,14 +170,7 @@ class WebMonitor(_BaseWebMonitor):
         if active_id and isinstance(sessions, list) and sessions:
             return snapshot
         try:
-            store = self._session_store_for_realtime_chat()
-            context_snapshot = store.snapshot()
-            self.replace_dialogue(context_snapshot.get("messages") or [])
-            try:
-                size = int(str(self._active_env_values().get("SESSION_CONTEXT_SIZE") or "6000"))
-            except (TypeError, ValueError):
-                size = 6000
-            self.set_context_state(context_snapshot, session_context_size=size)
+            self._refresh_session_context_from_store()
             return super().snapshot()
         except Exception as error:
             self.append_log(f"Initial session snapshot skipped: {error}\n", source="web")
@@ -318,6 +322,27 @@ class WebMonitor(_BaseWebMonitor):
         self.set_assistant_busy(busy)
         return {"ok": True, "assistant_busy": busy}
 
+    def _next_child_command(self, include_command: bool = True) -> dict[str, Any]:
+        command = self.pop_injected_command() if include_command else None
+        cancel = self.pop_cancel_requested()
+        return {"ok": True, "command": command, "cancel": cancel}
+
+    def _apply_child_event(self, payload: dict[str, Any]) -> dict[str, Any]:
+        kind = str(payload.get("type") or "").strip().lower()
+        if kind == "busy":
+            return self._set_realtime_chat_state({"assistant_busy": bool(payload.get("assistant_busy"))})
+        if kind == "message":
+            if payload.get("persisted_by_child"):
+                self._refresh_session_context_from_store()
+                if str(payload.get("role") or "").strip().lower() == "assistant":
+                    self.set_assistant_busy(False)
+                return {"ok": True, "refreshed": True}
+            return self._append_realtime_chat_message(payload)
+        if kind == "error":
+            self.append_log(f"Child command channel: {payload.get('message') or payload}\n", source="child")
+            return {"ok": True, "logged": True}
+        raise ValueError("child event type must be busy, message, or error")
+
     def start(self, host: str = "127.0.0.1", port: int = 8765) -> tuple[str, int]:
         monitor = self
         with _START_PATCH_LOCK:
@@ -327,6 +352,10 @@ class WebMonitor(_BaseWebMonitor):
                 class RealtimePolicyHandler(handler_class):
                     def _send_isolation_headers(self) -> None:
                         return
+
+                    def _is_local_child_client(self) -> bool:
+                        host = str(self.client_address[0] or "")
+                        return host in {"127.0.0.1", "::1", "localhost"} or host.startswith("127.")
 
                     def do_GET(self) -> None:
                         parsed = _base.urlparse(self.path)
@@ -340,6 +369,13 @@ class WebMonitor(_BaseWebMonitor):
 
                     def do_POST(self) -> None:
                         parsed = _base.urlparse(self.path)
+                        child_routes = {"/api/child-command-next", "/api/child-event"}
+                        if parsed.path in child_routes:
+                            if not self._is_local_child_client():
+                                self._send_json_error(403, {"ok": False, "error": {"message": "child channel is local-only"}}); return
+                            if parsed.path == "/api/child-command-next":
+                                self._handle_child_command_next(); return
+                            self._handle_child_event(); return
                         routes = {
                             "/api/mcp-realtime-policy",
                             "/api/mcp-server",
@@ -368,6 +404,23 @@ class WebMonitor(_BaseWebMonitor):
                         if parsed.path == "/api/mcp-test":
                             self._handle_mcp_test(); return
                         self._handle_mcp_realtime_policy_save()
+
+                    def _handle_child_command_next(self) -> None:
+                        payload = self._read_json_body(max_bytes=4 * 1024)
+                        if payload is None: return
+                        include_command = payload.get("command") is not False
+                        self._send_json(monitor._next_child_command(include_command=include_command))
+
+                    def _handle_child_event(self) -> None:
+                        payload = self._read_json_body(max_bytes=64 * 1024)
+                        if payload is None: return
+                        try:
+                            result = monitor._apply_child_event(payload)
+                        except ValueError as error:
+                            self._send_json_error(400, {"ok": False, "error": {"message": str(error)}}); return
+                        except Exception as error:
+                            self._send_json_error(500, {"ok": False, "error": {"message": f"Could not apply child event: {error}"}}); return
+                        self._send_json(result)
 
                     def _handle_realtime_browser_secret(self) -> None:
                         payload = self._read_json_body(max_bytes=4 * 1024)
