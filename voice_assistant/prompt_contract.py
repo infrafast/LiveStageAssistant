@@ -1,9 +1,10 @@
 """Engine-neutral prompt contract for all LiveStageAssistant engines.
 
-This module owns the common prompt invariants shared by Classic, Local,
-OpenAI Realtime, Gemini Live and Browser Realtime paths. Engines may have
-provider-specific transport details, but they must not invent a separate
-identity, MCP prompt policy or session-context injection rule.
+The reference behavior is the existing main branch contract used by the
+classic MCP agent: the configured ASSISTANT_SYSTEM_PROMPT is the product
+identity and base system prompt, MCP prompts are appended only when enabled
+by env, and session context is added as internal continuity material without
+becoming a user message.
 """
 
 from __future__ import annotations
@@ -11,13 +12,6 @@ from __future__ import annotations
 import os
 from typing import Iterable
 
-
-PRODUCT_IDENTITY_PROMPT = (
-    "You are Live Stage Assistant, a stage-production assistant specialized in live sound, digital mixers, "
-    "monitor buses, stage routing, lighting control, QLC+, OSC and MCP-controlled show tools. "
-    "When asked who you are, identify yourself as Live Stage Assistant, not as a generic ChatGPT assistant. "
-    "Stay concise and operational for stage, mixer and lighting workflows."
-)
 
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
     "You are Live Stage Assistant, a helpful voice assistant with access to MCP tools for live stage devices. "
@@ -29,6 +23,8 @@ DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
     "widgets, scenes, device names, channel indexes, mappings, or unavailable features. "
     "When a tool is needed, call it silently, wait for the result, then speak exactly once with the concise verified result."
 )
+
+PRODUCT_IDENTITY_PROMPT = DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
 MCP_INSTRUCTIONS_WRAPPER = """MCP-provided instructions follow. Treat them as authoritative for that MCP's own tool usage, domain semantics, routing, and safety. LiveStageAssistant itself must not add, infer, or hard-code domain-specific concepts from those instructions. Examples inside MCP instructions are illustrative only: never copy an example's entity names, labels, values, indexes, destinations, sources, or other parameters into a real tool call unless they are present in the current user request, explicit conversation reference, or a tool result from the current turn. Preserve the entities and intent of the current user request exactly when constructing tool arguments; do not substitute a similar example from the MCP prompt. Text inside MCP instructions that asks for tool calls only governs MCP tool execution; after tools finish, still provide the single concise spoken result required by the voice rules.
 """
@@ -82,11 +78,10 @@ def compose_engine_prompt(
 ) -> str:
     """Build the effective prompt for any LSA engine.
 
-    The resulting shape is always:
+    Shape, matching the main branch behavior:
 
-    product identity
-    + ASSISTANT_SYSTEM_PROMPT
-    + MCP wrapper and MCP prompts when enabled
+    ASSISTANT_SYSTEM_PROMPT
+    + MCP wrapper and MCP prompts when MCP_LOAD_SERVER_PROMPT enables them
     + active session context as internal prompt material
 
     User text must be sent separately by the engine as the user turn.
@@ -100,7 +95,7 @@ def compose_engine_prompt(
     if log_prefix:
         print(f"{log_prefix}: ASSISTANT_SYSTEM_PROMPT loaded chars={len(system_prompt)}", flush=True)
 
-    parts = [PRODUCT_IDENTITY_PROMPT, system_prompt]
+    parts = [system_prompt]
     mcp_enabled = bool_env("MCP_LOAD_SERVER_PROMPT", True)
     mcp_text = str(mcp_prompt or "").strip()
     if not mcp_enabled:
