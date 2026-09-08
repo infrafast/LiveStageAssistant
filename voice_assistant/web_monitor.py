@@ -34,6 +34,7 @@ for _name in dir(_base):
 _BaseWebMonitor = _base.WebMonitor
 _START_PATCH_LOCK = threading.Lock()
 DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"
+REALTIME_CHAT_SCRIPT = '<script src="assets/web/realtime-chat.js"></script>'
 
 
 def _runtime_status_file() -> Path:
@@ -113,6 +114,14 @@ class WebMonitor(_BaseWebMonitor):
         self._mcp_realtime_policy_save_handler: Callable[[str, dict[str, Any]], dict[str, Any]] = self._save_mcp_realtime_policy
         self._runtime_restart_handler: Callable[[], None] | None = None
         self._runtime_reload_state_provider: Callable[[], bool] = lambda: False
+
+    def render_index_html(self) -> str:
+        html = super().render_index_html()
+        if "realtime-chat.js" in html:
+            return html
+        if "</body>" in html:
+            return html.replace("</body>", f"  {REALTIME_CHAT_SCRIPT}\n</body>")
+        return html + REALTIME_CHAT_SCRIPT
 
     def set_mcp_realtime_policy_save_handler(self, handler: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
         with self._lock:
@@ -226,6 +235,24 @@ class WebMonitor(_BaseWebMonitor):
         handler()
         return {"ok": True, "restart_requested": True, "message": "Runtime engine reload requested."}
 
+    def _append_realtime_chat_message(self, payload: dict[str, Any]) -> dict[str, Any]:
+        role = str(payload.get("role") or "").strip().lower()
+        text = str(payload.get("text") or "").strip()
+        if role not in {"user", "assistant"}:
+            raise ValueError("role must be user or assistant")
+        if not text:
+            raise ValueError("text is required")
+        speak = bool(payload.get("speak"))
+        self.append_dialogue(role, text, speak=speak)
+        if role == "assistant":
+            self.set_assistant_busy(False)
+        return {"ok": True, "role": role}
+
+    def _set_realtime_chat_state(self, payload: dict[str, Any]) -> dict[str, Any]:
+        busy = bool(payload.get("assistant_busy"))
+        self.set_assistant_busy(busy)
+        return {"ok": True, "assistant_busy": busy}
+
     def start(self, host: str = "127.0.0.1", port: int = 8765) -> tuple[str, int]:
         monitor = self
         with _START_PATCH_LOCK:
@@ -248,7 +275,15 @@ class WebMonitor(_BaseWebMonitor):
 
                     def do_POST(self) -> None:
                         parsed = _base.urlparse(self.path)
-                        routes = {"/api/mcp-realtime-policy", "/api/mcp-server", "/api/mcp-test", "/api/runtime-restart", "/api/realtime-browser-secret"}
+                        routes = {
+                            "/api/mcp-realtime-policy",
+                            "/api/mcp-server",
+                            "/api/mcp-test",
+                            "/api/runtime-restart",
+                            "/api/realtime-browser-secret",
+                            "/api/realtime-chat-message",
+                            "/api/realtime-chat-state",
+                        }
                         if parsed.path not in routes:
                             super().do_POST()
                             return
@@ -259,6 +294,10 @@ class WebMonitor(_BaseWebMonitor):
                             self._handle_runtime_restart(); return
                         if parsed.path == "/api/realtime-browser-secret":
                             self._handle_realtime_browser_secret(); return
+                        if parsed.path == "/api/realtime-chat-message":
+                            self._handle_realtime_chat_message(); return
+                        if parsed.path == "/api/realtime-chat-state":
+                            self._handle_realtime_chat_state(); return
                         if parsed.path == "/api/mcp-server":
                             self._handle_mcp_server(); return
                         if parsed.path == "/api/mcp-test":
@@ -275,6 +314,26 @@ class WebMonitor(_BaseWebMonitor):
                         except Exception as error:
                             self._send_json_error(503, {"ok": False, "error": {"message": str(error)}}); return
                         self._send_json({"ok": True, "client_secret": result})
+
+                    def _handle_realtime_chat_message(self) -> None:
+                        payload = self._read_json_body(max_bytes=64 * 1024)
+                        if payload is None: return
+                        try:
+                            result = monitor._append_realtime_chat_message(payload)
+                        except ValueError as error:
+                            self._send_json_error(400, {"ok": False, "error": {"message": str(error)}}); return
+                        except Exception as error:
+                            self._send_json_error(500, {"ok": False, "error": {"message": f"Could not append realtime chat message: {error}"}}); return
+                        self._send_json(result)
+
+                    def _handle_realtime_chat_state(self) -> None:
+                        payload = self._read_json_body(max_bytes=4 * 1024)
+                        if payload is None: return
+                        try:
+                            result = monitor._set_realtime_chat_state(payload)
+                        except Exception as error:
+                            self._send_json_error(500, {"ok": False, "error": {"message": f"Could not update realtime chat state: {error}"}}); return
+                        self._send_json(result)
 
                     def _handle_runtime_restart(self) -> None:
                         payload = self._read_json_body(max_bytes=4 * 1024)
