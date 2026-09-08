@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from .prompts import compose_realtime_instructions
-
 
 class RealtimeEngineState(str, Enum):
     STOPPED = "stopped"
@@ -44,10 +42,10 @@ class RealtimeMCPServer:
 class RealtimeFunctionTool:
     """Provider-neutral function tool exposed to a realtime model.
 
-    RV2B uses this contract for the LSA MCP bridge: MCP tools are discovered by
-    the existing LSA MCP client and represented to the realtime provider as
-    ordinary function tools. The bridge retains the mapping back to the MCP
-    server/tool and owns actual execution.
+    MCP tools are discovered by the existing LSA MCP client and represented to
+    realtime providers as ordinary function tools. Prompt composition is owned
+    by the runtime before this contract is instantiated, so function tools do
+    not mutate or recompose the system prompt implicitly.
     """
 
     name: str
@@ -80,18 +78,8 @@ class RealtimeEngineConfig:
             raise ValueError("realtime model is required")
         if not self.voice.strip():
             raise ValueError("realtime voice is required")
-        unique_contexts: list[str] = []
-        seen: set[str] = set()
-        for source in (*self.mcp_servers, *self.function_tools):
-            context = str(getattr(source, "context_instructions", "") or "").strip()
-            if context and context not in seen:
-                unique_contexts.append(context)
-                seen.add(context)
-        object.__setattr__(
-            self,
-            "instructions",
-            compose_realtime_instructions(self.instructions, "\n\n".join(unique_contexts)),
-        )
+        if not str(self.instructions or "").strip():
+            raise ValueError("realtime instructions are required")
 
 
 @dataclass(frozen=True)
@@ -139,4 +127,4 @@ class RealtimeEngine(ABC):
 
     @abstractmethod
     async def submit_tool_result(self, call_id: str, result: Any) -> None:
-        """Return an existing LSA bridge/tool-path result to the provider session."""
+        """Submit the result for a provider tool call."""
