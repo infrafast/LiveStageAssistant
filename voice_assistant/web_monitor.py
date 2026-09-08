@@ -36,7 +36,22 @@ for _name in dir(_base):
 _BaseWebMonitor = _base.WebMonitor
 _START_PATCH_LOCK = threading.Lock()
 DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"
-REALTIME_CHAT_SCRIPT = '<script src="assets/web/realtime-chat.js"></script>'
+REALTIME_CHAT_BOOTSTRAP = """<script id=\"lsa-realtime-chat-bootstrap\">
+(() => {
+  const configured = String(window.LSA_BASE_PATH || "").replace(/\/+$/, "");
+  let base = configured;
+  if (!base) {
+    let path = window.location.pathname || "/";
+    path = path.replace(/\/index\.html$/, "");
+    if (path !== "/" && path.endsWith("/")) path = path.slice(0, -1);
+    base = path === "/" ? "" : path;
+  }
+  const script = document.createElement("script");
+  script.src = `${base}/assets/web/realtime-chat.js`;
+  script.defer = true;
+  document.currentScript.after(script);
+})();
+</script>"""
 
 
 def _runtime_status_file() -> Path:
@@ -119,11 +134,11 @@ class WebMonitor(_BaseWebMonitor):
 
     def render_index_html(self) -> str:
         html = super().render_index_html()
-        if "realtime-chat.js" in html:
+        if "lsa-realtime-chat-bootstrap" in html:
             return html
         if "</body>" in html:
-            return html.replace("</body>", f"  {REALTIME_CHAT_SCRIPT}\n</body>")
-        return html + REALTIME_CHAT_SCRIPT
+            return html.replace("</body>", f"  {REALTIME_CHAT_BOOTSTRAP}\n</body>")
+        return html + REALTIME_CHAT_BOOTSTRAP
 
     def set_mcp_realtime_policy_save_handler(self, handler: Callable[[str, dict[str, Any]], dict[str, Any]]) -> None:
         with self._lock:
@@ -139,6 +154,19 @@ class WebMonitor(_BaseWebMonitor):
 
     def snapshot(self) -> dict[str, Any]:
         snapshot = super().snapshot()
+        if not snapshot.get("session_context"):
+            try:
+                store = self._session_store_for_realtime_chat()
+                context_snapshot = store.snapshot()
+                self.replace_dialogue(context_snapshot.get("messages") or [])
+                try:
+                    size = int(str(self._active_env_values().get("SESSION_CONTEXT_SIZE") or "6000"))
+                except (TypeError, ValueError):
+                    size = 6000
+                self.set_context_state(context_snapshot, session_context_size=size)
+                snapshot = super().snapshot()
+            except Exception as error:
+                self.append_log(f"Initial session snapshot skipped: {error}\n", source="web")
         config = snapshot.get("config")
         if isinstance(config, dict):
             snapshot["config"] = _base.redact_mapping(config)
@@ -248,11 +276,14 @@ class WebMonitor(_BaseWebMonitor):
     def _session_store_for_realtime_chat(self) -> SessionContextStore:
         values = self._active_env_values()
         context_dir = str(values.get("SESSION_CONTEXT_DIR") or os.getenv("SESSION_CONTEXT_DIR") or DEFAULT_CONTEXT_DIR).strip()
+        context_path = Path(context_dir).expanduser()
+        if not context_path.is_absolute():
+            context_path = Path.cwd() / context_path
         try:
             summary_max_chars = int(values.get("SESSION_CONTEXT_SUMMARY_MAX_CHARS") or os.getenv("SESSION_CONTEXT_SUMMARY_MAX_CHARS") or 12000)
         except (TypeError, ValueError):
             summary_max_chars = 12000
-        return SessionContextStore(context_dir, summary_max_chars=summary_max_chars)
+        return SessionContextStore(context_path, summary_max_chars=summary_max_chars)
 
     def _append_realtime_chat_message(self, payload: dict[str, Any]) -> dict[str, Any]:
         role = str(payload.get("role") or "").strip().lower()
