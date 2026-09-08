@@ -66,6 +66,19 @@ def _max_score(value: Any) -> float:
         return 0.0
 
 
+def _best_label_score(prediction: Any) -> tuple[str, float]:
+    if not isinstance(prediction, Mapping) or not prediction:
+        return "configured model", _max_score(prediction)
+    best_label = "configured model"
+    best_score = 0.0
+    for label, value in prediction.items():
+        score = _max_score(value)
+        if score >= best_score:
+            best_label = str(label)
+            best_score = score
+    return best_label, best_score
+
+
 @dataclass(frozen=True)
 class RealtimeWakeConfig:
     wake_word: str = ""
@@ -115,6 +128,8 @@ class RealtimeWakeGate:
         self._pre_roll = bytearray()
         self._pre_roll_limit = int(REALTIME_RATE * PCM16_BYTES_PER_SAMPLE * (config.pre_roll_ms / 1000.0))
         self._last_detection = -1e9
+        self._last_detection_label = ""
+        self._last_detection_score = 0.0
         self._not_before = -1e9
         self._waiting = config.enabled
         self._predictor = predictor
@@ -134,6 +149,14 @@ class RealtimeWakeGate:
     @property
     def authorized(self) -> bool:
         return not self.waiting
+
+    @property
+    def last_detection_label(self) -> str:
+        return self._last_detection_label
+
+    @property
+    def last_detection_score(self) -> float:
+        return self._last_detection_score
 
     def _load_openwakeword(self) -> None:
         try:
@@ -205,11 +228,13 @@ class RealtimeWakeGate:
             del self._buffer[:OWW_FRAME_BYTES]
             samples = np.frombuffer(frame, dtype=np.int16)
             prediction = self._predictor(samples) if self._predictor is not None else {}
-            score = _max_score(prediction)
+            label, score = _best_label_score(prediction)
             now = self._clock()
             cooldown = self.config.cooldown_ms / 1000.0
             if score >= self.config.threshold and now - self._last_detection >= cooldown:
                 self._last_detection = now
+                self._last_detection_label = label
+                self._last_detection_score = score
                 self.authorize()
                 return True
         return False

@@ -229,6 +229,7 @@
     const classicSttPromptField = document.querySelector("#classic-stt-prompt-field");
     const classicInterruptField = document.querySelector("#classic-interrupt-field");
     const classicVadDetails = document.querySelector("#classic-vad-details");
+    const classicVadOnlyControls = Array.from(document.querySelectorAll(".classic-vad-only"));
     const llmProviderField = document.querySelector("#llm-provider-field");
     const llmModelField = document.querySelector("#llm-model-field");
     const sttInputField = document.querySelector("#stt-input-field");
@@ -3267,7 +3268,8 @@
       classicSttPromptField.classList.toggle("hidden", realtime);
       classicInterruptField.classList.toggle("hidden", realtime);
       sttInputField.classList.toggle("hidden", realtime);
-      classicVadDetails.classList.toggle("hidden", realtime);
+      classicVadDetails.classList.remove("hidden");
+      for (const element of classicVadOnlyControls) element.classList.toggle("hidden", realtime);
       for (const element of cloudAudioControls) element.classList.toggle("hidden", realtime || offline);
       for (const field of [ttsSpeedField, elevenlabsVoiceField, openaiTtsVoiceField, ttsTestField]) field.classList.toggle("hidden", realtime);
       webTtsVolumeField.classList.add("hidden");

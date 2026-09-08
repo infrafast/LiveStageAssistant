@@ -52,9 +52,11 @@ try:
     from .i18n import available_locales, i18n_text, load_locale, normalize_locale
     from .local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from .web_monitor import WebMonitor, build_service_state
+    from .semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .stage_timeout import TimedStageRunner
     from .wake_word import apply_wake_word, parse_wake_words
+    from .wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from .speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
@@ -73,9 +75,11 @@ except ImportError:
     from i18n import available_locales, i18n_text, load_locale, normalize_locale
     from local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from web_monitor import WebMonitor, build_service_state
+    from semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from stage_timeout import TimedStageRunner
     from wake_word import apply_wake_word, parse_wake_words
+    from wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
@@ -821,6 +825,7 @@ class BackendWakeWordDetector:
         self._debug_last_score = 0.0
         self._debug_last_label = ""
         self._debug_last_report_at = 0.0
+        self._debug_waiting_reported = False
 
     def reset(self, *, clear_cooldown: bool = False) -> None:
         """Reset buffered wake-word audio and model state when a capture cycle is abandoned."""
@@ -864,43 +869,28 @@ class BackendWakeWordDetector:
                 self._debug_max_label = label
                 self._debug_max_score = score
             if score < self.threshold:
-                self._debug_report_rejected()
                 continue
             now = time.monotonic()
             if self.cooldown_seconds and now - self.last_detection_at < self.cooldown_seconds:
-                self._debug_report_rejected(reason="cooldown")
                 continue
             self.last_detection_at = now
-            self._debug_report_triggered(label, score)
             return label, score
         return None
 
-    def _debug_report_rejected(self, *, reason: str = "below_threshold") -> None:
-        if not debug_logging_enabled():
+    def report_waiting(self, wake_words: list[str] | tuple[str, ...]) -> None:
+        if self._debug_waiting_reported:
             return
-        now = time.monotonic()
-        if now - self._debug_last_report_at < 2.0:
-            return
-        self._debug_last_report_at = now
-        label = self._debug_max_label or self._debug_last_label or "unknown"
+        self._debug_waiting_reported = True
+        model_label = self._debug_max_label or self._debug_last_label or "configured model"
         print(
-            "openWakeWord "
-            f"{label}: score={self._debug_last_score:.2f} max={self._debug_max_score:.2f} "
-            f"threshold={self.threshold:.2f} rejected ({reason})",
+            format_openwakeword_waiting(
+                wake_words,
+                threshold=self.threshold,
+                model_label=model_label,
+                engine="backend",
+            ),
             flush=True,
         )
-
-    def _debug_report_triggered(self, label: str, score: float) -> None:
-        if not debug_logging_enabled():
-            return
-        print(
-            f"openWakeWord {label}: score={score:.2f} threshold={self.threshold:.2f} triggered",
-            flush=True,
-        )
-        self._debug_max_label = ""
-        self._debug_max_score = 0.0
-        self._debug_last_report_at = time.monotonic()
-
 
 def pipewire_record_command() -> str | None:
     """Return a PipeWire command able to record raw PCM from a targeted source."""
@@ -2377,13 +2367,13 @@ class VoiceAssistant:
             else None
         )
         self.listening_sound_warning_shown = False
-        self.wake_detected_sound_file = (wake_detected_sound_file or "").strip()
-        self.wake_detected_sound_path = (
-            self._resolve_asset_path(self.wake_detected_sound_file)
-            if self.wake_detected_sound_file
-            else None
+        self.semantic_audio_warning_keys: set[str] = set()
+        self.semantic_audio = SemanticAudioController(
+            SemanticAudioConfig(wake_detected=(wake_detected_sound_file or "").strip()),
+            play_once=self.play_semantic_cue_once_async,
+            start_loop=lambda cue: None,
+            stop_loop=lambda: None,
         )
-        self.wake_detected_sound_warning_shown = False
         self.command_ack_sound_file = (command_ack_sound_file or "").strip()
         self.command_ack_sound_path = (
             self._resolve_asset_path(self.command_ack_sound_file)
@@ -2619,30 +2609,31 @@ class VoiceAssistant:
                 print(f"Could not play listening sound '{self.listening_sound_path}': {e}")
                 self.listening_sound_warning_shown = True
 
-    def play_wake_detected_sound_async(self) -> None:
-        """Play a short backend cue after openWakeWord triggers without pausing capture."""
-        if not self.wake_detected_sound_file:
+    def play_semantic_cue_once_async(self, cue: str) -> None:
+        """Play one configured semantic cue through backend output without blocking capture."""
+        cue = (cue or "").strip()
+        if not cue:
             return
         if not self._backend_output_ready():
             return
-        if not self.wake_detected_sound_path:
-            if not self.wake_detected_sound_warning_shown:
-                print(
-                    f"Wake-detected sound '{self.wake_detected_sound_file}' not found. "
-                    "Set WAKE_DETECTED_SOUND_FILE to a WAV file or place it in assets/."
-                )
-                self.wake_detected_sound_warning_shown = True
+        path = self._resolve_asset_path(cue)
+        if not path:
+            key = f"missing:{cue}"
+            if key not in self.semantic_audio_warning_keys:
+                print(f"Semantic audio cue '{cue}' not found. Set the matching *_SOUND_FILE to a WAV file or place it in assets/.")
+                self.semantic_audio_warning_keys.add(key)
             return
 
         def play_once() -> None:
             try:
-                self.play_wav_file(self.wake_detected_sound_path)
+                self.play_wav_file(path)
             except Exception as e:
-                if not self.wake_detected_sound_warning_shown:
-                    print(f"Could not play wake-detected sound '{self.wake_detected_sound_path}': {e}")
-                    self.wake_detected_sound_warning_shown = True
+                key = f"play:{path}:{type(e).__name__}"
+                if key not in self.semantic_audio_warning_keys:
+                    print(f"Could not play semantic audio cue '{path}': {e}")
+                    self.semantic_audio_warning_keys.add(key)
 
-        threading.Thread(target=play_once, name="backend-wake-detected-sound", daemon=True).start()
+        threading.Thread(target=play_once, name="backend-semantic-cue", daemon=True).start()
 
     def start_startup_loader_sound(self) -> None:
         """Loop the startup loader sound through backend output until startup is ready."""
@@ -3619,6 +3610,9 @@ class VoiceAssistant:
             print(f"Backend wake word is configured but unavailable; microphone capture paused: {reason}", flush=True)
             time.sleep(1.0)
             return None
+        if wake_detector_active and self.backend_wake_word_detector:
+            self.backend_wake_word_detector.report_waiting(self.wake_words)
+            self.semantic_audio.transition(SemanticAudioState.WAIT_WAKE)
         if not interrupt_capture:
             self._set_backend_audio_state(self._backend_listening_state(), "record_audio")
         elif not wake_required:
@@ -3775,11 +3769,17 @@ class VoiceAssistant:
                         self.vad.reset()
                         streaming_pre_wake_frame = False
                         print(
-                            f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
+                            format_openwakeword_detected(
+                                self.wake_words or detected_label,
+                                label=detected_label,
+                                score=detected_score,
+                                threshold=self.backend_wake_word_threshold,
+                                engine="backend",
+                            ),
                             flush=True,
                         )
                         if not interrupt_capture:
-                            self.play_wake_detected_sound_async()
+                            self.semantic_audio.transition(SemanticAudioState.WAKE_DETECTED)
                     else:
                         continue
 

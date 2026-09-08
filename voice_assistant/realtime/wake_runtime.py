@@ -14,6 +14,7 @@ from typing import Any
 from dotenv import dotenv_values
 
 from ..semantic_audio import SemanticAudioState
+from ..wake_logging import format_openwakeword_detected, format_openwakeword_waiting
 from .wake_gate import RealtimeWakeConfig, RealtimeWakeGate
 
 
@@ -35,6 +36,15 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
     interrupt_enabled = _bool(values.get("INTERRUPT_CONVERSATION_ENABLED"), False)
     semantic_ref: dict[str, Any] = {"controller": None}
     state_ref = {"speaking": False}
+    print(
+        format_openwakeword_waiting(
+            config.wake_word,
+            threshold=config.threshold,
+            model_label=(config.model_names or config.model_paths or ("configured model",))[0],
+            engine="realtime",
+        ),
+        flush=True,
+    )
 
     original_transition = service.SemanticAudioController.transition
 
@@ -88,8 +98,14 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                         original_transition(controller, SemanticAudioState.WAKE_DETECTED)
                     pre_roll = gate.consume_pre_roll()
                     print(
-                        f"LSA Realtime wake detected: word={config.wake_word} threshold={config.threshold:.2f} "
-                        f"pre_roll_bytes={len(pre_roll)}",
+                        format_openwakeword_detected(
+                            config.wake_word,
+                            label=gate.last_detection_label or (config.model_names or config.model_paths or ("configured model",))[0],
+                            score=gate.last_detection_score,
+                            threshold=config.threshold,
+                            engine="realtime",
+                            detail=f"pre_roll_bytes={len(pre_roll)}",
+                        ),
                         flush=True,
                     )
                     # Preserve the phrase around the wake boundary so commands
