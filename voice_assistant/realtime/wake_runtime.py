@@ -23,6 +23,13 @@ from ..wake_logging import format_openwakeword_detected, format_openwakeword_wai
 from .wake_gate import RealtimeWakeConfig, RealtimeWakeGate
 
 
+SESSION_CONTEXT_INSTRUCTION_HEADER = (
+    "Internal active session context. Use silently for continuity, preferences, aliases and follow-up references. "
+    "Never acknowledge, thank the user for, quote, summarize, or mention this context unless the user explicitly asks. "
+    "Do not treat it as live external state."
+)
+
+
 def _bool(value: object, default: bool = False) -> bool:
     if value in (None, ""):
         return default
@@ -34,20 +41,34 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
     env_path = Path(env_file).expanduser().resolve()
     values = dict(dotenv_values(env_path))
 
-    def session_context_for_turn(text: str) -> str:
+    def active_session_context_instruction() -> str:
         try:
             size = int(str(values.get("SESSION_CONTEXT_SIZE") or os.getenv("SESSION_CONTEXT_SIZE") or "6000"))
         except (TypeError, ValueError):
             size = 6000
         if size <= 0:
-            return text
+            return ""
         raw_dir = str(values.get("SESSION_CONTEXT_DIR") or os.getenv("SESSION_CONTEXT_DIR") or DEFAULT_CONTEXT_DIR).strip()
         context_dir = Path(raw_dir).expanduser()
         if not context_dir.is_absolute():
             context_dir = Path.cwd() / context_dir
         store = SessionContextStore(context_dir, summary_max_chars=DEFAULT_SUMMARY_MAX_CHARS)
-        context = store.context_text(exclude_last_user=True, max_chars=size)
-        return f"{text}\n\n{context}" if context else text
+        context = store.context_text(exclude_last_user=True, max_chars=size).strip()
+        if not context:
+            return ""
+        return f"{SESSION_CONTEXT_INSTRUCTION_HEADER}\n{context}"
+
+    def realtime_instructions_with_active_session() -> str:
+        base = str(getattr(service, "DEFAULT_BASE_PROMPT", "") or "").strip()
+        context = active_session_context_instruction()
+        return f"{base}\n\n{context}" if context else base
+
+    async def refresh_engine_context(engine) -> bool:
+        updater = getattr(engine, "update_instructions", None)
+        if not callable(updater):
+            return False
+        await updater(realtime_instructions_with_active_session())
+        return True
 
     original_event_loop = service.event_loop
 
@@ -68,7 +89,10 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                         await asyncio.to_thread(monitor.append_dialogue, "user", text, persisted_by_child=False)
                         await asyncio.to_thread(monitor.set_assistant_busy, True)
                         semantic.transition(SemanticAudioState.PROCESSING)
-                        await engine.send_text(session_context_for_turn(text))
+                        context_refreshed = await refresh_engine_context(engine)
+                        if not context_refreshed:
+                            print("Realtime session context refresh unavailable for this provider; sending clean user text only", flush=True)
+                        await engine.send_text(text)
             except Exception as exc:
                 print(f"Realtime supervised text command warning: {exc}", flush=True)
             await asyncio.sleep(0.15)
