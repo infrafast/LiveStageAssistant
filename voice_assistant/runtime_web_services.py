@@ -14,10 +14,13 @@ import re
 import tempfile
 import threading
 from typing import Any, Callable
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
+from .backend_audio_sample import BackendAudioSamplePlayer
 from .i18n import available_locales, normalize_locale
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
 
@@ -36,6 +39,13 @@ OPENAI_TTS_VOICE_OPTIONS = [
     {"id": voice, "label": voice}
     for voice in ("alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer")
 ]
+OPENAI_REALTIME_MODEL_FALLBACKS = ("gpt-realtime-2.1", "gpt-realtime")
+OPENAI_REALTIME_VOICE_OPTIONS = [
+    {"id": voice, "label": voice}
+    for voice in ("alloy", "ash", "ballad", "coral", "echo", "marin", "sage", "shimmer", "verse")
+]
+GEMINI_LIVE_MODEL_OPTIONS = [{"id": "gemini-3.1-flash-live-preview", "label": "gemini-3.1-flash-live-preview"}]
+GEMINI_LIVE_VOICE_OPTIONS = [{"id": voice, "label": voice} for voice in ("Kore", "Puck", "Charon", "Fenrir", "Aoede")]
 DEFAULT_STT_PROMPT = ""
 DEFAULT_SYSTEM_PROMPT = ""
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
@@ -55,6 +65,7 @@ class RuntimeWebServices:
         self.active_profile = active_profile
         self.automatic_profiles = bool(automatic_profiles)
         self._lock = threading.RLock()
+        self._backend_audio_sample_player = BackendAudioSamplePlayer()
 
     def bind(self) -> None:
         """Register only engine-neutral handlers on the common WebMonitor."""
@@ -79,9 +90,14 @@ class RuntimeWebServices:
             save_handler=self.save_session,
             delete_handler=self.delete_session,
         )
+        self.monitor.set_backend_audio_sample_handler(self.backend_audio_sample)
 
     def _values(self, profile: Path | None = None) -> dict[str, Any]:
         return dict(dotenv_values(profile or self.active_profile()))
+
+    def backend_audio_sample(self, filename: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._backend_audio_sample_player.update_values(self._values())
+        return self._backend_audio_sample_player.control(filename, options)
 
     @staticmethod
     def _bool(values: dict[str, Any], key: str, default: bool = False) -> bool:
@@ -191,6 +207,39 @@ class RuntimeWebServices:
             return bool(Path(path).expanduser().read_text(encoding="utf-8").strip())
         except OSError:
             return False
+
+    def _secret_value(self, values: dict[str, Any], name: str) -> str:
+        path = str(values.get(f"{name}_FILE") or "").strip()
+        if not path:
+            return ""
+        try:
+            return Path(path).expanduser().read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def _openai_realtime_models(self, values: dict[str, Any]) -> list[dict[str, str]]:
+        api_key = self._secret_value(values, "OPENAI_API_KEY")
+        model_ids: set[str] = set(OPENAI_REALTIME_MODEL_FALLBACKS)
+        if api_key:
+            try:
+                request = urllib.request.Request(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                for item in payload.get("data") or []:
+                    model_id = str(item.get("id") or "")
+                    if "realtime" in model_id:
+                        model_ids.add(model_id)
+            except (OSError, urllib.error.URLError, json.JSONDecodeError):
+                pass
+        return [{"id": model_id, "label": model_id} for model_id in sorted(model_ids)]
+
+    def _realtime_options(self, values: dict[str, Any], engine: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        if engine == "gemini-live":
+            return GEMINI_LIVE_MODEL_OPTIONS, GEMINI_LIVE_VOICE_OPTIONS
+        return self._openai_realtime_models(values), OPENAI_REALTIME_VOICE_OPTIONS
 
     @staticmethod
     def _voice_options(values: dict[str, Any]) -> list[dict[str, str]]:
@@ -315,6 +364,9 @@ class RuntimeWebServices:
         if stt_input not in {"both", "backend", "browser", "silent"}:
             stt_input = "both"
 
+        voice_engine = str(values.get("VOICE_ENGINE") or ("local" if connectivity == "offline" else "classic")).strip().lower()
+        realtime_models, realtime_voices = self._realtime_options(values, voice_engine)
+        openai_realtime_models = self._openai_realtime_models(values)
         providers = [
             {"id": "openai", "label": "OpenAI", "available": connectivity != "offline", "reason": None if connectivity != "offline" else "offline"},
             {"id": "ollama", "label": "Ollama", "available": True, "reason": None},
@@ -385,9 +437,19 @@ class RuntimeWebServices:
             "selected_wake_detected_sound_file": str(values.get("WAKE_DETECTED_SOUND_FILE") or "").strip(),
             "selected_startup_loader_sound_file": startup_file,
             "selected_command_ack_sound_file": command_ack,
-            "selected_voice_engine": str(values.get("VOICE_ENGINE") or ("local" if connectivity == "offline" else "classic")).strip().lower(),
-            "selected_realtime_model": (str(values.get("GEMINI_LIVE_MODEL") or "gemini-3.1-flash-live-preview").strip() if str(values.get("VOICE_ENGINE") or "").strip().lower() == "gemini-live" else str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip()),
-            "selected_realtime_voice": (str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip() if str(values.get("VOICE_ENGINE") or "").strip().lower() == "gemini-live" else str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip()),
+            "selected_voice_engine": voice_engine,
+            "realtime_models": realtime_models,
+            "realtime_voices": realtime_voices,
+            "openai_realtime_models": openai_realtime_models,
+            "openai_realtime_voices": OPENAI_REALTIME_VOICE_OPTIONS,
+            "gemini_live_models": GEMINI_LIVE_MODEL_OPTIONS,
+            "gemini_live_voices": GEMINI_LIVE_VOICE_OPTIONS,
+            "selected_openai_realtime_model": str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
+            "selected_openai_realtime_voice": str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
+            "selected_gemini_live_model": str(values.get("GEMINI_LIVE_MODEL") or "gemini-3.1-flash-live-preview").strip(),
+            "selected_gemini_live_voice": str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip(),
+            "selected_realtime_model": (str(values.get("GEMINI_LIVE_MODEL") or "gemini-3.1-flash-live-preview").strip() if voice_engine == "gemini-live" else str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip()),
+            "selected_realtime_voice": (str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip() if voice_engine == "gemini-live" else str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip()),
             "selected_cloud_tts_output_gain": self._float(values, "CLOUD_TTS_OUTPUT_GAIN", 1.0),
             "selected_local_tts_output_gain": self._float(values, "LOCAL_TTS_OUTPUT_GAIN", 1.0),
             "message": f"Common runtime options loaded from active profile: {self.active_profile()}",

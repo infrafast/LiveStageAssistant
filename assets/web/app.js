@@ -358,6 +358,7 @@
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
     let lastCloudApiStatus = null;
+    let lastLlmOptions = null;
     let mcpServersSignature = "";
     let lastMcpServers = [];
     let currentWebTtsSource = null;
@@ -2978,6 +2979,7 @@
       wakeDetectedSoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "WAKE_DETECTED_SOUND_FILE";
       wakeDetectedSound.title = wakeDetectedSoundField.title;
       wakeDetectedSoundPlay.title = wakeDetectedSoundField.title;
+      wakeDetectedSoundField.classList.toggle("hidden", !wakeWord.value.trim());
 
       const loaderBackendEnabled = output === "backend";
       startupLoaderSound.disabled = !loaderBackendEnabled;
@@ -3095,13 +3097,60 @@
       return opt;
     }
 
+    function populateOptionsWithCurrent(select, items, selectedValue, emptyLabel) {
+      if (!select) return;
+      const selected = String(selectedValue || "");
+      const options = Array.isArray(items) ? items : [];
+      select.replaceChildren();
+      if (options.length === 0) {
+        select.appendChild(option(emptyLabel || tr("no_option_available", "No option available"), selected, !selected, true));
+      } else {
+        for (const item of options) {
+          select.appendChild(option(item.label || item.id, item.id, false, item.id === selected));
+        }
+        if (selected && !options.some((item) => item.id === selected)) {
+          select.appendChild(option(`${selected} (${tr("current", "current")})`, selected, false, true));
+        }
+      }
+      if (selected && select.value !== selected) select.value = selected;
+    }
+
+    function syncRealtimeDropdownOptions() {
+      if (!lastLlmOptions || !realtimeModel || !realtimeVoice) return;
+      const engine = voiceEngine?.value || "classic";
+      const modelOptions = engine === "gemini-live"
+        ? (lastLlmOptions.gemini_live_models || lastLlmOptions.realtime_models || [])
+        : (lastLlmOptions.openai_realtime_models || lastLlmOptions.realtime_models || []);
+      const voiceOptions = engine === "gemini-live"
+        ? (lastLlmOptions.gemini_live_voices || lastLlmOptions.realtime_voices || [])
+        : (lastLlmOptions.openai_realtime_voices || lastLlmOptions.realtime_voices || []);
+      const selectedModel = engine === "gemini-live"
+        ? (lastLlmOptions.selected_gemini_live_model || lastLlmOptions.selected_realtime_model || "gemini-3.1-flash-live-preview")
+        : (lastLlmOptions.selected_openai_realtime_model || lastLlmOptions.selected_realtime_model || "gpt-realtime-2.1");
+      const selectedVoice = engine === "gemini-live"
+        ? (lastLlmOptions.selected_gemini_live_voice || lastLlmOptions.selected_realtime_voice || "Kore")
+        : (lastLlmOptions.selected_openai_realtime_voice || lastLlmOptions.selected_realtime_voice || "marin");
+      populateOptionsWithCurrent(
+        realtimeModel,
+        modelOptions,
+        selectedModel,
+        tr("no_realtime_model_available", "No realtime model available")
+      );
+      populateOptionsWithCurrent(
+        realtimeVoice,
+        voiceOptions,
+        selectedVoice,
+        tr("no_realtime_voice_available", "No realtime voice available")
+      );
+    }
+
     function configSignature() {
       return JSON.stringify({
         env_profile: activeEnvProfile,
         connectivity_mode: selectedConnectivityMode(),
         voice_engine: voiceEngine?.value || "classic",
-        realtime_model: realtimeModel?.value.trim() || "",
-        realtime_voice: realtimeVoice?.value.trim() || "",
+        realtime_model: String(realtimeModel?.value || "").trim(),
+        realtime_voice: String(realtimeVoice?.value || "").trim(),
         speech_output_gain: Number(speechOutputGain?.value || 1),
         provider: llmProvider.value || "",
         model: llmModel.value || "",
@@ -3261,6 +3310,7 @@
       for (const item of voiceEngine.options) item.disabled = offline ? item.value !== "local" : item.value === "local";
       realtimeModelField.classList.toggle("hidden", !realtime);
       realtimeVoiceField.classList.toggle("hidden", !realtime);
+      syncRealtimeDropdownOptions();
       realtimeBrowserField.classList.toggle("hidden", !browserRealtime);
       if (!browserRealtime && realtimeBrowserPeer) stopBrowserRealtime();
       llmProviderField.classList.toggle("hidden", realtime);
@@ -5134,12 +5184,12 @@
         const response = await fetch(apiUrl(`/api/llm-options${suffix}`), { cache: "no-store" });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
+        lastLlmOptions = data;
 
 	        const selectedProvider = data.provider || provider || "";
         setSelectedConnectivityMode(connectivityOverride || data.selected_connectivity_mode || "online");
         voiceEngine.value = data.selected_voice_engine || (selectedConnectivityMode() === "offline" ? "local" : "classic");
-        realtimeModel.value = data.selected_realtime_model || "gpt-realtime-2.1";
-        realtimeVoice.value = data.selected_realtime_voice || "marin";
+        syncRealtimeDropdownOptions();
         currentCloudGain = Number(data.selected_cloud_tts_output_gain ?? 1);
         currentLocalGain = Number(data.selected_local_tts_output_gain ?? 1);
         speechOutputGain.value = String(selectedConnectivityMode() === "offline" ? currentLocalGain : currentCloudGain);
@@ -5986,8 +6036,8 @@
     if (cloudApiDetails) loadCloudApiStatus();
     if (cloudApiRefresh) cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
     voiceEngine.addEventListener("change", () => { syncVoiceEngineControls(); syncTtsProviderControls(); syncConfigActionState(); });
-    realtimeModel.addEventListener("input", syncConfigActionState);
-    realtimeVoice.addEventListener("input", syncConfigActionState);
+    realtimeModel.addEventListener("change", syncConfigActionState);
+    realtimeVoice.addEventListener("change", syncConfigActionState);
     realtimeBrowserToggle.addEventListener("click", () => startBrowserRealtime().catch(() => {}));
     speechOutputGain.addEventListener("input", () => { syncSpeechOutputGainLabel(); syncConfigActionState(); });
     cloudTtsProvider.addEventListener("change", syncVoiceEngineControls);
@@ -6053,8 +6103,8 @@
       const speakerMarginValue = Number(speakerMargin.value || 0.10);
       const speakerProfilesValue = collectSpeakerProfiles();
       const voiceEngineValue = voiceEngine.value || (connectivityModeValue === "offline" ? "local" : "classic");
-      const realtimeModelValue = realtimeModel.value.trim() || "gpt-realtime-2.1";
-      const realtimeVoiceValue = realtimeVoice.value.trim() || "marin";
+      const realtimeModelValue = String(realtimeModel.value || "").trim() || "gpt-realtime-2.1";
+      const realtimeVoiceValue = String(realtimeVoice.value || "").trim() || "marin";
       const speechGainValue = Number(speechOutputGain.value || 1);
       const cloudGainValue = connectivityModeValue === "offline" ? currentCloudGain : speechGainValue;
       const localGainValue = connectivityModeValue === "offline" ? speechGainValue : currentLocalGain;
@@ -6163,6 +6213,7 @@
     wakeWord.addEventListener("input", () => {
       syncBackendAudioMonitorControls();
       syncBackendWakeWordControls();
+      syncAudioSampleControls();
       syncAudioDeviceVisibility();
     });
     for (const control of vadControls) {
