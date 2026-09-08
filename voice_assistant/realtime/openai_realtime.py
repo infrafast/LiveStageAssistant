@@ -67,6 +67,52 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             )
         return tools
 
+    async def _send_session_update(self, *, instructions: str | None = None) -> None:
+        session: dict[str, Any] = {
+            "type": "realtime",
+            "output_modalities": ["audio"],
+            "instructions": self.config.instructions if instructions is None else instructions,
+            "tools": self._session_tools(),
+            "tool_choice": "auto",
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "noise_reduction": {"type": "near_field"},
+                    "transcription": (
+                        {"model": self.config.input_transcription_model}
+                        if self.config.input_transcription_model
+                        else None
+                    ),
+                    "turn_detection": (
+                        {
+                            "type": "server_vad",
+                            "threshold": 0.5,
+                            "prefix_padding_ms": 300,
+                            "silence_duration_ms": 500,
+                            "create_response": True,
+                            "interrupt_response": True,
+                        }
+                        if self.config.server_vad
+                        else None
+                    ),
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": self.config.voice,
+                    "speed": 1.0,
+                },
+            },
+        }
+        await self._send({"type": "session.update", "session": session})
+
+    async def update_instructions(self, instructions: str) -> None:
+        """Refresh provider instructions without adding a user-visible chat item."""
+        self._require_connection()
+        value = str(instructions or "").strip()
+        if not value:
+            value = self.config.instructions
+        await self._send_session_update(instructions=value)
+
     async def start(self) -> None:
         if self.state != RealtimeEngineState.STOPPED:
             return
@@ -87,46 +133,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             close_timeout=5,
         )
         self._receiver_task = asyncio.create_task(self._receive_loop(), name="openai-realtime-receiver")
-        await self._send(
-            {
-                "type": "session.update",
-                "session": {
-                    "type": "realtime",
-                    "output_modalities": ["audio"],
-                    "instructions": self.config.instructions,
-                    "tools": self._session_tools(),
-                    "tool_choice": "auto",
-                    "audio": {
-                        "input": {
-                            "format": {"type": "audio/pcm", "rate": 24000},
-                            "noise_reduction": {"type": "near_field"},
-                            "transcription": (
-                                {"model": self.config.input_transcription_model}
-                                if self.config.input_transcription_model
-                                else None
-                            ),
-                            "turn_detection": (
-                                {
-                                    "type": "server_vad",
-                                    "threshold": 0.5,
-                                    "prefix_padding_ms": 300,
-                                    "silence_duration_ms": 500,
-                                    "create_response": True,
-                                    "interrupt_response": True,
-                                }
-                                if self.config.server_vad
-                                else None
-                            ),
-                        },
-                        "output": {
-                            "format": {"type": "audio/pcm", "rate": 24000},
-                            "voice": self.config.voice,
-                            "speed": 1.0,
-                        },
-                    },
-                },
-            }
-        )
+        await self._send_session_update()
 
     async def stop(self) -> None:
         task = self._receiver_task
