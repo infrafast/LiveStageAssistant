@@ -560,7 +560,7 @@
 
     function mcpServerAdminUrl(server, route) {
       if (route === "direct") return server.admin_url || "";
-      return server.proxy_admin_url || server.admin_url || "";
+      return server.proxy_admin_url ? apiUrl(server.proxy_admin_url) : (server.admin_url || "");
     }
 
     function mcpServerRouteDetail(route) {
@@ -630,7 +630,7 @@
           open.textContent = route === "direct" ? "Open direct" : "Open via proxy";
           actions.append(open);
         }
-        const alternateUrl = route === "direct" ? server.proxy_admin_url : server.admin_url;
+        const alternateUrl = route === "direct" ? (server.proxy_admin_url ? apiUrl(server.proxy_admin_url) : "") : server.admin_url;
         if (alternateUrl && alternateUrl !== selectedUrl) {
           const alternate = document.createElement("a");
           alternate.className = "mcp-server-open";
@@ -5012,7 +5012,7 @@
       llmMessage.textContent = tr("loading_llm_options", "Loading LLM options...");
       try {
         const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-        const response = await fetch(`/api/llm-options${suffix}`, { cache: "no-store" });
+        const response = await fetch(apiUrl(`/api/llm-options${suffix}`), { cache: "no-store" });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
 
