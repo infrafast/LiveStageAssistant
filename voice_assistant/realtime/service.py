@@ -33,7 +33,7 @@ from .mcp_bridge import RealtimeMCPBridge, load_remote_mcp_prompt
 from .mcp_config import CanonicalMCPServerConfig, load_mcp_inventory
 from .metrics import realtime_usage_cost_usd
 from .provider_factory import create_realtime_engine
-from .prompts import DEFAULT_BASE_PROMPT
+from .prompts import compose_realtime_instructions
 
 ROOT = Path(__file__).resolve().parents[2]
 REALTIME_RATE = 24000
@@ -43,7 +43,6 @@ DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-live-preview"
 DEFAULT_GEMINI_VOICE = "Kore"
 TRANSIENT_PROVIDER_EXIT = 75
 _RECENT_BRIDGE_CALL_IDS: set[str] = set()
-
 
 
 def read_secret(name: str, env_file: Path) -> str:
@@ -74,6 +73,49 @@ def resolve_path(value: str, env_file: Path) -> Path:
 def _bool_env(name: str, default: bool = False) -> bool:
     value = str(os.getenv(name, "true" if default else "false")).strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def _mcp_prompts_enabled() -> bool:
+    return str(os.getenv("MCP_LOAD_SERVER_PROMPT", "true")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _describe_mcp_prompt_source(server_name: str) -> str:
+    return f"server='{server_name}' prompt='agent_prompt' tool='get_agent_prompt'"
+
+
+def _describe_mcp_prompt_sources(server_names: list[str]) -> str:
+    return "; ".join(_describe_mcp_prompt_source(name) for name in server_names)
+
+
+def _format_loaded_mcp_prompts(loaded_prompts: list[tuple[str, str]]) -> str:
+    sections: list[str] = []
+    for server_name, text in loaded_prompts:
+        prompt = str(text or "").strip()
+        if prompt:
+            sections.append(f'Instructions loaded from MCP server "{server_name}":\n{prompt}')
+    return "\n\n".join(sections)
+
+
+def _log_loaded_mcp_prompts(server_names: list[str], loaded_prompts: list[tuple[str, str]]) -> None:
+    if not _mcp_prompts_enabled():
+        return
+    if server_names:
+        print(
+            "MCP startup prompt loading enabled. Requested source(s): "
+            f"{_describe_mcp_prompt_sources(server_names)}",
+            flush=True,
+        )
+    else:
+        print("⚠️ Warning: MCP_LOAD_SERVER_PROMPT is true but no MCP prompt sources are configured.", flush=True)
+    if not loaded_prompts:
+        print("⚠️ Warning: No MCP server instructions were loaded; keeping the local system prompt.", flush=True)
+        return
+    loaded_summary = "; ".join(f"{server} via startup prompt" for server, _text in loaded_prompts)
+    print(
+        f"Loaded and merged {len(loaded_prompts)} MCP prompt source(s) "
+        f"with merge mode 'append': {loaded_summary}",
+        flush=True,
+    )
 
 
 def play_startup_sound(env_file: Path) -> None:
@@ -203,7 +245,7 @@ async def native_server(server: CanonicalMCPServerConfig, *, strict_probe: bool 
         raise RuntimeError(f"MCP {server.name!r} native transport requires an HTTPS URL")
     authorization, headers = _split_authorization(server.native.headers)
     prompt = ""
-    if str(os.getenv("MCP_LOAD_SERVER_PROMPT", "true")).strip().lower() not in {"0", "false", "no", "off"}:
+    if _mcp_prompts_enabled():
         try:
             prompt = await load_remote_mcp_prompt(server_name=server.name, url=server.native.url, authorization=authorization, headers=headers)
             print(f"Realtime MCP prompt: {server.name} {'loaded' if prompt else 'not exposed'}", flush=True)
@@ -338,9 +380,6 @@ async def execute_bridge_call(engine, bridge: RealtimeMCPBridge, event, complete
     try:
         await engine.submit_tool_result(call_id, result)
     except Exception as exc:
-        # The MCP call may already have changed external state. Never replay it
-        # merely because the provider connection disappeared before receiving
-        # the tool result.
         print(f"Realtime bridge result delivery failed: call_id={call_id} error={exc}", flush=True)
 
 
@@ -556,10 +595,22 @@ async def run(args) -> int:
 
     bridge: RealtimeMCPBridge | None = None
     function_tools = ()
+    loaded_mcp_prompts: list[tuple[str, str]] = []
+    for native in native_servers:
+        prompt = str(getattr(native, "context_instructions", "") or "").strip()
+        if prompt:
+            loaded_mcp_prompts.append((str(getattr(native, "label", "native") or "native"), prompt))
     if bridge_names:
         bridge = RealtimeMCPBridge(raw_config, server_names=tuple(bridge_names))
         function_tools = await bridge.start()
         print(f"Realtime MCP stdio tools loaded: {len(function_tools)}", flush=True)
+        for server_name in bridge_names:
+            prompt = str(await bridge.load_prompt_text(server_name) or "").strip()
+            if prompt:
+                loaded_mcp_prompts.append((server_name, prompt))
+    _log_loaded_mcp_prompts([*bridge_names, *(native.label for native in native_servers)], loaded_mcp_prompts)
+    mcp_prompt = _format_loaded_mcp_prompts(loaded_mcp_prompts)
+    effective_instructions = compose_realtime_instructions(mcp_prompt=mcp_prompt)
 
     pa = pyaudio.PyAudio()
     input_stream = output_stream = None
@@ -598,7 +649,7 @@ async def run(args) -> int:
             on_state=lambda state: print(f"LSA semantic state: {state.value}", flush=True),
         )
 
-        engine = create_realtime_engine(provider, RealtimeEngineConfig(provider=provider, model=model, voice=voice, instructions=DEFAULT_BASE_PROMPT, server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)
+        engine = create_realtime_engine(provider, RealtimeEngineConfig(provider=provider, model=model, voice=voice, instructions=effective_instructions, server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)
         await engine.start()
         await wait_until_ready(engine)
         print(f"LSA Realtime ready: provider={provider} model={model} voice={voice}", flush=True)
