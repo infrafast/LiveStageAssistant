@@ -17,6 +17,7 @@ from typing import Any
 from dotenv import dotenv_values, load_dotenv
 
 from . import agent
+from .child_command_channel import child_monitor_from_env
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
 from .speaker_recognition import SpeakerProfile
 from .wake_word import parse_wake_words
@@ -131,6 +132,7 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
     session_dir = str(values.get("SESSION_CONTEXT_DIR") or DEFAULT_CONTEXT_DIR).strip() or str(DEFAULT_CONTEXT_DIR)
     context_store = SessionContextStore(session_dir, summary_max_chars=DEFAULT_SUMMARY_MAX_CHARS)
     speaker_profiles = _speaker_profiles(values)
+    command_monitor = child_monitor_from_env()
 
     cloud_gain = max(0.0, min(2.0, _float(values, "CLOUD_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
     local_gain = max(0.0, min(2.0, _float(values, "LOCAL_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
@@ -200,7 +202,7 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
         speaker_profiles=speaker_profiles,
         system_prompt=str(values.get("ASSISTANT_SYSTEM_PROMPT") or agent.DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip(),
         reload_event=None,
-        web_monitor=None,
+        web_monitor=command_monitor,
     )
     print(
         f"Classic engine profile: connectivity={connectivity} llm={assistant.llm_provider}/{assistant.model} "
