@@ -249,6 +249,11 @@
       background: var(--accent);
       color: #fff;
     }
+    .small-button.primary-save {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
     .chat-scroll {
       padding: 22px 16px 16px;
       scroll-behavior: smooth;
@@ -1135,6 +1140,7 @@
       min-width: 0;
       display: grid;
       gap: 12px;
+      align-content: start;
     }
     .audio-preview-button {
       width: 38px;
@@ -1228,6 +1234,27 @@
       padding: 10px 12px;
       border-bottom: 1px solid var(--border);
       background: var(--surface-soft);
+      cursor: pointer;
+      list-style: none;
+    }
+    .mcp-server-head::-webkit-details-marker {
+      display: none;
+    }
+    .mcp-server-head::after {
+      content: "›";
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 22px;
+      line-height: 1;
+      transition: transform 0.14s ease;
+    }
+    .mcp-server-card[open] > .mcp-server-head::after {
+      transform: rotate(90deg);
+    }
+    .mcp-server-body,
+    .cfg-mcp-editor {
+      display: grid;
+      gap: 0;
     }
     .mcp-server-title {
       min-width: 0;
@@ -1250,6 +1277,32 @@
       gap: 8px;
       align-items: center;
     }
+    .mcp-icon-action {
+      width: 30px;
+      height: 30px;
+      min-height: 30px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1;
+    }
+    .mcp-icon-action.danger {
+      color: var(--bad);
+    }
+    .mcp-enable-toggle {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+    .mcp-transport-badge {
+      min-width: 54px;
+      text-align: center;
+    }
     .mcp-server-open {
       min-height: 30px;
       border: 1px solid var(--border);
@@ -1260,6 +1313,14 @@
       font-size: 12px;
       font-weight: 700;
       text-decoration: none;
+    }
+    .mcp-server-link-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
     }
     .mcp-server-load {
       min-height: 30px;
@@ -1285,7 +1346,8 @@
       gap: 10px;
       align-items: end;
     }
-    .mcp-routing-save {
+    .mcp-routing-save,
+    .mcp-options-update {
       min-height: 38px;
       border: 1px solid var(--accent);
       border-radius: 8px;
@@ -1476,6 +1538,10 @@
       gap: 14px;
       padding: 14px;
     }
+    .ui-settings-details .config-controls {
+      grid-template-columns: repeat(2, minmax(240px, 1fr));
+      align-items: start;
+    }
     textarea.inspect {
       display: block;
       width: 100%;
@@ -1526,6 +1592,7 @@
         grid-column: 1;
       }
       .config-controls { grid-template-columns: 1fr; }
+      .ui-settings-details .config-controls { grid-template-columns: 1fr; }
       .cloud-api-grid { grid-template-columns: 1fr; }
       .mcp-server-toolbar { grid-template-columns: 1fr; }
       .mcp-server-head { align-items: stretch; flex-direction: column; }

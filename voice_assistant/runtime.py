@@ -285,7 +285,7 @@ def run_engine_session(
 
     if engine not in {"openai-realtime", "gemini-live"}:
         for item in status_tracker.status.mcp:
-            status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=None, detail="local MCP path selected")
+            status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=True, detail="local MCP path selected")
 
     loader = StartupLoader(ROOT, values)
     loader.start()

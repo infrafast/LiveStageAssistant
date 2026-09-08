@@ -45,11 +45,9 @@
     }
 
     const stateEl = document.querySelector("#state");
-    const configEl = document.querySelector("#config");
     const logsEl = document.querySelector("#logs");
     const sttPromptEl = document.querySelector("#stt-prompt");
     const assistantSystemPromptEl = document.querySelector("#assistant-system-prompt");
-    const promptEl = document.querySelector("#prompt");
     const metaEl = document.querySelector("#meta");
     const messagesEl = document.querySelector("#messages");
     const chatPanel = document.querySelector("#chat-panel");
@@ -358,6 +356,7 @@
     let backendAudioDiagnostic = null;
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
+    let lastCloudApiStatus = null;
     let mcpServersSignature = "";
     let lastMcpServers = [];
     let currentWebTtsSource = null;
@@ -502,6 +501,7 @@
     }
 
     function renderCloudApiStatus(data) {
+      lastCloudApiStatus = data;
       const openai = data.openai || {};
       const elevenlabs = data.elevenlabs || {};
       const openaiLines = Array.isArray(openai.lines) ? openai.lines.slice() : [];
@@ -515,13 +515,22 @@
         );
         elevenLines.unshift(`Caractères utilisés: ${formatNumber(elevenlabs.characters.used)}`);
       }
-      cloudApiGrid.innerHTML = [
-        cloudApiCard("OpenAI", { ...openai, lines: openaiLines }),
-        cloudApiCard("ElevenLabs", { ...elevenlabs, lines: elevenLines })
-      ].join("");
+      const engine = voiceEngine?.value || "classic";
+      const offline = selectedConnectivityMode() === "offline";
+      const cards = [];
+      if (!offline && ["classic", "openai-realtime"].includes(engine)) {
+        cards.push(cloudApiCard("OpenAI", { ...openai, lines: openaiLines }));
+      }
+      if (!offline && engine === "classic") {
+        cards.push(cloudApiCard("ElevenLabs", { ...elevenlabs, lines: elevenLines }));
+      }
+      cloudApiGrid.innerHTML = cards.length
+        ? cards.join("")
+        : `<div class="cloud-api-line">${escapeHtml(tr("no_cloud_api_for_engine", "No cloud API key status applies to the selected engine."))}</div>`;
     }
 
     async function loadCloudApiStatus(force = false) {
+      if (!cloudApiGrid || !cloudApiRefresh) return;
       if (cloudApiLoading || (!force && cloudApiLoaded)) return;
       cloudApiLoading = true;
       cloudApiRefresh.disabled = true;
@@ -577,6 +586,8 @@
       const items = Array.isArray(servers) ? servers : [];
       lastMcpServers = items;
       const route = selectedMcpAdminRoute();
+      const policies = mcpPolicyMap(lastSnapshot);
+      const runtimeMcp = Array.isArray(lastSnapshot?.runtime_status?.mcp) ? lastSnapshot.runtime_status.mcp : [];
       const signature = JSON.stringify(items.map((item) => [
         item.name || "",
         item.type || "",
@@ -586,7 +597,9 @@
         Boolean(item.auth_required),
         item.routing || "",
         JSON.stringify(item.env_options || {}),
-        item.detail || ""
+        item.detail || "",
+        JSON.stringify(policies[item.name || ""] || {}),
+        JSON.stringify(runtimeMcp.find((runtime) => String(runtime?.name || "") === String(item.name || "")) || {})
       ])) + "|" + route;
       if (signature === mcpServersSignature) return;
       mcpServersSignature = signature;
@@ -601,17 +614,22 @@
       }
 
       for (const server of items) {
-        const card = document.createElement("div");
+        const serverName = server.name || "MCP server";
+        const policy = policies[serverName] || {};
+        const runtime = runtimeMcpStatus(lastSnapshot, serverName);
+        const effectiveTransport = runtime?.effective_transport || policy.transport || server.type || "MCP";
+        const card = document.createElement("details");
         card.className = "mcp-server-card";
+        card.dataset.serverName = serverName;
 
-        const head = document.createElement("div");
+        const head = document.createElement("summary");
         head.className = "mcp-server-head";
 
         const title = document.createElement("div");
         title.className = "mcp-server-title";
         const name = document.createElement("div");
         name.className = "mcp-server-name";
-        name.textContent = server.name || "MCP server";
+        name.textContent = serverName;
         const url = document.createElement("div");
         url.className = "mcp-server-url";
         url.textContent = server.admin_url || server.detail || "No browser admin URL";
@@ -619,33 +637,99 @@
 
         const actions = document.createElement("div");
         actions.className = "mcp-server-actions";
-        const badge = document.createElement("span");
-        badge.className = "inline-badge";
-        badge.textContent = server.auth_required ? "Auth" : (server.type || "MCP");
-        actions.append(badge);
+        const transportBadge = document.createElement("span");
+        transportBadge.className = "inline-badge mcp-transport-badge";
+        transportBadge.textContent = displayMcpTransport(effectiveTransport);
+        transportBadge.title = runtime?.detail || server.detail || "";
+        const enabledToggle = document.createElement("input");
+        enabledToggle.type = "checkbox";
+        enabledToggle.className = "mcp-enable-toggle";
+        enabledToggle.checked = policy.enabled !== false;
+        enabledToggle.title = tr("mcp_enable_disable", "Enable / disable MCP");
+        enabledToggle.addEventListener("click", (event) => event.stopPropagation());
+        enabledToggle.addEventListener("change", async (event) => {
+          event.stopPropagation();
+          const nextEnabled = enabledToggle.checked;
+          enabledToggle.disabled = true;
+          mcpCrudSavePending = true;
+          try {
+            const data = await saveMcpDefinition("update", { existing_name: serverName, server: {
+              name: serverName,
+              enabled: nextEnabled,
+              command: policy.command || "",
+              args: JSON.stringify(policy.args || []),
+              local_url: policy.localUrl || "",
+              realtime_transport: policy.transport === "native" ? "https" : (policy.transport || "auto"),
+              https_url: policy.httpsUrl || "",
+              permission_mode: policy.permission || "open"
+            }});
+            mcpCrudDirty = false;
+            setRestartRequired(data.restart_required, "MCP saved · restart required.");
+            mcpServersSignature = "";
+          } catch (error) {
+            enabledToggle.checked = !nextEnabled;
+            llmMessage.textContent = `Save failed: ${error.message || error}`;
+          } finally {
+            enabledToggle.disabled = false;
+            mcpCrudSavePending = false;
+          }
+        });
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "mcp-icon-action danger";
+        deleteButton.title = tr("delete_mcp", "Delete MCP");
+        deleteButton.setAttribute("aria-label", trf("delete_mcp_named", "Delete {name}", { name: serverName }));
+        deleteButton.innerHTML = "&#128465;";
+        deleteButton.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!window.confirm(`Delete MCP "${serverName}"?`)) return;
+          deleteButton.disabled = true;
+          mcpCrudSavePending = true;
+          try {
+            const data = await saveMcpDefinition("delete", { server: serverName });
+            mcpCrudDirty = false;
+            setRestartRequired(data.restart_required, "MCP deleted · restart required.");
+            mcpServersSignature = "";
+            await refresh();
+          } catch (error) {
+            llmMessage.textContent = `Delete failed: ${error.message || error}`;
+          } finally {
+            deleteButton.disabled = false;
+            mcpCrudSavePending = false;
+          }
+        });
+        actions.append(deleteButton, enabledToggle, transportBadge);
         const selectedUrl = mcpServerAdminUrl(server, route);
-        if (selectedUrl) {
-          const open = document.createElement("a");
-          open.className = "mcp-server-open";
-          open.href = selectedUrl;
-          open.target = "_blank";
-          open.rel = "noreferrer";
-          open.textContent = route === "direct" ? "Open direct" : "Open via proxy";
-          actions.append(open);
-        }
         const alternateUrl = route === "direct" ? (server.proxy_admin_url ? apiUrl(server.proxy_admin_url) : "") : server.admin_url;
-        if (alternateUrl && alternateUrl !== selectedUrl) {
-          const alternate = document.createElement("a");
-          alternate.className = "mcp-server-open";
-          alternate.href = alternateUrl;
-          alternate.target = "_blank";
-          alternate.rel = "noreferrer";
-          alternate.textContent = route === "direct" ? "Proxy" : "Direct";
-          actions.append(alternate);
-        }
 
         head.append(title, actions);
         card.append(head);
+        const body = document.createElement("div");
+        body.className = "mcp-server-body";
+        if (selectedUrl || (alternateUrl && alternateUrl !== selectedUrl)) {
+          const linkRow = document.createElement("div");
+          linkRow.className = "mcp-server-link-row";
+          if (selectedUrl) {
+            const open = document.createElement("a");
+            open.className = "mcp-server-open";
+            open.href = selectedUrl;
+            open.target = "_blank";
+            open.rel = "noreferrer";
+            open.textContent = route === "direct" ? tr("open_direct", "Open direct") : tr("open_via_proxy", "Open via proxy");
+            linkRow.append(open);
+          }
+          if (alternateUrl && alternateUrl !== selectedUrl) {
+            const alternate = document.createElement("a");
+            alternate.className = "mcp-server-open";
+            alternate.href = alternateUrl;
+            alternate.target = "_blank";
+            alternate.rel = "noreferrer";
+            alternate.textContent = route === "direct" ? tr("proxy", "Proxy") : tr("direct", "Direct");
+            linkRow.append(alternate);
+          }
+          body.append(linkRow);
+        }
 
         const routingBox = document.createElement("div");
         routingBox.className = "mcp-routing-box";
@@ -670,7 +754,7 @@
         const routingSave = document.createElement("button");
         routingSave.className = "mcp-routing-save";
         routingSave.type = "button";
-        routingSave.textContent = "Save";
+        routingSave.textContent = tr("update", "Update");
         routingSave.disabled = routingDisabled;
         routingSave.title = routingDisabled ? routingDisabledReason : "Save routing words";
         const routingMessage = document.createElement("div");
@@ -681,7 +765,7 @@
         routingSave.addEventListener("click", () => saveMcpRouting(routingMessage));
         routingRow.append(routingInput, routingSave);
         routingBox.append(routingLabel, routingRow, routingMessage);
-        card.append(routingBox);
+        body.append(routingBox);
 
         const hasEnvOptions = server.env_options && Object.keys(server.env_options).length > 0;
         const isStdioServer = !server.admin_url && String(server.type || "stdio") === "stdio";
@@ -702,9 +786,9 @@
           optionsInput.title = "JSON object saved into mcpServers.<server>.env. Nested objects are stored as compact JSON strings.";
           optionsInput.addEventListener("input", () => { mcpCrudDirty = true; });
           const optionsSave = document.createElement("button");
-          optionsSave.className = "mcp-routing-save";
+          optionsSave.className = "mcp-options-update";
           optionsSave.type = "button";
-          optionsSave.textContent = "Save";
+          optionsSave.textContent = tr("update", "Update");
           optionsSave.title = "Save MCP server env options";
           const optionsMessage = document.createElement("div");
           optionsMessage.className = "mcp-routing-message";
@@ -712,7 +796,7 @@
           optionsSave.addEventListener("click", () => saveMcpServerOptions(optionsMessage));
           optionsRow.append(optionsInput, optionsSave);
           optionsBox.append(optionsLabel, optionsRow, optionsMessage);
-          card.append(optionsBox);
+          body.append(optionsBox);
         }
 
         if (server.embeddable && selectedUrl) {
@@ -737,14 +821,15 @@
           });
 
           placeholder.append(note, load);
-          card.append(placeholder);
+          body.append(placeholder);
         } else {
           const empty = document.createElement("div");
           empty.className = "mcp-server-empty";
           empty.textContent = server.detail || "This MCP server does not expose a browser page.";
-          card.append(empty);
+          body.append(empty);
         }
 
+        card.append(body);
         mcpServerGrid.append(card);
       }
     }
@@ -950,9 +1035,9 @@
 
     function ledClass(status) {
       const value = String(status || "unknown").toLowerCase();
-      if (["online", "initialized", "ready", "ok", "configured"].includes(value)) return "ok";
+      if (["online", "initialized", "ready", "ok", "healthy", "configured"].includes(value)) return "ok";
       if (["initializing", "reload", "unknown", "warning"].includes(value)) return "warn";
-      if (["offline", "error", "failed"].includes(value)) return "bad";
+      if (["offline", "error", "failed", "unavailable"].includes(value)) return "bad";
       return "idle";
     }
 
@@ -3189,6 +3274,10 @@
       backendTtsVolumeField.classList.add("hidden");
       currentClassicCloudSpeech = !offline && ["openai", "elevenlabs"].includes(String(cloudTtsProvider.value || "").toLowerCase());
       speechOutputGainField.classList.toggle("hidden", !(realtime || offline || currentClassicCloudSpeech));
+      if (cloudApiDetails) {
+        cloudApiDetails.classList.toggle("hidden", offline);
+      }
+      if (lastCloudApiStatus) renderCloudApiStatus(lastCloudApiStatus);
       syncSpeechOutputGainLabel();
     }
 
@@ -3379,20 +3468,22 @@
           status.textContent = policy.enabled === false ? `Disabled · Configured ${configured}` : effective ? `Configured ${configured} · Effective ${effective}${runtime.healthy === true ? " · healthy" : runtime.healthy === false ? " · unavailable" : ""}` : `Configured ${configured}`;
           section.append(status);
         }
-        const enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.checked = policy.enabled !== false;
+        const enabled = card.querySelector(".mcp-enable-toggle") || document.createElement("input");
+        enabled.checked = policy.enabled !== false;
         const command = document.createElement("input"); command.value = policy.command; command.placeholder = "STDIO command";
         const args = document.createElement("input"); args.value = JSON.stringify(policy.args); args.placeholder = '["arg1"]';
         const localUrl = document.createElement("input"); localUrl.value = policy.localUrl; localUrl.placeholder = "Local MCP URL";
         const controls = makeMcpPolicyControls(policy);
         const markMcpCrudDirty = () => { mcpCrudDirty = true; };
-        for (const control of [enabled, command, args, localUrl, controls.transport, controls.permission, controls.https]) {
+        for (const control of [command, args, localUrl, controls.transport, controls.permission, controls.https]) {
           control.addEventListener("input", markMcpCrudDirty);
           control.addEventListener("change", markMcpCrudDirty);
         }
         const auth = document.createElement("div"); auth.className = "detail"; auth.textContent = `HTTPS auth: ${policy.authConfigured ? "Configured" : "Missing / not required"}`;
-        const test = document.createElement("button"); test.type = "button"; test.className = "small-button"; test.textContent = "Test";
-        const save = document.createElement("button"); save.type = "button"; save.className = "small-button"; save.textContent = "Save MCP";
-        const del = document.createElement("button"); del.type = "button"; del.className = "small-button"; del.textContent = "Delete MCP";
+        const testedTransport = displayMcpTransport(runtime?.effective_transport || policy.transport || "auto");
+        const test = document.createElement("button"); test.type = "button"; test.className = "small-button"; test.textContent = trf("test_transport", "Test {transport}", { transport: testedTransport });
+        test.title = tr("test_transport_title", "Tests the currently saved/effective MCP transport.");
+        const save = document.createElement("button"); save.type = "button"; save.className = "small-button primary-save"; save.textContent = tr("save_mcp", "Save MCP");
         const message = document.createElement("span"); message.className = "detail";
         save.addEventListener("click", async () => {
           save.disabled = true; message.textContent = "Saving…"; mcpCrudSavePending = true;
@@ -3417,19 +3508,7 @@
           } catch (error) { message.textContent = `Test failed: ${error.message || error}`; }
           finally { test.disabled = false; }
         });
-        del.addEventListener("click", async () => {
-          if (!window.confirm(`Delete MCP "${name}"?`)) return;
-          del.disabled = true; mcpCrudSavePending = true;
-          try {
-            const data = await saveMcpDefinition("delete", { server: name });
-            mcpCrudDirty = false;
-            setRestartRequired(data.restart_required, "MCP deleted · restart required.");
-            mcpServersSignature = "";
-            await refresh();
-          } catch (error) { message.textContent = `Delete failed: ${error.message || error}`; }
-          finally { del.disabled = false; mcpCrudSavePending = false; }
-        });
-        section.append(makeCfgField("Enabled", enabled), makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), auth, test, save, del, message);
+        section.append(makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), auth, test, save, message);
         card.append(section);
       }
     }
@@ -5386,13 +5465,27 @@
           currentSnapshotEnvFile = snapshotEnvFile;
         }
         const services = data.services || {};
+        const runtimeMcpTiles = Array.isArray(data.runtime_status?.mcp)
+          ? data.runtime_status.mcp.map((item) => {
+            const status = item.enabled === false
+              ? "disabled"
+              : item.healthy === true
+                ? "healthy"
+                : item.healthy === false
+                  ? "unavailable"
+                  : (item.effective_transport || item.configured_transport ? "configured" : "unknown");
+            const transport = item.effective_transport || item.configured_transport || "";
+            const detail = `${transport ? `${displayMcpTransport(transport)} · ` : ""}${item.detail || ""}`.trim();
+            return tile(`MCP ${item.name || ""}`.trim(), status, detail);
+          })
+          : [];
         const rows = [
           tile("Internet", data.internet, data.mode === "auto" ? "auto profile detection" : "fixed profile"),
           tile("Profile", data.mode, data.env_file || ""),
-          ...Object.entries(services).map(([name, service]) => tile(name, service.status, service.detail))
+          ...Object.entries(services).map(([name, service]) => tile(name, service.status, service.detail)),
+          ...runtimeMcpTiles
         ];
         stateEl.innerHTML = rows.join("");
-        configEl.value = data.config_text || "";
         const deferMcpPanelRefresh = shouldDeferMcpCrudRefresh();
         if (!deferMcpPanelRefresh) {
           renderMcpServers(data.mcp_servers || []);
@@ -5445,7 +5538,6 @@
           cloudApiLoaded = false;
         }
         await syncLlmControls(data);
-        promptEl.value = data.prompt || "";
         renderSessions(data.session_context || {});
         if (!settingsOverlay.classList.contains("open")) {
           setSessionContextSize(data.session_context_size || 0);
@@ -5881,10 +5973,8 @@
     }
     speakerThreshold.addEventListener("input", syncSpeakerLabels);
     speakerMargin.addEventListener("input", syncSpeakerLabels);
-    cloudApiDetails.addEventListener("toggle", () => {
-      if (cloudApiDetails.open) loadCloudApiStatus();
-    });
-    cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
+    if (cloudApiDetails) loadCloudApiStatus();
+    if (cloudApiRefresh) cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
     voiceEngine.addEventListener("change", () => { syncVoiceEngineControls(); syncConfigActionState(); });
     realtimeModel.addEventListener("input", syncConfigActionState);
     realtimeVoice.addEventListener("input", syncConfigActionState);
