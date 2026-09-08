@@ -214,11 +214,7 @@ def _probe_http(url: str, headers: Mapping[str, Any] | None, timeout: float) -> 
 def _probe_stdio(entry: Mapping[str, Any], timeout: float) -> tuple[bool, str]:
     command = str(entry.get("command") or "").strip()
     if not command:
-        local_url = str(entry.get("url") or "").strip()
-        if local_url:
-            headers = entry.get("headers") if isinstance(entry.get("headers"), Mapping) else None
-            return _probe_http(local_url, headers, timeout)
-        return False, "no local STDIO/private HTTP route configured"
+        return False, "no STDIO command configured"
     args = entry.get("args") if isinstance(entry.get("args"), list) else []
     env = os.environ.copy()
     raw_env = entry.get("env") if isinstance(entry.get("env"), Mapping) else {}
@@ -254,24 +250,29 @@ def test_web_mcp_server(path: str | Path, server_name: str, *, timeout: float = 
     server = normalize_mcp_server(name, raw)
     enabled = raw.get("enabled", True) is not False
     transport = server.realtime.transport
-    tested = ""
-    healthy = False
-    detail = ""
-    if transport == "native":
-        tested = "https"
-        healthy, detail = _probe_http(server.native.url, server.native.headers, timeout)
-    elif transport == "stdio":
-        tested = "stdio"
+    routes: list[dict[str, Any]] = []
+    command = str(server.local_entry.get("command") or "").strip()
+    local_url = str(server.local_entry.get("url") or "").strip()
+    if command:
         healthy, detail = _probe_stdio(server.local_entry, timeout)
-    else:
-        if server.local_entry.get("command") or server.local_entry.get("url"):
-            tested = "stdio"
-            healthy, detail = _probe_stdio(server.local_entry, timeout)
-        if not healthy and server.native.url:
-            tested = "https"
-            healthy, detail = _probe_http(server.native.url, server.native.headers, timeout)
-    if not tested:
-        detail = "no testable route configured"
+        routes.append({"transport": "stdio", "label": "STDIO", "configured": True, "healthy": healthy, "detail": detail})
+    if local_url:
+        headers = server.local_entry.get("headers") if isinstance(server.local_entry.get("headers"), Mapping) else None
+        healthy, detail = _probe_http(local_url, headers, timeout)
+        routes.append({"transport": "local_url", "label": "Local MCP URL", "configured": True, "healthy": healthy, "detail": detail})
+    if server.native.url:
+        healthy, detail = _probe_http(server.native.url, server.native.headers, timeout)
+        routes.append({"transport": "https", "label": "Provider HTTPS URL", "configured": True, "healthy": healthy, "detail": detail})
+
+    healthy_count = sum(1 for route in routes if route.get("healthy") is True)
+    healthy = bool(routes) and healthy_count == len(routes)
+    status = "healthy" if healthy else "partial" if healthy_count else "unavailable"
+    tested = ",".join(str(route["transport"]) for route in routes)
+    detail = (
+        "; ".join(f"{route['label']}: {route['detail']}" for route in routes)
+        if routes
+        else "no testable route configured"
+    )
     return {
         "ok": True,
         "server": name,
@@ -279,6 +280,8 @@ def test_web_mcp_server(path: str | Path, server_name: str, *, timeout: float = 
         "configured_transport": _web_transport(transport),
         "tested_transport": tested,
         "healthy": healthy,
+        "status": status,
+        "routes": routes,
         "detail": detail,
         "auth_configured": bool(server.native.headers),
         "config_path": str(config_path),

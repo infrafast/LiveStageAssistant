@@ -3411,12 +3411,19 @@
       return normalized === "native" ? "HTTPS" : normalized.toUpperCase();
     }
 
-    function makeCfgField(label, control) {
+    function makeCfgField(label, control, hint = "") {
       const field = document.createElement("label");
       field.className = "field";
       const text = document.createElement("span");
       text.textContent = label;
       field.append(text, control);
+      if (hint) {
+        const help = document.createElement("div");
+        help.className = "field-hint";
+        help.textContent = hint;
+        help.title = hint;
+        field.append(help);
+      }
       return field;
     }
 
@@ -3436,7 +3443,14 @@
       https.type = "url";
       https.placeholder = "https://…/mcp";
       https.value = policy.httpsUrl || "";
-      const httpsField = makeCfgField("Provider HTTPS URL", https);
+      const httpsField = makeCfgField(
+        "Provider HTTPS URL",
+        https,
+        tr(
+          "mcp_provider_https_url_hint",
+          "Public/provider HTTPS endpoint used when the saved MCP transport is HTTPS."
+        )
+      );
       const sync = () => {
         httpsField.classList.toggle("hidden", transport.value === "stdio");
         const approval = [...permission.options].find((item) => item.value === "approval");
@@ -3477,7 +3491,22 @@
       const create = document.createElement("button"); create.type = "button"; create.className = "small-button"; create.textContent = "Create MCP";
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "small-button"; cancel.textContent = "Cancel";
       const message = document.createElement("span"); message.className = "detail";
-      form.append(makeCfgField("Name", name), makeCfgField("Enabled", enabled), makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), create, cancel, message);
+      form.append(
+        makeCfgField("Name", name),
+        makeCfgField("Enabled", enabled),
+        makeCfgField("STDIO command", command),
+        makeCfgField("STDIO args (JSON)", args),
+        makeCfgField("Local MCP URL", localUrl, tr(
+          "mcp_local_url_hint",
+          "Local URL reachable by LiveStageAssistant for proxy/admin access to this MCP server."
+        )),
+        makeCfgField("Transport", controls.transport),
+        controls.httpsField,
+        makeCfgField("Permission", controls.permission),
+        create,
+        cancel,
+        message
+      );
       toolbar.append(add, form);
       add.addEventListener("click", () => form.classList.remove("hidden"));
       cancel.addEventListener("click", () => form.classList.add("hidden"));
@@ -3532,9 +3561,8 @@
           control.addEventListener("change", markMcpCrudDirty);
         }
         const auth = document.createElement("div"); auth.className = "detail"; auth.textContent = `HTTPS auth: ${policy.authConfigured ? "Configured" : "Missing / not required"}`;
-        const testedTransport = displayMcpTransport(runtime?.effective_transport || policy.transport || "auto");
-        const test = document.createElement("button"); test.type = "button"; test.className = "small-button"; test.textContent = trf("test_transport", "Test {transport}", { transport: testedTransport });
-        test.title = tr("test_transport_title", "Tests the currently saved/effective MCP transport.");
+        const test = document.createElement("button"); test.type = "button"; test.className = "small-button"; test.textContent = tr("test_transport", "Tester transport");
+        test.title = tr("test_transport_title", "Tests every configured MCP route: STDIO, Local MCP URL, and Provider HTTPS URL.");
         const save = document.createElement("button"); save.type = "button"; save.className = "small-button primary-save"; save.textContent = tr("save_mcp", "Save MCP");
         const message = document.createElement("span"); message.className = "detail";
         save.addEventListener("click", async () => {
@@ -3556,11 +3584,30 @@
           try {
             const response = await fetch(apiUrl("/api/mcp-test"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ server: name }) });
             const data = await fetchJsonOrThrow(response);
-            message.textContent = `${data.healthy ? "Healthy" : "Unavailable"} · ${displayMcpTransport(data.tested_transport || data.configured_transport)} · ${data.detail || ""}`;
+            const routes = Array.isArray(data.routes) ? data.routes : [];
+            const status = data.status === "partial" ? "Partial" : data.healthy ? "Healthy" : "Unavailable";
+            const details = routes.length
+              ? routes.map((route) => `${route.label || displayMcpTransport(route.transport)}: ${route.healthy ? "OK" : "Fail"} (${route.detail || ""})`).join(" · ")
+              : (data.detail || "");
+            message.textContent = `${status} · ${details}`;
           } catch (error) { message.textContent = `Test failed: ${error.message || error}`; }
           finally { test.disabled = false; }
         });
-        section.append(makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), auth, test, save, message);
+        section.append(
+          makeCfgField("STDIO command", command),
+          makeCfgField("STDIO args (JSON)", args),
+          makeCfgField("Local MCP URL", localUrl, tr(
+            "mcp_local_url_hint",
+            "Local URL reachable by LiveStageAssistant for proxy/admin access to this MCP server."
+          )),
+          makeCfgField("Transport", controls.transport),
+          controls.httpsField,
+          makeCfgField("Permission", controls.permission),
+          auth,
+          test,
+          save,
+          message
+        );
         card.append(section);
       }
     }
