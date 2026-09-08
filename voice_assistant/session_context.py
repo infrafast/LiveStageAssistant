@@ -82,6 +82,28 @@ class SessionContextStore:
         if self.current:
             self._write_session(self.current)
 
+    def sync_active_session(self) -> dict[str, Any]:
+        """Reload the active session if another runtime owner selected it.
+
+        The parent WebMonitor and supervised child engines share the same small
+        context directory. Each operation refreshes from the active_session file
+        so a GUI session switch changes the prompt context for the next child
+        command instead of stacking session summaries in memory.
+        """
+        active_id = ""
+        try:
+            active_id = self.active_file.read_text().strip()
+        except OSError:
+            pass
+        if active_id and active_id != self.active_id:
+            data = self._read_session(self._session_path(active_id))
+            if data:
+                self.current = data
+                return data
+        if not self.current:
+            return self.load_active_or_latest()
+        return self.current
+
     def list_sessions(self) -> list[dict[str, Any]]:
         sessions = []
         for path in self.context_dir.glob("*.context.json"):
@@ -142,6 +164,7 @@ class SessionContextStore:
         return self.current
 
     def rename_session(self, session_id: str, title: str) -> dict[str, Any]:
+        self.sync_active_session()
         cleaned_title = re.sub(r"\s+", " ", title).strip()
         if not cleaned_title:
             raise ValueError("session title cannot be empty")
@@ -157,6 +180,7 @@ class SessionContextStore:
         return data
 
     def delete_session(self, session_id: str) -> dict[str, Any]:
+        self.sync_active_session()
         path = self._session_path(session_id)
         data = self._read_session(path)
         if not data:
@@ -177,6 +201,7 @@ class SessionContextStore:
         return self.current or self.load_active_or_latest()
 
     def clear_session_conversation(self, session_id: str, *, preserve_llm_summary: bool = True) -> dict[str, Any]:
+        self.sync_active_session()
         data = self._read_session(self._session_path(session_id))
         if not data:
             raise ValueError(f"session '{session_id}' was not found")
@@ -194,8 +219,7 @@ class SessionContextStore:
         return data
 
     def clear_current(self) -> None:
-        if not self.current:
-            self.load_active_or_latest()
+        self.sync_active_session()
         self.current["messages"] = []
         self.current["summary"] = ""
         self.current["llm_summary"] = ""
@@ -207,8 +231,7 @@ class SessionContextStore:
         cleaned_text = text.strip()
         if not cleaned_text:
             return None
-        if not self.current:
-            self.load_active_or_latest()
+        self.sync_active_session()
 
         now = time.time()
         normalized_role = role if role in {"user", "assistant"} else "assistant"
@@ -231,6 +254,7 @@ class SessionContextStore:
         return message
 
     def context_text(self, *, exclude_last_user: bool = False, max_chars: int | None = None) -> str:
+        self.sync_active_session()
         uses_llm_summary = bool(self.current) and bool(str(self.current.get("llm_summary") or "").strip())
         summary = self.injectable_summary().strip()
         if max_chars is not None:
@@ -266,11 +290,11 @@ class SessionContextStore:
         return str(self.current.get("summary") or "").strip()
 
     def summary_source_text(self) -> str:
+        self.sync_active_session()
         return str(self.current.get("summary") or "").strip() if self.current else ""
 
     def set_llm_summary(self, summary: str, source_summary: str | None = None) -> None:
-        if not self.current:
-            self.load_active_or_latest()
+        self.sync_active_session()
         cleaned_summary = summary.strip()
         self.current["llm_summary"] = cleaned_summary
         self.current["llm_summary_updated_at"] = time.time() if cleaned_summary else None
@@ -278,8 +302,7 @@ class SessionContextStore:
         self._save_current()
 
     def snapshot(self) -> dict[str, Any]:
-        if not self.current:
-            self.load_active_or_latest()
+        self.sync_active_session()
         return {
             "active_id": self.active_id,
             "sessions": self.list_sessions(),
