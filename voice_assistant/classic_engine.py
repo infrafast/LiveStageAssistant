@@ -18,6 +18,7 @@ from dotenv import dotenv_values, load_dotenv
 
 from . import agent
 from .child_command_channel import child_monitor_from_env
+from .prompt_contract import configured_system_prompt
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
 from .speaker_recognition import SpeakerProfile
 from .wake_word import parse_wake_words
@@ -133,6 +134,7 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
     context_store = SessionContextStore(session_dir, summary_max_chars=DEFAULT_SUMMARY_MAX_CHARS)
     speaker_profiles = _speaker_profiles(values)
     command_monitor = child_monitor_from_env()
+    system_prompt = configured_system_prompt(required=False, fallback=agent.DEFAULT_ASSISTANT_SYSTEM_PROMPT, log_prefix="Classic prompt")
 
     cloud_gain = max(0.0, min(2.0, _float(values, "CLOUD_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
     local_gain = max(0.0, min(2.0, _float(values, "LOCAL_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
@@ -200,7 +202,7 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
         speaker_margin=max(0.0, min(1.0, _float(values, "SPEAKER_MARGIN", 0.10))),
         speaker_recognition_timeout_seconds=max(1.0, _float(values, "SPEAKER_RECOGNITION_TIMEOUT_SECONDS", agent.DEFAULT_SPEAKER_RECOGNITION_TIMEOUT_SECONDS)),
         speaker_profiles=speaker_profiles,
-        system_prompt=str(values.get("ASSISTANT_SYSTEM_PROMPT") or agent.DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip(),
+        system_prompt=system_prompt,
         reload_event=None,
         web_monitor=command_monitor,
     )
