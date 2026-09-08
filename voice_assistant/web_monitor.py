@@ -21,11 +21,13 @@ try:
     )
     from .runtime_status import read_status_file
     from .realtime.browser_auth import create_openai_browser_client_secret
+    from .session_context import DEFAULT_CONTEXT_DIR, SessionContextStore
 except ImportError:  # pragma: no cover - direct script fallback
     import web_monitor_base as _base
     from mcp_realtime_web_endpoint import delete_mcp_server_from_snapshot, mcp_registry_from_snapshot, save_mcp_realtime_policy_from_snapshot, save_mcp_server_from_snapshot, test_mcp_server_from_snapshot
     from runtime_status import read_status_file
     from realtime.browser_auth import create_openai_browser_client_secret
+    from session_context import DEFAULT_CONTEXT_DIR, SessionContextStore
 
 for _name in dir(_base):
     if not _name.startswith("_") and _name != "WebMonitor":
@@ -195,6 +197,14 @@ class WebMonitor(_BaseWebMonitor):
                 return candidate.read_text(encoding="utf-8").strip()
         raise RuntimeError(f"could not read OPENAI_API_KEY_FILE; tried: {', '.join(tried)}")
 
+    def _active_env_values(self) -> dict[str, Any]:
+        snapshot = super().snapshot()
+        env_file = Path(str(snapshot.get("env_file") or "")).expanduser()
+        if env_file.is_file():
+            return dict(dotenv_values(env_file))
+        env = (snapshot.get("config") or {}).get("env") if isinstance(snapshot.get("config"), dict) else {}
+        return dict(env or {}) if isinstance(env, dict) else {}
+
     def _browser_realtime_secret(self) -> dict[str, Any]:
         snapshot = super().snapshot()
         env_file = Path(str(snapshot.get("env_file") or "")).expanduser()
@@ -235,6 +245,15 @@ class WebMonitor(_BaseWebMonitor):
         handler()
         return {"ok": True, "restart_requested": True, "message": "Runtime engine reload requested."}
 
+    def _session_store_for_realtime_chat(self) -> SessionContextStore:
+        values = self._active_env_values()
+        context_dir = str(values.get("SESSION_CONTEXT_DIR") or os.getenv("SESSION_CONTEXT_DIR") or DEFAULT_CONTEXT_DIR).strip()
+        try:
+            summary_max_chars = int(values.get("SESSION_CONTEXT_SUMMARY_MAX_CHARS") or os.getenv("SESSION_CONTEXT_SUMMARY_MAX_CHARS") or 12000)
+        except (TypeError, ValueError):
+            summary_max_chars = 12000
+        return SessionContextStore(context_dir, summary_max_chars=summary_max_chars)
+
     def _append_realtime_chat_message(self, payload: dict[str, Any]) -> dict[str, Any]:
         role = str(payload.get("role") or "").strip().lower()
         text = str(payload.get("text") or "").strip()
@@ -244,9 +263,17 @@ class WebMonitor(_BaseWebMonitor):
             raise ValueError("text is required")
         speak = bool(payload.get("speak"))
         self.append_dialogue(role, text, speak=speak)
+        persisted = False
+        try:
+            store = self._session_store_for_realtime_chat()
+            store.append_message(role, text)
+            self.set_context_state(store.snapshot())
+            persisted = True
+        except Exception as error:
+            self.append_log(f"Realtime chat session persistence skipped: {error}\n", source="web")
         if role == "assistant":
             self.set_assistant_busy(False)
-        return {"ok": True, "role": role}
+        return {"ok": True, "role": role, "persisted": persisted}
 
     def _set_realtime_chat_state(self, payload: dict[str, Any]) -> dict[str, Any]:
         busy = bool(payload.get("assistant_busy"))
