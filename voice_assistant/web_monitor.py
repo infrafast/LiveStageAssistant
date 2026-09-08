@@ -176,6 +176,15 @@ class WebMonitor(_BaseWebMonitor):
     def _test_mcp_server(self, server_name: str) -> dict[str, Any]:
         return test_mcp_server_from_snapshot(self.snapshot(), server_name)
 
+    def _read_api_key_file(self, secret_path: str, env_file: Path) -> str:
+        raw_path = Path(secret_path).expanduser()
+        candidates = [raw_path] if raw_path.is_absolute() else [env_file.parent / raw_path, Path.cwd() / raw_path]
+        tried: list[str] = []
+        for candidate in candidates:
+            tried.append(str(candidate))
+            if candidate.is_file():
+                return candidate.read_text(encoding="utf-8").strip()
+        raise RuntimeError(f"could not read OPENAI_API_KEY_FILE; tried: {', '.join(tried)}")
 
     def _browser_realtime_secret(self) -> dict[str, Any]:
         snapshot = super().snapshot()
@@ -188,11 +197,8 @@ class WebMonitor(_BaseWebMonitor):
         secret_path = str(values.get("OPENAI_API_KEY_FILE") or "").strip()
         api_key = str(values.get("OPENAI_API_KEY") or "").strip()
         if not api_key and secret_path:
-            path = Path(secret_path).expanduser()
-            if not path.is_absolute():
-                path = env_file.parent / path
             try:
-                api_key = path.read_text(encoding="utf-8").strip()
+                api_key = self._read_api_key_file(secret_path, env_file)
             except OSError as exc:
                 raise RuntimeError(f"could not read OPENAI_API_KEY_FILE: {exc}") from exc
         return create_openai_browser_client_secret(
