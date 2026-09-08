@@ -74,9 +74,31 @@ The expected prompt composition is:
 system prompt
 + MCP prompt/instructions loaded at engine startup when enabled
 + active session summary/context injected for the current turn
++ user message only
 ```
 
-The session summary is not appended permanently to the system prompt at each turn. Classic/Local inject it per command through the existing runtime instruction path. Backend Realtime injects it into supervised composer-text turns. Browser Realtime mirrors transcripts to the active session; provider-side continuity still depends on the active WebRTC session state.
+The session summary is not appended permanently to the system prompt at each turn. It must be treated as internal context, never as text typed or spoken by the user.
+
+For all engines, the user-visible message remains clean. The model must not receive a plain user turn shaped like:
+
+```text
+hello
+
+Session context summary...
+```
+
+because models may answer as if the user just supplied that context. The engine-neutral rule is:
+
+```text
+context goes in instructions/system/internal context when supported
+user message goes in the user turn
+```
+
+OpenAI backend Realtime refreshes session context with `session.update` before the supervised composer text turn, then sends the clean user text with `engine.send_text(text)`. Providers without a runtime instruction-refresh hook must not silently concatenate hidden context into the user message; they either use context already loaded at engine startup or run without per-turn hidden context until the provider adapter supports a safe instruction update.
+
+Classic/Local keep using their existing runtime instruction path for backend turns, but the session context is still considered internal prompt material, not a chat bubble or user-visible text.
+
+Browser Realtime mirrors transcripts to the active session; provider-side continuity still depends on the active WebRTC session state.
 
 ## Validation expectations
 
@@ -85,8 +107,9 @@ For final RV/CFG recipe, verify at least:
 1. Classic text command creates user bubble, thinking/busy state and assistant bubble.
 2. Local/offline text command does the same through the supervised channel.
 3. OpenAI/Gemini backend Realtime typed composer message reaches the running provider session, logs `Realtime injected text command`, and creates user/assistant bubbles.
-4. OpenAI Browser Realtime spoken turn creates user transcript bubble and assistant transcript bubble when provider transcript events are emitted.
-5. OpenAI Browser Realtime typed composer message goes into the active Realtime session and appears in the same chat surface.
-6. Starting/stopping Browser Realtime clears busy state.
-7. New session, session switch, resume latest session at startup, clear/save/delete still work through the existing session UI.
-8. Context summary/compact summary still appears in session metadata and is injected according to `SESSION_CONTEXT_SIZE` for backend turns.
+4. OpenAI backend Realtime composer text with an existing session context does not trigger answers like “thanks for the context”; the context was refreshed as instructions, not appended to the user text.
+5. OpenAI Browser Realtime spoken turn creates user transcript bubble and assistant transcript bubble when provider transcript events are emitted.
+6. OpenAI Browser Realtime typed composer message goes into the active Realtime session and appears in the same chat surface.
+7. Starting/stopping Browser Realtime clears busy state.
+8. New session, session switch, resume latest session at startup, clear/save/delete still work through the existing session UI.
+9. Context summary/compact summary still appears in session metadata and is injected according to `SESSION_CONTEXT_SIZE` for backend turns without accumulating old session summaries.
