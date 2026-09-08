@@ -519,7 +519,7 @@ Interpretation: local STDIO is faster and materially more deterministic for stag
 - [x] common connectivity supervision and basic online/offline engine/profile round trips Pi-validated under OR2;
 - [~] server health/status shows configured/effective transport and permission; implementation complete, consolidated Pi/browser validation pending;
 - [~] one common production WebMonitor owned by `runtime.py`; child Classic/Local monitor binding suppressed under supervision, consolidated Pi/browser validation pending;
-- [~] migrate remaining configuration/session/audio-diagnostic handlers out of `agent.py` into common runtime services; session/config and backend WAV asset/profile-sample preview handlers are now runtime-owned; backend microphone diagnostic/capture and web STT/TTS still need a shared audio service or child-service bridge rather than duplicated `agent.py` code;
+- [~] migrate remaining configuration/session/audio-diagnostic handlers out of `agent.py` into common runtime services; implementation complete in the runtime-owned WebMonitor through shared services for web STT/TTS, backend TTS test, backend WAV preview, speaker-profile sample preview, backend microphone diagnostic and backend speaker capture. Consolidated Pi/browser validation remains pending before marking complete.
 - [ ] STDIO approval completion;
 - [~] cloud/local independent output gains through one common configuration surface;
 - [ ] final inventory consolidation/plugin-style GUI.
@@ -917,7 +917,7 @@ common WebMonitor services
 - [x] Cloud/Local independent output-gain contract implemented across supervised Classic, Local/Piper, Realtime and legacy direct `agent.py` speech paths;
 - [~] semantic feedback cue contract implemented;
 - [~] one common runtime-owned WebMonitor server implemented; legacy child server binding suppressed under supervision;
-- [~] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services; runtime-owned profile-sample playback now reuses the common backend WAV preview player. The active engine audio path remains functional, including backend voice detection/speaker recognition when configured, but the common runtime GUI surface is still only partially decoupled: backend microphone diagnostic/capture and browser STT/TTS handlers still need extraction through a shared audio service or child-service bridge without importing the Classic engine stack.
+- [~] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services; implementation complete in the runtime-owned WebMonitor without a child compatibility bridge. Shared services now cover web STT/TTS, backend TTS test, backend WAV preview, speaker-profile sample preview, backend microphone diagnostic and backend speaker capture. The active engine audio path remains functional, including backend voice detection/speaker recognition when configured. Consolidated Pi/browser validation remains pending before marking complete.
 - [x] wire Cloud/Local gains into all relevant speech outputs; feedback-cue/sample preview volumes remain separately controlled by their semantic audio settings;
 - [~] render Cloud/Local gain controls once in the common GUI;
 - [x] render semantic cue controls once in the common GUI; command acknowledgement, thinking, ready, listening, wake-detected and startup-loader WAV selectors share the common Interface utilisateur section;
@@ -941,8 +941,8 @@ common WebMonitor services
 
 # 9. Current Next Actions
 
-1. **RV2D / CFG-9 — finish the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; migrate remaining configuration, session and audio-diagnostic handlers out of `agent.py` into common services. No historical/second WebMonitor is allowed in the supervised architecture.
-2. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** once the common handlers are migrated, run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
+1. **RV2D / CFG-9 — validate the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; run the migrated common handlers on Pi/browser before marking the milestone complete. No historical/second WebMonitor is allowed in the supervised architecture.
+2. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls, backend microphone diagnostic/capture, browser STT/TTS and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
 3. **RV2F / CFG-9 — semantic audio feedback parity:** finish the shared semantic-audio contract across Realtime, Classic and Local, including READY cue, listening/wake/thinking/result-ready/speaking transitions and one common GUI configuration surface.
 4. **CFG-9 / RV8 — Cloud vs Local speech gains:** finish wiring `CLOUD_TTS_OUTPUT_GAIN` and `LOCAL_TTS_OUTPUT_GAIN` through all relevant speech paths, including Classic cloud output, while keeping feedback-cue levels semantically separate from TTS gain.
 5. **RV2F / RV3 — wake compatibility:** integrate wake-detected/listening/thinking/result-ready/idle transitions without false feedback during `WAIT_WAKE`; preserve Classic post-TTS suppression/re-arm behavior as the reference contract.

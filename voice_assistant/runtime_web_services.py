@@ -20,9 +20,14 @@ from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
+from .backend_audio_input import BackendAudioInputService
 from .backend_audio_sample import BackendAudioSamplePlayer, speaker_profile_sample_path
+from .backend_tts import BackendTtsTester
+from .cloud_speech import audio_bytes_to_wav_bytes, transcribe_openai_audio, web_text_to_speech
 from .i18n import available_locales, normalize_locale
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
+from .speaker_recognition import SpeakerProfile, SpeakerRecognitionResult, build_speaker_recognizer
+from .wake_word import apply_wake_word, parse_wake_words
 
 
 CLOUD_TTS_PROVIDER_OPTIONS = [
@@ -66,6 +71,8 @@ class RuntimeWebServices:
         self.automatic_profiles = bool(automatic_profiles)
         self._lock = threading.RLock()
         self._backend_audio_sample_player = BackendAudioSamplePlayer()
+        self._backend_tts_tester = BackendTtsTester(self._backend_audio_sample_player)
+        self._backend_audio_input = BackendAudioInputService()
 
     def bind(self) -> None:
         """Register only engine-neutral handlers on the common WebMonitor."""
@@ -92,6 +99,13 @@ class RuntimeWebServices:
         )
         self.monitor.set_backend_audio_sample_handler(self.backend_audio_sample)
         self.monitor.set_speaker_profile_sample_handler(self.speaker_profile_sample)
+        self.monitor.set_backend_tts_test_handler(self.backend_tts_test)
+        self.monitor.set_web_audio_handlers(transcribe_handler=self.web_transcribe, tts_handler=self.web_tts)
+        self.monitor.set_backend_audio_diagnostic_handler(self.backend_audio_diagnostic)
+        self.monitor.set_backend_speaker_capture_handlers(
+            capture_handler=self.backend_speaker_capture,
+            stop_handler=self._backend_audio_input.stop_capture,
+        )
 
     def _values(self, profile: Path | None = None) -> dict[str, Any]:
         return dict(dotenv_values(profile or self.active_profile()))
@@ -129,6 +143,152 @@ class RuntimeWebServices:
             }
         )
         return result
+
+    def web_tts(self, text: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        values = self._values()
+        requested = options or {}
+        configured_provider = str(values.get("WEB_TTS_PROVIDER") or "").strip().lower()
+        if not configured_provider:
+            cloud_tts_provider = str(values.get("CLOUD_TTS_PROVIDER") or "").strip().lower()
+            configured_provider = cloud_tts_provider if cloud_tts_provider in {"openai", "elevenlabs"} else "none"
+        requested_provider = str(requested.get("provider") or "").strip().lower()
+        provider = requested_provider or configured_provider
+        return web_text_to_speech(
+            provider=provider,
+            text=text,
+            values=values,
+            openai_api_key=self._secret_value(values, "OPENAI_API_KEY"),
+            elevenlabs_api_key=self._secret_value(values, "ELEVENLABS_API_KEY"),
+            options=requested,
+        )
+
+    def backend_tts_test(self, text: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        values = self._values()
+        return self._backend_tts_tester.test(
+            text,
+            values=values,
+            openai_api_key=self._secret_value(values, "OPENAI_API_KEY"),
+            elevenlabs_api_key=self._secret_value(values, "ELEVENLABS_API_KEY"),
+            options=options,
+        )
+
+    def backend_audio_diagnostic(self, device: str, input_gain: float) -> dict[str, Any]:
+        return self._backend_audio_input.diagnose(
+            values=self._values(),
+            selected_device=str(device or "").strip(),
+            input_gain=input_gain,
+        )
+
+    def backend_speaker_capture(self, device: str, duration_seconds: float) -> dict[str, Any]:
+        return self._backend_audio_input.capture_speaker_sample(
+            values=self._values(),
+            selected_device=str(device or "").strip(),
+            duration_seconds=duration_seconds,
+        )
+
+    def web_transcribe(self, audio_bytes: bytes, mime_type: str, wake_word_mode: bool | str) -> dict[str, Any]:
+        values = self._values()
+        if str(values.get("WEB_STT_PROVIDER") or "openai").strip().lower() != "openai":
+            raise ValueError("Web audio transcription is not available")
+        text = transcribe_openai_audio(
+            api_key=self._secret_value(values, "OPENAI_API_KEY"),
+            audio_data=audio_bytes,
+            mime_type=mime_type,
+            model=str(values.get("WEB_STT_MODEL") or "whisper-1").strip() or "whisper-1",
+            language=str(values.get("STT_LANGUAGE") or "").strip(),
+            prompt=str(values.get("STT_PROMPT") or "").strip(),
+        )
+        speaker_payload = self._speaker_payload(values, audio_bytes, mime_type)
+        if not text:
+            return {
+                "text": "",
+                "accepted": False,
+                "command_text": "",
+                "message": "No speech detected.",
+                **speaker_payload,
+            }
+
+        mode = wake_word_mode.strip().lower() if isinstance(wake_word_mode, str) else ("require" if wake_word_mode else "ignore")
+        if mode not in {"require", "ignore"}:
+            mode = "ignore"
+        wake_words = parse_wake_words(str(values.get("WAKE_WORD") or "").strip() or None)
+        if mode == "require" and wake_words:
+            should_process, matched_wake_word, command_text = apply_wake_word(text, wake_words)
+            if not should_process:
+                return {
+                    "text": text,
+                    "accepted": False,
+                    "command_text": "",
+                    "matched_wake_word": "",
+                    "message": "Wake word not detected.",
+                    **speaker_payload,
+                }
+            return {
+                "text": text,
+                "accepted": True,
+                "command_text": command_text,
+                "matched_wake_word": matched_wake_word or "",
+                **speaker_payload,
+            }
+        return {
+            "text": text,
+            "accepted": True,
+            "command_text": text,
+            "matched_wake_word": "",
+            **speaker_payload,
+        }
+
+    def _speaker_payload(self, values: dict[str, Any], audio_bytes: bytes, mime_type: str) -> dict[str, Any]:
+        try:
+            result = self._recognize_speaker(values, audio_bytes, mime_type)
+        except Exception as error:
+            result = SpeakerRecognitionResult(backend=str(values.get("SPEAKER_BACKEND") or "none"), reason=str(error))
+        candidates = [
+            {"name": name, "confidence": confidence}
+            for name, confidence in (result.candidates or [])
+        ]
+        return {
+            "speaker": result.speaker,
+            "speaker_confidence": result.confidence,
+            "speaker_backend": result.backend,
+            "speaker_second_confidence": result.second_confidence,
+            "speaker_reason": result.reason,
+            "speaker_candidates": candidates,
+        }
+
+    def _recognize_speaker(self, values: dict[str, Any], audio_bytes: bytes, mime_type: str) -> SpeakerRecognitionResult:
+        if not self._bool(values, "SPEAKER_RECOGNITION_ENABLED", False):
+            return SpeakerRecognitionResult()
+        profiles = self._speaker_recognition_profiles(values)
+        recognizer = build_speaker_recognizer(
+            enabled=True,
+            backend=str(values.get("SPEAKER_BACKEND") or "resemblyzer").strip().lower(),
+            threshold=max(0.0, min(1.0, self._float(values, "SPEAKER_THRESHOLD", 0.75))),
+            margin=max(0.0, min(1.0, self._float(values, "SPEAKER_MARGIN", 0.10))),
+            profiles=profiles,
+        )
+        if recognizer is None:
+            return SpeakerRecognitionResult()
+        wav_bytes = audio_bytes_to_wav_bytes(audio_bytes, mime_type)
+        return recognizer.recognize_wav_bytes(wav_bytes)
+
+    def _speaker_recognition_profiles(self, values: dict[str, Any]) -> list[SpeakerProfile]:
+        maximum = max(0, min(5, self._int(values, "SPEAKER_PROFILES_MAX", 5)))
+        root = Path(str(values.get("SPEAKER_PROFILES_DIR") or "data/speaker_profiles").strip())
+        profiles: list[SpeakerProfile] = []
+        for index in range(1, maximum + 1):
+            name = str(values.get(f"SPEAKER_PROFILE_{index}_NAME") or "").strip()
+            enabled = self._bool(values, f"SPEAKER_PROFILE_{index}_ENABLED", False)
+            if not name and not enabled:
+                continue
+            profiles.append(
+                SpeakerProfile(
+                    name=name or f"speaker_{index}",
+                    wav_paths=[root / f"profil{index}_{sample}.wav" for sample in range(1, 4)],
+                    enabled=enabled,
+                )
+            )
+        return profiles
 
     @staticmethod
     def _bool(values: dict[str, Any], key: str, default: bool = False) -> bool:
