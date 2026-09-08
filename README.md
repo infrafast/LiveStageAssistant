@@ -88,6 +88,9 @@ http://127.0.0.1:8765
 ```
 
 Open that address in a browser to use the chat and configuration interface.
+The same web GUI can also be exposed behind a reverse proxy or Tailscale Funnel
+subpath such as `/lsa` when that public subpath is forwarded to the backend web
+root; its API and asset URLs are resolved relative to the opened page.
 
 ## Raspberry Pi Service
 

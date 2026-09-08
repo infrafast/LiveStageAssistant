@@ -1,3 +1,24 @@
+    const lsaBasePath = (() => {
+      const configured = String(window.LSA_BASE_PATH || "").replace(/\/+$/, "");
+      if (configured) return configured;
+      let path = window.location.pathname || "/";
+      path = path.replace(/\/index\.html$/, "");
+      if (path !== "/" && path.endsWith("/")) path = path.slice(0, -1);
+      return path === "/" ? "" : path;
+    })();
+    function lsaUrl(path) {
+      const value = String(path || "");
+      if (!value) return lsaBasePath || "/";
+      if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value)) return value;
+      return `${lsaBasePath}${value.startsWith("/") ? value : `/${value}`}`;
+    }
+    function apiUrl(path) {
+      return lsaUrl(path);
+    }
+    function assetUrl(path) {
+      return lsaUrl(path);
+    }
+
     const i18nPayload = window.LSA_I18N_PAYLOAD || { locale: "fr", messages: {}, available_locales: [] };
     const i18nMessages = i18nPayload.messages || {};
     function tr(key, fallback = "") {
@@ -503,7 +524,7 @@
       cloudApiRefresh.disabled = true;
       cloudApiGrid.innerHTML = '<div class="cloud-api-line">Chargement...</div>';
       try {
-        const response = await fetch("/api/cloud-api-status", { cache: "no-store" });
+        const response = await fetch(apiUrl("/api/cloud-api-status"), { cache: "no-store" });
         const text = await response.text();
         if (!response.ok) throw new Error(text);
         renderCloudApiStatus(JSON.parse(text));
@@ -735,7 +756,7 @@
       }
       if (messageEl) messageEl.textContent = tr("saving", "Saving...");
       try {
-        const response = await fetch("/api/mcp-routing", {
+        const response = await fetch(apiUrl("/api/mcp-routing"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ routing })
@@ -768,7 +789,7 @@
       }
       if (messageEl) messageEl.textContent = tr("saving", "Saving...");
       try {
-        const response = await fetch("/api/mcp-server-options", {
+        const response = await fetch(apiUrl("/api/mcp-server-options"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ options })
@@ -840,12 +861,12 @@
       params.set("viewOnly", vncViewOnly.checked ? "1" : "0");
       const password = parsed.searchParams.get("password") || "ronron";
       if (password) params.set("password", password);
-      return `/vnc.html?${params.toString()}`;
+      return lsaUrl(`/vnc.html?${params.toString()}`);
     }
 
     async function saveRemoteScreenUrl() {
       const nextUrl = vncUrl.value.trim();
-      const response = await fetch("/api/remote-screen-config", {
+      const response = await fetch(apiUrl("/api/remote-screen-config"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ vnc_url: nextUrl, view_only: Boolean(vncViewOnly.checked) })
@@ -1288,9 +1309,9 @@
 
     async function loadOrtModule() {
       if (!ortModulePromise) {
-        ortModulePromise = import(webAudio.vad_ort_url || "/assets/web/static/vendor/onnxruntime-web/ort.wasm.min.mjs").then((module) => {
+        ortModulePromise = import(assetUrl(webAudio.vad_ort_url || "/assets/web/static/vendor/onnxruntime-web/ort.wasm.min.mjs")).then((module) => {
           const ort = module.default || module;
-          ort.env.wasm.wasmPaths = webAudio.vad_ort_wasm_path || "/assets/web/static/vendor/onnxruntime-web/";
+          ort.env.wasm.wasmPaths = assetUrl(webAudio.vad_ort_wasm_path || "/assets/web/static/vendor/onnxruntime-web/");
           ort.env.wasm.numThreads = 2;
           return ort;
         });
@@ -1301,7 +1322,7 @@
     async function loadSileroSession() {
       if (!sileroSessionPromise) {
         sileroSessionPromise = loadOrtModule().then((ort) =>
-          ort.InferenceSession.create(webAudio.vad_model_url || "/assets/web/static/vendor/silero-vad/silero_vad_v6.onnx", {
+          ort.InferenceSession.create(assetUrl(webAudio.vad_model_url || "/assets/web/static/vendor/silero-vad/silero_vad_v6.onnx"), {
             executionProviders: ["wasm"]
           })
         );
@@ -1794,7 +1815,7 @@
       updateCountdown();
       state.countdownTimer = window.setInterval(updateCountdown, 250);
       try {
-        const response = await fetch("/api/backend-audio-diagnostic", {
+        const response = await fetch(apiUrl("/api/backend-audio-diagnostic"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1973,7 +1994,7 @@
       if (nowMs - lastBrowserCommandAckAt < 900) return;
       lastBrowserCommandAckAt = nowMs;
       try {
-        const audio = new Audio(commandAckSoundUrl);
+        const audio = new Audio(assetUrl(commandAckSoundUrl));
         audio.preload = "auto";
         audio.volume = Math.max(0, Math.min(1, Number(webAudio.tts_volume ?? 1)));
         await applyBrowserAudioOutput(audio);
@@ -2165,7 +2186,7 @@
       if (cancelRequestInFlight) return;
       cancelRequestInFlight = true;
       try {
-        const response = await fetch("/api/cancel-command", {
+        const response = await fetch(apiUrl("/api/cancel-command"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
@@ -2289,7 +2310,7 @@
       renderMessages(lastServerMessages, true);
       try {
         const speakerPayload = speakerPayloadForSubmit(options);
-        const response = await fetch("/api/inject-command", {
+        const response = await fetch(apiUrl("/api/inject-command"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2408,7 +2429,7 @@
       }
       try {
         const audioBase64 = await blobToBase64(blob);
-        const response = await fetch("/api/web-transcribe", {
+        const response = await fetch(apiUrl("/api/web-transcribe"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2710,7 +2731,7 @@
         if (options.model) payload.model = options.model;
         if (options.voice) payload.voice = options.voice;
         if (options.speed) payload.speed = options.speed;
-        const response = await fetch("/api/web-tts", {
+        const response = await fetch(apiUrl("/api/web-tts"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -2758,8 +2779,8 @@
     async function startThinkingAudio() {
       if (!webAudio.tts_enabled || webAudio.tts_output !== "browser" || !thinkingAudioUrl || thinkingAudioPlaying) return;
       try {
-        if (!thinkingAudio || thinkingAudio.src !== new URL(thinkingAudioUrl, window.location.href).href) {
-          thinkingAudio = new Audio(thinkingAudioUrl);
+        if (!thinkingAudio || thinkingAudio.src !== new URL(assetUrl(thinkingAudioUrl), window.location.href).href) {
+          thinkingAudio = new Audio(assetUrl(thinkingAudioUrl));
           thinkingAudio.loop = true;
         }
         thinkingAudio.volume = Math.max(0, Math.min(1, Number(webAudio.tts_volume ?? 1)));
@@ -2807,7 +2828,7 @@
         sample.audio.currentTime = 0;
       }
       if (sample.output === "backend") {
-        const stopBackendSample = () => fetch("/api/backend-audio-sample", {
+        const stopBackendSample = () => fetch(apiUrl("/api/backend-audio-sample"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "stop", filename: sample.filename })
@@ -2883,7 +2904,7 @@
       try {
         if (output === "browser") {
           await unlockWebTtsAudio();
-          const audio = new Audio(`/assets/${filename}`);
+          const audio = new Audio(assetUrl(`/assets/${filename}`));
           if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
           sample.audio = audio;
           audio.loop = true;
@@ -2892,7 +2913,7 @@
           if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
           await audio.play();
         } else {
-          sample.backendStart = fetch("/api/backend-audio-sample", {
+          sample.backendStart = fetch(apiUrl("/api/backend-audio-sample"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2923,7 +2944,7 @@
       injectStop.disabled = true;
       injectCommand.placeholder = "Cancelling...";
       try {
-        const response = await fetch("/api/cancel-command", {
+        const response = await fetch(apiUrl("/api/cancel-command"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
@@ -3076,7 +3097,7 @@
       realtimeBrowserToggle.disabled = true;
       realtimeBrowserStatus.textContent = "Creating short-lived Realtime session…";
       try {
-        const secretResponse = await fetch("/api/realtime-browser-secret", {
+        const secretResponse = await fetch(apiUrl("/api/realtime-browser-secret"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: "{}"
@@ -3176,7 +3197,7 @@
       llmMessage.textContent = "Restarting…";
       syncConfigActionState();
       try {
-        const response = await fetch("/api/runtime-restart", {
+        const response = await fetch(apiUrl("/api/runtime-restart"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: "{}"
@@ -3267,7 +3288,7 @@
     }
 
     async function saveMcpDefinition(action, body) {
-      const response = await fetch("/api/mcp-server", {
+      const response = await fetch(apiUrl("/api/mcp-server"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, ...body })
@@ -3364,7 +3385,7 @@
         test.addEventListener("click", async () => {
           test.disabled = true; message.textContent = "Testing…";
           try {
-            const response = await fetch("/api/mcp-test", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ server: name }) });
+            const response = await fetch(apiUrl("/api/mcp-test"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ server: name }) });
             const data = await fetchJsonOrThrow(response);
             message.textContent = `${data.healthy ? "Healthy" : "Unavailable"} · ${displayMcpTransport(data.tested_transport || data.configured_transport)} · ${data.detail || ""}`;
           } catch (error) { message.textContent = `Test failed: ${error.message || error}`; }
@@ -3391,7 +3412,7 @@
       envProfilesLoading = true;
       let profileChanged = false;
       try {
-        const response = await fetch("/api/env-profiles", { cache: "no-store" });
+        const response = await fetch(apiUrl("/api/env-profiles"), { cache: "no-store" });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         const current = data.current || "";
@@ -3443,7 +3464,7 @@
       disconnectVnc("reconnexion VNC...");
       llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
       try {
-        const response = await fetch("/api/env-profile", {
+        const response = await fetch(apiUrl("/api/env-profile"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ env_file: nextEnvProfile })
@@ -3813,7 +3834,7 @@
       button.disabled = true;
       button.classList.add("playing");
       try {
-        const response = await fetch("/api/speaker-profile-sample", {
+        const response = await fetch(apiUrl("/api/speaker-profile-sample"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -3884,7 +3905,7 @@
       if (deleteButton) deleteButton.disabled = true;
       if (status) status.textContent = tr("speaker_profile_deleting", "suppression...");
       try {
-        const response = await fetch("/api/speaker-profile-delete", {
+        const response = await fetch(apiUrl("/api/speaker-profile-delete"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ profile_index: profileIndex })
@@ -4110,7 +4131,7 @@
       }
       if (state.source === "backend" && state.recording) {
         state.discard = true;
-        fetch("/api/backend-speaker-capture/stop", { method: "POST" }).catch(() => {});
+        fetch(apiUrl("/api/backend-speaker-capture/stop"), { method: "POST" }).catch(() => {});
       }
       if (speakerCapture.stream) {
         for (const track of speakerCapture.stream.getTracks()) track.stop();
@@ -4127,7 +4148,7 @@
       speakerCapture.dialog.stop.disabled = true;
       setSpeakerCaptureStatus(tr("speaker_capture_processing", "Preparing preview..."), "processing");
       if (speakerCapture.source === "backend") {
-        fetch("/api/backend-speaker-capture/stop", { method: "POST" }).catch(() => {});
+        fetch(apiUrl("/api/backend-speaker-capture/stop"), { method: "POST" }).catch(() => {});
       } else if (speakerCapture.recorder && speakerCapture.recorder.state !== "inactive") {
         speakerCapture.recorder.stop();
       }
@@ -4215,7 +4236,7 @@
 
     async function beginBackendSpeakerSampleCapture(state) {
       startSpeakerCaptureTimers(state);
-      const response = await fetch("/api/backend-speaker-capture", {
+      const response = await fetch(apiUrl("/api/backend-speaker-capture"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4325,7 +4346,7 @@
       }
       try {
         const dataUrl = await readFileAsDataUrl(blob);
-        const response = await fetch("/api/speaker-profile-upload", {
+        const response = await fetch(apiUrl("/api/speaker-profile-upload"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -4460,7 +4481,7 @@
       llmMessage.textContent = tr("testing_voice", "Testing voice...");
       try {
         if (output === "backend") {
-          const response = await fetch("/api/backend-tts-test", {
+          const response = await fetch(apiUrl("/api/backend-tts-test"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -4859,7 +4880,7 @@
       if (!cleanedTitle) return;
       setSessionLoading(true, tr("renaming_session", "Renaming session"));
       try {
-        const response = await fetch("/api/session-context/rename", {
+        const response = await fetch(apiUrl("/api/session-context/rename"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId, title: cleanedTitle })
@@ -4878,7 +4899,7 @@
       if (!confirmed) return;
       setSessionLoading(true, "Deleting session");
       try {
-        const response = await fetch("/api/session-context/delete", {
+        const response = await fetch(apiUrl("/api/session-context/delete"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId })
@@ -4901,7 +4922,7 @@
       if (!confirmed) return;
       setSessionLoading(true, "Clearing conversation");
       try {
-        const response = await fetch("/api/session-context/clear", {
+        const response = await fetch(apiUrl("/api/session-context/clear"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId })
@@ -4920,7 +4941,7 @@
     async function saveSessionContext(sessionId, currentTitle) {
       setSessionLoading(true, "Saving context");
       try {
-        const response = await fetch("/api/session-context/save", {
+        const response = await fetch(apiUrl("/api/session-context/save"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId })
@@ -5317,7 +5338,7 @@
 
     async function refresh() {
       try {
-        const response = await fetch("/api/snapshot", { cache: "no-store" });
+        const response = await fetch(apiUrl("/api/snapshot"), { cache: "no-store" });
         const data = await response.json();
         lastSnapshot = data;
         const snapshotEnv = (data.config && data.config.env) || {};
@@ -5578,7 +5599,7 @@
     sessionNew.addEventListener("click", async () => {
       setSessionLoading(true, "Creating session");
       try {
-        const response = await fetch("/api/session-context/new", {
+        const response = await fetch(apiUrl("/api/session-context/new"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
@@ -5664,7 +5685,7 @@
       closeSessionSummary();
       setSessionLoading(true, "Loading session");
       try {
-        const response = await fetch("/api/session-context/select", {
+        const response = await fetch(apiUrl("/api/session-context/select"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId })
@@ -5896,7 +5917,7 @@
       llmSave.disabled = true;
       llmMessage.textContent = tr("saving", "Saving...");
       try {
-        const response = await fetch("/api/llm-config", {
+        const response = await fetch(apiUrl("/api/llm-config"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

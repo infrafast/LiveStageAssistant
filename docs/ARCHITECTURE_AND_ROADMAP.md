@@ -225,6 +225,9 @@ Common WebMonitor / GUI
   -> one production server owned by runtime
   -> edits the same canonical profile + MCP JSON model
   -> one common configuration surface, not duplicated per engine
+  -> resolves internal API/assets relative to its public base path for LAN,
+     reverse proxy and Tailscale Funnel subpath exposure when the public
+     subpath is forwarded to the backend web root
   -> engine-specific controls appear conditionally only when genuinely specific
   -> must not maintain a third independent configuration store
 ```

@@ -2673,6 +2673,13 @@ VNC_HTML = """<!doctype html>
     const statusEl = document.querySelector("#status");
     const screenEl = document.querySelector("#screen");
     const params = new URLSearchParams(window.location.search);
+    const basePath = (() => {
+      let path = window.location.pathname || "/";
+      path = path.replace(new RegExp("/vnc[.]html$"), "");
+      if (path !== "/" && path.endsWith("/")) path = path.slice(0, -1);
+      return path === "/" ? "" : path;
+    })();
+    const localUrl = (path) => `${basePath}${String(path || "").startsWith("/") ? path : `/${path}`}`;
 
     function setStatus(text, connected = false) {
       statusEl.textContent = text;
@@ -2685,10 +2692,10 @@ VNC_HTML = """<!doctype html>
       const port = params.get("port") || "5900";
       const password = params.get("password") || "ronron";
       const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-      const proxyUrl = `${scheme}://${window.location.host}/api/vnc-proxy?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
-      const checkUrl = `/api/vnc-check?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`;
+      const proxyUrl = `${scheme}://${window.location.host}${localUrl(`/api/vnc-proxy?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`)}`;
+      const checkUrl = localUrl(`/api/vnc-check?host=${encodeURIComponent(host)}&port=${encodeURIComponent(port)}`);
 
-      const { default: RFB } = await import("/assets/web/static/novnc/core/rfb.js?v=lsa-novnc-20260602-1");
+      const { default: RFB } = await import(localUrl("/assets/web/static/novnc/core/rfb.js?v=lsa-novnc-20260602-1"));
       setStatus(`Test VNC ${host}:${port}...`, false);
       const checkResponse = await fetch(checkUrl, { cache: "no-store" });
       if (!checkResponse.ok) {

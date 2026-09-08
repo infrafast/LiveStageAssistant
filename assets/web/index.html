@@ -4,7 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Live Stage Assistant</title>
-  <link rel="stylesheet" href="/assets/web/app.css">
+  <script>
+    window.LSA_BASE_PATH = (function () {
+      var path = window.location.pathname || "/";
+      path = path.replace(/\/index\.html$/, "");
+      if (path !== "/" && path.endsWith("/")) path = path.slice(0, -1);
+      return path === "/" ? "" : path;
+    }());
+    (function () {
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = window.LSA_BASE_PATH + "/assets/web/app.css";
+      document.head.appendChild(link);
+    }());
+  </script>
 </head>
 <body>
   <div class="app-shell">
@@ -59,6 +72,12 @@
   <div class="session-summary-popover" id="session-summary-popover" role="status" aria-live="polite"></div>
 
   <script>window.LSA_I18N_PAYLOAD = __I18N_PAYLOAD__; window.LSA_SPEAKER_EMBEDDING_PREPARATION_MESSAGE = __SPEAKER_EMBEDDING_PREPARATION_MESSAGE__;</script>
-  <script src="/assets/web/app.js"></script>
+  <script>
+    (function () {
+      var script = document.createElement("script");
+      script.src = (window.LSA_BASE_PATH || "") + "/assets/web/app.js";
+      document.body.appendChild(script);
+    }());
+  </script>
 </body>
 </html>
