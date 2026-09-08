@@ -1352,7 +1352,20 @@
       syncComposerSpeakerControl();
     }
 
+    function isOpenAiRealtimeSelected() {
+      return selectedConnectivityMode() !== "offline" && String(voiceEngine?.value || "") === "openai-realtime";
+    }
+
     function browserSttDisabledReason(kind = "conversation") {
+      if (isOpenAiRealtimeSelected()) {
+        if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+          return tr("conversation_disabled_https", "Conversation mode requires HTTPS or localhost for browser Realtime.");
+        }
+        if (browserAudioCapabilities.input === false) {
+          return tr("conversation_disabled_browser_audio", "Mode conversation indisponible : le navigateur ne peut pas accéder au micro.");
+        }
+        return "";
+      }
       if (webAudio.stt_enabled) return "";
       const sttInput = String(webAudio.stt_input || "").toLowerCase();
       const isVoiceInput = kind === "voice";
@@ -1384,15 +1397,17 @@
     }
 
     function updateConversationButton() {
-      webConversation.classList.toggle("active", conversationEnabled);
+      const realtimeActive = Boolean(realtimeBrowserPeer);
+      webConversation.classList.toggle("active", conversationEnabled || realtimeActive);
       const disabledReason = browserSttDisabledReason("conversation");
-      webConversation.title = disabledReason || (conversationEnabled ? "Stop conversation mode" : "Conversation mode");
-      webConversation.setAttribute("aria-label", conversationEnabled ? "Stop conversation mode" : "Conversation mode");
-      webConversation.disabled = !webAudio.stt_enabled;
-      webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      const running = conversationEnabled || realtimeActive;
+      webConversation.title = disabledReason || (running ? "Stop conversation mode" : "Conversation mode");
+      webConversation.setAttribute("aria-label", running ? "Stop conversation mode" : "Conversation mode");
+      webConversation.disabled = Boolean(disabledReason) && !running;
+      webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled || realtimeActive;
       webMic.title = browserSttDisabledReason("voice") || (isRecording ? "Stop recording" : "Voice input");
       webMic.setAttribute("aria-label", webMic.title);
-      composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
+      composerAttach.disabled = composerLocked || isRecording || conversationEnabled || realtimeActive;
     }
 
     function clearRecordingTimer() {
@@ -3242,6 +3257,7 @@
       realtimeBrowserAudio = null;
       if (realtimeBrowserToggle) realtimeBrowserToggle.textContent = "Start browser realtime";
       if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = "Stopped.";
+      updateConversationButton();
     }
 
     async function startBrowserRealtime() {
@@ -3249,8 +3265,10 @@
       if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
         throw new Error("Browser microphone/WebRTC requires HTTPS or localhost.");
       }
-      realtimeBrowserToggle.disabled = true;
-      realtimeBrowserStatus.textContent = "Creating short-lived Realtime session…";
+      webConversation.disabled = true;
+      metaEl.textContent = tr("realtime_connecting", "Realtime conversation connecting...");
+      if (realtimeBrowserToggle) realtimeBrowserToggle.disabled = true;
+      if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = "Creating short-lived Realtime session…";
       try {
         const secretResponse = await fetch(apiUrl("/api/realtime-browser-secret"), {
           method: "POST",
@@ -3270,7 +3288,8 @@
         realtimeBrowserAudio = audio;
         pc.ontrack = (event) => { audio.srcObject = event.streams[0]; };
         pc.onconnectionstatechange = () => {
-          realtimeBrowserStatus.textContent = `WebRTC: ${pc.connectionState}`;
+          metaEl.textContent = `Realtime WebRTC: ${pc.connectionState}`;
+          if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = `WebRTC: ${pc.connectionState}`;
           if (["failed", "closed"].includes(pc.connectionState)) stopBrowserRealtime();
         };
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -3289,14 +3308,18 @@
         });
         if (!answerResponse.ok) throw new Error(await answerResponse.text());
         await pc.setRemoteDescription({ type: "answer", sdp: await answerResponse.text() });
-        realtimeBrowserToggle.textContent = "Stop browser realtime";
-        realtimeBrowserStatus.textContent = "WebRTC connected; server API key remains on the Pi.";
+        if (realtimeBrowserToggle) realtimeBrowserToggle.textContent = "Stop browser realtime";
+        if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = "WebRTC connected; server API key remains on the Pi.";
+        metaEl.textContent = tr("realtime_connected", "Realtime conversation active.");
       } catch (error) {
         await stopBrowserRealtime();
-        realtimeBrowserStatus.textContent = `WebRTC failed: ${error.message || error}`;
+        const message = `WebRTC failed: ${error.message || error}`;
+        if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = message;
+        metaEl.textContent = message;
         throw error;
       } finally {
-        realtimeBrowserToggle.disabled = false;
+        if (realtimeBrowserToggle) realtimeBrowserToggle.disabled = false;
+        updateConversationButton();
       }
     }
 
@@ -3311,7 +3334,7 @@
       realtimeModelField.classList.toggle("hidden", !realtime);
       realtimeVoiceField.classList.toggle("hidden", !realtime);
       syncRealtimeDropdownOptions();
-      realtimeBrowserField.classList.toggle("hidden", !browserRealtime);
+      if (realtimeBrowserField) realtimeBrowserField.classList.toggle("hidden", !browserRealtime);
       if (!browserRealtime && realtimeBrowserPeer) stopBrowserRealtime();
       llmProviderField.classList.toggle("hidden", realtime);
       llmModelField.classList.toggle("hidden", realtime);
@@ -5828,6 +5851,16 @@
 
     webConversation.addEventListener("click", async () => {
       await unlockWebTtsAudio();
+      if (isOpenAiRealtimeSelected()) {
+        if (conversationEnabled) setConversationEnabled(false);
+        try {
+          await startBrowserRealtime();
+        } catch (_) {
+          updateConversationButton();
+        }
+        return;
+      }
+      if (realtimeBrowserPeer) await stopBrowserRealtime();
       setConversationEnabled(!conversationEnabled);
     });
 
@@ -6085,7 +6118,9 @@
     voiceEngine.addEventListener("change", () => { syncVoiceEngineControls(); syncTtsProviderControls(); syncConfigActionState(); });
     realtimeModel.addEventListener("change", syncConfigActionState);
     realtimeVoice.addEventListener("change", syncConfigActionState);
-    realtimeBrowserToggle.addEventListener("click", () => startBrowserRealtime().catch(() => {}));
+    if (realtimeBrowserToggle) {
+      realtimeBrowserToggle.addEventListener("click", () => startBrowserRealtime().catch(() => {}));
+    }
     speechOutputGain.addEventListener("input", () => { syncSpeechOutputGainLabel(); syncConfigActionState(); });
     cloudTtsProvider.addEventListener("change", syncVoiceEngineControls);
     panelConfig.addEventListener("input", syncConfigActionState);
