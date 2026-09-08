@@ -290,8 +290,11 @@
     let profileLoadingActive = false;
     let vncConnectTimer = null;
     let vncUrlDirty = false;
+    let vncUrlSavePending = false;
     let currentVncFrameUrl = "";
     let currentSnapshotEnvFile = "";
+    let mcpCrudDirty = false;
+    let mcpCrudSavePending = false;
     let metaErrorUntil = 0;
     let lastServerMessages = [];
     let pendingCommandMessages = [];
@@ -663,6 +666,7 @@
         routingInput.spellcheck = false;
         routingInput.disabled = routingDisabled;
         routingInput.title = routingDisabled ? routingDisabledReason : "assistantOptions.routing";
+        routingInput.addEventListener("input", () => { mcpCrudDirty = true; });
         const routingSave = document.createElement("button");
         routingSave.className = "mcp-routing-save";
         routingSave.type = "button";
@@ -696,6 +700,7 @@
           optionsInput.placeholder = '{\\n  "XMS_SPEAKER_MAP": {\\n    "laurent": { "bus": "Laurent", "channel": "Talk Laurent" }\\n  }\\n}';
           optionsInput.spellcheck = false;
           optionsInput.title = "JSON object saved into mcpServers.<server>.env. Nested objects are stored as compact JSON strings.";
+          optionsInput.addEventListener("input", () => { mcpCrudDirty = true; });
           const optionsSave = document.createElement("button");
           optionsSave.className = "mcp-routing-save";
           optionsSave.type = "button";
@@ -755,6 +760,7 @@
         if (name) routing[name] = input.value || "";
       }
       if (messageEl) messageEl.textContent = tr("saving", "Saving...");
+      mcpCrudSavePending = true;
       try {
         const response = await fetch(apiUrl("/api/mcp-routing"), {
           method: "POST",
@@ -762,12 +768,15 @@
           body: JSON.stringify({ routing })
         });
         const data = await fetchJsonOrThrow(response);
+        mcpCrudDirty = false;
         if (messageEl) messageEl.textContent = data.message || "Routing saved.";
         setRestartRequired(data.restart_required, "Routing saved · restart required.");
         mcpServersSignature = "";
         await refresh();
       } catch (error) {
         if (messageEl) messageEl.textContent = trf("save_failed", "Save failed: {error}", { error });
+      } finally {
+        mcpCrudSavePending = false;
       }
     }
 
@@ -788,6 +797,7 @@
         }
       }
       if (messageEl) messageEl.textContent = tr("saving", "Saving...");
+      mcpCrudSavePending = true;
       try {
         const response = await fetch(apiUrl("/api/mcp-server-options"), {
           method: "POST",
@@ -796,12 +806,15 @@
         });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
+        mcpCrudDirty = false;
         if (messageEl) messageEl.textContent = data.message || "MCP server options saved.";
         setRestartRequired(data.restart_required, "MCP options saved · restart required.");
         mcpServersSignature = "";
         await refresh();
       } catch (error) {
         if (messageEl) messageEl.textContent = trf("save_failed", "Save failed: {error}", { error });
+      } finally {
+        mcpCrudSavePending = false;
       }
     }
 
@@ -866,14 +879,21 @@
 
     async function saveRemoteScreenUrl() {
       const nextUrl = vncUrl.value.trim();
-      const response = await fetch(apiUrl("/api/remote-screen-config"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vnc_url: nextUrl, view_only: Boolean(vncViewOnly.checked) })
-      });
-      if (!response.ok) throw new Error(await response.text());
-      vncUrlDirty = false;
-      return response.json();
+      vncUrlSavePending = true;
+      try {
+        const response = await fetch(apiUrl("/api/remote-screen-config"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ vnc_url: nextUrl, view_only: Boolean(vncViewOnly.checked) })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        vncUrl.value = data.vnc_url || nextUrl;
+        vncUrlDirty = false;
+        return data;
+      } finally {
+        vncUrlSavePending = false;
+      }
     }
 
     function disconnectVnc(status = "hors ligne") {
@@ -3364,23 +3384,29 @@
         const args = document.createElement("input"); args.value = JSON.stringify(policy.args); args.placeholder = '["arg1"]';
         const localUrl = document.createElement("input"); localUrl.value = policy.localUrl; localUrl.placeholder = "Local MCP URL";
         const controls = makeMcpPolicyControls(policy);
+        const markMcpCrudDirty = () => { mcpCrudDirty = true; };
+        for (const control of [enabled, command, args, localUrl, controls.transport, controls.permission, controls.https]) {
+          control.addEventListener("input", markMcpCrudDirty);
+          control.addEventListener("change", markMcpCrudDirty);
+        }
         const auth = document.createElement("div"); auth.className = "detail"; auth.textContent = `HTTPS auth: ${policy.authConfigured ? "Configured" : "Missing / not required"}`;
         const test = document.createElement("button"); test.type = "button"; test.className = "small-button"; test.textContent = "Test";
         const save = document.createElement("button"); save.type = "button"; save.className = "small-button"; save.textContent = "Save MCP";
         const del = document.createElement("button"); del.type = "button"; del.className = "small-button"; del.textContent = "Delete MCP";
         const message = document.createElement("span"); message.className = "detail";
         save.addEventListener("click", async () => {
-          save.disabled = true; message.textContent = "Saving…";
+          save.disabled = true; message.textContent = "Saving…"; mcpCrudSavePending = true;
           try {
             const data = await saveMcpDefinition("update", { existing_name: name, server: {
               name, enabled: enabled.checked, command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
               realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
               https_url: controls.https.value.trim(), permission_mode: controls.permission.value
             }});
+            mcpCrudDirty = false;
             setRestartRequired(data.restart_required, "MCP saved · restart required.");
             message.textContent = "Saved · restart required.";
           } catch (error) { message.textContent = `Save failed: ${error.message || error}`; }
-          finally { save.disabled = false; }
+          finally { save.disabled = false; mcpCrudSavePending = false; }
         });
         test.addEventListener("click", async () => {
           test.disabled = true; message.textContent = "Testing…";
@@ -3393,18 +3419,25 @@
         });
         del.addEventListener("click", async () => {
           if (!window.confirm(`Delete MCP "${name}"?`)) return;
-          del.disabled = true;
+          del.disabled = true; mcpCrudSavePending = true;
           try {
             const data = await saveMcpDefinition("delete", { server: name });
+            mcpCrudDirty = false;
             setRestartRequired(data.restart_required, "MCP deleted · restart required.");
             mcpServersSignature = "";
             await refresh();
           } catch (error) { message.textContent = `Delete failed: ${error.message || error}`; }
-          finally { del.disabled = false; }
+          finally { del.disabled = false; mcpCrudSavePending = false; }
         });
         section.append(makeCfgField("Enabled", enabled), makeCfgField("STDIO command", command), makeCfgField("STDIO args (JSON)", args), makeCfgField("Local MCP URL", localUrl), makeCfgField("Transport", controls.transport), controls.httpsField, makeCfgField("Permission", controls.permission), auth, test, save, del, message);
         card.append(section);
       }
+    }
+
+    function shouldDeferMcpCrudRefresh() {
+      if (mcpCrudDirty || mcpCrudSavePending) return true;
+      const active = document.activeElement;
+      return Boolean(active && active.closest && active.closest("#mcp-server-grid"));
     }
 
     async function loadEnvProfiles() {
@@ -5360,14 +5393,21 @@
         ];
         stateEl.innerHTML = rows.join("");
         configEl.value = data.config_text || "";
-        renderMcpServers(data.mcp_servers || []);
-        syncMcpRoutingEditors();
-        window.setTimeout(() => renderMcpCrud(data), 0);
+        const deferMcpPanelRefresh = shouldDeferMcpCrudRefresh();
+        if (!deferMcpPanelRefresh) {
+          renderMcpServers(data.mcp_servers || []);
+          syncMcpRoutingEditors();
+          window.setTimeout(() => {
+            if (!shouldDeferMcpCrudRefresh()) renderMcpCrud(data);
+          }, 0);
+        } else {
+          lastMcpServers = data.mcp_servers || lastMcpServers;
+        }
         const remoteScreen = data.remote_screen || {};
-        if (!vncUrlDirty && snapshotEnvChanged && currentVncFrameUrl) {
+        if (!vncUrlDirty && !vncUrlSavePending && snapshotEnvChanged && currentVncFrameUrl) {
           disconnectVnc("reconnexion VNC...");
         }
-        if (!vncUrlDirty && remoteScreen.vnc_url) {
+        if (!vncUrlDirty && !vncUrlSavePending && remoteScreen.vnc_url) {
           const remoteScreenUrlChanged = vncUrl.value !== remoteScreen.vnc_url;
           if (remoteScreenUrlChanged) {
             vncUrl.value = remoteScreen.vnc_url;
@@ -5853,7 +5893,13 @@
     cloudTtsProvider.addEventListener("change", syncVoiceEngineControls);
     panelConfig.addEventListener("input", syncConfigActionState);
     panelConfig.addEventListener("change", syncConfigActionState);
-    mcpDetails.addEventListener("toggle", () => { if (mcpDetails.open && lastSnapshot) window.setTimeout(() => renderMcpCrud(lastSnapshot), 0); });
+    mcpDetails.addEventListener("toggle", () => {
+      if (mcpDetails.open && lastSnapshot && !shouldDeferMcpCrudRefresh()) {
+        window.setTimeout(() => {
+          if (!shouldDeferMcpCrudRefresh()) renderMcpCrud(lastSnapshot);
+        }, 0);
+      }
+    });
 
     llmSave.addEventListener("click", async () => {
       if (!hasUnsavedConfigChanges() && restartRequired) { await requestRuntimeRestart(); return; }
