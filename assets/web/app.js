@@ -5408,7 +5408,7 @@
 
         readySound.replaceChildren();
         const selectedReadySound = data.selected_ready_sound_file || "";
-        readySound.appendChild(option("No ready sound", "", false, !selectedReadySound));
+        readySound.appendChild(option(tr("ready_sound_disabled", "No ready sound"), "", false, !selectedReadySound));
         for (const sound of sounds) {
           readySound.appendChild(option(sound.label || sound.id, sound.id, false, sound.id === selectedReadySound));
         }

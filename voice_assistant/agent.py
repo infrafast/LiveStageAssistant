@@ -52,7 +52,7 @@ try:
     from .i18n import available_locales, i18n_text, load_locale, normalize_locale
     from .local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from .web_monitor import WebMonitor, build_service_state
-    from .semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState
+    from .semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .stage_timeout import TimedStageRunner
     from .wake_word import apply_wake_word, parse_wake_words
@@ -75,7 +75,7 @@ except ImportError:
     from i18n import available_locales, i18n_text, load_locale, normalize_locale
     from local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from web_monitor import WebMonitor, build_service_state
-    from semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState
+    from semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from stage_timeout import TimedStageRunner
     from wake_word import apply_wake_word, parse_wake_words
@@ -1763,7 +1763,7 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
     tts_config = resolve_tts_config_from_values(values)
     cloud_provider = tts_config.backend_provider
     voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
-    backend_tts_volume = max(0.0, min(2.0, env_float_from_mapping(values, "BACKEND_TTS_VOLUME", 1.0)))
+    backend_tts_volume = VoiceOutputGains.from_env(values).cloud
     backend_audio_output_pan = normalize_audio_pan(env_float_from_mapping(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
 
     def play_auto_mp3(audio_bytes: bytes) -> None:
@@ -7735,7 +7735,8 @@ async def main():
         web_tts_model = os.getenv("WEB_TTS_MODEL", DEFAULT_OPENAI_TTS_MODEL).strip()
         web_tts_speed = max(0.6, min(1.8, env_float("WEB_TTS_SPEED", 1.0)))
         web_tts_volume = max(0.0, min(1.0, env_float("WEB_TTS_VOLUME", 1.0)))
-        backend_tts_volume = max(0.0, min(2.0, env_float("BACKEND_TTS_VOLUME", 1.0)))
+        output_gains = VoiceOutputGains.from_env(os.environ)
+        backend_tts_volume = output_gains.local if tts_provider == "piper" else output_gains.cloud
         backend_audio_output_pan = normalize_audio_pan(env_float("BACKEND_AUDIO_OUTPUT_PAN", 0.0))
         backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(os.getenv("BACKEND_AUDIO_MONITOR_MODE", "off"))
         backend_audio_monitor_volume = max(0.0, min(2.0, env_float("BACKEND_AUDIO_MONITOR_VOLUME", 1.0)))

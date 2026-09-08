@@ -914,13 +914,13 @@ common WebMonitor services
 ### CFG-9 - Unified voice/audio configuration — PRIORITY
 
 - [~] common Voice/AI engine selector + model + voice controls implemented;
-- [~] Cloud/Local independent output-gain contract implemented;
+- [x] Cloud/Local independent output-gain contract implemented across supervised Classic, Local/Piper, Realtime and legacy direct `agent.py` speech paths;
 - [~] semantic feedback cue contract implemented;
 - [~] one common runtime-owned WebMonitor server implemented; legacy child server binding suppressed under supervision;
 - [~] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services; runtime-owned profile-sample playback now reuses the common backend WAV preview player. The active engine audio path remains functional, including backend voice detection/speaker recognition when configured, but the common runtime GUI surface is still only partially decoupled: backend microphone diagnostic/capture and browser STT/TTS handlers still need extraction through a shared audio service or child-service bridge without importing the Classic engine stack.
-- [ ] wire Cloud/Local gains into all relevant speech outputs;
+- [x] wire Cloud/Local gains into all relevant speech outputs; feedback-cue/sample preview volumes remain separately controlled by their semantic audio settings;
 - [~] render Cloud/Local gain controls once in the common GUI;
-- [ ] render semantic cue controls once in the common GUI;
+- [x] render semantic cue controls once in the common GUI; command acknowledgement, thinking, ready, listening, wake-detected and startup-loader WAV selectors share the common Interface utilisateur section;
 - [ ] ensure wake-word options do not move to a separate engine-specific page;
 - [ ] remove/reconcile temporary duplicate RV2D controls;
 - [ ] Pi/browser functional validation across Classic/Realtime/Local.
