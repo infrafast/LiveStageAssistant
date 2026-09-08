@@ -1136,15 +1136,11 @@
       gap: 6px;
       align-items: stretch;
     }
-    .audio-sound-stack {
-      min-width: 0;
-      display: grid;
-      gap: 12px;
-      align-content: start;
-    }
     .audio-preview-button {
       width: 38px;
       min-width: 38px;
+      height: 38px;
+      min-height: 38px;
       padding: 0;
       font-size: 14px;
       line-height: 1;
@@ -1541,6 +1537,15 @@
     .ui-settings-details .config-controls {
       grid-template-columns: repeat(2, minmax(240px, 1fr));
       align-items: start;
+    }
+    .ui-settings-details .field.full-row {
+      max-width: 520px;
+    }
+    .ui-sound-field {
+      min-width: 0;
+    }
+    .ui-sound-field .field-hint {
+      min-height: 16px;
     }
     textarea.inspect {
       display: block;
