@@ -152,21 +152,28 @@ class WebMonitor(_BaseWebMonitor):
         with self._lock:
             self._runtime_reload_state_provider = provider or (lambda: False)
 
-    def snapshot(self) -> dict[str, Any]:
-        snapshot = super().snapshot()
-        if not snapshot.get("session_context"):
+    def _hydrate_session_context_if_needed(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        context = snapshot.get("session_context") if isinstance(snapshot, dict) else None
+        sessions = context.get("sessions") if isinstance(context, dict) else None
+        active_id = str(context.get("active_id") or "") if isinstance(context, dict) else ""
+        if active_id and isinstance(sessions, list) and sessions:
+            return snapshot
+        try:
+            store = self._session_store_for_realtime_chat()
+            context_snapshot = store.snapshot()
+            self.replace_dialogue(context_snapshot.get("messages") or [])
             try:
-                store = self._session_store_for_realtime_chat()
-                context_snapshot = store.snapshot()
-                self.replace_dialogue(context_snapshot.get("messages") or [])
-                try:
-                    size = int(str(self._active_env_values().get("SESSION_CONTEXT_SIZE") or "6000"))
-                except (TypeError, ValueError):
-                    size = 6000
-                self.set_context_state(context_snapshot, session_context_size=size)
-                snapshot = super().snapshot()
-            except Exception as error:
-                self.append_log(f"Initial session snapshot skipped: {error}\n", source="web")
+                size = int(str(self._active_env_values().get("SESSION_CONTEXT_SIZE") or "6000"))
+            except (TypeError, ValueError):
+                size = 6000
+            self.set_context_state(context_snapshot, session_context_size=size)
+            return super().snapshot()
+        except Exception as error:
+            self.append_log(f"Initial session snapshot skipped: {error}\n", source="web")
+            return snapshot
+
+    def snapshot(self) -> dict[str, Any]:
+        snapshot = self._hydrate_session_context_if_needed(super().snapshot())
         config = snapshot.get("config")
         if isinstance(config, dict):
             snapshot["config"] = _base.redact_mapping(config)
