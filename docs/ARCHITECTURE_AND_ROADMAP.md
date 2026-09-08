@@ -917,7 +917,7 @@ common WebMonitor services
 - [~] Cloud/Local independent output-gain contract implemented;
 - [~] semantic feedback cue contract implemented;
 - [~] one common runtime-owned WebMonitor server implemented; legacy child server binding suppressed under supervision;
-- [~] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services; runtime-owned profile-sample playback now reuses the common backend WAV preview player, while backend microphone diagnostic/capture and web STT/TTS still need extraction without importing the Classic engine stack;
+- [~] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services; runtime-owned profile-sample playback now reuses the common backend WAV preview player. The active engine audio path remains functional, including backend voice detection/speaker recognition when configured, but the common runtime GUI surface is still only partially decoupled: backend microphone diagnostic/capture and browser STT/TTS handlers still need extraction through a shared audio service or child-service bridge without importing the Classic engine stack.
 - [ ] wire Cloud/Local gains into all relevant speech outputs;
 - [~] render Cloud/Local gain controls once in the common GUI;
 - [ ] render semantic cue controls once in the common GUI;
