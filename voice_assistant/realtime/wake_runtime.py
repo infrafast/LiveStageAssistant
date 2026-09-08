@@ -78,7 +78,7 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
 
     original_event_loop = service.event_loop
 
-    async def supervised_text_command_loop(engine, monitor, stop_event, semantic):
+    async def supervised_text_command_loop(engine, monitor, stop_event, semantic, turn_tracker):
         while not stop_event.is_set():
             try:
                 if await asyncio.to_thread(monitor.pop_cancel_requested):
@@ -86,6 +86,7 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                         await engine.cancel_response()
                     except Exception as exc:
                         print(f"Realtime text cancel warning: {exc}", flush=True)
+                    turn_tracker.reset_after_cancel_or_failure()
                     monitor.set_assistant_busy(False)
                 command = await asyncio.to_thread(monitor.pop_injected_command)
                 if command:
@@ -94,6 +95,7 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                         print(f"Realtime injected text command: {text}", flush=True)
                         await asyncio.to_thread(monitor.append_dialogue, "user", text, persisted_by_child=False)
                         await asyncio.to_thread(monitor.set_assistant_busy, True)
+                        turn_tracker.start_text_turn()
                         semantic.transition(SemanticAudioState.PROCESSING)
                         context_refreshed = await refresh_engine_context(engine)
                         if not context_refreshed:
@@ -117,35 +119,55 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
         if monitor is None:
             return await original_event_loop(engine, bridge, queue, interrupted, first_played, stop_event, semantic, provider_failure)
 
-        current_response_id = ""
         completed_calls = service._RECENT_BRIDGE_CALL_IDS
         completed_responses: set[str] = set()
         audio_started: set[str] = set()
         tool_tasks: set[asyncio.Task] = set()
-        speech_stopped_at: float | None = None
-        response_started: dict[str, float] = {}
-        speech_stop_by_response: dict[str, float] = {}
-        first_audio_received: dict[str, float] = {}
+        turn_tracker = service.RealtimeTurnTracker(
+            action_grace_seconds=service._float_env(
+                "REALTIME_ACTION_GRACE_SECONDS",
+                service.DEFAULT_REALTIME_ACTION_GRACE_SECONDS,
+            )
+        )
         turn = 0
         command_task = asyncio.create_task(
-            supervised_text_command_loop(engine, monitor, stop_event, semantic),
+            supervised_text_command_loop(engine, monitor, stop_event, semantic, turn_tracker),
             name="lsa-realtime-supervised-text",
         )
         try:
             while not stop_event.is_set():
-                event = await engine.next_event()
+                inactivity_timeout = service._float_env(
+                    "REALTIME_INACTIVITY_TIMEOUT_SECONDS",
+                    service.DEFAULT_REALTIME_INACTIVITY_TIMEOUT_SECONDS,
+                )
+                try:
+                    event = await asyncio.wait_for(
+                        engine.next_event(),
+                        timeout=inactivity_timeout if inactivity_timeout > 0 else None,
+                    )
+                except asyncio.TimeoutError:
+                    if turn_tracker.has_ambiguous_action():
+                        print("Realtime inactivity timeout deferred: action still in progress", flush=True)
+                        turn_tracker.touch()
+                        continue
+                    print(f"Realtime inactivity timeout after {inactivity_timeout:.1f}s; closing session", flush=True)
+                    stop_event.set()
+                    return
                 now = time.perf_counter()
+                turn_tracker.touch()
                 if event.type == "speech_started":
                     print("Realtime speech started", flush=True)
-                    if current_response_id:
-                        interrupted.add(current_response_id)
+                    turn_tracker.speech_started()
+                    if turn_tracker.current_response_id:
+                        interrupted.add(turn_tracker.current_response_id)
                         service.clear_queue(queue)
                         try:
                             await engine.cancel_response()
                         except Exception as exc:
                             print(f"Realtime cancellation warning: {exc}", flush=True)
+                        turn_tracker.reset_after_cancel_or_failure()
                 elif event.type == "speech_stopped":
-                    speech_stopped_at = now
+                    turn_tracker.speech_stopped(now)
                     print("Realtime speech stopped", flush=True)
                 elif event.type == "user_transcript_done":
                     text = str(event.data.get("text") or "").strip()
@@ -153,22 +175,20 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                         print(f"Utilisateur: {text}", flush=True)
                         await asyncio.to_thread(monitor.append_dialogue, "user", text, persisted_by_child=False)
                         await asyncio.to_thread(monitor.set_assistant_busy, True)
+                        turn_tracker.start_text_turn()
                 elif event.type == "response_started":
                     response = event.data.get("response") or {}
-                    current_response_id = str(response.get("id") or "")
-                    response_started[current_response_id] = now
-                    if speech_stopped_at is not None:
-                        speech_stop_by_response[current_response_id] = speech_stopped_at
+                    turn_tracker.response_started_event(str(response.get("id") or ""), now)
                     await asyncio.to_thread(monitor.set_assistant_busy, True)
                     semantic.transition(SemanticAudioState.PROCESSING)
                 elif event.type == "tool_call" and bridge is not None:
-                    task = asyncio.create_task(service.execute_bridge_call(engine, bridge, event, completed_calls))
+                    task = asyncio.create_task(service.execute_bridge_call(engine, bridge, event, completed_calls, turn_tracker))
                     tool_tasks.add(task)
                     task.add_done_callback(tool_tasks.discard)
                 elif event.type in {"mcp_list_tools", "mcp_call", "mcp_approval_request", "mcp_event", "mcp_followup_requested"}:
                     print(f"Realtime native MCP event: {event.type}", flush=True)
                 elif event.type == "audio_delta":
-                    response_id = str(event.data.get("response_id") or current_response_id)
+                    response_id = str(event.data.get("response_id") or turn_tracker.current_response_id)
                     if response_id in interrupted:
                         continue
                     audio = event.data.get("audio") or b""
@@ -177,7 +197,7 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                             audio_started.add(response_id)
                             semantic.transition(SemanticAudioState.RESULT_READY)
                             semantic.transition(SemanticAudioState.SPEAKING)
-                        first_audio_received.setdefault(response_id, now)
+                        turn_tracker.audio_started(response_id, now)
                         await queue.put((response_id, audio))
                 elif event.type == "transcript_done":
                     text = str(event.data.get("text") or "").strip()
@@ -185,26 +205,32 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                         print(f"Assistant: {text}", flush=True)
                         await asyncio.to_thread(monitor.append_dialogue, "assistant", text, persisted_by_child=False)
                 elif event.type == "response_done":
-                    response_id = str(event.data.get("response_id") or current_response_id)
+                    response_id = str(event.data.get("response_id") or turn_tracker.current_response_id)
                     if response_id in completed_responses:
                         continue
                     completed_responses.add(response_id)
                     turn += 1
-                    speech_end = speech_stop_by_response.get(response_id)
-                    metrics = {"pipeline":"realtime","provider":engine.config.provider,"model":engine.config.model,"turn":turn,"response_id":response_id,"speech_end_to_first_audio_ms":round((first_audio_received[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_audio_received else None,"speech_end_to_first_playback_ms":round((first_played[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_played else None,"response_start_to_done_ms":round((now-response_started[response_id])*1000,1) if response_id in response_started else None,"usage":event.data.get("usage") or {}}
+                    metric_values = turn_tracker.metrics_for(response_id, now)
+                    speech_end = turn_tracker.speech_stop_by_response.get(response_id)
+                    metrics = {"pipeline":"realtime","provider":engine.config.provider,"model":engine.config.model,"turn":turn,"response_id":response_id,"speech_end_to_first_audio_ms":metric_values["speech_end_to_first_audio_ms"],"speech_end_to_first_playback_ms":round((first_played[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_played else None,"response_start_to_done_ms":metric_values["response_start_to_done_ms"],"usage":event.data.get("usage") or {}}
                     metrics["cost_usd"] = service.realtime_usage_cost_usd(engine.config.model, metrics["usage"]) if engine.config.provider == "openai" else None
                     print("REALTIME_METRICS " + json.dumps(metrics, ensure_ascii=False, separators=(",", ":")), flush=True)
                     if response_id in audio_started:
                         await queue.put((response_id, None))
-                    if current_response_id == response_id:
-                        current_response_id = ""
+                    turn_tracker.response_done(response_id)
                     await asyncio.to_thread(monitor.set_assistant_busy, False)
                 elif event.type in {"provider_error", "connection_error"}:
                     print(f"Realtime provider error: {event.data}", flush=True)
+                    if turn_tracker.has_ambiguous_action():
+                        print("Realtime action state reset after provider error; no in-flight action will be replayed automatically", flush=True)
+                    turn_tracker.reset_after_cancel_or_failure()
                     await asyncio.to_thread(monitor.set_assistant_busy, False)
                     provider_failure.set()
                 elif event.type == "connection_closed":
                     print("Realtime connection closed", flush=True)
+                    if turn_tracker.has_ambiguous_action():
+                        print("Realtime action state reset after connection close; no in-flight action will be replayed automatically", flush=True)
+                    turn_tracker.reset_after_cancel_or_failure()
                     await asyncio.to_thread(monitor.set_assistant_busy, False)
                     provider_failure.set()
                     stop_event.set()

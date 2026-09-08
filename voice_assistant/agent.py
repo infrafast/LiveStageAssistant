@@ -1992,6 +1992,7 @@ class VoiceAssistant:
         web_tts_enabled: bool = False,
         elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
         thinking_sound_file: str = "thinking.wav",
+        ready_sound_file: str = "",
         listening_sound_file: str = "",
         wake_detected_sound_file: str = "",
         startup_loader_sound_enabled: bool = False,
@@ -2369,10 +2370,17 @@ class VoiceAssistant:
         self.listening_sound_warning_shown = False
         self.semantic_audio_warning_keys: set[str] = set()
         self.semantic_audio = SemanticAudioController(
-            SemanticAudioConfig(wake_detected=(wake_detected_sound_file or "").strip()),
+            SemanticAudioConfig(
+                ready=(ready_sound_file or "").strip(),
+                listening=(listening_sound_file or "").strip(),
+                wake_detected=(wake_detected_sound_file or "").strip(),
+                thinking=(thinking_sound_file or "").strip(),
+                result_ready=(command_ack_sound_file or "").strip(),
+            ),
             play_once=self.play_semantic_cue_once_async,
-            start_loop=lambda cue: None,
-            stop_loop=lambda: None,
+            start_loop=lambda cue: self.start_thinking_sound(),
+            stop_loop=self.stop_thinking_sound,
+            on_state=lambda state: print(f"LSA semantic state: {state.value}", flush=True),
         )
         self.command_ack_sound_file = (command_ack_sound_file or "").strip()
         self.command_ack_sound_path = (
@@ -2476,6 +2484,9 @@ class VoiceAssistant:
 
     def _backend_listening_state(self) -> BackendAudioState:
         return BackendAudioState.WAIT_WAKE if self.wake_words else BackendAudioState.CAPTURE_COMMAND
+
+    def _semantic_listening_state(self) -> SemanticAudioState:
+        return SemanticAudioState.WAIT_WAKE if self.wake_words else SemanticAudioState.LISTENING
 
     def _initialize_backend_wake_word_detector(self) -> None:
         """Initialize backend openWakeWord when a wake word is configured."""
@@ -3477,6 +3488,7 @@ class VoiceAssistant:
         print(message)
 
         self.stop_startup_loader_sound()
+        self.semantic_audio.transition(SemanticAudioState.READY)
         if self.web_monitor:
             self.web_monitor.set_environment_loading(False)
         if self.tts_provider != "none":
@@ -3642,7 +3654,7 @@ class VoiceAssistant:
                 pipewire_target=self.audio_input_pipewire_target,
             )
             if not wake_required and not interrupt_capture:
-                self.play_listening_sound()
+                self.semantic_audio.transition(SemanticAudioState.LISTENING)
             if self.backend_audio_monitor_mode == "passthrough":
                 try:
                     monitor_stream = self._open_backend_audio_monitor_stream()
@@ -5094,7 +5106,7 @@ class VoiceAssistant:
         wake_word_gate_active = wake_word_mode == "require" and bool(self.wake_words)
         should_manage_backend_thinking = not self.web_tts_enabled and not wake_word_gate_active
         if should_manage_backend_thinking:
-            self.start_thinking_sound()
+            self.semantic_audio.transition(SemanticAudioState.PROCESSING)
         try:
             speaker_operation = None
             if self._speaker_recognition_should_run(audio_data):
@@ -5135,7 +5147,7 @@ class VoiceAssistant:
             return {"text": text, "accepted": True, "command_text": text, "matched_wake_word": "", **speaker_payload}
         finally:
             if should_manage_backend_thinking:
-                self.stop_thinking_sound()
+                self.semantic_audio.transition(SemanticAudioState.IDLE)
 
     def audio_to_text_local_whisper(self, audio_data: bytes) -> str | None:
         """Convert audio to text using faster-whisper locally."""
@@ -5908,11 +5920,11 @@ class VoiceAssistant:
                 f"Détail: {detail}"
             )
 
-        self.start_thinking_sound()
+        self.semantic_audio.transition(SemanticAudioState.PROCESSING)
         try:
             return await self._run_agent_with_optional_tool_routing(text, speaker_result=speaker_result)
         except asyncio.CancelledError:
-            self.stop_thinking_sound()
+            self.semantic_audio.transition(SemanticAudioState.IDLE)
             raise
         except asyncio.TimeoutError:
             return "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple."
@@ -6155,7 +6167,7 @@ class VoiceAssistant:
                     else:
                         self._set_backend_audio_state(BackendAudioState.PROCESSING, "audio captured")
                         if not self.wake_words:
-                            self.start_thinking_sound()
+                            self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         # Convert to text
                         try:
                             text, speaker_result = self.transcribe_and_recognize_audio(
@@ -6163,7 +6175,7 @@ class VoiceAssistant:
                                 audio_data,
                             )
                         except CloudApiUserError as e:
-                            self.stop_thinking_sound()
+                            self.semantic_audio.transition(self._semantic_listening_state())
                             self._set_backend_audio_state(self._backend_listening_state(), "stt cloud error")
                             print(f"Voice transcription stopped: {e.message}")
                             if self.web_monitor:
@@ -6173,18 +6185,18 @@ class VoiceAssistant:
                             continue
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Stopping current assistant.")
-                            self.stop_thinking_sound()
+                            self.semantic_audio.transition(self._semantic_listening_state())
                             self._set_backend_audio_state(self._backend_listening_state(), "reload")
                             return "reload"
                         if not text:
-                            self.stop_thinking_sound()
+                            self.semantic_audio.transition(self._semantic_listening_state())
                             self._set_backend_audio_state(self._backend_listening_state(), "empty transcription")
                             continue
 
                         if self.wake_words:
                             if not self.last_backend_streaming_wake_detected:
                                 print("Backend wake word was configured but no openWakeWord trigger authorized this audio.")
-                                self.stop_thinking_sound()
+                                self.semantic_audio.transition(self._semantic_listening_state())
                                 self.play_rejected_backend_audio(audio_data)
                                 self._set_backend_audio_state(self._backend_listening_state(), "unauthorized audio")
                                 continue
@@ -6196,20 +6208,21 @@ class VoiceAssistant:
                             print(f"Wake word detected: {matched_wake_word}")
                             if command_text != text:
                                 print(f"Command after wake word: {command_text}")
-                            self.start_thinking_sound()
+                            self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         elif self.last_backend_streaming_wake_detected:
                             print("Command accepted after backend streaming wake detection.")
-                            self.start_thinking_sound()
+                            self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         text = command_text
 
                 if self._should_skip_duplicate_command(text):
                     print(f"Duplicate command ignored: {text}")
-                    self.stop_thinking_sound()
+                    self.semantic_audio.transition(self._semantic_listening_state())
                     self._set_backend_audio_state(self._backend_listening_state(), "duplicate command")
                     continue
 
                 # Process command
                 self._set_backend_audio_state(BackendAudioState.PROCESSING, "command accepted")
+                self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                 process_task = asyncio.create_task(self.process_command(text, speaker_result=speaker_result))
                 voice_cancel_stop_event = None
                 voice_cancel_task = None
@@ -6313,7 +6326,7 @@ class VoiceAssistant:
                     self._set_backend_audio_state(self._backend_listening_state(), "reload")
                     return "reload"
 
-                self.play_command_ack_sound()
+                self.semantic_audio.transition(SemanticAudioState.RESULT_READY)
                 print(f"\nAssistant: {response}")
                 if self.session_context_store:
                     self.session_context_store.append_message("assistant", response)
@@ -6333,6 +6346,7 @@ class VoiceAssistant:
 
                 # Try to speak the response
                 self._set_backend_audio_state(BackendAudioState.TTS, "speaking response")
+                self.semantic_audio.transition(SemanticAudioState.SPEAKING)
                 if self.interrupt_conversation_enabled and self.microphone_available and self.tts_provider != "none":
                     tts_task = asyncio.create_task(
                         asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(response)))
@@ -6376,6 +6390,7 @@ class VoiceAssistant:
                 else:
                     await self.text_to_speech(response)
 
+                self.semantic_audio.transition(SemanticAudioState.IDLE)
                 if self._backend_streaming_wake_active():
                     self.backend_wake_word_suppress_until = (
                         time.monotonic() + DEFAULT_BACKEND_WAKE_WORD_POST_TTS_SUPPRESS_MS / 1000.0
@@ -7133,6 +7148,7 @@ async def main():
         backend_audio_output_device: str,
         voice_id: str,
         thinking_sound_file: str,
+        ready_sound_file: str,
         listening_sound_file: str,
         wake_detected_sound_file: str,
         startup_loader_sound_file: str,
@@ -7469,6 +7485,7 @@ async def main():
                 "BACKEND_AUDIO_OUTPUT_DEVICE": backend_audio_output_device,
                 "ELEVENLABS_VOICE_ID": voice_id,
                 "THINKING_SOUND_FILE": thinking_sound_file,
+                "READY_SOUND_FILE": ready_sound_file,
                 "LISTENING_SOUND_FILE": listening_sound_file,
                 "WAKE_DETECTED_SOUND_FILE": wake_detected_sound_file,
                 "STARTUP_LOADER_SOUND_ENABLED": "true" if startup_loader_sound_file else "false",
@@ -7685,6 +7702,7 @@ async def main():
         web_tts_provider = tts_config.web_provider
         voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
         thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
+        ready_sound_file = os.getenv("READY_SOUND_FILE", "").strip()
         listening_sound_file = os.getenv("LISTENING_SOUND_FILE", "").strip()
         wake_detected_sound_file = os.getenv("WAKE_DETECTED_SOUND_FILE", "").strip()
         startup_loader_sound_enabled = env_bool("STARTUP_LOADER_SOUND_ENABLED", False)
@@ -7961,6 +7979,7 @@ async def main():
             web_tts_enabled=web_tts_enabled,
             elevenlabs_voice_id=voice_id,
             thinking_sound_file=thinking_sound_file,
+            ready_sound_file=ready_sound_file,
             listening_sound_file=listening_sound_file,
             wake_detected_sound_file=wake_detected_sound_file,
             startup_loader_sound_enabled=startup_loader_sound_enabled,
@@ -8441,7 +8460,7 @@ async def main():
         web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
         web_monitor.set_llm_config_handlers(
             options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, listening_sound_file, wake_detected_sound_file, startup_loader_sound_file, command_ack_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, backend_wake_word_model_paths, backend_wake_word_model_names, backend_wake_word_threshold, backend_wake_word_pre_roll_ms, backend_wake_word_cooldown_ms, backend_wake_word_vad_threshold, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
+            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, ready_sound_file, listening_sound_file, wake_detected_sound_file, startup_loader_sound_file, command_ack_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, backend_wake_word_model_paths, backend_wake_word_model_names, backend_wake_word_threshold, backend_wake_word_pre_roll_ms, backend_wake_word_cooldown_ms, backend_wake_word_vad_threshold, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
                 get_active_env_file(),
                 provider,
                 model,
@@ -8462,6 +8481,7 @@ async def main():
                 backend_audio_output_device,
                 voice_id,
                 thinking_sound_file,
+                ready_sound_file,
                 listening_sound_file,
                 wake_detected_sound_file,
                 startup_loader_sound_file,

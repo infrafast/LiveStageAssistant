@@ -157,6 +157,7 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
         web_tts_enabled=False,
         elevenlabs_voice_id=str(values.get("ELEVENLABS_VOICE_ID") or agent.DEFAULT_ELEVENLABS_VOICE_ID).strip(),
         thinking_sound_file=str(values.get("THINKING_SOUND_FILE") or "thinking.wav").strip(),
+        ready_sound_file=str(values.get("READY_SOUND_FILE") or "").strip(),
         listening_sound_file=str(values.get("LISTENING_SOUND_FILE") or "").strip(),
         wake_detected_sound_file=str(values.get("WAKE_DETECTED_SOUND_FILE") or "").strip(),
         startup_loader_sound_enabled=_bool(values, "STARTUP_LOADER_SOUND_ENABLED", False),

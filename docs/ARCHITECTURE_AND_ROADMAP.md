@@ -555,29 +555,29 @@ Interpretation: the cost request is closed for the current representative transa
 
 **Goal:** preserve and generalize the Classic user-facing audio-state behavior across Realtime, Local and future engines so the operator always knows whether LSA is starting, ready, waiting for wake, listening, processing, ready to answer or speaking.
 
-- [~] define provider/engine-neutral semantic states in `voice_assistant/semantic_audio.py`;
-- [~] define shared cue mapping for startup, ready, listening, wake-detected, thinking and result-ready states;
-- [~] common semantic-audio controller/lifecycle independent of engine/provider implemented;
-- [~] Realtime emits/uses semantic `READY`, `LISTENING`/`WAIT_WAKE`, `PROCESSING`, `RESULT_READY`, `SPEAKING`, `IDLE` events; initial Pi logs validate wake-OFF transitions;
-- [ ] Classic behavior is adapted to the shared contract without regressing its validated wake-word behavior;
+- [x] define provider/engine-neutral semantic states in `voice_assistant/semantic_audio.py`;
+- [x] define shared cue mapping for startup, ready, listening, wake-detected, thinking and result-ready states;
+- [x] common semantic-audio controller/lifecycle independent of engine/provider implemented;
+- [~] Realtime emits/uses semantic `READY`, `LISTENING`/`WAIT_WAKE`, `PROCESSING`, `RESULT_READY`, `SPEAKING`, `IDLE` events; initial Pi logs validate wake-OFF transitions, final audible wake-ON recette pending;
+- [~] Classic behavior is adapted to the shared contract without regressing its validated wake-word behavior; implementation complete, Pi wake ON/OFF audible validation pending;
 - [~] semantic thinking loop starts only after command acceptance and stops before result-ready/speech in Realtime; audible validation pending;
-- [ ] `WAIT_WAKE` remains silent; ambient speech must not trigger listening/processing cues;
-- [ ] `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event;
-- [ ] preserve Classic-style post-TTS suppression/re-arm behavior before returning to wake listening;
-- [ ] add optional `READY_SOUND_FILE` while preserving spoken READY announcements;
-- [ ] expose semantic audio cue selection once in the common GUI, not separately by engine;
+- [~] `WAIT_WAKE` remains silent; ambient speech must not trigger listening/processing cues; implementation in shared controller, final noisy-room validation pending;
+- [~] `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event; implementation complete for Classic and Realtime wake paths, audible validation pending;
+- [~] preserve Classic-style post-TTS suppression/re-arm behavior before returning to wake listening; implementation preserved, comparison validation pending;
+- [x] add optional `READY_SOUND_FILE` while preserving spoken READY announcements;
+- [x] expose semantic audio cue selection once in the common GUI, not separately by engine;
 - [ ] consolidated Pi validation with wake OFF and wake ON.
 
 Exit: Classic, Realtime and Local expose the same user-understandable semantic state feedback, with wake-word authorization semantics preserved.
 
 ### RV3 - Optional wake word and realtime session lifecycle
 
-- [~] wake-enabled realtime uses local openWakeWord; provider-neutral local gate implemented, final Pi recette pending;
+- [~] wake-enabled backend realtime uses local openWakeWord; provider-neutral local gate implemented, final Pi recette pending;
 - [x] wake-disabled realtime does not instantiate openWakeWord;
 - [~] preserve `WAKE_WORD` across engine switching; unified profile save and common wake gate implemented, final Pi recette pending;
 - [~] integrate RV2F semantic feedback contract with wake lifecycle; WAIT_WAKE/WAKE_DETECTED/re-arm wiring implemented;
 - [~] preserve Classic post-TTS suppression/re-arm semantics; Realtime uses the same post-TTS suppression contract, consolidated comparison pending;
-- [ ] inactivity/close policy;
+- [~] inactivity/close policy implemented through `REALTIME_INACTIVITY_TIMEOUT_SECONDS` and `REALTIME_ACTION_GRACE_SECONDS`; disabled by default until field timing is validated;
 - [~] production-service barge-in retest; response cancellation is wired, hardware retest pending;
 - [x] general prompt + realtime addendum composition;
 - [x] transcript observability.
@@ -591,7 +591,7 @@ Exit: Classic, Realtime and Local expose the same user-understandable semantic s
 - [~] provider/session timeout handling; startup/tool timeouts and reconnect budget implemented;
 - [~] deterministic cleanup; reconnect attempts reuse the existing deterministic session cleanup path;
 - [~] provider-failure fallback to Classic/local implemented at supervisor level but not prioritized for further work or validation yet;
-- [ ] no ambiguous action state after interruption/reconnect/fallback.
+- [~] no ambiguous action state after interruption/reconnect/fallback; realtime turn tracking now records active response, tool-in-flight, cancellation/failure reset and grace-period state. Hardware reconnect/interruption recette pending.
 
 ### RV5 - Pipecat comparison
 
@@ -611,6 +611,7 @@ Exit: Classic, Realtime and Local expose the same user-understandable semantic s
 - [~] direct browser realtime transport; WebRTC diagnostic path implemented, browser validation pending;
 - [~] backend-mediated ephemeral authorization; short-lived OpenAI client-secret endpoint implemented;
 - [~] secrets stay server-side; browser receives only the short-lived client secret;
+- [ ] optional browser-side wake gate for direct OpenAI Realtime WebRTC. Current behavior is intentional: browser Realtime streams directly to the provider and does not pass through the local LSA openWakeWord gate, so wake authorization is guaranteed only by backend realtime/classic/browser-STT paths. A future final design may either disable direct browser Realtime while `WAKE_WORD` is configured or implement deterministic browser-side wake detection before opening/sending realtime audio;
 - [ ] mobile browser validation.
 
 ### RV8 - Unified selectable voice engine and GUI — IN PROGRESS
@@ -707,6 +708,11 @@ MCP_CONFIG=mcp_servers.json
 
 ### AV2 - State-machine regression coverage
 - [ ] long wait, ambient ignore, timeout, post-TTS rearm, interruption modes.
+- [ ] Realtime inactivity disabled: with `REALTIME_INACTIVITY_TIMEOUT_SECONDS=0`, a long idle session remains open until normal stop/restart.
+- [ ] Realtime inactivity enabled: with a short non-zero timeout, idle closes cleanly without replaying stale audio, stale text or queued MCP calls.
+- [ ] Realtime action grace: timeout is deferred while a response/tool call is active or inside `REALTIME_ACTION_GRACE_SECONDS` after speech stop.
+- [ ] Realtime reconnect/fallback: after provider error or connection close, no old in-flight MCP action is replayed automatically after recovery.
+- [ ] Realtime interruption: barge-in cancels speech playback and clears the active response state without cancelling/replaying already dispatched MCP work.
 
 ### AV3 - Hardware recette
 - [ ] Pi input/output, TTS, browser audio, diagnostics, speaker recognition, MCP routing, env reload, interruption.
@@ -943,10 +949,11 @@ common WebMonitor services
 
 1. **RV2D / CFG-9 — validate the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; run the migrated common handlers on Pi/browser before marking the milestone complete. No historical/second WebMonitor is allowed in the supervised architecture.
 2. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls, backend microphone diagnostic/capture, browser STT/TTS and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
-3. **RV2F / CFG-9 — semantic audio feedback parity:** finish the shared semantic-audio contract across Realtime, Classic and Local, including READY cue, listening/wake/thinking/result-ready/speaking transitions and one common GUI configuration surface.
-4. **CFG-9 / RV8 — Cloud vs Local speech gains:** finish wiring `CLOUD_TTS_OUTPUT_GAIN` and `LOCAL_TTS_OUTPUT_GAIN` through all relevant speech paths, including Classic cloud output, while keeping feedback-cue levels semantically separate from TTS gain.
-5. **RV2F / RV3 — wake compatibility:** integrate wake-detected/listening/thinking/result-ready/idle transitions without false feedback during `WAIT_WAKE`; preserve Classic post-TTS suppression/re-arm behavior as the reference contract.
-6. **RV3 — optional Realtime wake-word lifecycle:** finish local openWakeWord integration after the semantic feedback state machine is shared.
-7. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the common WebMonitor and functional UX/audio milestones are stable.
-8. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI, without duplicating engine configuration screens or Web servers.
-9. **Nice-to-have / backlog:** representative MCP corpus, second-native-MCP fixtures, MCP-specific raw/bulk/automation optimizations and further fallback tuning remain useful but non-blocking and must not interrupt completion of the current LSA roadmap.
+3. **RV2F / CFG-9 — semantic audio feedback validation:** run audible Classic/Realtime/Local checks for READY, LISTENING/WAIT_WAKE, WAKE_DETECTED, PROCESSING, RESULT_READY, SPEAKING and IDLE before marking RV2F complete.
+4. **RV2F / RV3 — wake compatibility validation:** verify wake ON/OFF behavior in a noisy room: `WAIT_WAKE` stays silent, ambient speech does not trigger thinking/listening cues, `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event and Classic post-TTS suppression/re-arm remains intact.
+5. **CFG-9 / RV8 — output-gain validation:** verify Cloud/Local speech gains audibly across Classic cloud TTS, Local/Piper and Realtime while keeping feedback-cue/sample-preview volumes semantically separate from speech gain.
+6. **RV3 / RV4 — realtime lifecycle validation:** validate inactivity timeout, action-grace deferral, interruption and reconnect/fallback recovery without replaying stale actions.
+7. **RV7 — optional browser Realtime wake gate decision:** keep current direct WebRTC behavior documented, then later decide whether to disable browser Realtime when `WAKE_WORD` is set or implement deterministic browser-side wake detection.
+8. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the common WebMonitor and functional UX/audio milestones are stable.
+9. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI, without duplicating engine configuration screens or Web servers.
+10. **Nice-to-have / backlog:** representative MCP corpus, second-native-MCP fixtures, MCP-specific raw/bulk/automation optimizations and further fallback tuning remain useful but non-blocking and must not interrupt completion of the current LSA roadmap.

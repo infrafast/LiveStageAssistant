@@ -43,6 +43,104 @@ DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-live-preview"
 DEFAULT_GEMINI_VOICE = "Kore"
 TRANSIENT_PROVIDER_EXIT = 75
 _RECENT_BRIDGE_CALL_IDS: set[str] = set()
+DEFAULT_REALTIME_INACTIVITY_TIMEOUT_SECONDS = 0.0
+DEFAULT_REALTIME_ACTION_GRACE_SECONDS = 2.5
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(str(os.getenv(name, str(default)) or str(default)).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+class RealtimeTurnTracker:
+    """Track one realtime turn so recovery never has to guess action state."""
+
+    def __init__(self, *, action_grace_seconds: float = DEFAULT_REALTIME_ACTION_GRACE_SECONDS) -> None:
+        self.action_grace_seconds = max(0.0, float(action_grace_seconds))
+        self.current_response_id = ""
+        self.last_activity = time.monotonic()
+        self.awaiting_response = False
+        self.tool_in_flight = False
+        self.speech_started_at: float | None = None
+        self.speech_stopped_at: float | None = None
+        self.response_started: dict[str, float] = {}
+        self.speech_stop_by_response: dict[str, float] = {}
+        self.first_audio_received: dict[str, float] = {}
+
+    def touch(self) -> None:
+        self.last_activity = time.monotonic()
+
+    def start_text_turn(self) -> None:
+        self.awaiting_response = True
+        self.touch()
+
+    def speech_started(self) -> None:
+        self.speech_started_at = time.perf_counter()
+        self.awaiting_response = True
+        self.touch()
+
+    def speech_stopped(self, now: float) -> None:
+        self.speech_stopped_at = now
+        self.touch()
+
+    def response_started_event(self, response_id: str, now: float) -> None:
+        self.current_response_id = response_id
+        self.awaiting_response = True
+        if response_id:
+            self.response_started[response_id] = now
+            if self.speech_stopped_at is not None:
+                self.speech_stop_by_response[response_id] = self.speech_stopped_at
+        self.touch()
+
+    def tool_started(self) -> None:
+        self.tool_in_flight = True
+        self.touch()
+
+    def tool_finished(self) -> None:
+        self.tool_in_flight = False
+        self.touch()
+
+    def audio_started(self, response_id: str, now: float) -> None:
+        if response_id:
+            self.first_audio_received.setdefault(response_id, now)
+        self.touch()
+
+    def response_done(self, response_id: str) -> None:
+        if self.current_response_id == response_id:
+            self.current_response_id = ""
+        self.awaiting_response = False
+        self.tool_in_flight = False
+        self.touch()
+
+    def reset_after_cancel_or_failure(self) -> None:
+        self.current_response_id = ""
+        self.awaiting_response = False
+        self.tool_in_flight = False
+        self.speech_started_at = None
+        self.speech_stopped_at = None
+        self.touch()
+
+    def has_ambiguous_action(self) -> bool:
+        if self.tool_in_flight:
+            return True
+        if self.current_response_id or self.awaiting_response:
+            return True
+        if self.speech_stopped_at is None:
+            return False
+        return time.perf_counter() - self.speech_stopped_at < self.action_grace_seconds
+
+    def metrics_for(self, response_id: str, now: float) -> dict[str, float | None]:
+        speech_end = self.speech_stop_by_response.get(response_id)
+        first_audio = self.first_audio_received.get(response_id)
+        started = self.response_started.get(response_id)
+        return {
+            "speech_end_to_first_audio_ms": round((first_audio - speech_end) * 1000, 1)
+            if speech_end is not None and first_audio is not None
+            else None,
+            "response_start_to_done_ms": round((now - started) * 1000, 1) if started is not None else None,
+        }
 
 
 def read_secret(name: str, env_file: Path) -> str:
@@ -357,7 +455,13 @@ def clear_queue(queue: asyncio.Queue) -> None:
             return
 
 
-async def execute_bridge_call(engine, bridge: RealtimeMCPBridge, event, completed_calls: set[str]) -> None:
+async def execute_bridge_call(
+    engine,
+    bridge: RealtimeMCPBridge,
+    event,
+    completed_calls: set[str],
+    turn_tracker: RealtimeTurnTracker | None = None,
+) -> None:
     call_id = str(event.data.get("call_id") or "")
     name = str(event.data.get("name") or "")
     arguments = str(event.data.get("arguments") or "{}")
@@ -366,6 +470,8 @@ async def execute_bridge_call(engine, bridge: RealtimeMCPBridge, event, complete
     if len(completed_calls) >= 2048:
         completed_calls.clear()
     completed_calls.add(call_id)
+    if turn_tracker is not None:
+        turn_tracker.tool_started()
     target = bridge.tool_targets.get(name)
     started = time.perf_counter()
     print("Realtime bridge call " + json.dumps({"server": target.server if target else None, "tool": target.tool if target else name, "arguments": arguments}, ensure_ascii=False, separators=(",", ":")), flush=True)
@@ -381,6 +487,9 @@ async def execute_bridge_call(engine, bridge: RealtimeMCPBridge, event, complete
         await engine.submit_tool_result(call_id, result)
     except Exception as exc:
         print(f"Realtime bridge result delivery failed: call_id={call_id} error={exc}", flush=True)
+    finally:
+        if turn_tracker is not None:
+            turn_tracker.tool_finished()
 
 
 async def wait_until_ready(engine) -> None:
@@ -436,50 +545,62 @@ async def event_loop(
     semantic: SemanticAudioController,
     provider_failure: asyncio.Event,
 ) -> None:
-    current_response_id = ""
     completed_calls = _RECENT_BRIDGE_CALL_IDS
     completed_responses: set[str] = set()
     audio_started: set[str] = set()
     tool_tasks: set[asyncio.Task] = set()
-    speech_stopped_at: float | None = None
-    response_started: dict[str, float] = {}
-    speech_stop_by_response: dict[str, float] = {}
-    first_audio_received: dict[str, float] = {}
+    turn_tracker = RealtimeTurnTracker(
+        action_grace_seconds=_float_env("REALTIME_ACTION_GRACE_SECONDS", DEFAULT_REALTIME_ACTION_GRACE_SECONDS)
+    )
     turn = 0
     while not stop_event.is_set():
-        event = await engine.next_event()
+        inactivity_timeout = _float_env("REALTIME_INACTIVITY_TIMEOUT_SECONDS", DEFAULT_REALTIME_INACTIVITY_TIMEOUT_SECONDS)
+        try:
+            event = await asyncio.wait_for(
+                engine.next_event(),
+                timeout=inactivity_timeout if inactivity_timeout > 0 else None,
+            )
+        except asyncio.TimeoutError:
+            if turn_tracker.has_ambiguous_action():
+                print("Realtime inactivity timeout deferred: action still in progress", flush=True)
+                turn_tracker.touch()
+                continue
+            print(f"Realtime inactivity timeout after {inactivity_timeout:.1f}s; closing session", flush=True)
+            stop_event.set()
+            return
         now = time.perf_counter()
+        turn_tracker.touch()
         if event.type == "speech_started":
             print("Realtime speech started", flush=True)
-            if current_response_id:
-                interrupted.add(current_response_id)
+            turn_tracker.speech_started()
+            if turn_tracker.current_response_id:
+                interrupted.add(turn_tracker.current_response_id)
                 clear_queue(queue)
                 try:
                     await engine.cancel_response()
                 except Exception as exc:
                     print(f"Realtime cancellation warning: {exc}", flush=True)
+                turn_tracker.reset_after_cancel_or_failure()
         elif event.type == "speech_stopped":
-            speech_stopped_at = now
+            turn_tracker.speech_stopped(now)
             print("Realtime speech stopped", flush=True)
         elif event.type == "user_transcript_done":
             text = str(event.data.get("text") or "").strip()
             if text:
                 print(f"Utilisateur: {text}", flush=True)
+                turn_tracker.start_text_turn()
         elif event.type == "response_started":
             response = event.data.get("response") or {}
-            current_response_id = str(response.get("id") or "")
-            response_started[current_response_id] = now
-            if speech_stopped_at is not None:
-                speech_stop_by_response[current_response_id] = speech_stopped_at
+            turn_tracker.response_started_event(str(response.get("id") or ""), now)
             semantic.transition(SemanticAudioState.PROCESSING)
         elif event.type == "tool_call" and bridge is not None:
-            task = asyncio.create_task(execute_bridge_call(engine, bridge, event, completed_calls))
+            task = asyncio.create_task(execute_bridge_call(engine, bridge, event, completed_calls, turn_tracker))
             tool_tasks.add(task)
             task.add_done_callback(tool_tasks.discard)
         elif event.type in {"mcp_list_tools", "mcp_call", "mcp_approval_request", "mcp_event", "mcp_followup_requested"}:
             print(f"Realtime native MCP event: {event.type}", flush=True)
         elif event.type == "audio_delta":
-            response_id = str(event.data.get("response_id") or current_response_id)
+            response_id = str(event.data.get("response_id") or turn_tracker.current_response_id)
             if response_id in interrupted:
                 continue
             audio = event.data.get("audio") or b""
@@ -488,31 +609,37 @@ async def event_loop(
                     audio_started.add(response_id)
                     semantic.transition(SemanticAudioState.RESULT_READY)
                     semantic.transition(SemanticAudioState.SPEAKING)
-                first_audio_received.setdefault(response_id, now)
+                turn_tracker.audio_started(response_id, now)
                 await queue.put((response_id, audio))
         elif event.type == "transcript_done":
             text = str(event.data.get("text") or "").strip()
             if text:
                 print(f"Assistant: {text}", flush=True)
         elif event.type == "response_done":
-            response_id = str(event.data.get("response_id") or current_response_id)
+            response_id = str(event.data.get("response_id") or turn_tracker.current_response_id)
             if response_id in completed_responses:
                 continue
             completed_responses.add(response_id)
             turn += 1
-            speech_end = speech_stop_by_response.get(response_id)
-            metrics = {"pipeline":"realtime","provider":engine.config.provider,"model":engine.config.model,"turn":turn,"response_id":response_id,"speech_end_to_first_audio_ms":round((first_audio_received[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_audio_received else None,"speech_end_to_first_playback_ms":round((first_played[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_played else None,"response_start_to_done_ms":round((now-response_started[response_id])*1000,1) if response_id in response_started else None,"usage":event.data.get("usage") or {}}
+            metric_values = turn_tracker.metrics_for(response_id, now)
+            speech_end = turn_tracker.speech_stop_by_response.get(response_id)
+            metrics = {"pipeline":"realtime","provider":engine.config.provider,"model":engine.config.model,"turn":turn,"response_id":response_id,"speech_end_to_first_audio_ms":metric_values["speech_end_to_first_audio_ms"],"speech_end_to_first_playback_ms":round((first_played[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_played else None,"response_start_to_done_ms":metric_values["response_start_to_done_ms"],"usage":event.data.get("usage") or {}}
             metrics["cost_usd"] = realtime_usage_cost_usd(engine.config.model, metrics["usage"]) if engine.config.provider == "openai" else None
             print("REALTIME_METRICS " + json.dumps(metrics, ensure_ascii=False, separators=(",", ":")), flush=True)
             if response_id in audio_started:
                 await queue.put((response_id, None))
-            if current_response_id == response_id:
-                current_response_id = ""
+            turn_tracker.response_done(response_id)
         elif event.type in {"provider_error", "connection_error"}:
             print(f"Realtime provider error: {event.data}", flush=True)
+            if turn_tracker.has_ambiguous_action():
+                print("Realtime action state reset after provider error; no in-flight action will be replayed automatically", flush=True)
+            turn_tracker.reset_after_cancel_or_failure()
             provider_failure.set()
         elif event.type == "connection_closed":
             print("Realtime connection closed", flush=True)
+            if turn_tracker.has_ambiguous_action():
+                print("Realtime action state reset after connection close; no in-flight action will be replayed automatically", flush=True)
+            turn_tracker.reset_after_cancel_or_failure()
             provider_failure.set()
             stop_event.set()
     for task in tuple(tool_tasks):
