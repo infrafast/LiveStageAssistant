@@ -29,6 +29,8 @@ POST /api/realtime-chat-state
 
 This keeps the visible bubble UI and busy/thinking state aligned with the realtime conversation. Realtime assistant messages mirrored from browser audio use `speak=false` because the WebRTC audio has already been played by the provider session.
 
+Browser Realtime client secrets enable input transcription explicitly so the browser can receive `conversation.item.input_audio_transcription.*` events and mirror spoken user turns into the chat. Assistant transcript events are also mirrored when the provider emits final output text/audio transcript events.
+
 When the Browser Realtime data channel is open, text entered in the composer is sent into the active Realtime session with `conversation.item.create` followed by `response.create`. When the Realtime data channel is not open, the composer keeps the normal `/api/inject-command` path.
 
 ## Sessions and context
