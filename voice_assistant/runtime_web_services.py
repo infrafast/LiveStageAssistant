@@ -171,7 +171,14 @@ class RuntimeWebServices:
     def _refresh_monitor_config(self, *, mcp_config: dict[str, Any] | None = None) -> None:
         values = self._values()
         self.monitor.set_web_password(str(values.get("WEB_PASSWORD") or "").strip())
-        kwargs: dict[str, Any] = {"env_file": self.active_profile(), "env_values": values}
+        kwargs: dict[str, Any] = {
+            "env_file": self.active_profile(),
+            "env_values": values,
+            "remote_screen": {
+                "vnc_url": str(values.get("REMOTE_SCREEN_VNC_URL") or "vnc://127.0.0.1:5900?password=ronron").strip(),
+                "view_only": self._bool(values, "REMOTE_SCREEN_VNC_VIEW_ONLY", True),
+            },
+        }
         if mcp_config is not None:
             kwargs["mcp_config"] = mcp_config
         self.monitor.update(**kwargs)

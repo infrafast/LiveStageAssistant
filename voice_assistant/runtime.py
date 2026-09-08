@@ -208,6 +208,13 @@ def _monitor_host_port(values: Mapping[str, object]) -> tuple[str, int]:
     return host, port
 
 
+def _remote_screen_for_monitor(values: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "vnc_url": str(values.get("REMOTE_SCREEN_VNC_URL") or "vnc://127.0.0.1:5900?password=ronron").strip(),
+        "view_only": _env_bool(values, "REMOTE_SCREEN_VNC_VIEW_ONLY", True),
+    }
+
+
 def refresh_common_web_monitor(
     monitor: WebMonitor,
     *,
@@ -222,6 +229,7 @@ def refresh_common_web_monitor(
         internet=online,
         env_values=dict(values),
         mcp_config=_mcp_config_for_monitor(values, env_file),
+        remote_screen=_remote_screen_for_monitor(values),
     )
 
 
