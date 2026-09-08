@@ -168,6 +168,7 @@ class ChildCommandMonitor:
         self._messages: deque[dict[str, Any]] = deque(maxlen=80)
         self._next_message_id = 1
         self._assistant_busy = False
+        self._speaker_embedding_notice_handler = None
 
     def _send_event(self, payload: dict[str, Any]) -> None:
         if isinstance(self.reader, LocalHttpCommandClient):
@@ -235,6 +236,12 @@ class ChildCommandMonitor:
         self._send_event({"type": "busy", "assistant_busy": busy})
 
     def set_environment_loading(self, *_args: Any, **_kwargs: Any) -> None:
+        return
+
+    def set_speaker_embedding_notice_handler(self, handler: Any) -> None:
+        self._speaker_embedding_notice_handler = handler
+
+    def set_speaker_status(self, *_args: Any, **_kwargs: Any) -> None:
         return
 
     def update(self, *_args: Any, **_kwargs: Any) -> None:
