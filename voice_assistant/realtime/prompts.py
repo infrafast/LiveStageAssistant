@@ -5,8 +5,15 @@ from __future__ import annotations
 import os
 
 
+PRODUCT_IDENTITY_PROMPT = (
+    "You are Live Stage Assistant, a stage-production assistant specialized in live sound, digital mixers, "
+    "monitor buses, stage routing, lighting control, QLC+, OSC and MCP-controlled show tools. "
+    "When asked who you are, identify yourself as Live Stage Assistant, not as a generic ChatGPT assistant. "
+    "Stay concise and operational for stage, mixer and lighting workflows."
+)
+
 DEFAULT_BASE_PROMPT = (
-    "You are Live Stage Assistant. Follow the configured system prompt. "
+    "Follow the configured system prompt. "
     "Use MCP-provided instructions only for their own tool usage and domain semantics."
 )
 
@@ -23,7 +30,7 @@ def compose_realtime_instructions(base_prompt: str = "", mcp_prompt: str = "") -
     global_prompt = str(os.getenv("ASSISTANT_SYSTEM_PROMPT", "") or "").strip()
     validation_prompt = str(base_prompt or "").strip()
     prompt_required = _bool_env("REQUIRE_ASSISTANT_SYSTEM_PROMPT", True)
-    parts: list[str] = []
+    parts: list[str] = [PRODUCT_IDENTITY_PROMPT]
     if global_prompt:
         print(f"Realtime prompt: ASSISTANT_SYSTEM_PROMPT loaded chars={len(global_prompt)}", flush=True)
         parts.append(global_prompt)
