@@ -20,7 +20,7 @@ The WebGUI renders this existing state through the established `messages` + `ass
 
 Classic text, browser STT and backend STT continue to use `/api/inject-command`, which enters the existing backend pipeline, session context store and WebMonitor refresh cycle.
 
-Browser OpenAI Realtime uses direct WebRTC audio, but its user and assistant transcripts are now mirrored back into the same WebMonitor contract through:
+Browser OpenAI Realtime uses direct WebRTC audio, but its user and assistant transcripts are mirrored back into the same WebMonitor contract through:
 
 ```text
 POST /api/realtime-chat-message
@@ -41,7 +41,7 @@ The persistent session mechanism remains `SessionContextStore`:
 - `SESSION_CONTEXT_SIZE` controls how much active session context is injected into Classic/MCP turns;
 - `llm_summary` is preferred for injection when present, otherwise the compact rolling summary is used.
 
-Current limitation: Browser Realtime transcript mirroring updates the live WebMonitor chat state. Durable persisted session integration for browser-native Realtime transcripts must remain part of final RV validation unless the active session store is explicitly wired into the realtime chat-message endpoint by the supervising engine/runtime.
+Browser Realtime transcript mirroring now appends messages to both the live WebMonitor dialogue and the active `SessionContextStore` file resolved from `SESSION_CONTEXT_DIR` in the active profile. After each mirrored message, WebMonitor republishes the session snapshot so switching sessions and refreshing the browser use the same persisted session data.
 
 ## Validation expectations
 
