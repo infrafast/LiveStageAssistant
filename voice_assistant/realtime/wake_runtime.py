@@ -58,8 +58,14 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
             return ""
         return f"{SESSION_CONTEXT_INSTRUCTION_HEADER}\n{context}"
 
-    def realtime_instructions_with_active_session() -> str:
-        base = str(getattr(service, "DEFAULT_BASE_PROMPT", "") or "").strip()
+    def realtime_instructions_with_active_session(engine) -> str:
+        # Preserve the fully composed engine prompt: ASSISTANT_SYSTEM_PROMPT,
+        # MCP-provided instructions and provider-neutral realtime rules are
+        # already in engine.config.instructions. Only append the active session
+        # context as an internal, replaceable block for the current turn.
+        base = str(getattr(getattr(engine, "config", None), "instructions", "") or "").strip()
+        if not base:
+            base = str(getattr(service, "DEFAULT_BASE_PROMPT", "") or "").strip()
         context = active_session_context_instruction()
         return f"{base}\n\n{context}" if context else base
 
@@ -67,7 +73,7 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
         updater = getattr(engine, "update_instructions", None)
         if not callable(updater):
             return False
-        await updater(realtime_instructions_with_active_session())
+        await updater(realtime_instructions_with_active_session(engine))
         return True
 
     original_event_loop = service.event_loop
