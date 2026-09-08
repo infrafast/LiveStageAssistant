@@ -12,6 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
+DEFAULT_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 
 
 def create_openai_browser_client_secret(
@@ -40,7 +41,8 @@ def create_openai_browser_client_secret(
                         "type": "server_vad",
                         "create_response": True,
                         "interrupt_response": True,
-                    }
+                    },
+                    "transcription": {"model": DEFAULT_INPUT_TRANSCRIPTION_MODEL},
                 },
                 "output": {"voice": str(voice or "marin").strip()},
             },
