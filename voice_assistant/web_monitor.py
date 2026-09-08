@@ -19,12 +19,14 @@ try:
         save_mcp_server_from_snapshot,
         test_mcp_server_from_snapshot,
     )
+    from .prompt_contract import normalize_system_prompt_identity
     from .runtime_status import read_status_file
     from .realtime.browser_auth import create_openai_browser_client_secret
     from .session_context import DEFAULT_CONTEXT_DIR, SessionContextStore
 except ImportError:  # pragma: no cover - direct script fallback
     import web_monitor_base as _base
     from mcp_realtime_web_endpoint import delete_mcp_server_from_snapshot, mcp_registry_from_snapshot, save_mcp_realtime_policy_from_snapshot, save_mcp_server_from_snapshot, test_mcp_server_from_snapshot
+    from prompt_contract import normalize_system_prompt_identity
     from runtime_status import read_status_file
     from realtime.browser_auth import create_openai_browser_client_secret
     from session_context import DEFAULT_CONTEXT_DIR, SessionContextStore
@@ -263,7 +265,7 @@ class WebMonitor(_BaseWebMonitor):
             api_key,
             model=str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
             voice=str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
-            instructions=str(values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip(),
+            instructions=normalize_system_prompt_identity(str(values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip(), log_prefix="Browser realtime prompt"),
         )
 
     def _runtime_status(self) -> dict[str, Any]:
