@@ -56,6 +56,39 @@ Browser Realtime client secrets enable input transcription explicitly so the bro
 
 When the Browser Realtime data channel is open, text entered in the composer is sent into the active Realtime session with `conversation.item.create` followed by `response.create`. When the Realtime data channel is not open, the composer keeps the normal `/api/inject-command` path.
 
+## Prompt composition
+
+In the configured runtime profile, `ASSISTANT_SYSTEM_PROMPT` is required. It is not interchangeable with `DEFAULT_BASE_PROMPT`.
+
+The expected prompt composition is:
+
+```text
+ASSISTANT_SYSTEM_PROMPT
++ MCP prompt/instructions loaded according to MCP_LOAD_SERVER_PROMPT
++ active session summary/context injected for the current turn
++ user message only
+```
+
+`DEFAULT_BASE_PROMPT` is only a non-production fallback for isolated validation when `REQUIRE_ASSISTANT_SYSTEM_PROMPT=false`. It must never replace `ASSISTANT_SYSTEM_PROMPT` in the Pi runtime profile.
+
+Realtime startup logs must make prompt composition visible without printing prompt contents:
+
+```text
+Realtime prompt: ASSISTANT_SYSTEM_PROMPT loaded chars=<n>
+Realtime prompt: MCP prompts loaded chars=<n>
+```
+
+If `MCP_LOAD_SERVER_PROMPT=false`, startup must log that MCP prompts are disabled. If it is enabled but no MCP prompt is exposed by the selected servers, startup must log that none were loaded.
+
+MCP prompt loading follows the environment setting:
+
+```text
+MCP_LOAD_SERVER_PROMPT=true   -> load exposed MCP prompts/get_agent_prompt where available
+MCP_LOAD_SERVER_PROMPT=false  -> do not load MCP prompt text into model instructions
+```
+
+The MCP prompt text is wrapped as MCP-owned instructions. It governs that MCP's tool usage, domain semantics, routing and safety. It must not be copied into user-visible chat bubbles and must not replace the configured LSA identity prompt.
+
 ## Sessions and context
 
 The persistent session mechanism remains `SessionContextStore`:
@@ -67,15 +100,6 @@ The persistent session mechanism remains `SessionContextStore`:
 - `llm_summary` is preferred for injection when present, otherwise the compact rolling summary is used.
 
 `SessionContextStore` refreshes from the `active_session` file before append, snapshot and context injection operations. A session switch therefore changes the active prompt context for the next command without stacking old session summaries in memory.
-
-The expected prompt composition is:
-
-```text
-system prompt
-+ MCP prompt/instructions loaded at engine startup when enabled
-+ active session summary/context injected for the current turn
-+ user message only
-```
 
 The session summary is not appended permanently to the system prompt at each turn. It must be treated as internal context, never as text typed or spoken by the user.
 
@@ -104,12 +128,14 @@ Browser Realtime mirrors transcripts to the active session; provider-side contin
 
 For final RV/CFG recipe, verify at least:
 
-1. Classic text command creates user bubble, thinking/busy state and assistant bubble.
-2. Local/offline text command does the same through the supervised channel.
-3. OpenAI/Gemini backend Realtime typed composer message reaches the running provider session, logs `Realtime injected text command`, and creates user/assistant bubbles.
-4. OpenAI backend Realtime composer text with an existing session context does not trigger answers like “thanks for the context”; the context was refreshed as instructions, not appended to the user text.
-5. OpenAI Browser Realtime spoken turn creates user transcript bubble and assistant transcript bubble when provider transcript events are emitted.
-6. OpenAI Browser Realtime typed composer message goes into the active Realtime session and appears in the same chat surface.
-7. Starting/stopping Browser Realtime clears busy state.
-8. New session, session switch, resume latest session at startup, clear/save/delete still work through the existing session UI.
-9. Context summary/compact summary still appears in session metadata and is injected according to `SESSION_CONTEXT_SIZE` for backend turns without accumulating old session summaries.
+1. Realtime startup logs `ASSISTANT_SYSTEM_PROMPT loaded` with a non-zero char count.
+2. Realtime startup logs whether MCP prompts are loaded, disabled by `MCP_LOAD_SERVER_PROMPT`, or enabled but unavailable.
+3. Classic text command creates user bubble, thinking/busy state and assistant bubble.
+4. Local/offline text command does the same through the supervised channel.
+5. OpenAI/Gemini backend Realtime typed composer message reaches the running provider session, logs `Realtime injected text command`, and creates user/assistant bubbles.
+6. OpenAI backend Realtime composer text with an existing session context does not trigger answers like “thanks for the context”; the context was refreshed as instructions, not appended to the user text.
+7. OpenAI Browser Realtime spoken turn creates user transcript bubble and assistant transcript bubble when provider transcript events are emitted.
+8. OpenAI Browser Realtime typed composer message goes into the active Realtime session and appears in the same chat surface.
+9. Starting/stopping Browser Realtime clears busy state.
+10. New session, session switch, resume latest session at startup, clear/save/delete still work through the existing session UI.
+11. Context summary/compact summary still appears in session metadata and is injected according to `SESSION_CONTEXT_SIZE` for backend turns without accumulating old session summaries.
