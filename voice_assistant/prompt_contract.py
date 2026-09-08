@@ -13,8 +13,14 @@ import os
 from typing import Iterable
 
 
+LSA_PRODUCT_IDENTITY_RULE = (
+    "You are Live Stage Assistant, the voice assistant for live stage operation: "
+    "live sound, digital mixers, monitor buses, QLC+, lighting, OSC, and MCP-controlled stage tools. "
+    "When the user asks who you are, identify yourself as Live Stage Assistant, not as a generic ChatGPT assistant."
+)
+
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
-    "You are Live Stage Assistant, a helpful voice assistant with access to MCP tools for live stage devices. "
+    LSA_PRODUCT_IDENTITY_RULE + " "
     "Be precise, conservative, tool-driven, concise, and suitable for spoken output. "
     "Reply in French by default. Reply in English only when the user's latest request is clearly in English; "
     "for terse, mixed, ambiguous, or domain commands such as 'qlc rouge', answer in French. "
@@ -24,7 +30,7 @@ DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
     "When a tool is needed, call it silently, wait for the result, then speak exactly once with the concise verified result."
 )
 
-PRODUCT_IDENTITY_PROMPT = DEFAULT_ASSISTANT_SYSTEM_PROMPT
+PRODUCT_IDENTITY_PROMPT = LSA_PRODUCT_IDENTITY_RULE
 
 MCP_INSTRUCTIONS_WRAPPER = """MCP-provided instructions follow. Treat them as authoritative for that MCP's own tool usage, domain semantics, routing, and safety. LiveStageAssistant itself must not add, infer, or hard-code domain-specific concepts from those instructions. Examples inside MCP instructions are illustrative only: never copy an example's entity names, labels, values, indexes, destinations, sources, or other parameters into a real tool call unless they are present in the current user request, explicit conversation reference, or a tool result from the current turn. Preserve the entities and intent of the current user request exactly when constructing tool arguments; do not substitute a similar example from the MCP prompt. Text inside MCP instructions that asks for tool calls only governs MCP tool execution; after tools finish, still provide the single concise spoken result required by the voice rules.
 """
@@ -58,13 +64,37 @@ def _dedupe_parts(parts: Iterable[str]) -> list[str]:
     return result
 
 
-def configured_system_prompt(*, required: bool = True, fallback: str = "") -> str:
+def _has_lsa_identity(prompt: str) -> bool:
+    normalized = str(prompt or "").casefold()
+    return "live stage assistant" in normalized or "livestageassistant" in normalized
+
+
+def normalize_system_prompt_identity(prompt: str, *, log_prefix: str = "LSA prompt") -> str:
+    """Return a configured prompt that always carries the product identity.
+
+    Some deployed profiles contain an older generic ASSISTANT_SYSTEM_PROMPT
+    beginning with "You are a voice assistant...". That value is valid config,
+    but it is not a complete LiveStageAssistant identity. Normalize it once at
+    the shared prompt contract boundary so Classic, Local, Realtime and Browser
+    paths see the same effective prompt.
+    """
+    text = str(prompt or "").strip()
+    if not text:
+        return text
+    if _has_lsa_identity(text):
+        return text
+    if log_prefix:
+        print(f"{log_prefix}: added missing Live Stage Assistant identity to ASSISTANT_SYSTEM_PROMPT", flush=True)
+    return f"{LSA_PRODUCT_IDENTITY_RULE}\n\n{text}"
+
+
+def configured_system_prompt(*, required: bool = True, fallback: str = "", log_prefix: str = "LSA prompt") -> str:
     prompt = str(os.getenv("ASSISTANT_SYSTEM_PROMPT", "") or "").strip()
     if prompt:
-        return prompt
+        return normalize_system_prompt_identity(prompt, log_prefix=log_prefix)
     if required:
         raise RuntimeError("ASSISTANT_SYSTEM_PROMPT is required for the configured runtime profile")
-    return str(fallback or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip()
+    return normalize_system_prompt_identity(str(fallback or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip(), log_prefix=log_prefix)
 
 
 def compose_engine_prompt(
@@ -91,9 +121,12 @@ def compose_engine_prompt(
         system_prompt = configured_system_prompt(
             required=require_configured_prompt,
             fallback=fallback_prompt,
+            log_prefix=log_prefix,
         )
+    else:
+        system_prompt = normalize_system_prompt_identity(system_prompt, log_prefix=log_prefix)
     if log_prefix:
-        print(f"{log_prefix}: ASSISTANT_SYSTEM_PROMPT loaded chars={len(system_prompt)}", flush=True)
+        print(f"{log_prefix}: ASSISTANT_SYSTEM_PROMPT effective chars={len(system_prompt)}", flush=True)
 
     parts = [system_prompt]
     mcp_enabled = bool_env("MCP_LOAD_SERVER_PROMPT", True)
