@@ -93,7 +93,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             RealtimeMCPServer(label="service-a", url="https://example.test/mcp", require_approval="sometimes")
 
-    def test_config_composes_global_mcp_and_voice_instructions_generically(self):
+    def test_config_composes_global_and_mcp_instructions_generically(self):
         mcp_instructions = "Use the resource identifier returned by the discovery operation exactly as provided."
         tool = RealtimeFunctionTool(
             name="mcp__service_a__read_resource",
@@ -107,15 +107,14 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
                 function_tools=(tool,),
             )
         self.assertIn("Global LSA prompt.", config.instructions)
-        self.assertIn("Validation runner prompt.", config.instructions)
+        self.assertNotIn("Validation runner prompt.", config.instructions)
         self.assertIn(mcp_instructions, config.instructions)
         self.assertIn("MCP-provided instructions follow", config.instructions)
         self.assertIn("must not add, infer, or hard-code domain-specific concepts", config.instructions)
         self.assertIn("Examples inside MCP instructions are illustrative only", config.instructions)
         self.assertIn("never copy an example's entity names, labels, values, indexes, destinations, sources", config.instructions)
         self.assertIn("Preserve the entities and intent of the current user request exactly", config.instructions)
-        self.assertIn("Do not offer extra help", config.instructions)
-        self.assertIn("one short confirmation sentence", config.instructions)
+        self.assertNotIn("Realtime voice rules", config.instructions)
 
     def test_native_mcp_context_is_composed_without_domain_knowledge(self):
         native_instructions = "Use only identifiers and operation semantics provided by this MCP server."
@@ -133,9 +132,9 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIn(native_instructions, config.instructions)
         self.assertIn("Global LSA prompt.", config.instructions)
-        self.assertIn("Native validation prompt.", config.instructions)
+        self.assertNotIn("Native validation prompt.", config.instructions)
         self.assertIn("Examples inside MCP instructions are illustrative only", config.instructions)
-        self.assertIn("one short confirmation sentence", config.instructions)
+        self.assertNotIn("Realtime voice rules", config.instructions)
 
 
 if __name__ == "__main__":

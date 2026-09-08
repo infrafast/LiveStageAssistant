@@ -4835,41 +4835,46 @@
       syncBackendWakeWordControls();
     }
 
-	    function syncTtsProviderControls() {
+    function syncTtsProviderControls() {
       const connectivityMode = selectedConnectivityMode();
       const offline = connectivityMode === "offline";
-	      const provider = cloudTtsProvider.value || "none";
-	      const output = selectedTtsOutput();
-	      const forceSilent = !offline && provider === "none";
-      for (const element of cloudAudioControls) element.classList.toggle("hidden", offline);
+      const engine = voiceEngine?.value || "classic";
+      const classic = !offline && engine === "classic";
+      const provider = cloudTtsProvider.value || "none";
+      const output = selectedTtsOutput();
+      const forceSilent = classic && provider === "none";
+      for (const element of cloudAudioControls) element.classList.toggle("hidden", !classic);
       offlineAudioSummary.classList.toggle("hidden", !offline);
-	      for (const input of ttsOutputInputs) {
+      for (const input of ttsOutputInputs) {
         const enabled = ttsOutputAvailable(input.value)
           && (!forceSilent || input.value === "silent")
-          && (!offline || input.value === "backend" || input.value === "silent");
+          && (!offline || input.value === "backend" || input.value === "silent")
+          && (classic || offline);
         setSegmentOptionEnabled(input, enabled, ttsOutputUnavailableReason(input.value));
-	        input.checked = offline
-          ? input.value === (ttsOutputAvailable("backend") ? "backend" : "silent")
-          : (forceSilent ? input.value === "silent" : input.value === firstAvailableTtsOutput(output));
-	      }
-	      elevenlabsVoiceField.classList.toggle("hidden", offline || provider !== "elevenlabs");
-	      openaiTtsVoiceField.classList.toggle("hidden", offline || provider !== "openai");
-	      ttsSpeedField.classList.toggle("hidden", offline || provider === "none");
-	      ttsTestField.classList.toggle("hidden", offline || provider === "none");
-	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
-	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
-	      openaiTtsSpeed.disabled = offline || provider === "none";
-      webTtsVolume.disabled = offline || provider === "none" || selectedTtsOutput() !== "browser";
-      backendTtsVolume.disabled = selectedTtsOutput() !== "backend";
+        if (offline) {
+          input.checked = input.value === (ttsOutputAvailable("backend") ? "backend" : "silent");
+        } else if (classic) {
+          input.checked = forceSilent ? input.value === "silent" : input.value === firstAvailableTtsOutput(output);
+        }
+      }
+      elevenlabsVoiceField.classList.toggle("hidden", !classic || provider !== "elevenlabs");
+      openaiTtsVoiceField.classList.toggle("hidden", !classic || provider !== "openai");
+      ttsSpeedField.classList.toggle("hidden", !classic || provider === "none");
+      ttsTestField.classList.toggle("hidden", !classic || provider === "none");
+      elevenlabsVoice.disabled = !classic || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
+      openaiTtsVoice.disabled = !classic || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
+      openaiTtsSpeed.disabled = !classic || provider === "none";
+      webTtsVolume.disabled = !classic || provider === "none" || selectedTtsOutput() !== "browser";
+      backendTtsVolume.disabled = !classic && !offline ? true : selectedTtsOutput() !== "backend";
       backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
       webTtsVolumeField.title = webTtsVolume.disabled ? "WEB_TTS_VOLUME - actif seulement avec TTS Output Browser" : "WEB_TTS_VOLUME";
       backendTtsVolumeField.title = backendTtsVolume.disabled ? "BACKEND_TTS_VOLUME - actif seulement avec TTS Output Backend" : "BACKEND_TTS_VOLUME";
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif" : "BACKEND_AUDIO_OUTPUT_PAN";
-      ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
+      ttsTest.disabled = !classic || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
       syncAudioSampleControls();
       syncSpeakerProfileSampleControls();
       syncAudioDeviceVisibility();
-	    }
+    }
 
     function selectedConnectivityMode() {
       const checked = connectivityModeInputs.find((input) => input.checked);
@@ -5885,7 +5890,7 @@
       switchEnvProfile(envProfile.value);
     });
 
-	    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
+    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
     elevenlabsVoice.addEventListener("change", syncTtsProviderControls);
     openaiTtsVoice.addEventListener("change", syncTtsProviderControls);
     for (const input of ttsOutputInputs) {
@@ -5978,7 +5983,7 @@
     speakerMargin.addEventListener("input", syncSpeakerLabels);
     if (cloudApiDetails) loadCloudApiStatus();
     if (cloudApiRefresh) cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
-    voiceEngine.addEventListener("change", () => { syncVoiceEngineControls(); syncConfigActionState(); });
+    voiceEngine.addEventListener("change", () => { syncVoiceEngineControls(); syncTtsProviderControls(); syncConfigActionState(); });
     realtimeModel.addEventListener("input", syncConfigActionState);
     realtimeVoice.addEventListener("input", syncConfigActionState);
     realtimeBrowserToggle.addEventListener("click", () => startBrowserRealtime().catch(() => {}));
