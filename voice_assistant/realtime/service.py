@@ -408,7 +408,9 @@ async def _announce_phrase(engine, output_stream, output_rate: int, output_chann
                 converted = apply_pcm16_gain(converted, cloud_gain)
                 await asyncio.to_thread(output_stream.write, expand_pcm16_channels(converted, output_channels))
         elif event.type == "transcript_done":
-            print(f"Realtime startup announcement transcript: {str(event.data.get('text') or '').strip()}", flush=True)
+            transcript = str(event.data.get("text") or "").strip()
+            if transcript and transcript != text:
+                print(f"Realtime startup announcement transcript differed: {transcript}", flush=True)
         elif event.type == "response_done":
             return
         elif event.type in {"provider_error", "connection_error", "connection_closed"}:
