@@ -6849,18 +6849,25 @@ async def main():
 
     def list_ollama_models(values: dict) -> tuple[list[dict[str, str]], str | None]:
         base_url = (values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip().rstrip("/")
+        configured_model = str(
+            values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or DEFAULT_OLLAMA_MODEL
+        ).strip()
         try:
             with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2.0) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as e:
-            return [], f"Ollama unavailable at {base_url}: {e}"
+            fallback = [{"id": configured_model, "label": f"{configured_model} (configured)"}] if configured_model else []
+            return fallback, f"Ollama unavailable at {base_url}: {e}"
 
         names = sorted(
             model.get("name")
             for model in payload.get("models", [])
             if isinstance(model, dict) and model.get("name")
         )
-        return [{"id": name, "label": name} for name in names], None
+        models = [{"id": name, "label": name} for name in names]
+        if configured_model and configured_model not in names:
+            models.append({"id": configured_model, "label": f"{configured_model} (configured)"})
+        return models, None
 
     def parse_elevenlabs_voice_options(value: str) -> list[dict[str, str]]:
         voices = []
