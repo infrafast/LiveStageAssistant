@@ -21,7 +21,7 @@ from .child_command_channel import child_monitor_from_env
 from .prompt_contract import configured_system_prompt
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
 from .speaker_recognition import SpeakerProfile
-from .wake_word import parse_wake_words
+from .wake_word import get_configured_wake_words
 
 
 def _bool(values: dict[str, Any], name: str, default: bool = False) -> bool:
@@ -119,7 +119,7 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
     connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
     offline = connectivity == "offline"
     tts_config = agent.resolve_tts_config_from_values(values)
-    wake_words = parse_wake_words(str(values.get("WAKE_WORD") or "").strip() or None)
+    wake_words = get_configured_wake_words()
     monitor_mode = agent.normalize_backend_audio_monitor_mode(str(values.get("BACKEND_AUDIO_MONITOR_MODE") or "off"))
     if monitor_mode == "rejected" and not wake_words:
         monitor_mode = "off"
