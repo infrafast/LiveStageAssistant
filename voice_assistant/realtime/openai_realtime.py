@@ -99,7 +99,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                 "output": {
                     "format": {"type": "audio/pcm", "rate": 24000},
                     "voice": self.config.voice,
-                    "speed": 1.0,
+                    "speed": max(0.6, min(1.8, float(self.config.output_speed or 1.0))),
                 },
             },
         }

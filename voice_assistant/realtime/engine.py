@@ -66,6 +66,7 @@ class RealtimeEngineConfig:
     model: str
     voice: str = "marin"
     instructions: str = "Respond naturally and concisely in the user's language. Default to English when unclear."
+    output_speed: float = 1.0
     server_vad: bool = True
     input_transcription_model: str = "gpt-4o-mini-transcribe"
     mcp_servers: tuple[RealtimeMCPServer, ...] = ()
@@ -78,6 +79,8 @@ class RealtimeEngineConfig:
             raise ValueError("realtime model is required")
         if not self.voice.strip():
             raise ValueError("realtime voice is required")
+        if self.output_speed <= 0:
+            raise ValueError("realtime output speed must be positive")
         if not str(self.instructions or "").strip():
             raise ValueError("realtime instructions are required")
 

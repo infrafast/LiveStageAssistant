@@ -672,6 +672,8 @@ Runtime startup remains usable when MCP servers are partially unavailable. The a
 
 Startup ready wording is composed once in `voice_assistant/startup_messages.py` and reused by Classic and Realtime so all engines announce available MCP tools with the same i18n behavior.
 
+Voice preview is exposed next to the selected voice control rather than as a separate global button. Classic OpenAI/ElevenLabs, OpenAI Realtime and Gemini Live use the common `/api/backend-tts-test` path for backend playback previews; Classic browser TTS preview still uses the browser TTS path when browser output is selected.
+
 Offline LLM startup is managed locally when `LLM_PROVIDER=ollama`. The assistant checks `OLLAMA_BASE_URL`, starts `ollama serve` only when the URL is localhost and no Ollama API is already reachable, then verifies or pulls the selected model before constructing the LangChain Ollama client. `OLLAMA_AUTO_START=false` disables this automatic service startup. When auto mode later switches back online, or when the assistant shuts down, LSA stops only the Ollama process it started itself and never stops an instance that was already running before LSA needed it.
 
 The Linux/Raspberry install script provisions the local voice/runtime stack used by the classic and experimental voice paths: openWakeWord ONNX package resources, WebSocket realtime transport support, Piper local TTS, the default French Piper voice `fr_FR-siwis-medium`, Ollama, and the default install-time model `qwen3:8b`. The script may start `ollama serve` temporarily only to pull the model; it stops only that install-time process and does not stop an Ollama instance that was already running.

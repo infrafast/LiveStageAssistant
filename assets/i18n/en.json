@@ -168,6 +168,7 @@
     "testing_voice": "Testing voice...",
     "voice_test_played": "Voice test played.",
     "voice_test_failed": "Voice test failed: {error}",
+    "play_voice_sample": "Test selected voice",
     "stt_example_applied": "STT example applied. Save to persist.",
     "speaker_sample_upload": "Sample {index}",
     "speaker_samples_missing": "0/3 embeddings",

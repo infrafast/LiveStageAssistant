@@ -169,6 +169,7 @@ class RuntimeWebServices:
             values=values,
             openai_api_key=self._secret_value(values, "OPENAI_API_KEY"),
             elevenlabs_api_key=self._secret_value(values, "ELEVENLABS_API_KEY"),
+            gemini_api_key=self._secret_value(values, "GEMINI_API_KEY"),
             options=options,
         )
 

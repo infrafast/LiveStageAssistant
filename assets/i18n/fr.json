@@ -168,6 +168,7 @@
     "testing_voice": "Test de la voix...",
     "voice_test_played": "Test voix joué.",
     "voice_test_failed": "Échec du test voix : {error}",
+    "play_voice_sample": "Tester la voix sélectionnée",
     "stt_example_applied": "Exemple STT appliqué. Sauvegarde pour le conserver.",
     "speaker_sample_upload": "Sample {index}",
     "speaker_samples_missing": "0/3 empreintes",

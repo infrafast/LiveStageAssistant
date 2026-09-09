@@ -796,7 +796,7 @@ async def run(args) -> int:
             on_state=lambda state: print(f"LSA semantic state: {state.value}", flush=True),
         )
 
-        engine = create_realtime_engine(provider, RealtimeEngineConfig(provider=provider, model=model, voice=voice, instructions=effective_instructions, server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)
+        engine = create_realtime_engine(provider, RealtimeEngineConfig(provider=provider, model=model, voice=voice, instructions=effective_instructions, output_speed=max(0.6, min(1.8, _float_env("WEB_TTS_SPEED", 1.0))), server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)
         await engine.start()
         await wait_until_ready(engine)
         print(f"LSA Realtime ready: provider={provider} model={model} voice={voice}", flush=True)

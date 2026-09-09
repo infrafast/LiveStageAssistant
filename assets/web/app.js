@@ -106,14 +106,14 @@
     const ttsSpeedField = document.querySelector("#tts-speed-field");
     const openaiTtsSpeed = document.querySelector("#openai-tts-speed");
     const openaiTtsSpeedLabel = document.querySelector("#openai-tts-speed-label");
+    const openaiTtsVoicePlay = document.querySelector("#openai-tts-voice-play");
+    const elevenlabsVoicePlay = document.querySelector("#elevenlabs-voice-play");
     const webTtsVolumeField = document.querySelector("#web-tts-volume-field");
     const webTtsVolume = document.querySelector("#web-tts-volume");
     const webTtsVolumeLabel = document.querySelector("#web-tts-volume-label");
     const backendTtsVolumeField = document.querySelector("#backend-tts-volume-field");
     const backendTtsVolume = document.querySelector("#backend-tts-volume");
     const backendTtsVolumeLabel = document.querySelector("#backend-tts-volume-label");
-    const ttsTestField = document.querySelector("#tts-test-field");
-    const ttsTest = document.querySelector("#tts-test");
     const vadSpeechThreshold = document.querySelector("#vad-speech-threshold");
     const vadSpeechThresholdLabel = document.querySelector("#vad-speech-threshold-label");
     const vadNegativeThreshold = document.querySelector("#vad-negative-threshold");
@@ -219,6 +219,7 @@
     const realtimeModelField = document.querySelector("#realtime-model-field");
     const realtimeVoice = document.querySelector("#realtime-voice");
     const realtimeVoiceField = document.querySelector("#realtime-voice-field");
+    const realtimeVoicePlay = document.querySelector("#realtime-voice-play");
     const realtimeBrowserField = document.querySelector("#realtime-browser-field");
     const realtimeBrowserToggle = document.querySelector("#realtime-browser-toggle");
     const realtimeBrowserStatus = document.querySelector("#realtime-browser-status");
@@ -3344,7 +3345,7 @@
       classicVadDetails.classList.remove("hidden");
       for (const element of classicVadOnlyControls) element.classList.toggle("hidden", realtime);
       for (const element of cloudAudioControls) element.classList.toggle("hidden", realtime || offline);
-      for (const field of [ttsSpeedField, elevenlabsVoiceField, openaiTtsVoiceField, ttsTestField]) field.classList.toggle("hidden", realtime);
+      for (const field of [elevenlabsVoiceField, openaiTtsVoiceField]) field.classList.toggle("hidden", realtime);
       webTtsVolumeField.classList.add("hidden");
       backendTtsVolumeField.classList.add("hidden");
       currentClassicCloudSpeech = !offline && ["openai", "elevenlabs"].includes(String(cloudTtsProvider.value || "").toLowerCase());
@@ -4702,16 +4703,43 @@
       llmMessage.textContent = tr("stt_example_applied", "STT example applied. Save to persist.");
     }
 
-    async function testSelectedTtsVoice() {
+    function selectedVoiceTestConfig(kind) {
+      const engine = voiceEngine?.value || "classic";
+      if (kind === "realtime" || ["openai-realtime", "gemini-live"].includes(engine)) {
+        if (engine === "openai-realtime") {
+          return { provider: "openai-realtime", model: realtimeModel.value || "", voice: realtimeVoice.value || "" };
+        }
+        if (engine === "gemini-live") {
+          return { provider: "gemini-live", model: realtimeModel.value || "", voice: realtimeVoice.value || "" };
+        }
+      }
+      if (kind === "elevenlabs") {
+        return { provider: "elevenlabs", model: "", voice: elevenlabsVoice.value || "" };
+      }
+      if (kind === "openai") {
+        return { provider: "openai", model: "gpt-4o-mini-tts", voice: openaiTtsVoice.value || "" };
+      }
       const provider = cloudTtsProvider.value || "none";
-      if (!["openai", "elevenlabs"].includes(provider)) return;
-      const voice = provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value;
+      return {
+        provider,
+        model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+        voice: provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value
+      };
+    }
+
+    async function testSelectedTtsVoice(kind, button) {
+      const config = selectedVoiceTestConfig(kind);
+      const provider = config.provider || "none";
+      if (!["openai", "elevenlabs", "openai-realtime", "gemini-live"].includes(provider) || !config.voice) return;
+      const voice = config.voice;
       const speed = Number(openaiTtsSpeed.value || 1);
       const volume = Number(webTtsVolume.value || 1);
-      const backendVolume = Number(backendTtsVolume.value || 1);
+      const backendVolume = ["openai-realtime", "gemini-live"].includes(provider)
+        ? Number(speechOutputGain?.value || 1)
+        : Number(backendTtsVolume.value || 1);
       const backendPan = Number(backendAudioOutputPan.value || 0);
-      const output = selectedTtsOutput();
-      ttsTest.disabled = true;
+      const output = ["openai-realtime", "gemini-live"].includes(provider) ? "backend" : selectedTtsOutput();
+      if (button) button.disabled = true;
       llmMessage.textContent = tr("testing_voice", "Testing voice...");
       try {
         if (output === "backend") {
@@ -4721,7 +4749,7 @@
             body: JSON.stringify({
               text: ttsTestPhrase,
               provider,
-              model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+              model: config.model || "",
               voice,
               speed,
               volume: backendVolume,
@@ -4743,7 +4771,7 @@
           await playWebTts(ttsTestPhrase, {
             force: true,
             provider,
-            model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+            model: config.model || "",
             voice,
             speed,
             volume
@@ -4962,9 +4990,12 @@
       const offline = connectivityMode === "offline";
       const engine = voiceEngine?.value || "classic";
       const classic = !offline && engine === "classic";
+      const realtimeEngine = !offline && ["openai-realtime", "gemini-live"].includes(engine);
       const provider = cloudTtsProvider.value || "none";
       const output = selectedTtsOutput();
       const forceSilent = classic && provider === "none";
+      const classicVoicePreviewUnavailable = output === "silent" || (output === "backend" && !backendAudioCapabilities.output);
+      const realtimeVoicePreviewUnavailable = !backendAudioCapabilities.output;
       for (const element of cloudAudioControls) element.classList.toggle("hidden", !classic);
       offlineAudioSummary.classList.toggle("hidden", !offline);
       for (const input of ttsOutputInputs) {
@@ -4981,18 +5012,20 @@
       }
       elevenlabsVoiceField.classList.toggle("hidden", !classic || provider !== "elevenlabs");
       openaiTtsVoiceField.classList.toggle("hidden", !classic || provider !== "openai");
-      ttsSpeedField.classList.toggle("hidden", !classic || provider === "none");
-      ttsTestField.classList.toggle("hidden", !classic || provider === "none");
+      ttsSpeedField.classList.toggle("hidden", !((classic && provider !== "none") || realtimeEngine));
       elevenlabsVoice.disabled = !classic || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
       openaiTtsVoice.disabled = !classic || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
-      openaiTtsSpeed.disabled = !classic || provider === "none";
+      realtimeVoice.disabled = !realtimeEngine || realtimeVoice.options.length === 0 || !realtimeVoice.value;
+      openaiTtsSpeed.disabled = !((classic && provider !== "none") || realtimeEngine);
       webTtsVolume.disabled = !classic || provider === "none" || selectedTtsOutput() !== "browser";
       backendTtsVolume.disabled = !classic && !offline ? true : selectedTtsOutput() !== "backend";
       backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
       webTtsVolumeField.title = webTtsVolume.disabled ? "WEB_TTS_VOLUME - actif seulement avec TTS Output Browser" : "WEB_TTS_VOLUME";
       backendTtsVolumeField.title = backendTtsVolume.disabled ? "BACKEND_TTS_VOLUME - actif seulement avec TTS Output Backend" : "BACKEND_TTS_VOLUME";
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif" : "BACKEND_AUDIO_OUTPUT_PAN";
-      ttsTest.disabled = !classic || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
+      if (elevenlabsVoicePlay) elevenlabsVoicePlay.disabled = elevenlabsVoice.disabled || classicVoicePreviewUnavailable;
+      if (openaiTtsVoicePlay) openaiTtsVoicePlay.disabled = openaiTtsVoice.disabled || classicVoicePreviewUnavailable;
+      if (realtimeVoicePlay) realtimeVoicePlay.disabled = realtimeVoice.disabled || realtimeVoicePreviewUnavailable;
       syncAudioSampleControls();
       syncSpeakerProfileSampleControls();
       syncAudioDeviceVisibility();
@@ -5233,7 +5266,9 @@
       backendAudioOutputPan.disabled = true;
       commandAckSound.disabled = true;
       commandAckSoundPlay.disabled = true;
-      ttsTest.disabled = true;
+      if (elevenlabsVoicePlay) elevenlabsVoicePlay.disabled = true;
+      if (openaiTtsVoicePlay) openaiTtsVoicePlay.disabled = true;
+      if (realtimeVoicePlay) realtimeVoicePlay.disabled = true;
       for (const control of vadControls) control.disabled = true;
       for (const control of backendWakeWordControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
@@ -6309,5 +6344,7 @@
     for (const button of vadPresetButtons) {
       button.addEventListener("click", () => applyVadPreset(button.dataset.vadPreset || ""));
     }
-    ttsTest.addEventListener("click", testSelectedTtsVoice);
+    if (elevenlabsVoicePlay) elevenlabsVoicePlay.addEventListener("click", () => testSelectedTtsVoice("elevenlabs", elevenlabsVoicePlay));
+    if (openaiTtsVoicePlay) openaiTtsVoicePlay.addEventListener("click", () => testSelectedTtsVoice("openai", openaiTtsVoicePlay));
+    if (realtimeVoicePlay) realtimeVoicePlay.addEventListener("click", () => testSelectedTtsVoice("realtime", realtimeVoicePlay));
     loadBrowserAudioDevices(false);
