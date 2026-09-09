@@ -309,7 +309,6 @@ def run_engine_session(
     ready_seen = threading.Event()
     output_done = threading.Event()
     connectivity_events: queue.Queue[ConnectivityEvent] = queue.Queue(maxsize=1)
-    local_ready_announced = False
 
     def read_output() -> None:
         try:
@@ -350,10 +349,6 @@ def run_engine_session(
                 _terminate_process(process)
                 output_done.wait(timeout=2.0)
                 return None, None, True
-
-            if not online and ready_seen.is_set() and not local_ready_announced:
-                speak_local("Assistant vocal prêt à exécuter des commandes.", values)
-                local_ready_announced = True
 
             try:
                 event = connectivity_events.get_nowait()
@@ -425,9 +420,6 @@ def main() -> int:
             online = connectivity.detect()
             env_file = ONLINE_ENV if online else OFFLINE_ENV
             print(f"LSA initial connectivity: {'online' if online else 'offline'}", flush=True)
-            if not online:
-                offline_values = _load_values(OFFLINE_ENV) if OFFLINE_ENV.is_file() else {}
-                speak_local("Assistant fonctionne localement.", offline_values)
         else:
             env_file = Path(raw_env_arg).expanduser()
             if not env_file.is_absolute():
