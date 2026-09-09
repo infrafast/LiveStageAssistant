@@ -160,7 +160,11 @@ class BackendAudioSamplePlayer:
 
     def _play_once(self, path: Path, *, selector: str, volume: float, stop_event: threading.Event | None) -> None:
         target = _pipewire_target(selector)
-        if target and shutil.which("pw-play"):
+        if target:
+            if not shutil.which("pw-play"):
+                raise RuntimeError(
+                    f"configured PipeWire output '{target}' cannot be used because pw-play is unavailable"
+                )
             self._play_pipewire(path, target=target, stop_event=stop_event)
             return
         self._play_pyaudio(path, output_device_index=_pyaudio_output_index(selector), volume=volume, stop_event=stop_event)
