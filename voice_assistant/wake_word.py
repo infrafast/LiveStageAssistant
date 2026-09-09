@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 
@@ -24,6 +25,16 @@ def parse_wake_words(value: str | None) -> list[str]:
 
     candidates = re.split(r"[,;|]", value)
     return [candidate.strip() for candidate in candidates if candidate.strip()]
+
+
+def get_configured_wake_words() -> list[str]:
+    """Return the configured wake words from the process environment.
+
+    This is the single configuration boundary for wake-word consumers. Engine
+    code must use this helper instead of reading or parsing ``WAKE_WORD``
+    directly.
+    """
+    return parse_wake_words(str(os.getenv("WAKE_WORD") or "").strip() or None)
 
 
 def apply_wake_word(text: str, wake_words: list[str]) -> tuple[bool, str | None, str]:
