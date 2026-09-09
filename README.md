@@ -208,6 +208,10 @@ PIPER_DATA_DIR=data/piper
 WEB_TTS_PROVIDER=none
 ```
 
+Offline profiles use `LLM_PROVIDER=ollama` with `OLLAMA_BASE_URL=http://localhost:11434`. When `OLLAMA_AUTO_START=true`, Live Stage Assistant checks the local Ollama API, starts `ollama serve` only if nothing is already running, verifies or pulls the selected model, and stops only the Ollama process it started itself when switching back online or shutting down. The Linux/Raspberry install script also installs Ollama when missing and pulls `qwen3:8b` by default; override that with `LSA_OLLAMA_MODEL=<model>`.
+
+On Linux/Raspberry, `./scripts/install.sh` also installs the local voice extras used by the current and experimental voice paths: openWakeWord ONNX resources, realtime WebSocket transport support, Piper local TTS, and the default French Piper voice `fr_FR-siwis-medium`.
+
 ### Wake Word
 
 The wake word is optional.

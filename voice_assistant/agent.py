@@ -132,6 +132,7 @@ AUTO_CONNECTIVITY_HOST = "api.openai.com"
 AUTO_CONNECTIVITY_PORT = 443
 AUTO_CONNECTIVITY_TIMEOUT = 2.0
 AUTO_CHECK_INTERVAL = 10.0
+OLLAMA_START_TIMEOUT_SECONDS = 20.0
 EXTERNAL_STATE_FRESHNESS_RULE = (
     "Use conversation memory for context, preferences, and follow-up references, but not as the source of truth "
     "for live external state. When the user asks about the current state of anything outside this conversation, "
@@ -581,6 +582,108 @@ def check_internet_connection(
             return True
     except OSError:
         return False
+
+
+def local_ollama_autostart_enabled() -> bool:
+    return os.getenv("OLLAMA_AUTO_START", "true").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def ollama_base_url_is_local(base_url: str) -> bool:
+    parsed = urllib.parse.urlparse(base_url)
+    hostname = (parsed.hostname or "").strip().lower()
+    return hostname in {"", "localhost", "127.0.0.1", "::1"}
+
+
+class LocalOllamaManager:
+    """Start and stop only the Ollama process owned by this assistant runtime."""
+
+    def __init__(self) -> None:
+        self.process: subprocess.Popen | None = None
+        self.base_url = ""
+
+    def _api_ready(self, base_url: str) -> bool:
+        try:
+            with urllib.request.urlopen(f"{base_url.rstrip('/')}/api/tags", timeout=1.0):
+                return True
+        except Exception:
+            return False
+
+    def _wait_until_ready(self, base_url: str, timeout_seconds: float) -> bool:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if self._api_ready(base_url):
+                return True
+            time.sleep(0.25)
+        return self._api_ready(base_url)
+
+    def _serve_env(self, base_url: str) -> dict[str, str]:
+        env = dict(os.environ)
+        parsed = urllib.parse.urlparse(base_url)
+        if parsed.hostname and parsed.port:
+            host = "127.0.0.1" if parsed.hostname in {"localhost", "::1"} else parsed.hostname
+            env["OLLAMA_HOST"] = f"{host}:{parsed.port}"
+        return env
+
+    def _ensure_model(self, model: str, base_url: str) -> None:
+        model = (model or "").strip()
+        if not model:
+            return
+        command_env = self._serve_env(base_url)
+        if subprocess.run(
+            ["ollama", "show", model],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=command_env,
+            check=False,
+        ).returncode == 0:
+            print(f"Ollama model available: {model}")
+            return
+        print(f"Ollama model '{model}' is not available locally; pulling it now.")
+        subprocess.run(["ollama", "pull", model], env=command_env, check=True)
+
+    def ensure_running(self, base_url: str, model: str) -> None:
+        base_url = (base_url or "http://localhost:11434").strip().rstrip("/")
+        if shutil.which("ollama") is None:
+            raise RuntimeError("LLM_PROVIDER=ollama requires the 'ollama' command")
+        if self._api_ready(base_url):
+            print(f"Ollama already running at {base_url}.")
+            self._ensure_model(model, base_url)
+            return
+        if not local_ollama_autostart_enabled():
+            raise RuntimeError(
+                f"Ollama is unavailable at {base_url} and OLLAMA_AUTO_START=false prevents starting it"
+            )
+        if not ollama_base_url_is_local(base_url):
+            raise RuntimeError(f"Ollama is unavailable at non-local OLLAMA_BASE_URL={base_url}")
+        print(f"Starting local Ollama service at {base_url}.")
+        self.process = subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=self._serve_env(base_url),
+        )
+        self.base_url = base_url
+        if not self._wait_until_ready(base_url, OLLAMA_START_TIMEOUT_SECONDS):
+            self.stop_owned()
+            raise RuntimeError(f"Ollama did not become ready within {OLLAMA_START_TIMEOUT_SECONDS:.0f}s")
+        print("Local Ollama service started by LiveStageAssistant.")
+        self._ensure_model(model, base_url)
+
+    def stop_owned(self) -> None:
+        process = self.process
+        self.process = None
+        if not process or process.poll() is not None:
+            return
+        print("Stopping local Ollama service started by LiveStageAssistant.")
+        process.terminate()
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2.0)
+
+
+LOCAL_OLLAMA_MANAGER = LocalOllamaManager()
 
 
 def request_force_exit(_signum=None, _frame=None) -> None:
@@ -7928,6 +8031,15 @@ async def main():
             )
             sys.exit(1)
 
+        if llm_provider == "ollama":
+            try:
+                LOCAL_OLLAMA_MANAGER.ensure_running(ollama_base_url, model)
+            except Exception as e:
+                print(f"Error: local LLM service is unavailable: {e}")
+                sys.exit(1)
+        else:
+            LOCAL_OLLAMA_MANAGER.stop_owned()
+
         web_tts_has_key = (
             (web_tts_provider == "openai" and bool(openai_api_key))
             or (web_tts_provider == "elevenlabs" and bool(elevenlabs_api_key))
@@ -8589,6 +8701,7 @@ async def main():
                 print(f"Configuration reload requested. Restarting assistant with {get_active_env_file()}.")
                 announce_reload_complete = True
         finally:
+            LOCAL_OLLAMA_MANAGER.stop_owned()
             if web_monitor:
                 web_monitor.stop()
                 web_monitor.restore_console_capture()
@@ -8635,6 +8748,7 @@ async def main():
             announce_reload_complete = True
     finally:
         auto_monitor.stop()
+        LOCAL_OLLAMA_MANAGER.stop_owned()
         if web_monitor:
             web_monitor.stop()
             web_monitor.restore_console_capture()

@@ -6,6 +6,7 @@ import numpy as np
 
 from voice_assistant.agent import (
     BackendWakeWordDetector,
+    LocalOllamaManager,
     VoiceAssistant,
     classify_cloud_api_error,
     format_backend_listening_message,
@@ -202,3 +203,34 @@ def test_startup_ready_message_reports_tool_count_and_failed_servers():
     assert assistant._startup_ready_message([], {"mixer": "timeout", "qlcplus": "timeout"}) == (
         "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté."
     )
+
+
+def test_local_ollama_manager_leaves_existing_service_running(monkeypatch):
+    manager = LocalOllamaManager()
+    calls = []
+
+    monkeypatch.setattr("voice_assistant.agent.shutil.which", lambda command: "/usr/bin/ollama")
+    manager._api_ready = lambda base_url: calls.append(("ready", base_url)) or True
+    manager._ensure_model = lambda model, base_url: calls.append(("model", model, base_url))
+
+    manager.ensure_running("http://localhost:11434", "qwen3:8b")
+
+    assert manager.process is None
+    assert calls == [
+        ("ready", "http://localhost:11434"),
+        ("model", "qwen3:8b", "http://localhost:11434"),
+    ]
+
+
+def test_local_ollama_manager_refuses_nonlocal_autostart(monkeypatch):
+    manager = LocalOllamaManager()
+
+    monkeypatch.setattr("voice_assistant.agent.shutil.which", lambda command: "/usr/bin/ollama")
+    manager._api_ready = lambda _base_url: False
+
+    try:
+        manager.ensure_running("http://192.168.1.10:11434", "qwen3:8b")
+    except RuntimeError as e:
+        assert "non-local" in str(e)
+    else:
+        raise AssertionError("expected non-local RuntimeError")

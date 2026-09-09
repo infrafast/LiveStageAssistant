@@ -25,10 +25,10 @@ install_system_packages() {
                 printf '%s\n' "Installing Linux audio/system packages with apt-get."
                 if [ "$(id -u 2>/dev/null || printf 1)" = "0" ]; then
                     apt-get update
-                    apt-get install -y curl portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
+                    apt-get install -y curl ca-certificates portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
                 elif command -v sudo >/dev/null 2>&1; then
                     sudo apt-get update
-                    sudo apt-get install -y curl portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
+                    sudo apt-get install -y curl ca-certificates portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
                 else
                     printf '%s\n' "Warning: sudo is not available; install audio packages manually if backend audio is needed." >&2
                 fi
@@ -92,16 +92,47 @@ install_ollama() {
         return
     fi
 
+    ollama_started_pid=""
     if ! ollama list >/dev/null 2>&1; then
-        printf '%s\n' "Ollama is installed but not running. Start it with 'ollama serve', then pull ${ollama_model} for offline mode."
-        return
+        printf '%s\n' "Starting Ollama temporarily to pull ${ollama_model} for local/offline mode."
+        ollama serve >/tmp/livestageassistant-ollama-install.log 2>&1 &
+        ollama_started_pid="$!"
+        i=0
+        while [ "$i" -lt 60 ]; do
+            if ollama list >/dev/null 2>&1; then
+                break
+            fi
+            i=$((i + 1))
+            sleep 1
+        done
+        if ! ollama list >/dev/null 2>&1; then
+            if [ -n "$ollama_started_pid" ]; then
+                kill "$ollama_started_pid" >/dev/null 2>&1 || true
+            fi
+            printf '%s\n' "Warning: Ollama did not become ready; skipping model pull. See /tmp/livestageassistant-ollama-install.log." >&2
+            return
+        fi
     fi
 
+    ollama_pull_status=0
     if ollama show "$ollama_model" >/dev/null 2>&1; then
         printf '%s\n' "Ollama model ${ollama_model} is already available."
     else
         printf '%s\n' "Pulling Ollama model ${ollama_model} for local/offline mode."
-        ollama pull "$ollama_model"
+        if ! ollama pull "$ollama_model"; then
+            ollama_pull_status=1
+        fi
+    fi
+
+    if [ -n "$ollama_started_pid" ]; then
+        printf '%s\n' "Stopping temporary Ollama install server."
+        kill "$ollama_started_pid" >/dev/null 2>&1 || true
+        wait "$ollama_started_pid" >/dev/null 2>&1 || true
+    fi
+
+    if [ "$ollama_pull_status" -ne 0 ]; then
+        printf '%s\n' "Error: failed to pull Ollama model ${ollama_model}." >&2
+        return "$ollama_pull_status"
     fi
 }
 
