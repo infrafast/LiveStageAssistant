@@ -151,20 +151,14 @@ def _pipewire_target(values: Mapping[str, object] | None = None) -> str:
 
 
 def play_local_wav(path: str | Path, values: Mapping[str, object] | None = None) -> None:
-    """Play a local WAV through PipeWire when available, else ALSA default."""
-    audio_path = str(Path(path))
-    target = _pipewire_target(values)
-    if shutil.which("pw-play"):
-        command = ["pw-play"]
-        if target:
-            command.extend(["--target", target])
-        command.append(audio_path)
-        subprocess.run(command, check=True)
-        return
-    if shutil.which("aplay"):
-        subprocess.run(["aplay", "-q", audio_path], check=True)
-        return
-    raise RuntimeError("Neither pw-play nor aplay is available for local TTS playback")
+    """Play local speech through the same configured backend output contract as the rest of LSA."""
+    try:
+        from .backend_audio_sample import BackendAudioSamplePlayer
+    except ImportError:
+        from backend_audio_sample import BackendAudioSamplePlayer
+
+    player = BackendAudioSamplePlayer(values)
+    player.control_path(Path(path), {"action": "play", "volume": 1.0})
 
 
 def speak_local_status(text: str, values: Mapping[str, object] | None = None) -> bool:
