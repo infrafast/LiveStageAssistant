@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from typing import Mapping
 import unicodedata
 
 
@@ -27,14 +28,15 @@ def parse_wake_words(value: str | None) -> list[str]:
     return [candidate.strip() for candidate in candidates if candidate.strip()]
 
 
-def get_configured_wake_words() -> list[str]:
-    """Return the configured wake words from the process environment.
+def get_configured_wake_words(values: Mapping[str, object] | None = None) -> list[str]:
+    """Return configured wake words through the single configuration boundary.
 
-    This is the single configuration boundary for wake-word consumers. Engine
-    code must use this helper instead of reading or parsing ``WAKE_WORD``
-    directly.
+    ``values`` lets early startup consumers use their selected profile before it
+    has been exported to the process environment. Engine code must use this
+    helper instead of reading or parsing ``WAKE_WORD`` directly.
     """
-    return parse_wake_words(str(os.getenv("WAKE_WORD") or "").strip() or None)
+    source: Mapping[str, object] = values if values is not None else os.environ
+    return parse_wake_words(str(source.get("WAKE_WORD") or "").strip() or None)
 
 
 def apply_wake_word(text: str, wake_words: list[str]) -> tuple[bool, str | None, str]:
