@@ -1,4 +1,4 @@
-from voice_assistant.runtime import fallback_engine_candidates, select_fallback_engine
+from voice_assistant.runtime import engine_identity, fallback_engine_candidates, select_fallback_engine
 
 
 def test_default_online_fallback_is_classic():
@@ -31,3 +31,22 @@ def test_select_fallback_does_not_loop_back_to_previous_failure():
         failed_engine="classic",
         failed_engines={"classic", "openai-realtime"},
     ) == ""
+
+
+def test_local_engine_identity_uses_ollama_model():
+    provider, model, voice = engine_identity(
+        "local",
+        {"LLM_PROVIDER": "ollama", "OLLAMA_MODEL": "qwen3:8b", "OPENAI_MODEL": "gpt-4.1-mini"},
+    )
+    assert provider == "ollama"
+    assert model == "qwen3:8b"
+    assert voice == ""
+
+
+def test_local_engine_identity_supports_legacy_offline_model():
+    provider, model, _voice = engine_identity(
+        "local",
+        {"LLM_PROVIDER": "ollama", "OFFLINE_MODEL": "qwen3:8b"},
+    )
+    assert provider == "ollama"
+    assert model == "qwen3:8b"
