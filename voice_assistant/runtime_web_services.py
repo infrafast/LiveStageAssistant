@@ -54,7 +54,7 @@ GEMINI_LIVE_VOICE_OPTIONS = [{"id": voice, "label": voice} for voice in ("Kore",
 DEFAULT_STT_PROMPT = ""
 DEFAULT_SYSTEM_PROMPT = ""
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
-DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 
 class RuntimeWebServices:
@@ -110,6 +110,26 @@ class RuntimeWebServices:
 
     def _values(self, profile: Path | None = None) -> dict[str, Any]:
         return dict(dotenv_values(profile or self.active_profile()))
+
+    @staticmethod
+    def _ollama_models(values: dict[str, Any], configured_model: str) -> tuple[list[dict[str, str]], str]:
+        """List live Ollama models, falling back to the configured model if the API is temporarily unavailable."""
+        base_url = str(values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip().rstrip("/")
+        try:
+            with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            names = sorted(
+                str(item.get("name") or "").strip()
+                for item in (payload.get("models") or [])
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            )
+            models = [{"id": name, "label": name} for name in names]
+            if configured_model and configured_model not in names:
+                models.append({"id": configured_model, "label": f"{configured_model} (configured)"})
+            return models, ""
+        except Exception as error:
+            fallback = [{"id": configured_model, "label": f"{configured_model} (configured)"}] if configured_model else []
+            return fallback, f"Ollama API unavailable at {base_url}: {error}"
 
     def backend_audio_sample(self, filename: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         self._backend_audio_sample_player.update_values(self._values())
@@ -526,10 +546,12 @@ class RuntimeWebServices:
             provider = "ollama"
 
         if provider == "ollama":
-            selected_model = str(values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or "").strip()
+            selected_model = str(values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
+            models, ollama_message = self._ollama_models(values, selected_model)
         else:
             selected_model = str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
-        models = [{"id": selected_model, "label": selected_model}] if selected_model else []
+            models = [{"id": selected_model, "label": selected_model}] if selected_model else []
+            ollama_message = ""
 
         cloud_tts = str(values.get("CLOUD_TTS_PROVIDER") or "").strip().lower()
         if not cloud_tts:
@@ -572,6 +594,7 @@ class RuntimeWebServices:
             "providers": providers,
             "models": models,
             "selected_model": selected_model,
+            "message": ollama_message,
             "cloud_tts_providers": CLOUD_TTS_PROVIDER_OPTIONS,
             "selected_cloud_tts_provider": cloud_tts,
             "selected_stt_input": stt_input,
