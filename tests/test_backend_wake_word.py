@@ -204,6 +204,12 @@ def test_startup_ready_message_reports_tool_count_and_failed_servers():
         "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté."
     )
 
+    assistant.wake_words = ["momo"]
+    assert assistant._startup_ready_message(["mixer"], {}) == (
+        "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté. "
+        "Wake word actif, prononcez momo pour me réveiller."
+    )
+
 
 def test_local_ollama_manager_leaves_existing_service_running(monkeypatch):
     manager = LocalOllamaManager()

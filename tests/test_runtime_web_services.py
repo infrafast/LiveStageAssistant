@@ -23,6 +23,12 @@ class DummyMonitor:
     def set_mcp_routing_save_handler(self, handler): self.handlers["routing"] = handler
     def set_mcp_server_options_save_handler(self, handler): self.handlers["options"] = handler
     def set_session_context_handlers(self, **kwargs): self.handlers.update(kwargs)
+    def set_backend_audio_sample_handler(self, handler): self.handlers["backend_audio_sample"] = handler
+    def set_speaker_profile_sample_handler(self, handler): self.handlers["speaker_profile_sample"] = handler
+    def set_backend_tts_test_handler(self, handler): self.handlers["backend_tts_test"] = handler
+    def set_web_audio_handlers(self, **kwargs): self.handlers.update(kwargs)
+    def set_backend_audio_diagnostic_handler(self, handler): self.handlers["backend_audio_diagnostic"] = handler
+    def set_backend_speaker_capture_handlers(self, **kwargs): self.handlers.update(kwargs)
     def set_web_password(self, value): self.password = value
     def update(self, **kwargs): self.updated.append(kwargs)
     def replace_dialogue(self, messages): self.dialogue = list(messages)
@@ -106,6 +112,70 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertEqual(offline["provider"], "ollama")
         self.assertEqual(offline["selected_model"], "mistral:7b-instruct-q4_K_M")
         self.assertEqual(offline["selected_connectivity_mode"], "offline")
+
+    def test_offline_save_uses_existing_model_when_ui_model_is_empty(self):
+        self.active[0] = self.offline
+
+        result = self.services.save_llm_config(
+            provider="ollama",
+            model="",
+            cloud_tts_provider="none",
+            tts_output="backend",
+            stt_input="backend",
+            stt_language="fr",
+            connectivity_mode="offline",
+            wake_word="momo",
+            stt_prompt="",
+            system_prompt="",
+            session_context_size=4000,
+            mcp_agent_max_steps=20,
+            mcp_tool_routing_enabled=False,
+            interrupt_conversation_enabled=False,
+            backend_audio_input_device="",
+            backend_audio_input_gain=1.0,
+            backend_audio_output_device="",
+            voice_id="",
+            thinking_sound_file="",
+            ready_sound_file="",
+            listening_sound_file="",
+            wake_detected_sound_file="",
+            startup_loader_sound_file="",
+            command_ack_sound_file="",
+            openai_tts_voice="alloy",
+            openai_tts_speed=1.0,
+            web_tts_volume=1.0,
+            backend_tts_volume=1.0,
+            backend_audio_output_pan=0.0,
+            backend_audio_monitor_mode="off",
+            backend_audio_monitor_volume=1.0,
+            vad_speech_threshold=0.5,
+            vad_negative_threshold=0.35,
+            vad_min_speech_ms=120,
+            vad_min_silence_ms=650,
+            vad_speech_pad_ms=100,
+            vad_max_speech_seconds=8.0,
+            backend_wake_word_model_paths="data/wake_words/momo.onnx",
+            backend_wake_word_model_names="",
+            backend_wake_word_threshold=0.65,
+            backend_wake_word_pre_roll_ms=1600,
+            backend_wake_word_cooldown_ms=1200,
+            backend_wake_word_vad_threshold=0.0,
+            speaker_recognition_enabled=False,
+            speaker_backend="resemblyzer",
+            speaker_threshold=0.75,
+            speaker_margin=0.10,
+            speaker_profiles=[],
+            voice_engine="local",
+            realtime_model="",
+            realtime_voice="",
+            cloud_tts_output_gain=1.0,
+            local_tts_output_gain=1.0,
+        )
+
+        self.assertEqual(result["model"], "mistral:7b-instruct-q4_K_M")
+        saved = self.offline.read_text(encoding="utf-8")
+        self.assertIn("WAKE_WORD=momo", saved)
+        self.assertIn("OFFLINE_MODEL=mistral:7b-instruct-q4_K_M", saved)
 
     def test_auto_profile_list_is_locked_to_connectivity(self):
         result = self.services.list_env_profiles()

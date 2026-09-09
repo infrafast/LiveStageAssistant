@@ -2456,6 +2456,14 @@ class VoiceAssistant:
             self.openai_client = openai.OpenAI(
                 api_key=openai_api_key,
             )
+        if self.stt_provider == "local-whisper":
+            stage_started_at = time.perf_counter()
+            preload_status = "ready" if self._load_local_whisper_model() else "unavailable"
+            print(
+                "Startup timing: local Whisper preload "
+                f"{preload_status} in {time.perf_counter() - stage_started_at:.3f}s",
+                flush=True,
+            )
 
         self.model = model
         self.llm_provider = llm_provider.lower()
@@ -3604,6 +3612,7 @@ class VoiceAssistant:
             stt_language=self.stt_language,
             tool_count=self._available_mcp_tool_count(),
             failed_servers=failed_servers,
+            wake_words=getattr(self, "wake_words", []),
         )
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
@@ -7313,6 +7322,7 @@ async def main():
         reload_event: threading.Event | None,
         auto_env_mode: bool = False,
     ) -> dict[str, Any]:
+        values = dict(dotenv_values(env_file))
         provider = provider.strip().lower()
         model = model.strip()
         cloud_tts_provider = (cloud_tts_provider or "").strip().lower()
@@ -7320,6 +7330,12 @@ async def main():
         stt_input = (stt_input or "both").strip().lower()
         stt_language = normalize_locale(stt_language)
         connectivity_mode = (connectivity_mode or "").strip().lower()
+        if not connectivity_mode:
+            connectivity_mode = connectivity_mode_from_values(values, env_file)
+        if not model and connectivity_mode == "offline":
+            model = str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
+        elif not model:
+            model = str(values.get("OPENAI_MODEL") or "").strip()
         wake_word = (wake_word or "").strip()
         stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
         system_prompt = (system_prompt or "").strip()
@@ -7418,9 +7434,6 @@ async def main():
             raise ValueError(f"unsupported STT input: {stt_input}")
         if provider not in {"openai", "ollama"}:
             raise ValueError(f"unsupported LLM provider: {provider}")
-        values = dict(dotenv_values(env_file))
-        if not connectivity_mode:
-            connectivity_mode = connectivity_mode_from_values(values, env_file)
         if connectivity_mode not in {"online", "offline"}:
             raise ValueError(f"unsupported connectivity mode: {connectivity_mode}")
         def env_secret_available(name: str) -> bool:

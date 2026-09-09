@@ -54,6 +54,7 @@ GEMINI_LIVE_VOICE_OPTIONS = [{"id": voice, "label": voice} for voice in ("Kore",
 DEFAULT_STT_PROMPT = ""
 DEFAULT_SYSTEM_PROMPT = ""
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
+DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 
 
 class RuntimeWebServices:
@@ -718,6 +719,10 @@ class RuntimeWebServices:
         elif provider != "openai":
             raise ValueError("online mode uses the cloud LLM provider; local Ollama belongs to the offline profile")
         model = str(model or "").strip()
+        if not model and active_connectivity == "offline":
+            model = str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
+        elif not model:
+            model = str(values.get("OPENAI_MODEL") or "").strip()
         if not model:
             raise ValueError("Model is required")
 
