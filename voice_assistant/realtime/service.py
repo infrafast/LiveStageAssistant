@@ -25,6 +25,7 @@ from ..semantic_audio import (
     VoiceOutputGains,
 )
 from ..semantic_audio_output import SemanticCuePlayer
+from ..startup_messages import startup_ready_message
 from .audio import Pcm16MonoResampler, apply_pcm16_gain, downmix_pcm16, expand_pcm16_channels
 from .audio_devices import PipeWireInputStream, PipeWireOutputStream, parse_pipewire_selector
 from .engine import RealtimeEngineConfig, RealtimeMCPServer
@@ -528,11 +529,26 @@ async def _announce_phrase(engine, output_stream, output_rate: int, output_chann
             print(f"Realtime MCP startup event: {event.type}", flush=True)
 
 
-async def announce_ready(engine, output_stream, output_rate: int, output_channels: int, connectivity: str, cloud_gain: float) -> None:
+async def announce_ready(
+    engine,
+    output_stream,
+    output_rate: int,
+    output_channels: int,
+    connectivity: str,
+    cloud_gain: float,
+    *,
+    tool_count: int,
+    has_unknown_native_tools: bool = False,
+) -> None:
     connectivity_text = "Assistant connecté à internet." if connectivity == "online" else "Assistant hors ligne."
     await _announce_phrase(engine, output_stream, output_rate, output_channels, connectivity_text, cloud_gain)
     await asyncio.sleep(0.45)
-    await _announce_phrase(engine, output_stream, output_rate, output_channels, "Assistant vocal prêt à exécuter des commandes.", cloud_gain)
+    ready_text = startup_ready_message(
+        stt_language=str(os.getenv("STT_LANGUAGE") or "fr").strip(),
+        tool_count=tool_count,
+        has_unknown_native_tools=has_unknown_native_tools,
+    )
+    await _announce_phrase(engine, output_stream, output_rate, output_channels, ready_text, cloud_gain)
 
 
 async def event_loop(
@@ -740,6 +756,8 @@ async def run(args) -> int:
     _log_loaded_mcp_prompts([*bridge_names, *(native.label for native in native_servers)], loaded_mcp_prompts)
     mcp_prompt = _format_loaded_mcp_prompts(loaded_mcp_prompts)
     effective_instructions = compose_realtime_instructions(mcp_prompt=mcp_prompt)
+    available_tool_count = len(function_tools) + sum(len(server.allowed_tools or ()) for server in native_servers)
+    has_unknown_native_tools = any(not server.allowed_tools for server in native_servers)
 
     pa = pyaudio.PyAudio()
     input_stream = output_stream = None
@@ -782,7 +800,16 @@ async def run(args) -> int:
         await engine.start()
         await wait_until_ready(engine)
         print(f"LSA Realtime ready: provider={provider} model={model} voice={voice}", flush=True)
-        await announce_ready(engine, output_stream, output_rate, output_channels, connectivity, output_gains.cloud)
+        await announce_ready(
+            engine,
+            output_stream,
+            output_rate,
+            output_channels,
+            connectivity,
+            output_gains.cloud,
+            tool_count=available_tool_count,
+            has_unknown_native_tools=has_unknown_native_tools,
+        )
         semantic.transition(SemanticAudioState.READY)
         semantic.transition(SemanticAudioState.LISTENING)
         print("LSA Realtime listening: provider VAD active", flush=True)

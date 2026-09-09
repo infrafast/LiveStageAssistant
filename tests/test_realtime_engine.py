@@ -10,6 +10,7 @@ from voice_assistant.realtime.engine import (
     RealtimeFunctionTool,
     RealtimeMCPServer,
 )
+from voice_assistant.startup_messages import startup_ready_message
 
 
 class DummyEngine(RealtimeEngine):
@@ -71,6 +72,17 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
             RealtimeEngineConfig(provider="x", model="")
         with self.assertRaises(ValueError):
             RealtimeEngineConfig(provider="x", model="y", voice="")
+
+    def test_realtime_startup_ready_message_reports_tool_count(self):
+        with patch.dict("os.environ", {"STT_LANGUAGE": "fr"}, clear=False):
+            self.assertEqual(
+                startup_ready_message(stt_language="fr", tool_count=95),
+                "Assistant vocal prêt à exécuter des commandes, 95 outils disponibles !",
+            )
+            self.assertEqual(
+                startup_ready_message(stt_language="fr", tool_count=0),
+                "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté.",
+            )
 
     def test_native_mcp_server_is_provider_neutral_config(self):
         server = RealtimeMCPServer(

@@ -55,6 +55,7 @@ try:
     from .semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .stage_timeout import TimedStageRunner
+    from .startup_messages import startup_ready_message
     from .wake_word import apply_wake_word, parse_wake_words
     from .wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from .speaker_recognition import (
@@ -78,6 +79,7 @@ except ImportError:
     from semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from stage_timeout import TimedStageRunner
+    from startup_messages import startup_ready_message
     from wake_word import apply_wake_word, parse_wake_words
     from wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from speaker_recognition import (
@@ -3598,34 +3600,11 @@ class VoiceAssistant:
         return len(self.mcp_all_tools or [])
 
     def _startup_ready_message(self, loaded_servers: list[str], failed_servers: dict[str, str] | None = None) -> str:
-        locale = load_locale(self.stt_language)
-        tool_count = self._available_mcp_tool_count()
-        failed_names = sorted(str(name) for name in (failed_servers or {}).keys() if str(name).strip())
-        if failed_names:
-            if tool_count <= 0:
-                return i18n_text(locale, "startup.ready_no_mcp", "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté.")
-            servers = human_join(failed_names)
-            if len(failed_names) == 1:
-                template = i18n_text(
-                    locale,
-                    "startup.ready_partial_tools_singular",
-                    "Assistant vocal prêt à exécuter des commandes, seulement {tool_count} outils disponibles car {servers} est injoignable.",
-                )
-            else:
-                template = i18n_text(
-                    locale,
-                    "startup.ready_partial_tools",
-                    "Assistant vocal prêt à exécuter des commandes, seulement {tool_count} outils disponibles car {servers} sont injoignables.",
-                )
-            return template.format(tool_count=tool_count, servers=servers)
-        if tool_count <= 0:
-            return i18n_text(locale, "startup.ready_no_mcp", "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté.")
-        template = i18n_text(
-            locale,
-            "startup.ready_tools",
-            "Assistant vocal prêt à exécuter des commandes, {tool_count} outils disponibles !",
+        return startup_ready_message(
+            stt_language=self.stt_language,
+            tool_count=self._available_mcp_tool_count(),
+            failed_servers=failed_servers,
         )
-        return template.format(tool_count=tool_count)
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
         """Announce that the assistant is ready, using the configured speech side."""
