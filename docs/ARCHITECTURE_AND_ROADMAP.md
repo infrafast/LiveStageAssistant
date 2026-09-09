@@ -265,7 +265,8 @@ READY
   -> ready announcement and optional READY_SOUND_FILE
 
 WAIT_WAKE
-  -> silence while waiting for activation
+  -> LISTENING_SOUND_FILE once when entering armed wake-word wait
+  -> then silence while waiting for activation
 
 WAKE_DETECTED
   -> WAKE_DETECTED_SOUND_FILE
@@ -561,7 +562,7 @@ Interpretation: the cost request is closed for the current representative transa
 - [~] Realtime emits/uses semantic `READY`, `LISTENING`/`WAIT_WAKE`, `PROCESSING`, `RESULT_READY`, `SPEAKING`, `IDLE` events; initial Pi logs validate wake-OFF transitions, final audible wake-ON recette pending;
 - [~] Classic behavior is adapted to the shared contract without regressing its validated wake-word behavior; implementation complete, Pi wake ON/OFF audible validation pending;
 - [~] semantic thinking loop starts only after command acceptance and stops before result-ready/speech in Realtime; audible validation pending;
-- [~] `WAIT_WAKE` remains silent; ambient speech must not trigger listening/processing cues; implementation in shared controller, final noisy-room validation pending;
+- [~] `WAIT_WAKE` plays the same one-shot ready-to-listen cue when entering armed wake wait, then remains silent; ambient speech must not trigger processing cues; implementation in shared controller, final noisy-room validation pending;
 - [~] `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event; implementation complete for Classic and Realtime wake paths, audible validation pending;
 - [~] preserve Classic-style post-TTS suppression/re-arm behavior before returning to wake listening; implementation preserved, comparison validation pending;
 - [x] add optional `READY_SOUND_FILE` while preserving spoken READY announcements;
@@ -726,7 +727,7 @@ MCP_CONFIG=mcp_servers.json
 - [ ] startup loader audible and stops exactly on READY;
 - [ ] READY announcement/cue occurs once;
 - [ ] wake OFF: listening cue occurs when direct command capture is ready;
-- [ ] wake ON: WAIT_WAKE is silent and wake-detected cue occurs once on valid activation;
+- [ ] wake ON: ready-to-listen cue occurs once when armed, WAIT_WAKE stays silent afterward, and wake-detected cue occurs once on valid activation;
 - [ ] thinking loop begins only after accepted command;
 - [ ] thinking loop stops before result-ready/speech;
 - [ ] result-ready acknowledgement cue occurs once;
@@ -950,7 +951,7 @@ common WebMonitor services
 1. **RV2D / CFG-9 — validate the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; run the migrated common handlers on Pi/browser before marking the milestone complete. No historical/second WebMonitor is allowed in the supervised architecture.
 2. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls, backend microphone diagnostic/capture, browser STT/TTS and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
 3. **RV2F / CFG-9 — semantic audio feedback validation:** run audible Classic/Realtime/Local checks for READY, LISTENING/WAIT_WAKE, WAKE_DETECTED, PROCESSING, RESULT_READY, SPEAKING and IDLE before marking RV2F complete.
-4. **RV2F / RV3 — wake compatibility validation:** verify wake ON/OFF behavior in a noisy room: `WAIT_WAKE` stays silent, ambient speech does not trigger thinking/listening cues, `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event and Classic post-TTS suppression/re-arm remains intact.
+4. **RV2F / RV3 — wake compatibility validation:** verify wake ON/OFF behavior in a noisy room: entering `WAIT_WAKE` plays one ready-to-listen cue, ambient speech does not trigger thinking/repeated listening cues, `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event and Classic post-TTS suppression/re-arm remains intact.
 5. **CFG-9 / RV8 — output-gain validation:** verify Cloud/Local speech gains audibly across Classic cloud TTS, Local/Piper and Realtime while keeping feedback-cue/sample-preview volumes semantically separate from speech gain.
 6. **RV3 / RV4 — realtime lifecycle validation:** validate inactivity timeout, action-grace deferral, interruption and reconnect/fallback recovery without replaying stale actions.
 7. **RV7 — optional browser Realtime wake gate decision:** keep current direct WebRTC behavior documented, then later decide whether to disable browser Realtime when `WAKE_WORD` is set or implement deterministic browser-side wake detection.

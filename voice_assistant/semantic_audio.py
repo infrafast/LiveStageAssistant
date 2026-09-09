@@ -53,6 +53,7 @@ class SemanticAudioConfig:
         return {
             SemanticAudioState.STARTING: self.startup,
             SemanticAudioState.READY: self.ready,
+            SemanticAudioState.WAIT_WAKE: self.listening,
             SemanticAudioState.LISTENING: self.listening,
             SemanticAudioState.WAKE_DETECTED: self.wake_detected,
             SemanticAudioState.PROCESSING: self.thinking,
@@ -110,6 +111,7 @@ class SemanticAudioController:
             self._loop_state = state
         elif state in {
             SemanticAudioState.READY,
+            SemanticAudioState.WAIT_WAKE,
             SemanticAudioState.WAKE_DETECTED,
             SemanticAudioState.LISTENING,
             SemanticAudioState.RESULT_READY,
