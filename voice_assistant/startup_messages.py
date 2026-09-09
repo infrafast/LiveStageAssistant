@@ -20,6 +20,26 @@ def human_join(items: list[str], conjunction: str = "et") -> str:
     return ", ".join(items[:-1]) + f" {conjunction} " + items[-1]
 
 
+def startup_connectivity_message(*, stt_language: str | None, connectivity: str) -> str:
+    """Build the shared spoken connectivity announcement."""
+    locale = load_locale(stt_language)
+    online = str(connectivity or "").strip().lower() == "online"
+    fallback = "Assistant connecté à internet" if online else "Assistant fonctionne localement"
+    text = i18n_text(locale, "network.online" if online else "network.offline", fallback).strip()
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
+def _wake_word_suffix(locale: Mapping[str, object], wake_words: list[str]) -> str:
+    if not wake_words:
+        return ""
+    language = str(locale.get("locale") or "fr").strip().lower()
+    conjunction = "and" if language == "en" else "et"
+    joined = human_join(wake_words, conjunction=conjunction)
+    if language == "en":
+        return f" Wake word active, say {joined} to wake me up."
+    return f" Wake word actif, prononcez {joined} pour me réveiller."
+
+
 def startup_ready_message(
     *,
     stt_language: str | None,
@@ -31,10 +51,8 @@ def startup_ready_message(
     locale = load_locale(stt_language)
     count = max(0, int(tool_count or 0))
     failed_names = sorted(str(name) for name in (failed_servers or {}).keys() if str(name).strip())
-    wake_word_suffix = ""
     normalized_wake_words = [str(item).strip() for item in (wake_words or []) if str(item).strip()]
-    if normalized_wake_words:
-        wake_word_suffix = " Wake word actif, prononcez " + human_join(normalized_wake_words) + " pour me réveiller."
+    wake_word_suffix = _wake_word_suffix(locale, normalized_wake_words)
     if failed_names:
         if count <= 0:
             return i18n_text(
