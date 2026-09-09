@@ -5411,7 +5411,11 @@ class VoiceAssistant:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
                 temp_path = temp_file.name
             piper_values = dict(os.environ)
+            # Playback applies the configured backend gain/pan, exactly like
+            # cloud TTS. Render Piper at unity gain to avoid applying local
+            # output gain twice.
             piper_values["BACKEND_TTS_VOLUME"] = "1.0"
+            piper_values["LOCAL_TTS_OUTPUT_GAIN"] = "1.0"
             render_piper_wav(prepare_text_for_tts(text), temp_path, piper_values)
             print(f"Piper TTS fallback/local voice: {piper_voice_name(piper_values)}")
             self.stop_thinking_sound()
