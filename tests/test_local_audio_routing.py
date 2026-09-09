@@ -14,7 +14,6 @@ def test_local_tts_routes_numeric_output_through_backend_player(tmp_path):
     with mock.patch.object(backend_audio_sample, "BackendAudioSamplePlayer", return_value=player):
         local_tts.play_local_wav(wav, {"BACKEND_AUDIO_OUTPUT_DEVICE": "7"})
 
-    backend_audio_sample.BackendAudioSamplePlayer.assert_not_called if False else None
     player.control_path.assert_called_once_with(Path(wav), {"action": "play", "volume": 1.0})
 
 
