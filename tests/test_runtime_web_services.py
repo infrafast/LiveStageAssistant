@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from voice_assistant.runtime_web_services import RuntimeWebServices
 
@@ -108,10 +109,36 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertTrue(result["models"])
 
         self.active[0] = self.offline
-        offline = self.services.llm_options("openai")
+        with mock.patch("voice_assistant.runtime_web_services.urllib.request.urlopen", side_effect=OSError("offline")):
+            offline = self.services.llm_options("openai")
         self.assertEqual(offline["provider"], "ollama")
         self.assertEqual(offline["selected_model"], "mistral:7b-instruct-q4_K_M")
         self.assertEqual(offline["selected_connectivity_mode"], "offline")
+        self.assertEqual(offline["models"][0]["id"], "mistral:7b-instruct-q4_K_M")
+        self.assertIn("configured", offline["models"][0]["label"])
+
+    def test_ollama_live_models_are_listed_from_api(self):
+        self.active[0] = self.offline
+        payload = json.dumps({
+            "models": [
+                {"name": "qwen3:8b"},
+                {"name": "mistral:7b-instruct-q4_K_M"},
+            ]
+        }).encode("utf-8")
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return payload
+
+        with mock.patch("voice_assistant.runtime_web_services.urllib.request.urlopen", return_value=Response()):
+            result = self.services.llm_options()
+
+        self.assertEqual(
+            [item["id"] for item in result["models"]],
+            ["mistral:7b-instruct-q4_K_M", "qwen3:8b"],
+        )
+        self.assertEqual(result["message"], "")
 
     def test_offline_save_uses_existing_model_when_ui_model_is_empty(self):
         self.active[0] = self.offline
