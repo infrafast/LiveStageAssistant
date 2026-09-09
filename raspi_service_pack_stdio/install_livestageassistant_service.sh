@@ -133,6 +133,15 @@ ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_MODEL_PATH" ""
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_CONFIG_PATH" ""
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_LENGTH_SCALE" "1.00"
 
+# Keep the deployed offline LLM profile aligned with the installer/runtime defaults.
+# Older profiles stored the local model in OPENAI_MODEL; migrate them to the
+# provider-specific Ollama keys so the runtime, UI and ChatOllama use one value.
+ensure_env_value_if_missing "$OFFLINE_ENV" "OLLAMA_MODEL" "qwen3:8b"
+ensure_env_value_if_missing "$OFFLINE_ENV" "OFFLINE_MODEL" "qwen3:8b"
+ensure_env_value_if_missing "$OFFLINE_ENV" "OLLAMA_BASE_URL" "http://localhost:11434"
+ensure_env_value_if_missing "$OFFLINE_ENV" "OLLAMA_AUTO_START" "true"
+remove_env_key "$OFFLINE_ENV" "OPENAI_MODEL"
+
 sudo cp "$SCRIPT_DIR/livestageassistant.service" /etc/systemd/system/livestageassistant.service
 sudo cp "$SCRIPT_DIR/livestageassistant" /usr/local/bin/livestageassistant
 
