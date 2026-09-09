@@ -25,7 +25,8 @@ from ..semantic_audio import (
     VoiceOutputGains,
 )
 from ..semantic_audio_output import SemanticCuePlayer
-from ..startup_messages import startup_ready_message
+from ..startup_messages import startup_connectivity_message, startup_ready_message
+from ..wake_word import get_configured_wake_words
 from .audio import Pcm16MonoResampler, apply_pcm16_gain, downmix_pcm16, expand_pcm16_channels
 from .audio_devices import PipeWireInputStream, PipeWireOutputStream, parse_pipewire_selector
 from .engine import RealtimeEngineConfig, RealtimeMCPServer
@@ -505,7 +506,7 @@ async def wait_until_ready(engine) -> None:
 
 
 async def _announce_phrase(engine, output_stream, output_rate: int, output_channels: int, text: str, cloud_gain: float) -> None:
-    instruction = f"Annonce système de démarrage. Prononce exactement cette phrase en français, sans ajouter un seul mot : {text}"
+    instruction = f"Annonce système de démarrage. Prononce exactement cette phrase, sans ajouter un seul mot : {text}"
     print(f"Realtime startup announcement: {text}", flush=True)
     await engine.send_text(instruction)
     resampler = Pcm16MonoResampler(REALTIME_RATE, output_rate)
@@ -540,13 +541,19 @@ async def announce_ready(
     tool_count: int,
     has_unknown_native_tools: bool = False,
 ) -> None:
-    connectivity_text = "Assistant connecté à internet." if connectivity == "online" else "Assistant hors ligne."
+    stt_language = str(os.getenv("STT_LANGUAGE") or "fr").strip()
+    wake_words = get_configured_wake_words()
+    connectivity_text = startup_connectivity_message(
+        stt_language=stt_language,
+        connectivity=connectivity,
+    )
     await _announce_phrase(engine, output_stream, output_rate, output_channels, connectivity_text, cloud_gain)
     await asyncio.sleep(0.45)
     ready_text = startup_ready_message(
-        stt_language=str(os.getenv("STT_LANGUAGE") or "fr").strip(),
+        stt_language=stt_language,
         tool_count=tool_count,
         has_unknown_native_tools=has_unknown_native_tools,
+        wake_words=wake_words,
     )
     await _announce_phrase(engine, output_stream, output_rate, output_channels, ready_text, cloud_gain)
 
