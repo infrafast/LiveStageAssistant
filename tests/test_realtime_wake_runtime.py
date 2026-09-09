@@ -25,6 +25,8 @@ class FakeGate:
         self.enabled = True
         self.rearms = []
         self.preroll = b"PRE"
+        self.last_detection_label = "momo"
+        self.last_detection_score = 0.9
 
     def feed(self, _pcm):
         self.waiting = False
@@ -63,12 +65,15 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
 
     def _service(self):
         controller_type = type("Controller", (), {"transition": FakeController.transition})
+        async def event_loop(*_args, **_kwargs):
+            return None
         return types.SimpleNamespace(
             SemanticAudioController=controller_type,
             Pcm16MonoResampler=FakeResampler,
             REALTIME_RATE=24000,
             downmix_pcm16=lambda pcm, _channels: pcm,
             capture_loop=None,
+            event_loop=event_loop,
         )
 
     def test_listening_is_wait_wake_until_authorized(self):

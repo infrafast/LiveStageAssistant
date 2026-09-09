@@ -123,6 +123,7 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
         completed_responses: set[str] = set()
         audio_started: set[str] = set()
         tool_tasks: set[asyncio.Task] = set()
+        completion_tasks: set[asyncio.Task] = set()
         turn_tracker = service.RealtimeTurnTracker(
             action_grace_seconds=service._float_env(
                 "REALTIME_ACTION_GRACE_SECONDS",
@@ -182,9 +183,16 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                     await asyncio.to_thread(monitor.set_assistant_busy, True)
                     semantic.transition(SemanticAudioState.PROCESSING)
                 elif event.type == "tool_call" and bridge is not None:
+                    await asyncio.to_thread(monitor.set_assistant_busy, True)
+                    semantic.transition(SemanticAudioState.PROCESSING)
                     task = asyncio.create_task(service.execute_bridge_call(engine, bridge, event, completed_calls, turn_tracker))
                     tool_tasks.add(task)
                     task.add_done_callback(tool_tasks.discard)
+                elif event.type == "tool_followup_requested":
+                    turn_tracker.tool_followup_requested()
+                    await asyncio.to_thread(monitor.set_assistant_busy, True)
+                    semantic.transition(SemanticAudioState.PROCESSING)
+                    print("Realtime tool follow-up requested", flush=True)
                 elif event.type in {"mcp_list_tools", "mcp_call", "mcp_approval_request", "mcp_event", "mcp_followup_requested"}:
                     print(f"Realtime native MCP event: {event.type}", flush=True)
                 elif event.type == "audio_delta":
@@ -215,11 +223,24 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
                     metrics = {"pipeline":"realtime","provider":engine.config.provider,"model":engine.config.model,"turn":turn,"response_id":response_id,"speech_end_to_first_audio_ms":metric_values["speech_end_to_first_audio_ms"],"speech_end_to_first_playback_ms":round((first_played[response_id]-speech_end)*1000,1) if speech_end is not None and response_id in first_played else None,"response_start_to_done_ms":metric_values["response_start_to_done_ms"],"usage":event.data.get("usage") or {}}
                     metrics["cost_usd"] = service.realtime_usage_cost_usd(engine.config.model, metrics["usage"]) if engine.config.provider == "openai" else None
                     print("REALTIME_METRICS " + json.dumps(metrics, ensure_ascii=False, separators=(",", ":")), flush=True)
-                    if response_id in audio_started:
-                        await queue.put((response_id, None))
                     turn_tracker.response_done(response_id)
-                    await asyncio.to_thread(monitor.set_assistant_busy, False)
+                    task = asyncio.create_task(
+                        service.settle_completed_response(
+                            response_id=response_id,
+                            response_had_audio=response_id in audio_started,
+                            turn_tracker=turn_tracker,
+                            tool_tasks=tool_tasks,
+                            queue=queue,
+                            semantic=semantic,
+                            set_busy=monitor.set_assistant_busy,
+                        )
+                    )
+                    completion_tasks.add(task)
+                    task.add_done_callback(completion_tasks.discard)
                 elif event.type in {"provider_error", "connection_error"}:
+                    if event.type == "provider_error" and service.is_benign_provider_error(event.data):
+                        print(f"Realtime provider benign warning: {event.data}", flush=True)
+                        continue
                     print(f"Realtime provider error: {event.data}", flush=True)
                     if turn_tracker.has_ambiguous_action():
                         print("Realtime action state reset after provider error; no in-flight action will be replayed automatically", flush=True)
@@ -238,7 +259,9 @@ def install(service: Any, env_file: str | Path) -> RealtimeWakeGate | None:
             command_task.cancel()
             for task in tuple(tool_tasks):
                 task.cancel()
-            pending = [command_task, *tool_tasks]
+            for task in tuple(completion_tasks):
+                task.cancel()
+            pending = [command_task, *tool_tasks, *completion_tasks]
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
 

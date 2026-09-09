@@ -2,6 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
+from voice_assistant.semantic_audio import SemanticAudioState
 from voice_assistant.realtime.engine import (
     RealtimeEngine,
     RealtimeEngineConfig,
@@ -10,6 +11,7 @@ from voice_assistant.realtime.engine import (
     RealtimeFunctionTool,
     RealtimeMCPServer,
 )
+from voice_assistant.realtime import service as realtime_service
 from voice_assistant.startup_messages import startup_ready_message
 
 
@@ -147,6 +149,97 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Native validation prompt.", config.instructions)
         self.assertIn("Examples inside MCP instructions are illustrative only", config.instructions)
         self.assertNotIn("Realtime voice rules", config.instructions)
+
+    def test_turn_tracker_keeps_turn_busy_until_tool_followup_response(self):
+        tracker = realtime_service.RealtimeTurnTracker(action_grace_seconds=0)
+        tracker.start_text_turn()
+        tracker.response_started_event("resp_1", 1.0)
+        tracker.tool_started()
+        tracker.response_done("resp_1")
+        self.assertTrue(tracker.has_pending_work())
+
+        tracker.tool_finished(expect_followup=True)
+        self.assertTrue(tracker.has_pending_work())
+
+        tracker.tool_followup_requested()
+        self.assertTrue(tracker.has_pending_work())
+
+        tracker.response_started_event("resp_2", 2.0)
+        tracker.response_done("resp_2")
+        self.assertFalse(tracker.has_pending_work())
+
+    def test_turn_tracker_does_not_wait_forever_after_tool_result_delivery_failure(self):
+        tracker = realtime_service.RealtimeTurnTracker(action_grace_seconds=0)
+        tracker.tool_started()
+        tracker.tool_finished(expect_followup=False)
+        self.assertFalse(tracker.has_pending_work())
+
+    def test_response_cancel_not_active_is_benign_provider_error(self):
+        self.assertTrue(
+            realtime_service.is_benign_provider_error(
+                {
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "response_cancel_not_active",
+                        "message": "Cancellation failed: no active response found",
+                    }
+                }
+            )
+        )
+        self.assertFalse(realtime_service.is_benign_provider_error({"error": {"code": "server_error"}}))
+
+    async def test_settle_completed_response_defers_idle_when_tool_followup_is_pending(self):
+        class Semantic:
+            def __init__(self):
+                self.states = []
+
+            def transition(self, state):
+                self.states.append(state)
+
+        tracker = realtime_service.RealtimeTurnTracker(action_grace_seconds=0)
+        tracker.tool_started()
+        tracker.tool_finished(expect_followup=True)
+        queue = asyncio.Queue()
+        semantic = Semantic()
+
+        with patch.dict("os.environ", {"REALTIME_TURN_SETTLE_SECONDS": "0"}, clear=False):
+            await realtime_service.settle_completed_response(
+                response_id="resp_1",
+                response_had_audio=False,
+                turn_tracker=tracker,
+                tool_tasks=set(),
+                queue=queue,
+                semantic=semantic,
+            )
+
+        self.assertEqual(semantic.states, [])
+
+    async def test_settle_completed_response_returns_to_listening_when_turn_is_stable(self):
+        class Semantic:
+            def __init__(self):
+                self.states = []
+
+            def transition(self, state):
+                self.states.append(state)
+
+        tracker = realtime_service.RealtimeTurnTracker(action_grace_seconds=0)
+        queue = asyncio.Queue()
+        semantic = Semantic()
+        busy = []
+
+        with patch.dict("os.environ", {"REALTIME_TURN_SETTLE_SECONDS": "0"}, clear=False):
+            await realtime_service.settle_completed_response(
+                response_id="resp_1",
+                response_had_audio=False,
+                turn_tracker=tracker,
+                tool_tasks=set(),
+                queue=queue,
+                semantic=semantic,
+                set_busy=busy.append,
+            )
+
+        self.assertEqual(semantic.states, [SemanticAudioState.IDLE, SemanticAudioState.LISTENING])
+        self.assertEqual(busy, [False])
 
 
 if __name__ == "__main__":

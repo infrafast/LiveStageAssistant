@@ -746,6 +746,8 @@ The Linux/Raspberry install script provisions the local voice/runtime stack used
 - [ ] Cloud and Local gains are independently audible/configurable;
 - [ ] same GUI controls apply regardless of selected engine.
 
+Realtime turn completion is intentionally conservative: `response.done` alone does not make the assistant available again while bridge tool execution, provider follow-up generation or result delivery is still pending. The runtime waits for `REALTIME_TURN_SETTLE_SECONDS` before returning to IDLE/LISTENING so late tool events from the provider do not race against the web `busy` state or semantic audio state. Benign provider races such as `response_cancel_not_active` are logged as warnings and do not trigger realtime fallback/reconnect.
+
 ---
 
 # 6. Roadmap OR - Offline Reliability And Auto Profile Switching
