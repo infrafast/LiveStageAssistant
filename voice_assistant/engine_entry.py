@@ -3,8 +3,7 @@
 
 This module contains no connectivity detection, WebMonitor ownership or startup
 policy. It provides only the small engine-specific speech adapter needed to
-deliver a pending online-connectivity announcement with the selected engine
-voice.
+deliver startup announcements with the selected engine voice.
 """
 
 from __future__ import annotations
@@ -16,6 +15,8 @@ import sys
 
 from dotenv import dotenv_values
 
+from voice_assistant.startup_messages import startup_connectivity_message
+
 CLASSIC_READY_MARKER = "LSA Classic ready:"
 
 
@@ -24,7 +25,8 @@ def run_classic(env_file: str) -> int:
     from voice_assistant import classic_engine
 
     values = dict(dotenv_values(env_file)) if str(env_file).lower() != "auto" else {}
-    online = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower() != "offline"
+    connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
+    online = connectivity != "offline"
 
     if os.getenv("LSA_COMMON_STARTUP_LIFECYCLE") == "1":
         agent.VoiceAssistant.start_startup_loader_sound = lambda self: None
@@ -35,24 +37,22 @@ def run_classic(env_file: str) -> int:
         async def announce_ready_with_connectivity(self, loaded_servers):
             print(f"{CLASSIC_READY_MARKER} connectivity={'online' if online else 'offline'}", flush=True)
 
-            if online:
-                if os.getenv("LSA_ANNOUNCE_ONLINE_WITH_ENGINE", "1") == "1":
-                    message = "Assistant connecté à internet."
-                    print(f"LSA connectivity announcement via classic: {message}", flush=True)
-                    if getattr(self, "tts_provider", "none") != "none":
-                        try:
-                            await asyncio.wait_for(
-                                asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message))),
-                                timeout=8.0,
-                            )
-                        except Exception as exc:
-                            print(f"Classic connectivity announcement failed: {exc}", flush=True)
-                    await asyncio.sleep(0.45)
+            message = startup_connectivity_message(
+                stt_language=getattr(self, "stt_language", str(values.get("STT_LANGUAGE") or "fr")),
+                connectivity=connectivity,
+            )
+            print(f"LSA connectivity announcement via classic: {message}", flush=True)
+            if getattr(self, "tts_provider", "none") != "none":
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(message))),
+                        timeout=8.0,
+                    )
+                except Exception as exc:
+                    print(f"Classic connectivity announcement failed: {exc}", flush=True)
+            await asyncio.sleep(0.45)
 
-                await original_announce_ready(self, loaded_servers)
-                return
-
-            return
+            await original_announce_ready(self, loaded_servers)
 
         agent.VoiceAssistant.announce_startup_ready = announce_ready_with_connectivity
 
