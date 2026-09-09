@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
+from ..wake_word import get_configured_wake_words
 from .audio import Pcm16MonoResampler
 
 OWW_RATE = 16000
@@ -96,8 +97,9 @@ class RealtimeWakeConfig:
     @classmethod
     def from_env(cls, values: Mapping[str, object] | None = None) -> "RealtimeWakeConfig":
         env: Mapping[str, object] = values if values is not None else os.environ
+        wake_words = get_configured_wake_words(env)
         return cls(
-            wake_word=str(env.get("WAKE_WORD") or "").strip(),
+            wake_word=wake_words[0] if wake_words else "",
             model_paths=_csv(env.get("BACKEND_WAKE_WORD_MODEL_PATHS")),
             model_names=_csv(env.get("BACKEND_WAKE_WORD_MODEL_NAMES")),
             threshold=max(0.01, min(0.99, _float(env, "BACKEND_WAKE_WORD_THRESHOLD", 0.5))),
