@@ -129,8 +129,11 @@ def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str
             str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip(),
         )
     provider = str(values.get("LLM_PROVIDER") or ("ollama" if engine == "local" else "openai")).strip().lower()
-    model_keys = {"openai": "OPENAI_MODEL", "anthropic": "ANTHROPIC_MODEL", "ollama": "OLLAMA_MODEL"}
-    model = str(values.get(model_keys.get(provider, "MODEL")) or "").strip()
+    if provider == "ollama":
+        model = str(values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or "qwen3:8b").strip()
+    else:
+        model_keys = {"openai": "OPENAI_MODEL", "anthropic": "ANTHROPIC_MODEL"}
+        model = str(values.get(model_keys.get(provider, "MODEL")) or "").strip()
     return provider, model, ""
 
 
