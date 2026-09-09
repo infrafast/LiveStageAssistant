@@ -104,7 +104,7 @@ FORCE_EXIT_REQUESTED = threading.Event()
 DEFAULT_ELEVENLABS_VOICE_ID = "1EmYoP3UnnnwhlJKovEy"  # french male; ZF6FPAbjXT4488VcRRnw = english female
 DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "alloy"
-DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
 DEFAULT_STT_TIMEOUT_SECONDS = 25.0
@@ -7092,7 +7092,11 @@ async def main():
         current_connectivity_mode = connectivity_mode_from_values(values, env_file)
         current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
         provider = (requested_provider or current_provider or "openai").strip().lower()
-        current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        current_model = (
+            str(values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
+            if current_provider == "ollama"
+            else str(values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        )
         current_stt_input = (values.get("STT_INPUT") or "both").strip().lower()
         current_stt_language = normalize_locale(values.get("STT_LANGUAGE"))
         if current_stt_input not in {"both", "backend", "browser", "silent"}:
@@ -7494,7 +7498,11 @@ async def main():
         if connectivity_mode != "offline" and browser_stt_selected and not env_secret_available("OPENAI_API_KEY"):
             raise ValueError("browser STT requires OPENAI_API_KEY_FILE")
         current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
-        current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        current_model = (
+            str(values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
+            if current_provider == "ollama"
+            else str(values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        )
         if connectivity_mode == "offline" and (
             not model
             or (current_provider != "ollama" and model == current_model)
@@ -7832,8 +7840,15 @@ async def main():
 
         openai_api_key = env_secret("OPENAI_API_KEY")
         elevenlabs_api_key = env_secret("ELEVENLABS_API_KEY")
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
+        llm_provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+        if llm_provider == "ollama":
+            model = (
+                os.getenv("OLLAMA_MODEL")
+                or os.getenv("OFFLINE_MODEL")
+                or DEFAULT_OLLAMA_MODEL
+            ).strip()
+        else:
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         stt_provider = os.getenv("STT_PROVIDER", "openai-whisper").lower()
         stt_input = os.getenv("STT_INPUT", "both").strip().lower()
