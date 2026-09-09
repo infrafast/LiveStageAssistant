@@ -777,6 +777,18 @@ def format_backend_listening_message(wake_words: list[str], engine: str | None) 
     return f'Listening for "{wake_word_label}" using {engine or "openwakeword"}...'
 
 
+def human_join(items: list[str], conjunction: str = "et") -> str:
+    """Join names for short spoken French status messages."""
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f" {conjunction} ".join(cleaned)
+    return f"{', '.join(cleaned[:-1])} {conjunction} {cleaned[-1]}"
+
+
 def strip_leading_wake_word_if_present(text: str, wake_words: list[str]) -> tuple[str, str]:
     """Remove a leading wake word from an already-authorized command without validating it."""
     if not wake_words:
@@ -2410,6 +2422,7 @@ class VoiceAssistant:
         self.mcp_tool_routes: list[dict[str, Any]] = []
         self.mcp_all_tools: list[Any] = []
         self.mcp_tools_by_server: dict[str, list[Any]] = {}
+        self.mcp_failed_servers: dict[str, str] = {}
         self.session_context_store = session_context_store
         self.session_context_size = max(0, int(session_context_size or 0))
         self.stt_prompt = self._with_mcp_routing_stt_keywords(base_stt_prompt)
@@ -3478,13 +3491,42 @@ class VoiceAssistant:
             return sorted(str(name) for name in self.mcp_client.sessions.keys())
         return sorted(str(name) for name in (config or {}).get("mcpServers", {}).keys())
 
-    def _startup_ready_message(self, loaded_servers: list[str]) -> str:
+    def _available_mcp_tool_count(self) -> int:
+        return len(self.mcp_all_tools or [])
+
+    def _startup_ready_message(self, loaded_servers: list[str], failed_servers: dict[str, str] | None = None) -> str:
         locale = load_locale(self.stt_language)
-        return i18n_text(locale, "startup.ready", "Assistant vocal prêt à exécuter des commandes.")
+        tool_count = self._available_mcp_tool_count()
+        failed_names = sorted(str(name) for name in (failed_servers or {}).keys() if str(name).strip())
+        if failed_names:
+            if tool_count <= 0:
+                return i18n_text(locale, "startup.ready_no_mcp", "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté.")
+            servers = human_join(failed_names)
+            if len(failed_names) == 1:
+                template = i18n_text(
+                    locale,
+                    "startup.ready_partial_tools_singular",
+                    "Assistant vocal prêt à exécuter des commandes, seulement {tool_count} outils disponibles car {servers} est injoignable.",
+                )
+            else:
+                template = i18n_text(
+                    locale,
+                    "startup.ready_partial_tools",
+                    "Assistant vocal prêt à exécuter des commandes, seulement {tool_count} outils disponibles car {servers} sont injoignables.",
+                )
+            return template.format(tool_count=tool_count, servers=servers)
+        if tool_count <= 0:
+            return i18n_text(locale, "startup.ready_no_mcp", "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté.")
+        template = i18n_text(
+            locale,
+            "startup.ready_tools",
+            "Assistant vocal prêt à exécuter des commandes, {tool_count} outils disponibles !",
+        )
+        return template.format(tool_count=tool_count)
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
         """Announce that the assistant is ready, using the configured speech side."""
-        message = self._startup_ready_message(loaded_servers)
+        message = self._startup_ready_message(loaded_servers, self.mcp_failed_servers)
         print(message)
 
         self.stop_startup_loader_sound()
@@ -3534,9 +3576,11 @@ class VoiceAssistant:
 
         try:
             self.mcp_initialization_error = None
+            self.mcp_failed_servers = {}
             self._validate_unique_mcp_routing_keywords(config)
             runtime_config, failed_servers = await self._filter_connectable_mcp_servers(config)
             if failed_servers:
+                self.mcp_failed_servers = dict(failed_servers)
                 failed_detail = "; ".join(f"{name}: {error}" for name, error in failed_servers.items())
                 if runtime_config is config:
                     self._log_mcp_prompt_warning(
@@ -3594,6 +3638,11 @@ class VoiceAssistant:
 
         except Exception as e:
             self.mcp_initialization_error = str(e)
+            if not self.mcp_failed_servers:
+                self.mcp_failed_servers = {
+                    str(name): str(e)
+                    for name in (config.get("mcpServers") or {}).keys()
+                }
             print(f"✗ Error initializing MCP: {e}")
             if self.web_monitor:
                 self.web_monitor.update(services={"MCP": {"status": "error", "detail": str(e)}})
@@ -6109,6 +6158,7 @@ class VoiceAssistant:
             print("Failed to initialize MCP. Continuing without MCP tools; use the web config to fix and reload.")
             if self.web_monitor:
                 self.web_monitor.set_environment_loading(False)
+            await self.announce_startup_ready([])
         else:
             await self.refresh_session_llm_summary()
             await self.announce_startup_ready(self._loaded_mcp_server_names(self.mcp_config))

@@ -668,6 +668,8 @@ MCP_CONFIG=mcp_servers.json
 
 **Goal:** allow LSA to answer domain-specific technical questions without hard-coding device/vendor documentation into the generic agent prompt.
 
+Runtime startup remains usable when MCP servers are partially unavailable. The assistant probes configured MCP servers, skips unreachable servers when at least one server can still connect, initializes the remaining tools, and announces the actual number of available MCP tools. If no tools are available, the ready announcement says that no MCP is connected instead of implying full tool availability.
+
 ### MK0 - Inventory existing retrieval capability
 - [ ] audit current dependencies/code;
 - [ ] measure Raspberry Pi feasibility.

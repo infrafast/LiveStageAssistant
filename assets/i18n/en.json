@@ -2,6 +2,10 @@
   "language_name": "English",
   "startup": {
     "ready": "Voice assistant ready to run commands.",
+    "ready_tools": "Voice assistant ready to run commands, {tool_count} tools available!",
+    "ready_partial_tools_singular": "Voice assistant ready to run commands, only {tool_count} tools available because {servers} is unreachable.",
+    "ready_partial_tools": "Voice assistant ready to run commands, only {tool_count} tools available because {servers} are unreachable.",
+    "ready_no_mcp": "Voice assistant ready to run commands, no MCP connected.",
     "mcp_loaded": "MCP servers loaded: {servers}.",
     "mcp_none": "No MCP server loaded.",
     "web_available": "Web interface available on port {port}.",

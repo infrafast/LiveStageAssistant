@@ -92,6 +92,8 @@ The same web GUI can also be exposed behind a reverse proxy or Tailscale Funnel
 subpath such as `/lsa` when that public subpath is forwarded to the backend web
 root; its API and asset URLs are resolved relative to the opened page.
 
+At the end of startup, the spoken ready message reports how many MCP tools are actually available. If every configured MCP is reachable it says, for example, `Assistant vocal prêt à exécuter des commandes, 95 outils disponibles !`. If one or more MCP servers cannot be reached, it keeps the web interface usable and names the unavailable servers, or says `aucun MCP connecté` when no MCP tools are available.
+
 ## Raspberry Pi Service
 
 Run the normal installer first, then install the Raspberry Pi service pack:

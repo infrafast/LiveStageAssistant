@@ -2,6 +2,10 @@
   "language_name": "Français",
   "startup": {
     "ready": "Assistant vocal prêt à exécuter des commandes.",
+    "ready_tools": "Assistant vocal prêt à exécuter des commandes, {tool_count} outils disponibles !",
+    "ready_partial_tools_singular": "Assistant vocal prêt à exécuter des commandes, seulement {tool_count} outils disponibles car {servers} est injoignable.",
+    "ready_partial_tools": "Assistant vocal prêt à exécuter des commandes, seulement {tool_count} outils disponibles car {servers} sont injoignables.",
+    "ready_no_mcp": "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté.",
     "mcp_loaded": "Serveurs MCP chargés : {servers}.",
     "mcp_none": "Aucun serveur MCP chargé.",
     "web_available": "Interface web disponible sur le port {port}.",

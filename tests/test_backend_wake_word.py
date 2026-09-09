@@ -182,3 +182,23 @@ def test_cloud_api_error_classification_is_user_facing():
     rate = classify_cloud_api_error("rate_limit_exceeded", provider="OpenAI", stage="stt")
     assert rate is not None
     assert rate.kind == "rate_limit"
+
+
+def test_startup_ready_message_reports_tool_count_and_failed_servers():
+    assistant = VoiceAssistant.__new__(VoiceAssistant)
+    assistant.stt_language = "fr"
+    assistant.mcp_all_tools = [object()] * 95
+
+    assert assistant._startup_ready_message(["mixer"], {}) == (
+        "Assistant vocal prêt à exécuter des commandes, 95 outils disponibles !"
+    )
+
+    assert assistant._startup_ready_message(["mixer"], {"qlcplus": "timeout"}) == (
+        "Assistant vocal prêt à exécuter des commandes, seulement 95 outils disponibles "
+        "car qlcplus est injoignable."
+    )
+
+    assistant.mcp_all_tools = []
+    assert assistant._startup_ready_message([], {"mixer": "timeout", "qlcplus": "timeout"}) == (
+        "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté."
+    )
