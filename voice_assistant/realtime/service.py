@@ -66,7 +66,7 @@ class RealtimeTurnTracker:
         self.last_activity = time.monotonic()
         self.awaiting_response = False
         self.tool_in_flight = False
-        self.awaiting_tool_followup = False
+        self.waiting_for_tool_followup_response = False
         self.speech_started_at: float | None = None
         self.speech_stopped_at: float | None = None
         self.response_started: dict[str, float] = {}
@@ -92,6 +92,7 @@ class RealtimeTurnTracker:
     def response_started_event(self, response_id: str, now: float) -> None:
         self.current_response_id = response_id
         self.awaiting_response = True
+        self.waiting_for_tool_followup_response = False
         if response_id:
             self.response_started[response_id] = now
             if self.speech_stopped_at is not None:
@@ -105,13 +106,13 @@ class RealtimeTurnTracker:
 
     def tool_finished(self, *, expect_followup: bool = True) -> None:
         self.tool_in_flight = False
-        self.awaiting_tool_followup = expect_followup
+        self.waiting_for_tool_followup_response = expect_followup
         if not expect_followup and not self.current_response_id:
             self.awaiting_response = False
         self.touch()
 
     def tool_followup_requested(self) -> None:
-        self.awaiting_tool_followup = False
+        self.waiting_for_tool_followup_response = True
         self.awaiting_response = True
         self.touch()
 
@@ -130,18 +131,23 @@ class RealtimeTurnTracker:
         self.current_response_id = ""
         self.awaiting_response = False
         self.tool_in_flight = False
-        self.awaiting_tool_followup = False
+        self.waiting_for_tool_followup_response = False
         self.speech_started_at = None
         self.speech_stopped_at = None
         self.touch()
 
     def has_pending_work(self) -> bool:
-        return bool(self.current_response_id or self.awaiting_response or self.tool_in_flight or self.awaiting_tool_followup)
+        return bool(
+            self.current_response_id
+            or self.awaiting_response
+            or self.tool_in_flight
+            or self.waiting_for_tool_followup_response
+        )
 
     def has_ambiguous_action(self) -> bool:
         if self.tool_in_flight:
             return True
-        if self.current_response_id or self.awaiting_response or self.awaiting_tool_followup:
+        if self.current_response_id or self.awaiting_response or self.waiting_for_tool_followup_response:
             return True
         if self.speech_stopped_at is None:
             return False

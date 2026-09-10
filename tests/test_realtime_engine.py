@@ -165,6 +165,8 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tracker.has_pending_work())
 
         tracker.response_started_event("resp_2", 2.0)
+        self.assertFalse(tracker.waiting_for_tool_followup_response)
+        self.assertTrue(tracker.has_pending_work())
         tracker.response_done("resp_2")
         self.assertFalse(tracker.has_pending_work())
 
