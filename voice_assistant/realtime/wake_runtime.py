@@ -146,6 +146,14 @@ class RealtimeWakeRuntime:
                 stop_event.set()
         return True
 
+    def should_ignore_provider_speech_started(self, semantic_state: SemanticAudioState | None) -> bool:
+        return (
+            self.gate.enabled
+            and self.speaking
+            and not self.interrupt_enabled
+            and semantic_state == SemanticAudioState.SPEAKING
+        )
+
 
 def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
     """Create explicit callbacks for the provider-neutral realtime service."""
@@ -184,4 +192,5 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
     )
     callbacks.capture_filter = runtime.capture_filter
     callbacks.semantic_transition = runtime.semantic_transition
+    callbacks.should_ignore_provider_speech_started = runtime.should_ignore_provider_speech_started
     return callbacks

@@ -139,7 +139,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.mcp_servers[0].context_instructions, native_instructions)
         self.assertNotIn("Global LSA prompt.", config.instructions)
 
-    def test_turn_tracker_keeps_turn_busy_until_tool_followup_response(self):
+    def test_turn_tracker_keeps_turn_busy_until_expected_response_after_tool(self):
         tracker = realtime_service.RealtimeTurnTracker(action_grace_seconds=0)
         tracker.start_text_turn()
         tracker.response_started_event("resp_1", 1.0)
@@ -154,7 +154,6 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(tracker.has_pending_work())
 
         tracker.response_started_event("resp_2", 2.0)
-        self.assertFalse(tracker.waiting_for_tool_followup_response)
         self.assertTrue(tracker.has_pending_work())
         tracker.response_done("resp_2")
         self.assertFalse(tracker.has_pending_work())
@@ -317,6 +316,49 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(SemanticAudioState.PROCESSING, semantic.states)
         self.assertTrue(provider_failure.is_set())
         self.assertEqual(busy[-1], False)
+
+    async def test_wake_gate_can_ignore_provider_speech_started_during_assistant_speech(self):
+        class Semantic:
+            def __init__(self):
+                self.states = []
+                self.state = None
+
+            def transition(self, state):
+                self.states.append(state)
+                self.state = state
+                return True
+
+        engine = DummyEngine(RealtimeEngineConfig(provider="test", model="test-model"))
+        await engine.events.put(RealtimeEvent("response_started", {"response": {"id": "resp_1"}}))
+        await engine.events.put(RealtimeEvent("audio_delta", {"response_id": "resp_1", "audio": b"abc"}))
+        await engine.events.put(RealtimeEvent("speech_started", {}))
+        await engine.events.put(RealtimeEvent("response_done", {"response_id": "resp_1"}))
+        await engine.events.put(RealtimeEvent("connection_closed", {}))
+        queue = asyncio.Queue()
+        interrupted = set()
+        stop_event = asyncio.Event()
+        provider_failure = asyncio.Event()
+        semantic = Semantic()
+        callbacks = realtime_service.RealtimeRuntimeCallbacks(
+            should_ignore_provider_speech_started=lambda state: state == SemanticAudioState.SPEAKING
+        )
+
+        with patch.dict("os.environ", {"REALTIME_INACTIVITY_TIMEOUT_SECONDS": "0"}, clear=False):
+            await realtime_service.event_loop(
+                engine,
+                None,
+                queue,
+                interrupted,
+                {},
+                stop_event,
+                semantic,
+                provider_failure,
+                callbacks,
+            )
+
+        self.assertEqual(engine.cancelled, 0)
+        self.assertEqual(interrupted, set())
+        self.assertIn(SemanticAudioState.SPEAKING, semantic.states)
 
     def test_main_loads_env_before_runtime_callback_factory(self):
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:

@@ -75,6 +75,7 @@ class RealtimeRuntimeCallbacks:
     pop_cancel_requested: Callable[[], bool] | None = None
     pop_injected_command: Callable[[], dict[str, Any] | None] | None = None
     refresh_engine_context: Callable[[Any], Awaitable[bool]] | None = None
+    should_ignore_provider_speech_started: Callable[[SemanticAudioState | None], bool] | None = None
 
     @property
     def has_supervised_text(self) -> bool:
@@ -90,7 +91,6 @@ class RealtimeTurnTracker:
         self.last_activity = time.monotonic()
         self.awaiting_response = False
         self.tool_in_flight = False
-        self.waiting_for_tool_followup_response = False
         self.speech_started_at: float | None = None
         self.speech_stopped_at: float | None = None
         self.response_started: dict[str, float] = {}
@@ -116,7 +116,6 @@ class RealtimeTurnTracker:
     def response_started_event(self, response_id: str, now: float) -> None:
         self.current_response_id = response_id
         self.awaiting_response = True
-        self.waiting_for_tool_followup_response = False
         if response_id:
             self.response_started[response_id] = now
             if self.speech_stopped_at is not None:
@@ -130,13 +129,10 @@ class RealtimeTurnTracker:
 
     def tool_finished(self, *, expect_followup: bool = True) -> None:
         self.tool_in_flight = False
-        self.waiting_for_tool_followup_response = expect_followup
-        if not expect_followup and not self.current_response_id:
-            self.awaiting_response = False
+        self.awaiting_response = bool(expect_followup)
         self.touch()
 
     def tool_followup_requested(self) -> None:
-        self.waiting_for_tool_followup_response = True
         self.awaiting_response = True
         self.touch()
 
@@ -155,7 +151,6 @@ class RealtimeTurnTracker:
         self.current_response_id = ""
         self.awaiting_response = False
         self.tool_in_flight = False
-        self.waiting_for_tool_followup_response = False
         self.speech_started_at = None
         self.speech_stopped_at = None
         self.touch()
@@ -165,7 +160,6 @@ class RealtimeTurnTracker:
             self.current_response_id
             or self.awaiting_response
             or self.tool_in_flight
-            or self.waiting_for_tool_followup_response
         )
 
     def age_seconds(self) -> float:
@@ -179,14 +173,12 @@ class RealtimeTurnTracker:
             parts.append("awaiting_response")
         if self.tool_in_flight:
             parts.append("tool_in_flight")
-        if self.waiting_for_tool_followup_response:
-            parts.append("waiting_for_tool_followup")
         return ", ".join(parts) if parts else "none"
 
     def has_ambiguous_action(self) -> bool:
         if self.tool_in_flight:
             return True
-        if self.current_response_id or self.awaiting_response or self.waiting_for_tool_followup_response:
+        if self.current_response_id or self.awaiting_response:
             return True
         if self.speech_stopped_at is None:
             return False
@@ -285,6 +277,20 @@ async def _refresh_engine_context(callbacks: RealtimeRuntimeCallbacks | None, en
         return False
 
 
+def _should_ignore_provider_speech_started(
+    callbacks: RealtimeRuntimeCallbacks | None,
+    semantic_state: SemanticAudioState | None,
+) -> bool:
+    runtime_callbacks = _callbacks(callbacks)
+    if runtime_callbacks.should_ignore_provider_speech_started is None:
+        return False
+    try:
+        return bool(runtime_callbacks.should_ignore_provider_speech_started(semantic_state))
+    except Exception as exc:
+        print(f"Realtime speech-start callback warning: {exc}", flush=True)
+        return False
+
+
 def _active_task_exists(tasks: set[asyncio.Task]) -> bool:
     return any(not task.done() for task in tasks)
 
@@ -353,7 +359,7 @@ async def settle_completed_response(
     if settle_seconds > 0:
         await asyncio.sleep(settle_seconds)
     if turn_tracker.has_pending_work() or any(not task.done() for task in tool_tasks):
-        print("Realtime turn completion deferred: tool or follow-up still active", flush=True)
+        print(f"Realtime turn completion deferred: pending={turn_tracker.pending_summary()}", flush=True)
         return False
     if response_had_audio:
         await queue.put((response_id, None))
@@ -945,6 +951,9 @@ async def event_loop(
             now = time.perf_counter()
             turn_tracker.touch()
             if event.type == "speech_started":
+                if _should_ignore_provider_speech_started(runtime_callbacks, semantic.state):
+                    print("Realtime speech started ignored while assistant speech is protected by local wake gate", flush=True)
+                    continue
                 print("Realtime speech started", flush=True)
                 turn_tracker.speech_started()
                 if turn_tracker.current_response_id:
