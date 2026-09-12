@@ -38,13 +38,13 @@ class MCPConfigUpdateTests(unittest.TestCase):
                 path,
                 "alpha",
                 transport="native",
-                permission_mode="restricted",
+                permission_mode="approval",
                 allowed_tools=["one", "two", "one"],
             )
             after = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(result.realtime.transport, "native")
-            self.assertEqual(result.realtime.permissions.mode, "restricted")
-            self.assertEqual(result.realtime.permissions.allowed_tools, ("one", "two"))
+            self.assertEqual(result.realtime.permissions.mode, "approval")
+            self.assertEqual(result.realtime.permissions.allowed_tools, ())
             self.assertEqual(after["mcpServers"]["beta"], before["mcpServers"]["beta"])
             self.assertEqual(after["mcpServers"]["alpha"]["command"], "node")
             self.assertEqual(after["mcpServers"]["alpha"]["args"], ["alpha.js"])
@@ -82,11 +82,11 @@ class MCPConfigUpdateTests(unittest.TestCase):
             self.assertEqual(server.native.headers, {"Authorization": "Bearer x"})
             self.assertEqual(server.realtime.permissions.mode, "approval")
 
-    def test_rejects_invalid_restricted_policy_before_write(self):
+    def test_rejects_invalid_permission_policy_before_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._config(Path(tmp))
             before = path.read_text(encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "requires allowedTools"):
+            with self.assertRaisesRegex(ValueError, "must be one of"):
                 update_mcp_realtime_policy(
                     path,
                     "alpha",

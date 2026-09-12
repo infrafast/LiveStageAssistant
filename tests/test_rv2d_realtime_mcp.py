@@ -47,20 +47,20 @@ class RV2DRealtimeMCPTests(unittest.TestCase):
             self.assertEqual(args.mcp_url, "https://example.test/mcp")
             self.assertEqual(args.permission_mode, "open")
 
-    def test_native_maps_restricted_permission_and_headers(self):
+    def test_native_maps_approval_permission_and_headers(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env_file, config_path = self._write(root, {
                 "native": {"url": "https://example.test/mcp", "headers": {"X-Test": "ok"}},
                 "realtime": {
                     "transport": "native",
-                    "permissions": {"mode": "restricted", "allowedTools": ["alpha"]},
+                    "permissions": {"mode": "approval"},
                 },
             })
             transport, args = build_runner_args(self._cli(env_file, config_path))
             self.assertEqual(transport, "native")
-            self.assertEqual(args.permission_mode, "restricted")
-            self.assertEqual(args.allow_tool, ["alpha"])
+            self.assertEqual(args.permission_mode, "approval")
+            self.assertEqual(args.allow_tool, [])
             self.assertEqual(args.mcp_header, ["X-Test=ok"])
 
     def test_stdio_open_keeps_native_disabled(self):
@@ -76,7 +76,7 @@ class RV2DRealtimeMCPTests(unittest.TestCase):
             self.assertEqual(args.allow_tool, [])
             self.assertFalse(hasattr(args, "mcp_url"))
 
-    def test_stdio_restricted_maps_allow_list(self):
+    def test_stdio_rejects_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env_file, config_path = self._write(root, {
@@ -84,12 +84,11 @@ class RV2DRealtimeMCPTests(unittest.TestCase):
                 "args": ["server.js"],
                 "realtime": {
                     "transport": "stdio",
-                    "permissions": {"mode": "restricted", "allowedTools": ["one", "two"]},
+                    "permissions": {"mode": "approval"},
                 },
             })
-            transport, args = build_runner_args(self._cli(env_file, config_path))
-            self.assertEqual(transport, "stdio")
-            self.assertEqual(args.allow_tool, ["one", "two"])
+            with self.assertRaisesRegex(RuntimeError, "STDIO approval"):
+                build_runner_args(self._cli(env_file, config_path))
 
     def test_native_requires_https_url(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -108,7 +107,7 @@ class RV2DRealtimeMCPTests(unittest.TestCase):
                 "args": ["server.js"],
                 "realtime": {"transport": "stdio", "permissions": {"mode": "approval"}},
             })
-            with self.assertRaisesRegex(RuntimeError, "approval mode is not yet implemented"):
+            with self.assertRaisesRegex(RuntimeError, "STDIO approval"):
                 build_runner_args(self._cli(env_file, config_path))
 
 

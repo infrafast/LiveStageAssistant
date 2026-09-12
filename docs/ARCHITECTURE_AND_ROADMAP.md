@@ -294,6 +294,8 @@ IDLE
 
 The semantic state machine must be provider/engine-neutral. Engines/runtime emit semantic events; the shared audio-feedback layer maps those states to configured cues. This preserves the Classic user experience while allowing Realtime and future engines to use the same UX contract.
 
+Realtime owns one common provider-event loop and one common capture path. WebMonitor integration, session-context injection and the local wake gate plug into that runtime through explicit `RealtimeRuntimeCallbacks`; they must not monkey-patch `event_loop`, `capture_loop` or `SemanticAudioController.transition`. This keeps provider events, MCP bridge calls, wake authorization and UI state under one state machine.
+
 ## 1.8 MCP architecture
 
 MCP servers remain authoritative for domain-specific tools and protocol logic. LSA must not duplicate mixer, lighting or other domain protocol implementations inside the agent.
@@ -590,6 +592,7 @@ Exit: Classic, Realtime and Local expose the same user-understandable semantic s
 - [~] cancellation around MCP calls; speech cancellation does not cancel/replay already-dispatched MCP tasks;
 - [~] duplicate-call prevention across reconnects; bounded call-id memory suppresses duplicate bridge dispatch within the child lifecycle;
 - [~] provider/session timeout handling; startup/tool timeouts and reconnect budget implemented;
+- [~] realtime turn watchdog implemented through `REALTIME_TURN_TIMEOUT_SECONDS`; when a turn has pending provider work but no active MCP task for too long, the child cancels/reset its local state and reconnects the realtime session without replaying old actions;
 - [~] deterministic cleanup; reconnect attempts reuse the existing deterministic session cleanup path;
 - [~] provider-failure fallback to Classic/local implemented at supervisor level but not prioritized for further work or validation yet;
 - [~] no ambiguous action state after interruption/reconnect/fallback; realtime turn tracking now records active response, tool-in-flight, cancellation/failure reset and grace-period state. Hardware reconnect/interruption recette pending.
@@ -747,6 +750,8 @@ The Linux/Raspberry install script provisions the local voice/runtime stack used
 - [ ] same GUI controls apply regardless of selected engine.
 
 Realtime turn completion is intentionally conservative: `response.done` alone does not make the assistant available again while bridge tool execution, provider follow-up generation or result delivery is still pending. The runtime waits for `REALTIME_TURN_SETTLE_SECONDS` before returning to IDLE/LISTENING so late tool events from the provider do not race against the web `busy` state or semantic audio state. Benign provider races such as `response_cancel_not_active` are logged as warnings and do not trigger realtime fallback/reconnect.
+
+The common realtime loop also handles provider transcription failures as first-class turn events. `user_transcript_error` is logged, the UI/semantic state moves to processing if the provider has already ended speech, and the same `REALTIME_TURN_TIMEOUT_SECONDS` watchdog recovers the session if no model response follows. Native MCP follow-up events are observed as diagnostics only; bridge tool follow-up tracking is owned by `RealtimeTurnTracker` so stale follow-up flags cannot keep the assistant busy forever after an assistant response is complete.
 
 ---
 

@@ -59,7 +59,7 @@ class MCPRealtimeWebEndpointTests(unittest.TestCase):
             try:
                 os.chdir(root)
                 snapshot = {"config": {"env": {"MCP_CONFIG": "mcp.json"}}}
-                self.assertEqual(mcp_config_path_from_snapshot(snapshot), root / "mcp.json")
+                self.assertEqual(mcp_config_path_from_snapshot(snapshot).resolve(), (root / "mcp.json").resolve())
             finally:
                 os.chdir(old_cwd)
 
@@ -72,7 +72,7 @@ class MCPRealtimeWebEndpointTests(unittest.TestCase):
                 "permission_mode": "approval",
                 "native_url": "https://new.example.test/mcp",
             })
-            self.assertEqual(safe["realtime_transport"], "native")
+            self.assertEqual(safe["realtime_transport"], "https")
             self.assertEqual(safe["permission_mode"], "approval")
             self.assertNotIn("headers", safe)
             mixer = refreshed["mcpServers"]["mixer"]

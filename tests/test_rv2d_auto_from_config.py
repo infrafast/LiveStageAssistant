@@ -51,7 +51,7 @@ class RV2DAutoFromConfigTests(unittest.TestCase):
             self.assertEqual(args.allow_tool, [])
             self.assertEqual(args.mcp_config, str(config_path))
 
-    def test_maps_restricted_allow_list(self):
+    def test_maps_approval_policy_and_headers(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             env_file = root / ".env.online"
@@ -63,14 +63,14 @@ class RV2DAutoFromConfigTests(unittest.TestCase):
                         "native": {"url": "https://example.test/mcp", "headers": {"X-Test": "ok"}},
                         "realtime": {
                             "transport": "auto",
-                            "permissions": {"mode": "restricted", "allowedTools": ["alpha", "beta"]},
+                            "permissions": {"mode": "approval"},
                         },
                     }
                 }
             }), encoding="utf-8")
             args = build_auto_args(self._cli(env_file, config_path))
-            self.assertEqual(args.permission_mode, "restricted")
-            self.assertEqual(args.allow_tool, ["alpha", "beta"])
+            self.assertEqual(args.permission_mode, "approval")
+            self.assertEqual(args.allow_tool, [])
             self.assertEqual(args.mcp_header, ["X-Test=ok"])
 
     def test_rejects_non_auto_transport(self):

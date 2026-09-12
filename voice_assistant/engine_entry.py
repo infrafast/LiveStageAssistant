@@ -67,12 +67,8 @@ def run_realtime(env_file: str, provider: str) -> int:
     if os.getenv("LSA_COMMON_STARTUP_LIFECYCLE") == "1":
         service.play_startup_sound = lambda _env_file: None
 
-    # Wake authorization remains local and provider-neutral. With WAKE_WORD
-    # empty this is a no-op and the direct-listening flow is preserved.
-    wake_runtime.install(service, env_file)
-
     sys.argv = [sys.argv[0], "--env-file", env_file]
-    return service.main()
+    return service.main(runtime_callbacks_factory=wake_runtime.build_runtime_callbacks)
 
 
 def main() -> int:

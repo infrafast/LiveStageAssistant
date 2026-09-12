@@ -29,7 +29,7 @@ class SemanticAudioTests(unittest.TestCase):
         self.assertEqual(config.cue_for(SemanticAudioState.WAKE_DETECTED), "wake.wav")
         self.assertEqual(config.cue_for(SemanticAudioState.PROCESSING), "thinking.wav")
         self.assertEqual(config.cue_for(SemanticAudioState.RESULT_READY), "done.wav")
-        self.assertEqual(config.cue_for(SemanticAudioState.WAIT_WAKE), "")
+        self.assertEqual(config.cue_for(SemanticAudioState.WAIT_WAKE), "listen.wav")
         self.assertEqual(config.cue_for(SemanticAudioState.SPEAKING), "")
 
     def test_controller_stops_processing_before_result_ready_cue(self) -> None:
@@ -53,11 +53,11 @@ class SemanticAudioTests(unittest.TestCase):
             ],
         )
 
-    def test_wait_wake_is_silent_and_repeated_state_is_noop(self) -> None:
+    def test_wait_wake_plays_listening_cue_once_and_repeated_state_is_noop(self) -> None:
         events: list[str] = []
         states: list[SemanticAudioState] = []
         controller = SemanticAudioController(
-            SemanticAudioConfig(wake_detected="wake.wav"),
+            SemanticAudioConfig(listening="listen.wav", wake_detected="wake.wav"),
             play_once=lambda cue: events.append(cue),
             start_loop=lambda cue: events.append(cue),
             stop_loop=lambda: events.append("stop"),
@@ -65,9 +65,9 @@ class SemanticAudioTests(unittest.TestCase):
         )
         self.assertTrue(controller.transition(SemanticAudioState.WAIT_WAKE))
         self.assertFalse(controller.transition(SemanticAudioState.WAIT_WAKE))
-        self.assertEqual(events, [])
+        self.assertEqual(events, ["listen.wav"])
         controller.transition(SemanticAudioState.WAKE_DETECTED)
-        self.assertEqual(events, ["wake.wav"])
+        self.assertEqual(events, ["listen.wav", "wake.wav"])
         self.assertEqual(states, [SemanticAudioState.WAIT_WAKE, SemanticAudioState.WAKE_DETECTED])
 
     def test_cloud_and_local_gains_are_independent(self) -> None:

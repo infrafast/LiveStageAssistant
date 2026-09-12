@@ -138,7 +138,7 @@ class RuntimeWebServicesTests(unittest.TestCase):
             [item["id"] for item in result["models"]],
             ["mistral:7b-instruct-q4_K_M", "qwen3:8b"],
         )
-        self.assertEqual(result["message"], "")
+        self.assertIn("Common runtime options loaded from active profile", result["message"])
 
     def test_offline_save_uses_existing_model_when_ui_model_is_empty(self):
         self.active[0] = self.offline

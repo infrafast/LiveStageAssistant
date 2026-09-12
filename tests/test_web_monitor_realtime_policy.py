@@ -8,10 +8,79 @@ import unittest
 from unittest.mock import patch
 from urllib import request as urllib_request
 
+from voice_assistant.runtime_web_services import RuntimeWebServices
 from voice_assistant.web_monitor import WebMonitor, _runtime_service_tiles
 
 
 class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
+    def _save_runtime_config(
+        self,
+        services: RuntimeWebServices,
+        *,
+        voice_engine: str | None = None,
+        cloud_gain: float = 1.0,
+        local_gain: float = 1.0,
+        connectivity: str = "online",
+    ) -> dict:
+        provider = "ollama" if connectivity == "offline" else "openai"
+        model = "qwen3:8b" if connectivity == "offline" else "gpt-4.1-mini"
+        selected_voice_engine = voice_engine or ("local" if connectivity == "offline" else "classic")
+        return services.save_llm_config(
+            provider=provider,
+            model=model,
+            cloud_tts_provider="none",
+            tts_output="silent",
+            stt_input="backend",
+            stt_language="fr",
+            connectivity_mode=connectivity,
+            wake_word="",
+            stt_prompt="",
+            system_prompt="",
+            session_context_size=4000,
+            mcp_agent_max_steps=20,
+            mcp_tool_routing_enabled=True,
+            interrupt_conversation_enabled=False,
+            backend_audio_input_device="",
+            backend_audio_input_gain=1.0,
+            backend_audio_output_device="",
+            voice_id="",
+            thinking_sound_file="",
+            ready_sound_file="",
+            listening_sound_file="",
+            wake_detected_sound_file="",
+            startup_loader_sound_file="",
+            command_ack_sound_file="",
+            openai_tts_voice="alloy",
+            openai_tts_speed=1.0,
+            web_tts_volume=1.0,
+            backend_tts_volume=1.0,
+            backend_audio_output_pan=0.0,
+            backend_audio_monitor_mode="off",
+            backend_audio_monitor_volume=1.0,
+            vad_speech_threshold=0.5,
+            vad_negative_threshold=0.35,
+            vad_min_speech_ms=120,
+            vad_min_silence_ms=900,
+            vad_speech_pad_ms=100,
+            vad_max_speech_seconds=12,
+            backend_wake_word_model_paths="",
+            backend_wake_word_model_names="",
+            backend_wake_word_threshold=0.7,
+            backend_wake_word_pre_roll_ms=1600,
+            backend_wake_word_cooldown_ms=1200,
+            backend_wake_word_vad_threshold=0.0,
+            speaker_recognition_enabled=False,
+            speaker_backend="resemblyzer",
+            speaker_threshold=0.75,
+            speaker_margin=0.06,
+            speaker_profiles=[],
+            voice_engine=selected_voice_engine,
+            realtime_model="gpt-realtime-2.1",
+            realtime_voice="marin",
+            cloud_tts_output_gain=cloud_gain,
+            local_tts_output_gain=local_gain,
+        )
+
     def test_runtime_service_tiles_are_provider_and_mcp_neutral(self) -> None:
         tiles = _runtime_service_tiles({
             "engine": "openai-realtime", "provider": "openai", "model": "gpt-realtime-2.1", "voice": "marin", "ready": True,
@@ -49,9 +118,14 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             env_path = Path(temp_dir) / ".env.online"
             env_path.write_text("CONNECTIVITY_MODE=online\nVOICE_ENGINE=classic\n", encoding="utf-8")
-            monitor = WebMonitor(); monitor.update(env_values={"CONNECTIVITY_MODE": "online", "VOICE_ENGINE": "classic"})
+            monitor = WebMonitor()
+            services = RuntimeWebServices(
+                monitor=monitor,
+                active_profile=lambda: env_path,
+                automatic_profiles=True,
+            )
             with patch.dict(os.environ, {"ASSISTANT_AUTO_ENV_DIR": temp_dir}):
-                result = monitor._save_voice_engine("openai-realtime", realtime_model="gpt-realtime-2.1", realtime_voice="marin")
+                result = self._save_runtime_config(services, voice_engine="openai-realtime")
             saved = env_path.read_text(encoding="utf-8")
             self.assertIn("VOICE_ENGINE=openai-realtime", saved)
             self.assertEqual(result["profile"], str(env_path))
@@ -61,9 +135,17 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             online = Path(temp_dir) / ".env.online"; offline = Path(temp_dir) / ".env.offline"
             online.write_text("CONNECTIVITY_MODE=online\n", encoding="utf-8"); offline.write_text("CONNECTIVITY_MODE=offline\n", encoding="utf-8")
-            monitor = WebMonitor(); monitor.update(env_values={"CONNECTIVITY_MODE": "online"})
+            active = [online]
+            monitor = WebMonitor()
+            services = RuntimeWebServices(
+                monitor=monitor,
+                active_profile=lambda: active[0],
+                automatic_profiles=True,
+            )
             with patch.dict(os.environ, {"ASSISTANT_AUTO_ENV_DIR": temp_dir}):
-                result = monitor._save_voice_output_gains(1.35, 0.80)
+                result = self._save_runtime_config(services, cloud_gain=1.35, local_gain=0.80, connectivity="online")
+                active[0] = offline
+                self._save_runtime_config(services, cloud_gain=1.35, local_gain=0.80, connectivity="offline")
             self.assertTrue(result["restart_required"])
             self.assertIn("CLOUD_TTS_OUTPUT_GAIN=1.35", online.read_text(encoding="utf-8"))
             self.assertIn("LOCAL_TTS_OUTPUT_GAIN=0.80", offline.read_text(encoding="utf-8"))

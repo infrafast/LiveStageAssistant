@@ -73,7 +73,7 @@ def build_runner_args(cli) -> tuple[str, Namespace]:
 
     if transport == "stdio":
         if policy.mode == "approval":
-            raise RuntimeError("STDIO approval mode is not yet implemented; use open or restricted")
+            raise RuntimeError("STDIO approval mode is not yet implemented; use open or provider HTTPS approval")
         args = Namespace(
             env_file=str(Path(cli.env_file).resolve()),
             model=cli.model,
@@ -81,7 +81,7 @@ def build_runner_args(cli) -> tuple[str, Namespace]:
             duration=cli.duration,
             mcp_config=str(config_path),
             mcp_server=server.name,
-            allow_tool=list(policy.allowed_tools) if policy.mode == "restricted" else [],
+            allow_tool=[],
             input_device=cli.input_device,
             output_device=cli.output_device,
         )
@@ -109,7 +109,7 @@ async def run(cli) -> int:
     transport, args = build_runner_args(cli)
     print(
         f"RV2D realtime config policy: server={args.mcp_server} transport={transport} "
-        f"permission={getattr(args, 'permission_mode', 'restricted' if args.allow_tool else 'open')}",
+        f"permission={getattr(args, 'permission_mode', 'open')}",
         flush=True,
     )
     if transport == "native":

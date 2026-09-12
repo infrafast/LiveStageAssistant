@@ -1,4 +1,7 @@
 import asyncio
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -8,7 +11,6 @@ from voice_assistant.realtime.engine import (
     RealtimeEngineConfig,
     RealtimeEngineState,
     RealtimeEvent,
-    RealtimeFunctionTool,
     RealtimeMCPServer,
 )
 from voice_assistant.realtime import service as realtime_service
@@ -20,6 +22,7 @@ class DummyEngine(RealtimeEngine):
         super().__init__(config)
         self.events = asyncio.Queue()
         self.text_turns = []
+        self.cancelled = 0
 
     async def start(self):
         self.state = RealtimeEngineState.READY
@@ -40,6 +43,7 @@ class DummyEngine(RealtimeEngine):
         return await self.events.get()
 
     async def cancel_response(self):
+        self.cancelled += 1
         return None
 
     async def submit_tool_result(self, call_id: str, result):
@@ -107,30 +111,17 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             RealtimeMCPServer(label="service-a", url="https://example.test/mcp", require_approval="sometimes")
 
-    def test_config_composes_global_and_mcp_instructions_generically(self):
-        mcp_instructions = "Use the resource identifier returned by the discovery operation exactly as provided."
-        tool = RealtimeFunctionTool(
-            name="mcp__service_a__read_resource",
-            context_instructions=mcp_instructions,
-        )
+    def test_config_preserves_runtime_composed_instructions(self):
         with patch.dict("os.environ", {"ASSISTANT_SYSTEM_PROMPT": "Global LSA prompt."}, clear=False):
             config = RealtimeEngineConfig(
                 provider="test",
                 model="test-model",
                 instructions="Validation runner prompt.",
-                function_tools=(tool,),
             )
-        self.assertIn("Global LSA prompt.", config.instructions)
-        self.assertNotIn("Validation runner prompt.", config.instructions)
-        self.assertIn(mcp_instructions, config.instructions)
-        self.assertIn("MCP-provided instructions follow", config.instructions)
-        self.assertIn("must not add, infer, or hard-code domain-specific concepts", config.instructions)
-        self.assertIn("Examples inside MCP instructions are illustrative only", config.instructions)
-        self.assertIn("never copy an example's entity names, labels, values, indexes, destinations, sources", config.instructions)
-        self.assertIn("Preserve the entities and intent of the current user request exactly", config.instructions)
-        self.assertNotIn("Realtime voice rules", config.instructions)
+        self.assertEqual(config.instructions, "Validation runner prompt.")
+        self.assertNotIn("Global LSA prompt.", config.instructions)
 
-    def test_native_mcp_context_is_composed_without_domain_knowledge(self):
+    def test_native_mcp_context_is_metadata_not_implicit_prompt_mutation(self):
         native_instructions = "Use only identifiers and operation semantics provided by this MCP server."
         server = RealtimeMCPServer(
             label="service-a",
@@ -144,11 +135,9 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
                 instructions="Native validation prompt.",
                 mcp_servers=(server,),
             )
-        self.assertIn(native_instructions, config.instructions)
-        self.assertIn("Global LSA prompt.", config.instructions)
-        self.assertNotIn("Native validation prompt.", config.instructions)
-        self.assertIn("Examples inside MCP instructions are illustrative only", config.instructions)
-        self.assertNotIn("Realtime voice rules", config.instructions)
+        self.assertEqual(config.instructions, "Native validation prompt.")
+        self.assertEqual(config.mcp_servers[0].context_instructions, native_instructions)
+        self.assertNotIn("Global LSA prompt.", config.instructions)
 
     def test_turn_tracker_keeps_turn_busy_until_tool_followup_response(self):
         tracker = realtime_service.RealtimeTurnTracker(action_grace_seconds=0)
@@ -205,7 +194,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         semantic = Semantic()
 
         with patch.dict("os.environ", {"REALTIME_TURN_SETTLE_SECONDS": "0"}, clear=False):
-            await realtime_service.settle_completed_response(
+            settled = await realtime_service.settle_completed_response(
                 response_id="resp_1",
                 response_had_audio=False,
                 turn_tracker=tracker,
@@ -214,6 +203,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
                 semantic=semantic,
             )
 
+        self.assertFalse(settled)
         self.assertEqual(semantic.states, [])
 
     async def test_settle_completed_response_returns_to_listening_when_turn_is_stable(self):
@@ -228,20 +218,129 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         queue = asyncio.Queue()
         semantic = Semantic()
         busy = []
+        callbacks = realtime_service.RealtimeRuntimeCallbacks(set_busy=busy.append)
 
         with patch.dict("os.environ", {"REALTIME_TURN_SETTLE_SECONDS": "0"}, clear=False):
-            await realtime_service.settle_completed_response(
+            settled = await realtime_service.settle_completed_response(
                 response_id="resp_1",
                 response_had_audio=False,
                 turn_tracker=tracker,
                 tool_tasks=set(),
                 queue=queue,
                 semantic=semantic,
-                set_busy=busy.append,
+                callbacks=callbacks,
             )
 
+        self.assertTrue(settled)
         self.assertEqual(semantic.states, [SemanticAudioState.IDLE, SemanticAudioState.LISTENING])
         self.assertEqual(busy, [False])
+
+    async def test_turn_watchdog_reconnects_stuck_turn(self):
+        class Semantic:
+            def __init__(self):
+                self.states = []
+
+            def transition(self, state):
+                self.states.append(state)
+                return True
+
+        engine = DummyEngine(RealtimeEngineConfig(provider="test", model="test-model"))
+        await engine.events.put(RealtimeEvent("user_transcript_done", {"text": "momo test"}))
+        queue = asyncio.Queue()
+        stop_event = asyncio.Event()
+        provider_failure = asyncio.Event()
+        semantic = Semantic()
+        busy = []
+        callbacks = realtime_service.RealtimeRuntimeCallbacks(set_busy=busy.append)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "REALTIME_TURN_TIMEOUT_SECONDS": "0.01",
+                "REALTIME_EVENT_POLL_SECONDS": "0.005",
+                "REALTIME_INACTIVITY_TIMEOUT_SECONDS": "0",
+                "REALTIME_TURN_SETTLE_SECONDS": "0",
+            },
+            clear=False,
+        ):
+            await realtime_service.event_loop(
+                engine,
+                None,
+                queue,
+                set(),
+                {},
+                stop_event,
+                semantic,
+                provider_failure,
+                callbacks,
+            )
+
+        self.assertTrue(stop_event.is_set())
+        self.assertTrue(provider_failure.is_set())
+        self.assertEqual(engine.cancelled, 1)
+        self.assertEqual(semantic.states[-2:], [SemanticAudioState.IDLE, SemanticAudioState.LISTENING])
+        self.assertEqual(busy[-1], False)
+
+    async def test_user_transcript_error_is_observable_and_recoverable(self):
+        class Semantic:
+            def __init__(self):
+                self.states = []
+
+            def transition(self, state):
+                self.states.append(state)
+                return True
+
+        engine = DummyEngine(RealtimeEngineConfig(provider="test", model="test-model"))
+        await engine.events.put(RealtimeEvent("speech_stopped", {}))
+        await engine.events.put(RealtimeEvent("user_transcript_error", {"error": {"message": "bad transcript"}}))
+        await engine.events.put(RealtimeEvent("connection_closed", {}))
+        queue = asyncio.Queue()
+        stop_event = asyncio.Event()
+        provider_failure = asyncio.Event()
+        semantic = Semantic()
+        busy = []
+        callbacks = realtime_service.RealtimeRuntimeCallbacks(set_busy=busy.append)
+
+        with patch.dict("os.environ", {"REALTIME_INACTIVITY_TIMEOUT_SECONDS": "0"}, clear=False):
+            await realtime_service.event_loop(
+                engine,
+                None,
+                queue,
+                set(),
+                {},
+                stop_event,
+                semantic,
+                provider_failure,
+                callbacks,
+            )
+
+        self.assertIn(SemanticAudioState.PROCESSING, semantic.states)
+        self.assertTrue(provider_failure.is_set())
+        self.assertEqual(busy[-1], False)
+
+    def test_main_loads_env_before_runtime_callback_factory(self):
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            handle.write("LSA_CHILD_COMMAND_HTTP=true\n")
+            env_path = Path(handle.name)
+        self.addCleanup(lambda: env_path.unlink(missing_ok=True))
+        observed = []
+
+        def factory(_env_file):
+            observed.append(os.getenv("LSA_CHILD_COMMAND_HTTP"))
+            return realtime_service.RealtimeRuntimeCallbacks()
+
+        async def fake_run(_args, runtime_callbacks=None):
+            self.assertIsInstance(runtime_callbacks, realtime_service.RealtimeRuntimeCallbacks)
+            return 0
+
+        with patch("sys.argv", ["service.py", "--env-file", str(env_path)]), patch.object(
+            realtime_service,
+            "run",
+            fake_run,
+        ), patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(realtime_service.main(runtime_callbacks_factory=factory), 0)
+
+        self.assertEqual(observed, ["true"])
 
 
 if __name__ == "__main__":
