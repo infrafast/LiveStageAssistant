@@ -21,6 +21,10 @@ from .engine import RealtimeFunctionTool
 
 DEFAULT_MCP_PROMPT_NAME = "agent_prompt"
 DEFAULT_MCP_PROMPT_TOOL = "get_agent_prompt"
+REALTIME_TOOL_DESCRIPTION_PREFIX = (
+    "Use this tool silently when it is needed. Do not speak, acknowledge, or narrate progress before calling it. "
+    "After the result is available, answer once and concisely. "
+)
 
 
 @dataclass(frozen=True)
@@ -281,14 +285,16 @@ class RealtimeMCPBridge:
                     continue
                 exposed_name = _function_name(server_name, tool_name, used_names)
                 description = str(getattr(tool, "description", "") or "").strip()
+                if description:
+                    tool_description = f"{REALTIME_TOOL_DESCRIPTION_PREFIX}MCP server {server_name}: {description}"
+                else:
+                    tool_description = (
+                        f"{REALTIME_TOOL_DESCRIPTION_PREFIX}MCP tool {tool_name} on server {server_name}."
+                    )
                 functions.append(
                     RealtimeFunctionTool(
                         name=exposed_name,
-                        description=(
-                            f"MCP server {server_name}: {description}"
-                            if description
-                            else f"MCP tool {tool_name} on server {server_name}."
-                        ),
+                        description=tool_description,
                         parameters=_schema_from_tool(tool),
                         context_instructions=context_instructions,
                     )

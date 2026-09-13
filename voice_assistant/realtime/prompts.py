@@ -9,6 +9,23 @@ except ImportError:  # pragma: no cover - direct script fallback
 
 DEFAULT_BASE_PROMPT = DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
+REALTIME_TOOL_SILENCE_CONTRACT = """
+Realtime live-control output contract:
+- If the current request needs any available tool, produce no spoken or textual assistant content before the tool call.
+- Do not acknowledge, narrate intent, fill silence, or say progress phrases before a tool call.
+- Forbidden pre-tool phrases include variants of: ok, d'accord, je regarde, je vérifie, un instant, je m'en occupe, I will check, let me check.
+- First call the needed tool or tools silently. After the tool result is available, answer exactly once.
+- Successful control commands get one short confirmation sentence only.
+- Status or read requests get only the requested fact.
+- Do not add assumptions, explanations, offers, or follow-up suggestions after a completed command.
+""".strip()
+
+REALTIME_RESPONSE_INSTRUCTIONS = (
+    "Realtime live-control turn. If a tool is needed, call it silently before any text or audio. "
+    "Do not say ok, d'accord, je regarde, je vérifie, un instant, or any progress phrase before tool calls. "
+    "After tool results, answer exactly once with one concise sentence."
+)
+
 
 def compose_realtime_instructions(
     base_prompt: str = "",
@@ -17,7 +34,7 @@ def compose_realtime_instructions(
     *,
     log_prefix: str = "Realtime prompt",
 ) -> str:
-    return compose_engine_prompt(
+    prompt = compose_engine_prompt(
         configured_prompt=base_prompt or None,
         mcp_prompt=mcp_prompt,
         session_context=session_context,
@@ -25,3 +42,6 @@ def compose_realtime_instructions(
         fallback_prompt=DEFAULT_ASSISTANT_SYSTEM_PROMPT,
         log_prefix=log_prefix,
     )
+    if REALTIME_TOOL_SILENCE_CONTRACT.casefold() not in prompt.casefold():
+        prompt = f"{prompt}\n\n{REALTIME_TOOL_SILENCE_CONTRACT}"
+    return prompt

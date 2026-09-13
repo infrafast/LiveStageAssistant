@@ -117,7 +117,7 @@ class RealtimeEngine(ABC):
     async def send_text(self, text: str, *, create_response: bool = True) -> None:
         """Inject one user text turn, optionally asking the provider to respond."""
 
-    async def create_response(self) -> None:
+    async def create_response(self, *, instructions: str | None = None) -> None:
         """Ask the provider to respond to the current conversation item."""
         await self.send_text("", create_response=True)
 

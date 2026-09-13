@@ -36,7 +36,7 @@ from .mcp_bridge import RealtimeMCPBridge, load_remote_mcp_prompt
 from .mcp_config import CanonicalMCPServerConfig, load_mcp_inventory
 from .metrics import realtime_usage_cost_usd
 from .provider_factory import create_realtime_engine
-from .prompts import compose_realtime_instructions
+from .prompts import REALTIME_RESPONSE_INSTRUCTIONS, compose_realtime_instructions
 
 ROOT = Path(__file__).resolve().parents[2]
 REALTIME_RATE = 24000
@@ -307,7 +307,7 @@ def _is_wake_only_transcript(callbacks: RealtimeRuntimeCallbacks | None, text: s
 async def _create_response(engine) -> None:
     creator = getattr(engine, "create_response", None)
     if callable(creator):
-        await creator()
+        await creator(instructions=REALTIME_RESPONSE_INSTRUCTIONS)
         return
     await engine.send_text("", create_response=True)
 

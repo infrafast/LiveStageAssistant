@@ -14,6 +14,7 @@ from voice_assistant.realtime.engine import (
     RealtimeMCPServer,
 )
 from voice_assistant.realtime import service as realtime_service
+from voice_assistant.realtime.prompts import REALTIME_RESPONSE_INSTRUCTIONS, compose_realtime_instructions
 from voice_assistant.startup_messages import startup_ready_message
 
 
@@ -23,6 +24,7 @@ class DummyEngine(RealtimeEngine):
         self.events = asyncio.Queue()
         self.text_turns = []
         self.created_responses = 0
+        self.response_instructions = []
         self.cancelled = 0
 
     async def start(self):
@@ -37,8 +39,9 @@ class DummyEngine(RealtimeEngine):
     async def send_text(self, text: str, *, create_response: bool = True):
         self.text_turns.append((text, create_response))
 
-    async def create_response(self):
+    async def create_response(self, *, instructions=None):
         self.created_responses += 1
+        self.response_instructions.append(instructions)
 
     async def commit_audio(self):
         return None
@@ -124,6 +127,17 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(config.instructions, "Validation runner prompt.")
         self.assertNotIn("Global LSA prompt.", config.instructions)
+
+    def test_realtime_prompt_adds_final_tool_silence_contract(self):
+        prompt = compose_realtime_instructions(
+            base_prompt="Base prompt.",
+            mcp_prompt="MCP prompt.",
+            log_prefix="",
+        )
+        self.assertIn("Base prompt.", prompt)
+        self.assertIn("MCP prompt.", prompt)
+        self.assertIn("Realtime live-control output contract:", prompt)
+        self.assertGreater(prompt.rfind("Realtime live-control output contract:"), prompt.rfind("MCP prompt."))
 
     def test_native_mcp_context_is_metadata_not_implicit_prompt_mutation(self):
         native_instructions = "Use only identifiers and operation semantics provided by this MCP server."
@@ -450,6 +464,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(engine.created_responses, 1)
+        self.assertEqual(engine.response_instructions, [REALTIME_RESPONSE_INSTRUCTIONS])
         self.assertIn(("user", "Momo baisse le volume."), dialogue)
 
     def test_main_loads_env_before_runtime_callback_factory(self):

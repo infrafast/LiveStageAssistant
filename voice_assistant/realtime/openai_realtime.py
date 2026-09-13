@@ -190,11 +190,20 @@ class OpenAIRealtimeEngine(RealtimeEngine):
         self._require_connection()
         await self._send({"type": "input_audio_buffer.commit"})
         if not self.config.server_vad:
-            await self._send({"type": "response.create"})
+            await self._send(self._response_create_payload())
 
-    async def create_response(self) -> None:
+    async def create_response(self, *, instructions: str | None = None) -> None:
         self._require_connection()
-        await self._send({"type": "response.create"})
+        await self._send(self._response_create_payload(instructions=instructions))
+
+    def _response_create_payload(self, *, instructions: str | None = None) -> dict[str, Any]:
+        instruction_text = str(instructions or "").strip()
+        if not instruction_text:
+            return {"type": "response.create"}
+        return {
+            "type": "response.create",
+            "response": {"instructions": instruction_text},
+        }
 
     async def next_event(self) -> RealtimeEvent:
         return await self._events.get()
@@ -218,7 +227,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
         if self._response_active:
             self._function_followup_pending = True
         else:
-            await self._send({"type": "response.create"})
+            await self._send(self._response_create_payload())
 
     async def _send(self, payload: dict[str, Any]) -> None:
         self._require_connection()
@@ -249,7 +258,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
 
         self._native_mcp_followup_pending = False
         self._function_followup_pending = False
-        await self._send({"type": "response.create"})
+        await self._send(self._response_create_payload())
         await self._events.put(RealtimeEvent("tool_followup_requested", {}))
 
     async def _receive_loop(self) -> None:

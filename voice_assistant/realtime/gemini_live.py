@@ -146,7 +146,7 @@ class GeminiLiveEngine(RealtimeEngine):
     async def commit_audio(self) -> None:
         await self._send({"realtimeInput": {"audioStreamEnd": True}})
 
-    async def create_response(self) -> None:
+    async def create_response(self, *, instructions: str | None = None) -> None:
         # Gemini Live decides response timing from realtime input/activity.
         return None
 

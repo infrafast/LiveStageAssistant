@@ -1,7 +1,11 @@
 import unittest
 from types import SimpleNamespace
 
-from voice_assistant.realtime.mcp_bridge import RealtimeMCPBridge, load_mcp_prompt_from_session
+from voice_assistant.realtime.mcp_bridge import (
+    REALTIME_TOOL_DESCRIPTION_PREFIX,
+    RealtimeMCPBridge,
+    load_mcp_prompt_from_session,
+)
 
 
 class FakeSession:
@@ -102,6 +106,7 @@ class RealtimeMCPBridgeTests(unittest.IsolatedAsyncioTestCase):
         targets = bridge.tool_targets
         self.assertEqual({target.tool for target in targets.values()}, {"read_resource", "set_resource"})
         self.assertEqual(functions[0].parameters["type"], "object")
+        self.assertTrue(functions[0].description.startswith(REALTIME_TOOL_DESCRIPTION_PREFIX))
 
     async def test_restricted_allow_list_filters_discovery(self):
         bridge = RealtimeMCPBridge(
