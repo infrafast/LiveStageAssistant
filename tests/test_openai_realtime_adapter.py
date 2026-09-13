@@ -233,6 +233,28 @@ class OpenAIRealtimeNativeMCPFollowupTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_session_update_can_disable_server_vad_auto_response(self):
+        engine = OpenAIRealtimeEngine(
+            RealtimeEngineConfig(
+                provider="openai",
+                model="gpt-realtime-2.1-mini",
+                server_vad_create_response=False,
+            ),
+            api_key="test-key",
+        )
+        engine._ws = FakeWebSocket()
+
+        await engine._send_session_update()
+
+        turn_detection = engine._ws.sent[0]["session"]["audio"]["input"]["turn_detection"]
+        self.assertEqual(turn_detection["type"], "server_vad")
+        self.assertFalse(turn_detection["create_response"])
+
+    async def test_create_response_sends_response_create(self):
+        engine = self.make_engine()
+        await engine.create_response()
+        self.assertEqual(engine._ws.sent, [{"type": "response.create"}])
+
     async def test_completed_mcp_call_after_response_done_requests_one_followup(self):
         engine = self.make_engine()
         engine._response_active = False

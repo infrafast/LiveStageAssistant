@@ -83,6 +83,7 @@ def _best_label_score(prediction: Any) -> tuple[str, float]:
 @dataclass(frozen=True)
 class RealtimeWakeConfig:
     wake_word: str = ""
+    wake_words: tuple[str, ...] = ()
     model_paths: tuple[str, ...] = ()
     model_names: tuple[str, ...] = ()
     threshold: float = 0.5
@@ -100,6 +101,7 @@ class RealtimeWakeConfig:
         wake_words = get_configured_wake_words(env)
         return cls(
             wake_word=wake_words[0] if wake_words else "",
+            wake_words=tuple(wake_words),
             model_paths=_csv(env.get("BACKEND_WAKE_WORD_MODEL_PATHS")),
             model_names=_csv(env.get("BACKEND_WAKE_WORD_MODEL_NAMES")),
             threshold=max(0.01, min(0.99, _float(env, "BACKEND_WAKE_WORD_THRESHOLD", 0.5))),

@@ -76,6 +76,8 @@ class RealtimeRuntimeCallbacks:
     pop_injected_command: Callable[[], dict[str, Any] | None] | None = None
     refresh_engine_context: Callable[[Any], Awaitable[bool]] | None = None
     should_ignore_provider_speech_started: Callable[[SemanticAudioState | None], bool] | None = None
+    defer_provider_response_until_user_transcript: bool = False
+    is_wake_only_transcript: Callable[[str], bool] | None = None
 
     @property
     def has_supervised_text(self) -> bool:
@@ -289,6 +291,25 @@ def _should_ignore_provider_speech_started(
     except Exception as exc:
         print(f"Realtime speech-start callback warning: {exc}", flush=True)
         return False
+
+
+def _is_wake_only_transcript(callbacks: RealtimeRuntimeCallbacks | None, text: str) -> bool:
+    runtime_callbacks = _callbacks(callbacks)
+    if runtime_callbacks.is_wake_only_transcript is None:
+        return False
+    try:
+        return bool(runtime_callbacks.is_wake_only_transcript(text))
+    except Exception as exc:
+        print(f"Realtime wake transcript callback warning: {exc}", flush=True)
+        return False
+
+
+async def _create_response(engine) -> None:
+    creator = getattr(engine, "create_response", None)
+    if callable(creator):
+        await creator()
+        return
+    await engine.send_text("", create_response=True)
 
 
 def _active_task_exists(tasks: set[asyncio.Task]) -> bool:
@@ -951,7 +972,7 @@ async def event_loop(
             now = time.perf_counter()
             turn_tracker.touch()
             if event.type == "speech_started":
-                if _should_ignore_provider_speech_started(runtime_callbacks, semantic.state):
+                if _should_ignore_provider_speech_started(runtime_callbacks, getattr(semantic, "state", None)):
                     print("Realtime speech started ignored while assistant speech is protected by local wake gate", flush=True)
                     continue
                 print("Realtime speech started", flush=True)
@@ -971,10 +992,27 @@ async def event_loop(
             elif event.type == "user_transcript_done":
                 text = str(event.data.get("text") or "").strip()
                 if text:
+                    if _is_wake_only_transcript(runtime_callbacks, text):
+                        print("Realtime wake word only; waiting for command speech.", flush=True)
+                        turn_tracker.reset_after_cancel_or_failure()
+                        await _set_busy(runtime_callbacks, False)
+                        transition_semantic(semantic, SemanticAudioState.IDLE, runtime_callbacks)
+                        transition_semantic(semantic, SemanticAudioState.LISTENING, runtime_callbacks)
+                        continue
                     print(f"Utilisateur: {text}", flush=True)
                     await _append_dialogue(runtime_callbacks, "user", text)
                     await _set_busy(runtime_callbacks, True)
                     turn_tracker.start_text_turn()
+                    if runtime_callbacks.defer_provider_response_until_user_transcript:
+                        try:
+                            await _create_response(engine)
+                        except Exception as exc:
+                            print(f"Realtime deferred response creation failed: {exc}", flush=True)
+                            turn_tracker.reset_after_cancel_or_failure()
+                            await _set_busy(runtime_callbacks, False)
+                            provider_failure.set()
+                            stop_event.set()
+                            continue
             elif event.type == "user_transcript_error":
                 print(f"Realtime user transcription error: {_format_user_transcript_error(event.data)}", flush=True)
                 if turn_tracker.speech_stopped_at is not None:
@@ -1217,7 +1255,21 @@ async def run(args, runtime_callbacks: RealtimeRuntimeCallbacks | None = None) -
             on_state=lambda state: print(f"LSA semantic state: {state.value}", flush=True),
         )
 
-        engine = create_realtime_engine(provider, RealtimeEngineConfig(provider=provider, model=model, voice=voice, instructions=effective_instructions, output_speed=max(0.6, min(1.8, _float_env("WEB_TTS_SPEED", 1.0))), server_vad=True, mcp_servers=tuple(native_servers), function_tools=tuple(function_tools)), api_key=api_key)
+        engine = create_realtime_engine(
+            provider,
+            RealtimeEngineConfig(
+                provider=provider,
+                model=model,
+                voice=voice,
+                instructions=effective_instructions,
+                output_speed=max(0.6, min(1.8, _float_env("WEB_TTS_SPEED", 1.0))),
+                server_vad=True,
+                server_vad_create_response=not runtime_callbacks.defer_provider_response_until_user_transcript,
+                mcp_servers=tuple(native_servers),
+                function_tools=tuple(function_tools),
+            ),
+            api_key=api_key,
+        )
         await engine.start()
         await wait_until_ready(engine)
         print(f"LSA Realtime ready: provider={provider} model={model} voice={voice}", flush=True)

@@ -68,6 +68,7 @@ class RealtimeEngineConfig:
     instructions: str = "Respond naturally and concisely in the user's language. Default to English when unclear."
     output_speed: float = 1.0
     server_vad: bool = True
+    server_vad_create_response: bool = True
     input_transcription_model: str = "gpt-4o-mini-transcribe"
     mcp_servers: tuple[RealtimeMCPServer, ...] = ()
     function_tools: tuple[RealtimeFunctionTool, ...] = ()
@@ -115,6 +116,10 @@ class RealtimeEngine(ABC):
     @abstractmethod
     async def send_text(self, text: str, *, create_response: bool = True) -> None:
         """Inject one user text turn, optionally asking the provider to respond."""
+
+    async def create_response(self) -> None:
+        """Ask the provider to respond to the current conversation item."""
+        await self.send_text("", create_response=True)
 
     @abstractmethod
     async def commit_audio(self) -> None:

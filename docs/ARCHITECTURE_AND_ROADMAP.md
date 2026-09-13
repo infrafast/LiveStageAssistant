@@ -753,6 +753,8 @@ Realtime turn completion is intentionally conservative: `response.done` alone do
 
 The common realtime loop also handles provider transcription failures as first-class turn events. `user_transcript_error` is logged, the UI/semantic state moves to processing if the provider has already ended speech, and the same `REALTIME_TURN_TIMEOUT_SECONDS` watchdog recovers the session if no model response follows. Native MCP follow-up events are observed as diagnostics only; bridge tool result delivery only marks that a provider response is expected, so there is no separate stale follow-up flag that can keep the assistant busy forever after an assistant response is complete. With local realtime wake enabled, provider `speech_started` events that arrive while assistant speech is protected by the wake gate are ignored instead of being treated as user barge-in.
 
+When local realtime wake-word gating is enabled, provider VAD remains responsible for delimiting speech but provider auto-response is disabled. LSA creates the provider response only after receiving a useful user transcript. A transcript that contains only the wake word rearms listening without appending chat messages, starting the thinking cue or asking the model to respond. A continuous utterance such as "momo baisse le volume" remains valid because the full post-wake audio is still sent to the provider and the deferred response is created after transcription.
+
 ---
 
 # 6. Roadmap OR - Offline Reliability And Auto Profile Switching

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 from dotenv import dotenv_values
@@ -17,6 +18,7 @@ from dotenv import dotenv_values
 from ..child_command_channel import child_monitor_from_env
 from ..semantic_audio import SemanticAudioController, SemanticAudioState
 from ..session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
+from ..wake_word import normalize_for_wake_word
 from ..wake_logging import format_openwakeword_detected, format_openwakeword_waiting
 from .service import RealtimeRuntimeCallbacks
 from .wake_gate import RealtimeWakeConfig, RealtimeWakeGate
@@ -154,6 +156,14 @@ class RealtimeWakeRuntime:
             and semantic_state == SemanticAudioState.SPEAKING
         )
 
+    def is_wake_only_transcript(self, text: str) -> bool:
+        normalized = normalize_for_wake_word(text)
+        normalized = re.sub(r"[^\w]+", " ", normalized).strip()
+        if not normalized:
+            return False
+        wake_words = self.config.wake_words or ((self.config.wake_word,) if self.config.wake_word else ())
+        return any(normalized == normalize_for_wake_word(wake_word).strip() for wake_word in wake_words)
+
 
 def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
     """Create explicit callbacks for the provider-neutral realtime service."""
@@ -193,4 +203,6 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
     callbacks.capture_filter = runtime.capture_filter
     callbacks.semantic_transition = runtime.semantic_transition
     callbacks.should_ignore_provider_speech_started = runtime.should_ignore_provider_speech_started
+    callbacks.defer_provider_response_until_user_transcript = True
+    callbacks.is_wake_only_transcript = runtime.is_wake_only_transcript
     return callbacks

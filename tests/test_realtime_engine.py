@@ -22,6 +22,7 @@ class DummyEngine(RealtimeEngine):
         super().__init__(config)
         self.events = asyncio.Queue()
         self.text_turns = []
+        self.created_responses = 0
         self.cancelled = 0
 
     async def start(self):
@@ -35,6 +36,9 @@ class DummyEngine(RealtimeEngine):
 
     async def send_text(self, text: str, *, create_response: bool = True):
         self.text_turns.append((text, create_response))
+
+    async def create_response(self):
+        self.created_responses += 1
 
     async def commit_audio(self):
         return None
@@ -359,6 +363,94 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine.cancelled, 0)
         self.assertEqual(interrupted, set())
         self.assertIn(SemanticAudioState.SPEAKING, semantic.states)
+
+    async def test_deferred_wake_only_transcript_does_not_start_response_or_thinking(self):
+        class Semantic:
+            def __init__(self):
+                self.states = []
+                self.state = None
+
+            def transition(self, state):
+                self.states.append(state)
+                self.state = state
+                return True
+
+        engine = DummyEngine(RealtimeEngineConfig(provider="test", model="test-model"))
+        await engine.events.put(RealtimeEvent("speech_started", {}))
+        await engine.events.put(RealtimeEvent("speech_stopped", {}))
+        await engine.events.put(RealtimeEvent("user_transcript_done", {"text": "Momo."}))
+        await engine.events.put(RealtimeEvent("connection_closed", {}))
+        queue = asyncio.Queue()
+        stop_event = asyncio.Event()
+        provider_failure = asyncio.Event()
+        semantic = Semantic()
+        busy = []
+        dialogue = []
+        callbacks = realtime_service.RealtimeRuntimeCallbacks(
+            set_busy=busy.append,
+            append_dialogue=lambda role, text: dialogue.append((role, text)),
+            defer_provider_response_until_user_transcript=True,
+            is_wake_only_transcript=lambda text: text.strip().lower().rstrip(".") == "momo",
+        )
+
+        with patch.dict("os.environ", {"REALTIME_INACTIVITY_TIMEOUT_SECONDS": "0"}, clear=False):
+            await realtime_service.event_loop(
+                engine,
+                None,
+                queue,
+                set(),
+                {},
+                stop_event,
+                semantic,
+                provider_failure,
+                callbacks,
+            )
+
+        self.assertEqual(engine.created_responses, 0)
+        self.assertNotIn(SemanticAudioState.PROCESSING, semantic.states)
+        self.assertEqual(dialogue, [])
+        self.assertIn(False, busy)
+
+    async def test_deferred_wake_command_transcript_requests_response(self):
+        class Semantic:
+            def __init__(self):
+                self.states = []
+
+            def transition(self, state):
+                self.states.append(state)
+                return True
+
+        engine = DummyEngine(RealtimeEngineConfig(provider="test", model="test-model"))
+        await engine.events.put(RealtimeEvent("speech_started", {}))
+        await engine.events.put(RealtimeEvent("speech_stopped", {}))
+        await engine.events.put(RealtimeEvent("user_transcript_done", {"text": "Momo baisse le volume."}))
+        await engine.events.put(RealtimeEvent("connection_closed", {}))
+        queue = asyncio.Queue()
+        stop_event = asyncio.Event()
+        provider_failure = asyncio.Event()
+        semantic = Semantic()
+        dialogue = []
+        callbacks = realtime_service.RealtimeRuntimeCallbacks(
+            append_dialogue=lambda role, text: dialogue.append((role, text)),
+            defer_provider_response_until_user_transcript=True,
+            is_wake_only_transcript=lambda text: text.strip().lower().rstrip(".") == "momo",
+        )
+
+        with patch.dict("os.environ", {"REALTIME_INACTIVITY_TIMEOUT_SECONDS": "0"}, clear=False):
+            await realtime_service.event_loop(
+                engine,
+                None,
+                queue,
+                set(),
+                {},
+                stop_event,
+                semantic,
+                provider_failure,
+                callbacks,
+            )
+
+        self.assertEqual(engine.created_responses, 1)
+        self.assertIn(("user", "Momo baisse le volume."), dialogue)
 
     def test_main_loads_env_before_runtime_callback_factory(self):
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:

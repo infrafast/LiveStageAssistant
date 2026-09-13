@@ -89,7 +89,7 @@ class OpenAIRealtimeEngine(RealtimeEngine):
                             "threshold": 0.5,
                             "prefix_padding_ms": 300,
                             "silence_duration_ms": 500,
-                            "create_response": True,
+                            "create_response": bool(self.config.server_vad_create_response),
                             "interrupt_response": True,
                         }
                         if self.config.server_vad
@@ -191,6 +191,10 @@ class OpenAIRealtimeEngine(RealtimeEngine):
         await self._send({"type": "input_audio_buffer.commit"})
         if not self.config.server_vad:
             await self._send({"type": "response.create"})
+
+    async def create_response(self) -> None:
+        self._require_connection()
+        await self._send({"type": "response.create"})
 
     async def next_event(self) -> RealtimeEvent:
         return await self._events.get()
