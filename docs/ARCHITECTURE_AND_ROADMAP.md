@@ -400,6 +400,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 
 The VAD has no language prompt. Prompting applies to the realtime model/session, not speech-boundary detection.
 At engine instantiation, LSA logs the exact final consolidated prompt that is sent to the selected LLM path. Classic/OpenAI/Ollama log the prompt after freshness and MCP prompt merging, backend Realtime logs the prompt after MCP prompt merging and realtime voice-control contract composition, and browser Realtime logs the instructions passed to the browser session secret flow.
+`ASSISTANT_SYSTEM_PROMPT` and `STT_PROMPT` are prompt-file references, not inline prompt bodies. By default they point to `data/prompt/assistant_system_prompt.md` and `data/prompt/stt_prompt.md`. The Web GUI exposes these values as dropdowns populated from `data/prompt/*.md` and `data/prompt/*.txt`; the selected file path is persisted in the active env profile and resolved relative to the env profile directory first, then relative to the project root for CLI, service and Docker execution.
 
 ```text
 PROMPT.md / general LSA instructions

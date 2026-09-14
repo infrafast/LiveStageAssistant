@@ -5314,8 +5314,18 @@
         setSelectedInterruptConversationEnabled(Boolean(data.selected_interrupt_conversation_enabled));
         interruptConversationEnabled = selectedInterruptConversationEnabled();
         wakeWord.value = data.selected_wake_word || "";
-        sttPromptEl.value = data.selected_stt_prompt || "";
-        assistantSystemPromptEl.value = data.selected_system_prompt || "";
+        populateOptionsWithCurrent(
+          sttPromptEl,
+          data.prompt_files || [],
+          data.selected_stt_prompt || "",
+          tr("no_prompt_file_available", "No prompt file available")
+        );
+        populateOptionsWithCurrent(
+          assistantSystemPromptEl,
+          data.prompt_files || [],
+          data.selected_system_prompt || "",
+          tr("no_prompt_file_available", "No prompt file available")
+        );
 
         cloudTtsProvider.replaceChildren();
         const selectedCloudTtsProvider = data.selected_cloud_tts_provider || "";

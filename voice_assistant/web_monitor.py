@@ -20,6 +20,7 @@ try:
         test_mcp_server_from_snapshot,
     )
     from .prompt_contract import log_final_engine_prompt, normalize_system_prompt_identity
+    from .prompt_files import DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH, prompt_text_from_values
     from .runtime_status import read_status_file
     from .realtime.browser_auth import create_openai_browser_client_secret
     from .session_context import DEFAULT_CONTEXT_DIR, SessionContextStore
@@ -27,6 +28,7 @@ except ImportError:  # pragma: no cover - direct script fallback
     import web_monitor_base as _base
     from mcp_realtime_web_endpoint import delete_mcp_server_from_snapshot, mcp_registry_from_snapshot, save_mcp_realtime_policy_from_snapshot, save_mcp_server_from_snapshot, test_mcp_server_from_snapshot
     from prompt_contract import log_final_engine_prompt, normalize_system_prompt_identity
+    from prompt_files import DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH, prompt_text_from_values
     from runtime_status import read_status_file
     from realtime.browser_auth import create_openai_browser_client_secret
     from session_context import DEFAULT_CONTEXT_DIR, SessionContextStore
@@ -262,7 +264,12 @@ class WebMonitor(_BaseWebMonitor):
             except OSError as exc:
                 raise RuntimeError(f"could not read OPENAI_API_KEY_FILE: {exc}") from exc
         instructions = normalize_system_prompt_identity(
-            str(values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip(),
+            prompt_text_from_values(
+                values,
+                "ASSISTANT_SYSTEM_PROMPT",
+                env_file=env_file,
+                default_path=DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH,
+            ),
             log_prefix="Browser realtime prompt",
         )
         log_final_engine_prompt(instructions, log_prefix="Browser realtime prompt")

@@ -12,6 +12,11 @@ from __future__ import annotations
 import os
 from typing import Iterable
 
+try:
+    from .prompt_files import DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH, read_prompt_file
+except ImportError:  # pragma: no cover - direct script fallback
+    from prompt_files import DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH, read_prompt_file  # type: ignore
+
 
 LSA_PRODUCT_IDENTITY_RULE = (
     "You are Live Stage Assistant, the voice assistant for live stage operation: "
@@ -89,9 +94,18 @@ def normalize_system_prompt_identity(prompt: str, *, log_prefix: str = "LSA prom
 
 
 def configured_system_prompt(*, required: bool = True, fallback: str = "", log_prefix: str = "LSA prompt") -> str:
-    prompt = str(os.getenv("ASSISTANT_SYSTEM_PROMPT", "") or "").strip()
-    if prompt:
-        return normalize_system_prompt_identity(prompt, log_prefix=log_prefix)
+    prompt_ref = str(os.getenv("ASSISTANT_SYSTEM_PROMPT", "") or DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH).strip()
+    if prompt_ref:
+        try:
+            prompt = read_prompt_file(prompt_ref)
+            if log_prefix:
+                print(f"{log_prefix}: loaded ASSISTANT_SYSTEM_PROMPT from {prompt_ref}", flush=True)
+            return normalize_system_prompt_identity(prompt, log_prefix=log_prefix)
+        except OSError as exc:
+            if required and not fallback:
+                raise RuntimeError(f"ASSISTANT_SYSTEM_PROMPT file is not readable: {prompt_ref} ({exc})") from exc
+            if log_prefix:
+                print(f"{log_prefix}: ASSISTANT_SYSTEM_PROMPT file unavailable, using fallback ({exc})", flush=True)
     if required:
         raise RuntimeError("ASSISTANT_SYSTEM_PROMPT is required for the configured runtime profile")
     return normalize_system_prompt_identity(str(fallback or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip(), log_prefix=log_prefix)

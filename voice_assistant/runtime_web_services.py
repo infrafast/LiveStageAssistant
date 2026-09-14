@@ -25,6 +25,13 @@ from .backend_audio_sample import BackendAudioSamplePlayer, speaker_profile_samp
 from .backend_tts import BackendTtsTester
 from .cloud_speech import audio_bytes_to_wav_bytes, transcribe_openai_audio, web_text_to_speech
 from .i18n import available_locales, normalize_locale
+from .prompt_files import (
+    DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH,
+    DEFAULT_STT_PROMPT_PATH,
+    prompt_path_options,
+    prompt_reference_from_values,
+    prompt_text_from_values,
+)
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
 from .speaker_recognition import SpeakerProfile, SpeakerRecognitionResult, build_speaker_recognizer
 from .wake_word import apply_wake_word, parse_wake_words
@@ -51,8 +58,6 @@ OPENAI_REALTIME_VOICE_OPTIONS = [
 ]
 GEMINI_LIVE_MODEL_OPTIONS = [{"id": "gemini-3.1-flash-live-preview", "label": "gemini-3.1-flash-live-preview"}]
 GEMINI_LIVE_VOICE_OPTIONS = [{"id": voice, "label": voice} for voice in ("Kore", "Puck", "Charon", "Fenrir", "Aoede")]
-DEFAULT_STT_PROMPT = ""
-DEFAULT_SYSTEM_PROMPT = ""
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
@@ -218,7 +223,12 @@ class RuntimeWebServices:
             mime_type=mime_type,
             model=str(values.get("WEB_STT_MODEL") or "whisper-1").strip() or "whisper-1",
             language=str(values.get("STT_LANGUAGE") or "").strip(),
-            prompt=str(values.get("STT_PROMPT") or "").strip(),
+            prompt=prompt_text_from_values(
+                values,
+                "STT_PROMPT",
+                env_file=self.active_profile(),
+                default_path=DEFAULT_STT_PROMPT_PATH,
+            ),
         )
         speaker_payload = self._speaker_payload(values, audio_bytes, mime_type)
         if not text:
@@ -603,8 +613,17 @@ class RuntimeWebServices:
             "tts_outputs": TTS_OUTPUT_OPTIONS,
             "selected_tts_output": tts_output,
             "selected_wake_word": str(values.get("WAKE_WORD") or "").strip(),
-            "selected_stt_prompt": str(values.get("STT_PROMPT") or DEFAULT_STT_PROMPT).strip(),
-            "selected_system_prompt": str(values.get("ASSISTANT_SYSTEM_PROMPT") or DEFAULT_SYSTEM_PROMPT).strip(),
+            "prompt_files": prompt_path_options(),
+            "selected_stt_prompt": prompt_reference_from_values(
+                values,
+                "STT_PROMPT",
+                default_path=DEFAULT_STT_PROMPT_PATH,
+            ),
+            "selected_system_prompt": prompt_reference_from_values(
+                values,
+                "ASSISTANT_SYSTEM_PROMPT",
+                default_path=DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH,
+            ),
             "selected_session_context_size": self._int(values, "SESSION_CONTEXT_SIZE", 6000),
             "selected_mcp_agent_max_steps": self._int(values, "MCP_AGENT_MAX_STEPS", DEFAULT_MCP_AGENT_MAX_STEPS),
             "selected_mcp_tool_routing_enabled": self._bool(values, "MCP_TOOL_ROUTING_ENABLED", False),
@@ -801,6 +820,14 @@ class RuntimeWebServices:
             if not realtime_model or not realtime_voice:
                 raise ValueError("Realtime model and voice are required")
 
+        prompt_file_ids = {item["id"] for item in prompt_path_options()}
+        stt_prompt = str(stt_prompt or DEFAULT_STT_PROMPT_PATH).strip()
+        system_prompt = str(system_prompt or DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH).strip()
+        if stt_prompt not in prompt_file_ids:
+            raise ValueError(f"STT prompt file '{stt_prompt}' is not available in data/prompt")
+        if system_prompt not in prompt_file_ids:
+            raise ValueError(f"assistant system prompt file '{system_prompt}' is not available in data/prompt")
+
         updates = {
             "VOICE_ENGINE": requested_engine,
             "CLOUD_TTS_OUTPUT_GAIN": f"{cloud_tts_output_gain:.2f}",
@@ -809,8 +836,8 @@ class RuntimeWebServices:
             "STT_INPUT": stt_input,
             "STT_LANGUAGE": normalize_locale(stt_language),
             "WAKE_WORD": wake_word,
-            "STT_PROMPT": str(stt_prompt or "").strip(),
-            "ASSISTANT_SYSTEM_PROMPT": str(system_prompt or "").strip(),
+            "STT_PROMPT": stt_prompt,
+            "ASSISTANT_SYSTEM_PROMPT": system_prompt,
             "SESSION_CONTEXT_SIZE": str(max(0, min(12000, int(session_context_size)))),
             "MCP_AGENT_MAX_STEPS": str(max(5, min(60, int(mcp_agent_max_steps)))),
             "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",

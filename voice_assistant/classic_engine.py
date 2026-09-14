@@ -19,6 +19,7 @@ from dotenv import dotenv_values, load_dotenv
 from . import agent
 from .child_command_channel import child_monitor_from_env
 from .prompt_contract import configured_system_prompt
+from .prompt_files import DEFAULT_STT_PROMPT_PATH, prompt_text_from_values
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
 from .speaker_recognition import SpeakerProfile
 from .wake_word import get_configured_wake_words
@@ -135,6 +136,13 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
     speaker_profiles = _speaker_profiles(values)
     command_monitor = child_monitor_from_env()
     system_prompt = configured_system_prompt(required=False, fallback=agent.DEFAULT_ASSISTANT_SYSTEM_PROMPT, log_prefix="Classic prompt")
+    stt_prompt = prompt_text_from_values(
+        values,
+        "STT_PROMPT",
+        env_file=env_file,
+        default_path=DEFAULT_STT_PROMPT_PATH,
+        fallback_text=agent.DEFAULT_STT_PROMPT,
+    )
 
     cloud_gain = max(0.0, min(2.0, _float(values, "CLOUD_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
     local_gain = max(0.0, min(2.0, _float(values, "LOCAL_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
@@ -151,7 +159,7 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
         stt_provider="local-whisper" if offline else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
         local_whisper_model=str(values.get("LOCAL_WHISPER_MODEL") or "base").strip(),
         stt_language=str(values.get("STT_LANGUAGE") or "fr").strip(),
-        stt_prompt=str(values.get("STT_PROMPT") or agent.DEFAULT_STT_PROMPT).strip(),
+        stt_prompt=stt_prompt,
         stt_timeout_seconds=max(1.0, _float(values, "STT_TIMEOUT_SECONDS", agent.DEFAULT_STT_TIMEOUT_SECONDS)),
         tts_provider=tts_config.backend_provider,
         web_tts_enabled=False,

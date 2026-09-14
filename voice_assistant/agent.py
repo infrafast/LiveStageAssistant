@@ -57,6 +57,13 @@ try:
     from .stage_timeout import TimedStageRunner
     from .startup_messages import startup_ready_message
     from .prompt_contract import log_final_engine_prompt
+    from .prompt_files import (
+        DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH,
+        DEFAULT_STT_PROMPT_PATH,
+        prompt_path_options,
+        prompt_reference_from_values,
+        prompt_text_from_values,
+    )
     from .wake_word import apply_wake_word, parse_wake_words
     from .wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from .speaker_recognition import (
@@ -82,6 +89,7 @@ except ImportError:
     from stage_timeout import TimedStageRunner
     from startup_messages import startup_ready_message
     from prompt_contract import log_final_engine_prompt
+    from prompt_files import DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH, DEFAULT_STT_PROMPT_PATH, prompt_path_options, prompt_reference_from_values, prompt_text_from_values
     from wake_word import apply_wake_word, parse_wake_words
     from wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from speaker_recognition import (
@@ -7118,8 +7126,16 @@ async def main():
         current_cloud_tts_provider = cloud_tts_provider_from_values(values)
         current_tts_output = tts_output_from_values(values)
         current_wake_word = (values.get("WAKE_WORD") or "").strip()
-        current_stt_prompt = (values.get("STT_PROMPT") or DEFAULT_STT_PROMPT).strip()
-        current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip()
+        current_stt_prompt = prompt_reference_from_values(
+            values,
+            "STT_PROMPT",
+            default_path=DEFAULT_STT_PROMPT_PATH,
+        )
+        current_system_prompt = prompt_reference_from_values(
+            values,
+            "ASSISTANT_SYSTEM_PROMPT",
+            default_path=DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH,
+        )
         current_session_context_size = env_int_from_values(values, "SESSION_CONTEXT_SIZE", 6000)
         current_mcp_agent_max_steps = env_int_from_values(values, "MCP_AGENT_MAX_STEPS", DEFAULT_MCP_AGENT_MAX_STEPS)
         current_mcp_tool_routing_enabled = env_bool_from_values(values, "MCP_TOOL_ROUTING_ENABLED", False)
@@ -7234,6 +7250,7 @@ async def main():
             "tts_outputs": TTS_OUTPUT_OPTIONS,
             "selected_tts_output": current_tts_output,
             "selected_wake_word": current_wake_word,
+            "prompt_files": prompt_path_options(),
             "selected_stt_prompt": current_stt_prompt,
             "selected_system_prompt": current_system_prompt,
             "selected_session_context_size": current_session_context_size,
@@ -7355,8 +7372,13 @@ async def main():
         elif not model:
             model = str(values.get("OPENAI_MODEL") or "").strip()
         wake_word = (wake_word or "").strip()
-        stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
+        stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT_PATH).strip()
         system_prompt = (system_prompt or "").strip()
+        prompt_file_ids = {item["id"] for item in prompt_path_options()}
+        if stt_prompt not in prompt_file_ids:
+            raise ValueError(f"STT prompt file '{stt_prompt}' is not available in data/prompt")
+        if system_prompt not in prompt_file_ids:
+            raise ValueError(f"assistant system prompt file '{system_prompt}' is not available in data/prompt")
         session_context_size = max(0, min(12000, int(session_context_size or 0)))
         mcp_agent_max_steps = max(5, min(60, int(mcp_agent_max_steps or DEFAULT_MCP_AGENT_MAX_STEPS)))
         mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
@@ -7868,7 +7890,14 @@ async def main():
         stt_input = os.getenv("STT_INPUT", "both").strip().lower()
         local_whisper_model = os.getenv("LOCAL_WHISPER_MODEL", "base")
         stt_language = normalize_locale(os.getenv("STT_LANGUAGE"))
-        stt_prompt = os.getenv("STT_PROMPT", DEFAULT_STT_PROMPT)
+        env_values = dict(dotenv_values(env_file))
+        stt_prompt = prompt_text_from_values(
+            env_values,
+            "STT_PROMPT",
+            env_file=env_file,
+            default_path=DEFAULT_STT_PROMPT_PATH,
+            fallback_text=DEFAULT_STT_PROMPT,
+        )
         stt_timeout_seconds = max(1.0, min(300.0, env_float("STT_TIMEOUT_SECONDS", DEFAULT_STT_TIMEOUT_SECONDS)))
         tts_config = resolve_tts_config_from_values(os.environ)
         cloud_tts_provider = tts_config.cloud_provider
@@ -7953,7 +7982,13 @@ async def main():
         if backend_audio_monitor_mode == "rejected" and not wake_words:
             print("Backend audio monitor rejected mode requires WAKE_WORD; falling back to off.")
             backend_audio_monitor_mode = "off"
-        system_prompt = env_optional("ASSISTANT_SYSTEM_PROMPT")
+        system_prompt = prompt_text_from_values(
+            env_values,
+            "ASSISTANT_SYSTEM_PROMPT",
+            env_file=env_file,
+            default_path=DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH,
+            fallback_text=DEFAULT_ASSISTANT_SYSTEM_PROMPT,
+        )
         mcp_config_path = env_optional("MCP_CONFIG")
         mcp_prompt_merge_mode = os.getenv("MCP_PROMPT_MERGE_MODE", "append").lower()
         mcp_agent_memory_enabled = env_bool("MCP_AGENT_MEMORY_ENABLED", True)

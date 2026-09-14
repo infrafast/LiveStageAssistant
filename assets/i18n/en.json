@@ -53,6 +53,7 @@
     "no_realtime_model_available": "No realtime model available",
     "no_realtime_voice_available": "No realtime voice available",
     "no_option_available": "No option available",
+    "no_prompt_file_available": "No prompt file available",
     "disabled": "Disabled",
     "interrupt_conversation": "Interrupt conversation",
     "interrupt_conversation_hint": "Disabled by default. If a wake word is configured, it must be spoken to interrupt the assistant.",
