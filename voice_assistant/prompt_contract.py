@@ -166,6 +166,16 @@ def log_final_engine_prompt(prompt: str, *, log_prefix: str = "LSA prompt") -> N
     text = str(prompt or "").strip()
     if not log_prefix:
         log_prefix = "LSA prompt"
-    print(f"{log_prefix}: FINAL CONSOLIDATED PROMPT START chars={len(text)}", flush=True)
+    print(
+        "================================================================\n"
+        f"{log_prefix}: FINAL CONSOLIDATED PROMPT START chars={len(text)}\n"
+        "================================================================",
+        flush=True,
+    )
     print(text, flush=True)
-    print(f"{log_prefix}: FINAL CONSOLIDATED PROMPT END", flush=True)
+    print(
+        "================================================================\n"
+        f"{log_prefix}: FINAL CONSOLIDATED PROMPT END\n"
+        "================================================================",
+        flush=True,
+    )
