@@ -392,6 +392,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", default="auto")
     args = parser.parse_args()
+    print(
+        "\n"
+        "================================================================\n"
+        f"LiveStageAssistant startup {time.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+        "================================================================",
+        flush=True,
+    )
 
     stop_event = threading.Event()
     reload_event = threading.Event()
