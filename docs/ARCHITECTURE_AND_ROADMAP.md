@@ -338,7 +338,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2B STDIO bridge is validated on Pi5. RV2C AUTO safety is validated and AUTO now prefers a healthy local STDIO path when one is configured; native remains an explicit/remote capability and safe alternate path. RV2E cost characterization is complete for the current representative read scenario, including cold/warm separation. RV2D health/status and single-runtime WebMonitor ownership are implemented and waiting for consolidated Pi/browser validation. Semantic audio feedback parity remains a priority before RV3 wake-word completion.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2B STDIO bridge is validated on Pi5. RV2C AUTO safety is validated and AUTO now prefers a configured local STDIO path without a destructive pre-probe; native remains an explicit/remote capability and safe alternate path. RV2E cost characterization is complete for the current representative read scenario, including cold/warm separation. RV2D health/status and single-runtime WebMonitor ownership are implemented and waiting for consolidated Pi/browser validation. Semantic audio feedback parity remains a priority before RV3 wake-word completion.
 
 **Goal:** add selectable low-latency realtime voice beside Classic without decommissioning Classic, while preserving MCP transport flexibility, wake-word behavior, semantic user feedback, speaker/context features, offline operation, GUI configuration and stage safety.
 
@@ -422,8 +422,9 @@ stdio
   -> preferred for stage-local execution when available and healthy
 
 auto
-  -> prefer healthy local STDIO/bridge when configured
-  -> use native when local execution is unavailable/unhealthy or explicitly selected
+  -> prefer configured local STDIO/bridge without starting it during selection
+  -> validate local health during the single real bridge startup
+  -> use native when no local execution route is configured or when native is explicitly selected
   -> cross-transport fallback only on clearly safe failure
   -> never blindly replay an ambiguous write
 ```
@@ -490,7 +491,7 @@ Require approval
 - [x] auth/timeout/post-dispatch deterministic unit tests and fault matrix executed on Pi5;
 - [x] real provider-native post-dispatch mutation fault injection validates no ambiguous replay;
 - [x] direct native-vs-STDIO read-only comparison completed on the same Pi5/XR16 with 20 samples;
-- [x] AUTO selection priority changed to healthy local-STDIO-first and functionally validated on Pi5 (`effective=stdio`, 39 tools discovered on the real mixer MCP);
+- [x] AUTO selection priority changed to local-STDIO-first and functionally validated on Pi5 (`effective=stdio`, 39 tools discovered on the real mixer MCP);
 - [ ] representative Classic-vs-Realtime tool corpus — nice-to-have validation harness, not roadmap-blocking;
 - [ ] arbitrary unrelated MCP proof without engine changes — nice-to-have validation harness.
 
@@ -935,7 +936,7 @@ common WebMonitor services
 - [ ] complete STDIO approval or explicitly keep unsupported;
 - [x] pre-dispatch AUTO fallback parity;
 - [x] native-vs-STDIO read-only benchmark on identical Pi5/XR16 conditions;
-- [x] AUTO effective selection prefers healthy local STDIO when available and is Pi-functionally validated.
+- [x] AUTO effective selection prefers configured local STDIO when available and is Pi-functionally validated.
 
 ### CFG-9 - Unified voice/audio configuration — PRIORITY
 

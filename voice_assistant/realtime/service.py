@@ -616,24 +616,13 @@ def _has_local_mcp_route(server: CanonicalMCPServerConfig) -> bool:
     return bool(command or (url and not url.lower().startswith("https://")))
 
 
-async def probe_local_stdio(raw_config: dict[str, Any], server: CanonicalMCPServerConfig) -> tuple[bool, str]:
-    """Probe one AUTO server through the local bridge without executing a tool."""
+def select_local_stdio_route(server: CanonicalMCPServerConfig) -> tuple[bool, str]:
+    """Select a configured local bridge route without starting the MCP process."""
     if server.realtime.permissions.mode == "approval":
         return False, "stdio approval is not implemented"
     if not _has_local_mcp_route(server):
         return False, "no local command/private HTTP route configured"
-
-    probe = RealtimeMCPBridge(raw_config, server_names=(server.name,))
-    try:
-        tools = await probe.start()
-        count = len(tools)
-        if count < 1:
-            return False, "local bridge discovered no tools"
-        return True, f"local bridge discovered {count} tool(s)"
-    except Exception as exc:
-        return False, f"local bridge probe failed: {exc}"
-    finally:
-        await probe.close()
+    return True, "local bridge route configured"
 
 
 async def capture_loop(
@@ -1164,15 +1153,14 @@ async def run(args, runtime_callbacks: RealtimeRuntimeCallbacks | None = None) -
             if transport == "native":
                 raise RuntimeError(f"Gemini Live has no provider-native MCP adapter for {server.name!r}; select Auto or STDIO")
             if transport == "auto":
-                local_ok, local_reason = await probe_local_stdio(raw_config, server)
+                local_ok, local_reason = select_local_stdio_route(server)
                 if not local_ok:
                     raise RuntimeError(f"AUTO MCP {server.name!r} has no healthy local bridge for Gemini: {local_reason}")
                 print(f"Realtime MCP auto selection: {server.name} -> stdio ({local_reason})", flush=True)
             bridge_names.append(server.name)
             continue
         if transport == "auto":
-            print(f"Realtime MCP auto selection: {server.name} -> probing local STDIO/bridge first", flush=True)
-            local_ok, local_reason = await probe_local_stdio(raw_config, server)
+            local_ok, local_reason = select_local_stdio_route(server)
             if local_ok:
                 bridge_names.append(server.name)
                 print(f"Realtime MCP auto selection: {server.name} -> stdio ({local_reason})", flush=True)
