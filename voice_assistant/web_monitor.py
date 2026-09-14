@@ -40,7 +40,7 @@ for _name in dir(_base):
 _BaseWebMonitor = _base.WebMonitor
 _START_PATCH_LOCK = threading.Lock()
 DEFAULT_RUNTIME_STATUS_FILE = "/tmp/livestageassistant-runtime-status.json"
-REALTIME_CHAT_BOOTSTRAP = """<script id=\"lsa-realtime-chat-bootstrap\">
+REALTIME_CHAT_BOOTSTRAP = r"""<script id=\"lsa-realtime-chat-bootstrap\">
 (() => {
   const configured = String(window.LSA_BASE_PATH || "").replace(/\/+$/, "");
   let base = configured;

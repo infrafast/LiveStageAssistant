@@ -28,19 +28,19 @@ def prompt_path_options() -> list[dict[str, str]]:
     return options
 
 
-def resolve_prompt_path(value: str, *, env_file: Path | None = None) -> Path:
+def resolve_prompt_path(value: str, *, env_file: str | Path | None = None) -> Path:
     raw = os.path.expandvars(str(value or "").strip())
     path = Path(raw).expanduser()
     if path.is_absolute():
         return path
     candidates: list[Path] = []
     if env_file is not None:
-        candidates.append(env_file.expanduser().resolve().parent / path)
+        candidates.append(Path(env_file).expanduser().resolve().parent / path)
     candidates.append(ROOT / path)
     return next((candidate for candidate in candidates if candidate.is_file()), candidates[-1])
 
 
-def read_prompt_file(value: str, *, env_file: Path | None = None) -> str:
+def read_prompt_file(value: str, *, env_file: str | Path | None = None) -> str:
     path = resolve_prompt_path(value, env_file=env_file)
     return path.read_text(encoding="utf-8").strip()
 
@@ -58,7 +58,7 @@ def prompt_text_from_values(
     values: Mapping[str, Any],
     name: str,
     *,
-    env_file: Path | None = None,
+    env_file: str | Path | None = None,
     default_path: str,
     fallback_text: str = "",
 ) -> str:
