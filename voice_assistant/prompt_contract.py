@@ -145,3 +145,13 @@ def compose_engine_prompt(
     if context:
         parts.append(f"{SESSION_CONTEXT_INSTRUCTION_HEADER}\n{context}")
     return "\n\n".join(_dedupe_parts(parts))
+
+
+def log_final_engine_prompt(prompt: str, *, log_prefix: str = "LSA prompt") -> None:
+    """Log the exact consolidated prompt handed to an engine instance."""
+    text = str(prompt or "").strip()
+    if not log_prefix:
+        log_prefix = "LSA prompt"
+    print(f"{log_prefix}: FINAL CONSOLIDATED PROMPT START chars={len(text)}", flush=True)
+    print(text, flush=True)
+    print(f"{log_prefix}: FINAL CONSOLIDATED PROMPT END", flush=True)

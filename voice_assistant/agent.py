@@ -56,6 +56,7 @@ try:
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .stage_timeout import TimedStageRunner
     from .startup_messages import startup_ready_message
+    from .prompt_contract import log_final_engine_prompt
     from .wake_word import apply_wake_word, parse_wake_words
     from .wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from .speaker_recognition import (
@@ -80,6 +81,7 @@ except ImportError:
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from stage_timeout import TimedStageRunner
     from startup_messages import startup_ready_message
+    from prompt_contract import log_final_engine_prompt
     from wake_word import apply_wake_word, parse_wake_words
     from wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from speaker_recognition import (
@@ -3708,6 +3710,7 @@ class VoiceAssistant:
 
             # Create LLM
             llm = self._build_llm()
+            log_final_engine_prompt(self.system_prompt, log_prefix="Classic prompt")
 
             # Create agent with memory
             self.agent = MCPAgent(

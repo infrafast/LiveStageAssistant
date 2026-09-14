@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 try:
-    from ..prompt_contract import DEFAULT_ASSISTANT_SYSTEM_PROMPT, compose_engine_prompt
+    from ..prompt_contract import DEFAULT_ASSISTANT_SYSTEM_PROMPT, compose_engine_prompt, log_final_engine_prompt
 except ImportError:  # pragma: no cover - direct script fallback
-    from prompt_contract import DEFAULT_ASSISTANT_SYSTEM_PROMPT, compose_engine_prompt  # type: ignore
+    from prompt_contract import DEFAULT_ASSISTANT_SYSTEM_PROMPT, compose_engine_prompt, log_final_engine_prompt  # type: ignore
 
 DEFAULT_BASE_PROMPT = DEFAULT_ASSISTANT_SYSTEM_PROMPT
 
@@ -44,4 +44,5 @@ def compose_realtime_instructions(
     )
     if REALTIME_TOOL_SILENCE_CONTRACT.casefold() not in prompt.casefold():
         prompt = f"{prompt}\n\n{REALTIME_TOOL_SILENCE_CONTRACT}"
+    log_final_engine_prompt(prompt, log_prefix=log_prefix)
     return prompt

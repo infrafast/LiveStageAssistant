@@ -19,14 +19,14 @@ try:
         save_mcp_server_from_snapshot,
         test_mcp_server_from_snapshot,
     )
-    from .prompt_contract import normalize_system_prompt_identity
+    from .prompt_contract import log_final_engine_prompt, normalize_system_prompt_identity
     from .runtime_status import read_status_file
     from .realtime.browser_auth import create_openai_browser_client_secret
     from .session_context import DEFAULT_CONTEXT_DIR, SessionContextStore
 except ImportError:  # pragma: no cover - direct script fallback
     import web_monitor_base as _base
     from mcp_realtime_web_endpoint import delete_mcp_server_from_snapshot, mcp_registry_from_snapshot, save_mcp_realtime_policy_from_snapshot, save_mcp_server_from_snapshot, test_mcp_server_from_snapshot
-    from prompt_contract import normalize_system_prompt_identity
+    from prompt_contract import log_final_engine_prompt, normalize_system_prompt_identity
     from runtime_status import read_status_file
     from realtime.browser_auth import create_openai_browser_client_secret
     from session_context import DEFAULT_CONTEXT_DIR, SessionContextStore
@@ -261,11 +261,16 @@ class WebMonitor(_BaseWebMonitor):
                 api_key = self._read_api_key_file(secret_path, env_file)
             except OSError as exc:
                 raise RuntimeError(f"could not read OPENAI_API_KEY_FILE: {exc}") from exc
+        instructions = normalize_system_prompt_identity(
+            str(values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip(),
+            log_prefix="Browser realtime prompt",
+        )
+        log_final_engine_prompt(instructions, log_prefix="Browser realtime prompt")
         return create_openai_browser_client_secret(
             api_key,
             model=str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip(),
             voice=str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip(),
-            instructions=normalize_system_prompt_identity(str(values.get("ASSISTANT_SYSTEM_PROMPT") or "").strip(), log_prefix="Browser realtime prompt"),
+            instructions=instructions,
         )
 
     def _runtime_status(self) -> dict[str, Any]:
