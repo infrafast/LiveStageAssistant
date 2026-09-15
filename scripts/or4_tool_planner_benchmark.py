@@ -5,9 +5,9 @@ This script deliberately does not import or start LiveStageAssistant, mcp_use,
 audio, Whisper, Piper or real MCP servers. It measures only local Ollama tool
 planning so candidate models can be accepted/rejected before integration.
 
-Examples:
-  python3 scripts/or4_tool_planner_benchmark.py --models llama3.2:3b
-  python3 scripts/or4_tool_planner_benchmark.py --models llama3.2:1b,qwen2.5:1.5b
+The benchmark mirrors LSA's server-level routing contract: each routed case sees
+only the tools and prompt for that MCP server. A one-tool baseline isolates raw
+Ollama tool-call capability from multi-tool selection.
 """
 
 from __future__ import annotations
@@ -23,11 +23,11 @@ from typing import Any
 
 
 DEFAULT_BASE_URL = "http://localhost:11434"
-DEFAULT_TIMEOUT = 20.0
+DEFAULT_TIMEOUT = 12.0
 
 
-TOOLS = [
-    {
+TOOLS = {
+    "resolve_target": {
         "type": "function",
         "function": {
             "name": "resolve_target",
@@ -39,7 +39,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "mute_target": {
         "type": "function",
         "function": {
             "name": "mute_target",
@@ -55,7 +55,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "qlc_get_state": {
         "type": "function",
         "function": {
             "name": "qlc_get_state",
@@ -63,7 +63,7 @@ TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
-    {
+    "qlc_list_widgets": {
         "type": "function",
         "function": {
             "name": "qlc_list_widgets",
@@ -74,7 +74,7 @@ TOOLS = [
             },
         },
     },
-    {
+    "qlc_button_press": {
         "type": "function",
         "function": {
             "name": "qlc_button_press",
@@ -86,15 +86,26 @@ TOOLS = [
             },
         },
     },
-]
+}
 
-SYSTEM_PROMPT = (
-    "You are a strict tool planner for a live-stage assistant. "
-    "Use tools silently and do not invent target indexes. "
-    "For a named mixer target, resolve it before acting. "
+
+BASELINE_PROMPT = (
+    "You are a strict tool planner. Use the provided tool silently. "
+    "Resolve the user-provided target name exactly; do not answer with JSON text."
+)
+
+MIXER_PROMPT = (
+    "You are a strict mixer tool planner. Use tools silently. "
+    "Never invent target indexes. Resolve a named target before acting on it. "
     "French 'coupe' means mute=true and 'remets' means mute=false. "
-    "For QLC, call qlc_get_state first; if ready, list widgets before pressing an exact caption. "
-    "When the user asks only to list controls, get state then call qlc_list_widgets."
+    "After a resolver result gives kind/index, use those exact values."
+)
+
+QLC_PROMPT = (
+    "You are a strict QLC tool planner. Use tools silently. "
+    "Call qlc_get_state first. If state is ready and the user asks only to list "
+    "controls, call qlc_list_widgets. Before pressing a control, list/verify its "
+    "exact caption first."
 )
 
 
@@ -102,12 +113,33 @@ SYSTEM_PROMPT = (
 class Case:
     name: str
     user: str
+    system_prompt: str
+    tool_names: list[str]
     expected_sequence: list[str]
 
 
 CASES = [
-    Case("mixer-mute", "coupe Claude", ["resolve_target", "mute_target"]),
-    Case("qlc-list", "qlc liste tous les contrôles", ["qlc_get_state", "qlc_list_widgets"]),
+    Case(
+        "single-resolve",
+        "résous Claude",
+        BASELINE_PROMPT,
+        ["resolve_target"],
+        ["resolve_target"],
+    ),
+    Case(
+        "mixer-mute",
+        "coupe Claude",
+        MIXER_PROMPT,
+        ["resolve_target", "mute_target"],
+        ["resolve_target", "mute_target"],
+    ),
+    Case(
+        "qlc-list",
+        "qlc liste tous les contrôles",
+        QLC_PROMPT,
+        ["qlc_get_state", "qlc_list_widgets", "qlc_button_press"],
+        ["qlc_get_state", "qlc_list_widgets"],
+    ),
 ]
 
 
@@ -165,7 +197,14 @@ def synthetic_tool_result(name: str, arguments: dict[str, Any]) -> str:
     if name == "resolve_target":
         return json.dumps({"name": "Claude", "kind": "bus", "index": 3, "safeToWrite": True})
     if name == "mute_target":
-        return json.dumps({"ok": True, "kind": arguments.get("kind"), "index": arguments.get("index"), "mute": arguments.get("mute")})
+        return json.dumps(
+            {
+                "ok": True,
+                "kind": arguments.get("kind"),
+                "index": arguments.get("index"),
+                "mute": arguments.get("mute"),
+            }
+        )
     if name == "qlc_get_state":
         return json.dumps({"state": "ready"})
     if name == "qlc_list_widgets":
@@ -182,38 +221,72 @@ def validate_call(case: Case, step: int, name: str, arguments: dict[str, Any]) -
     if name == "resolve_target" and str(arguments.get("name", "")).lower() != "claude":
         return False, f"resolve_target expected name=Claude, got {arguments}"
     if name == "mute_target":
-        if arguments.get("kind") != "bus" or arguments.get("index") != 3 or arguments.get("mute") is not True:
+        if (
+            arguments.get("kind") != "bus"
+            or arguments.get("index") != 3
+            or arguments.get("mute") is not True
+        ):
             return False, f"mute_target expected bus/3/true, got {arguments}"
     return True, "ok"
 
 
-def run_case(base_url: str, model: str, case: Case, timeout: float, max_step_s: float) -> tuple[bool, float]:
+def describe_calls(calls: list[Any]) -> list[tuple[str, dict[str, Any]]]:
+    described: list[tuple[str, dict[str, Any]]] = []
+    for raw_call in calls:
+        call = raw_call if isinstance(raw_call, dict) else {}
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        described.append(
+            (
+                str(function.get("name") or ""),
+                normalize_arguments(function.get("arguments")),
+            )
+        )
+    return described
+
+
+def run_case(
+    base_url: str,
+    model: str,
+    case: Case,
+    timeout: float,
+    max_step_s: float,
+) -> tuple[bool, float]:
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": case.system_prompt},
         {"role": "user", "content": case.user},
     ]
+    case_tools = [TOOLS[name] for name in case.tool_names]
     total_started = time.perf_counter()
+    request_timeout = min(timeout, max_step_s + 2.0)
+
+    print(f"  tools={','.join(case.tool_names)} request_timeout={request_timeout:.1f}s")
 
     for step, expected in enumerate(case.expected_sequence):
         payload = {
             "model": model,
             "messages": messages,
-            "tools": TOOLS,
+            "tools": case_tools,
             "stream": False,
             "think": False,
             "keep_alive": "10m",
-            "options": {"temperature": 0, "num_ctx": 2048, "num_predict": 64},
+            "options": {"temperature": 0, "num_ctx": 2048, "num_predict": 48},
         }
         started = time.perf_counter()
         try:
-            response = http_json(f"{base_url.rstrip('/')}/api/chat", payload, timeout)
+            response = http_json(
+                f"{base_url.rstrip('/')}/api/chat",
+                payload,
+                request_timeout,
+            )
         except Exception as exc:
             elapsed = time.perf_counter() - started
             print(f"  step {step + 1}: ERROR after {elapsed:.2f}s: {exc}")
             return False, time.perf_counter() - total_started
+
         elapsed = time.perf_counter() - started
         message = response.get("message") or {}
         calls = message.get("tool_calls") or []
+        described = describe_calls(calls)
         print(
             f"  step {step + 1}: {elapsed:.2f}s "
             f"load={duration_s(response, 'load_duration'):.2f}s "
@@ -223,24 +296,47 @@ def run_case(base_url: str, model: str, case: Case, timeout: float, max_step_s: 
             f"{int(response.get('eval_count') or 0)}tok "
             f"tool_calls={len(calls)}"
         )
+        for idx, (name, arguments) in enumerate(described, start=1):
+            print(
+                f"    call[{idx}]={name or '<none>'} "
+                f"args={json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
+            )
+
+        content = str(message.get("content") or "")
+        if content:
+            print(f"    content={content[:200]!r}")
+
         if elapsed > max_step_s:
             print(f"    FAIL: step exceeded {max_step_s:.1f}s target")
             return False, time.perf_counter() - total_started
+
         if len(calls) != 1:
-            content = str(message.get("content") or "")
-            print(f"    FAIL: expected exactly one tool call ({expected}); content={content[:160]!r}")
+            print(
+                f"    FAIL: expected exactly one sequential tool call ({expected}); "
+                f"got {len(calls)}"
+            )
             return False, time.perf_counter() - total_started
-        call = calls[0] if isinstance(calls[0], dict) else {}
-        function = call.get("function") if isinstance(call.get("function"), dict) else {}
-        name = str(function.get("name") or "")
-        arguments = normalize_arguments(function.get("arguments"))
+
+        name, arguments = described[0]
         valid, reason = validate_call(case, step, name, arguments)
-        print(f"    call={name} args={json.dumps(arguments, ensure_ascii=False, sort_keys=True)}")
         if not valid:
             print(f"    FAIL: {reason}")
             return False, time.perf_counter() - total_started
-        messages.append({"role": "assistant", "content": str(message.get("content") or ""), "tool_calls": calls})
-        messages.append({"role": "tool", "tool_name": name, "content": synthetic_tool_result(name, arguments)})
+
+        messages.append(
+            {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": calls,
+            }
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_name": name,
+                "content": synthetic_tool_result(name, arguments),
+            }
+        )
 
     total = time.perf_counter() - total_started
     print(f"  PASS: {case.name} total={total:.2f}s")
@@ -249,7 +345,11 @@ def run_case(base_url: str, model: str, case: Case, timeout: float, max_step_s: 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--models", default="llama3.2:3b", help="Comma-separated Ollama model names")
+    parser.add_argument(
+        "--models",
+        default="llama3.2:3b",
+        help="Comma-separated Ollama model names",
+    )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--max-step-seconds", type=float, default=10.0)
@@ -258,7 +358,10 @@ def main() -> int:
     models = [item.strip() for item in args.models.split(",") if item.strip()]
     available = installed_models(args.base_url)
     print(f"Ollama: {args.base_url}")
-    print(f"Acceptance: every required tool call <= {args.max_step_seconds:.1f}s and correct")
+    print(
+        f"Acceptance: every required sequential tool call "
+        f"<= {args.max_step_seconds:.1f}s and correct"
+    )
     print()
 
     overall = True
@@ -269,11 +372,19 @@ def main() -> int:
             overall = False
             print()
             continue
+
         model_ok = True
         for case in CASES:
             print(f" CASE {case.name}: {case.user}")
-            ok, _ = run_case(args.base_url, model, case, args.timeout, args.max_step_seconds)
+            ok, _ = run_case(
+                args.base_url,
+                model,
+                case,
+                args.timeout,
+                args.max_step_seconds,
+            )
             model_ok = model_ok and ok
+
         print(f" RESULT {model}: {'PASS' if model_ok else 'FAIL'}")
         print()
         overall = overall and model_ok
