@@ -1564,8 +1564,12 @@
       background: var(--surface-soft);
     }
     #logs { min-height: 360px; }
-    #stt-prompt { min-height: 96px; }
-    #assistant-system-prompt { min-height: 180px; }
+    #stt-prompt,
+    #assistant-system-prompt {
+      height: 38px;
+      min-height: 38px;
+      max-height: 38px;
+    }
     #prompt { min-height: 300px; }
     @media (max-width: 720px) {
       .topbar { padding-inline: 12px; }
