@@ -278,6 +278,7 @@ def run_engine_session(
     env_file: Path,
     values: Mapping[str, object],
     online: bool,
+    automatic_profiles: bool,
     connectivity: ConnectivityManager,
     stop_event: threading.Event,
     reload_event: threading.Event,
@@ -341,7 +342,8 @@ def run_engine_session(
                 pass
 
     threading.Thread(target=read_output, name="lsa-engine-output", daemon=True).start()
-    threading.Thread(target=watch_connectivity, name="lsa-connectivity-watch", daemon=True).start()
+    if automatic_profiles:
+        threading.Thread(target=watch_connectivity, name="lsa-connectivity-watch", daemon=True).start()
 
     try:
         while not stop_event.wait(0.2):
@@ -492,6 +494,7 @@ def main() -> int:
                 env_file=env_file,
                 values=values,
                 online=online,
+                automatic_profiles=automatic,
                 connectivity=connectivity,
                 stop_event=stop_event,
                 reload_event=reload_event,
@@ -524,10 +527,6 @@ def main() -> int:
                     engine_override = fallback
                     time.sleep(0.35)
                     continue
-                return int(code or 0)
-
-            if not automatic:
-                print("LSA connectivity changed but fixed --env-file mode prevents profile switching.", flush=True)
                 return int(code or 0)
 
             online = event.online
