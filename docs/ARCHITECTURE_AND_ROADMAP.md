@@ -315,6 +315,8 @@ One MCP's permission or transport choice must not implicitly change another MCP.
 
 Offline mode remains cloud-independent and uses Ollama, local faster-whisper, Piper local TTS and local/STDIO MCP servers. Realtime work must not weaken this path. `CONNECTIVITY_MODE=offline` must never dispatch to a cloud realtime provider even if a stale/mistaken online-engine value exists.
 
+On `realtime-voice-architecture`, OR4 is introducing an experimental native Ollama MCP execution loop for the supervised Offline/Local engine. It reuses the existing MCP sessions and discovered LangChain tool objects but bypasses `MCPAgent.run()` during local command execution. MCP routing keywords keep their original meaning: a matching route narrows the candidate tools to one MCP server, while an unrouted turn keeps all discovered MCP tools eligible. Online/OpenAI Classic continues to use the existing `VoiceAssistant`/`mcp_use` path. Automatic session-LLM summarization is skipped during native-local startup so READY is not blocked by an extra Ollama inference; transcript/session fallback context remains available.
+
 The common `ConnectivityManager` and `EngineSupervisor` implement the production ownership model. Basic Pi5 Online -> Offline -> Online round trips are validated for both Classic and OpenAI Realtime with local loss/READY announcements and without observed audio-device lockup.
 
 ## 1.10 Rack connectivity and remote MCP
@@ -819,6 +821,55 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 - [x] Online Classic -> Offline Local -> Online Classic without audio-device lockup;
 - [x] installers and user-facing guidance updated.
 
+### OR4 - Native Ollama MCP execution — IN PROGRESS
+
+**Goal:** make the fully local Pi path execute real MCP tools with predictable latency by keeping existing MCP discovery/sessions but bypassing the heavyweight `MCPAgent.run()` loop for Ollama command execution. This work must not change the cloud/OpenAI Classic path and must keep LSA domain-agnostic.
+
+Architecture constraints:
+
+- `assistantOptions.routing` / `MCP_TOOL_ROUTING_ENABLED` remains only an MCP-server narrowing optimization; it is not an intent classifier and must never decide whether tools are available at all;
+- a matching route narrows the candidate set to tools belonging to that MCP server;
+- an unrouted turn keeps all discovered MCP tools eligible;
+- the native runner consumes generic LangChain MCP tool objects and contains no XMSeries-, QLCPlus- or protocol-specific tool names;
+- tool calls are executed sequentially to avoid introducing parallel stage-control writes;
+- online/OpenAI Classic continues to instantiate the base `VoiceAssistant` and keeps the existing `mcp_use` behavior;
+- no automatic tool retry may replay an ambiguous control write.
+
+#### OR4A - Direct native tool-loop proof — [~] IMPLEMENTED, PI VALIDATION PENDING
+
+- [x] add a generic `NativeOllamaMcpVoiceAssistant` isolated to the supervised Offline/Local engine;
+- [x] keep existing MCP client/session discovery and reuse the actual discovered LangChain MCP tool objects;
+- [x] call Ollama directly with `bind_tools()`, execute returned tool calls against the real MCP tool object, append `ToolMessage` results, and continue until a final response or the existing command timeout/max-step budget is reached;
+- [x] preserve routing semantics: routed turns use that server's tools; unrouted turns retain all discovered tools;
+- [x] preserve pending-confirmation routing behavior;
+- [x] de-duplicate duplicate callable tool names generically before binding because tool-call protocols address tools by name;
+- [x] skip automatic startup/session LLM summary refresh on the native local path so READY is not delayed by an unrelated Ollama inference; explicit forced summary refresh remains available;
+- [x] remove the temporary diagnostic behavior `no route -> zero tools`;
+- [x] keep cloud/OpenAI Classic on the unchanged base `VoiceAssistant` path;
+- [~] unit coverage added for unrouted-all-tools, routed-server-only, real tool-object invocation/result feedback, confirmation routing and unchanged cloud semantics; execute the tests in the project venv/Pi before promoting the milestone;
+- [~] Pi acceptance: execute at least one real MCP read and one controlled MCP write end-to-end through Ollama, observe the native tool-call log, avoid the historical 45 s timeout, and record cold/warm post-command latency plus CPU behavior. Target warm control latency is <= 15 s and cold first-use latency <= 30 s.
+
+#### OR4B - Generic compact tool selection
+
+- [ ] if OR4A still exposes too many schemas for unrouted/local turns, add a compact MCP-agnostic tool catalogue/selection stage independent from routing keywords;
+- [ ] bind full JSON schemas only for the selected candidate tools;
+- [ ] preserve every discovered MCP as eligible when no routing keyword matches;
+- [ ] benchmark tool-selection overhead and false exclusions on representative mixer, QLCPlus and generic-MCP requests.
+
+#### OR4C - Context, confirmation and safety parity
+
+- [ ] validate multi-turn clarification/confirmation against the native loop;
+- [ ] validate speaker/session context parity with Classic;
+- [ ] validate cancellation/timeout behavior without duplicate writes;
+- [ ] verify tool errors cannot silently become success claims.
+
+#### OR4D - Offline stage validation and default decision
+
+- [ ] Pi5 repeated cold/warm command corpus with latency/CPU/RAM/temperature;
+- [ ] mixer + QLCPlus + one unrelated MCP fixture;
+- [ ] compare native Ollama runner against historical `mcp_use` local path;
+- [ ] decide final offline default only from measured reliability and latency.
+
 ---
 
 # 7. Evolution GUI
@@ -970,13 +1021,14 @@ common WebMonitor services
 
 # 9. Current Next Actions
 
-1. **RV2D / CFG-9 — validate the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; run the migrated common handlers on Pi/browser before marking the milestone complete. No historical/second WebMonitor is allowed in the supervised architecture.
-2. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls, backend microphone diagnostic/capture, browser STT/TTS and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
-3. **RV2F / CFG-9 — semantic audio feedback validation:** run audible Classic/Realtime/Local checks for READY, LISTENING/WAIT_WAKE, WAKE_DETECTED, PROCESSING, RESULT_READY, SPEAKING and IDLE before marking RV2F complete.
-4. **RV2F / RV3 — wake compatibility validation:** verify wake ON/OFF behavior in a noisy room: entering `WAIT_WAKE` plays one ready-to-listen cue, ambient speech does not trigger thinking/repeated listening cues, `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event and Classic post-TTS suppression/re-arm remains intact.
-5. **CFG-9 / RV8 — output-gain validation:** verify Cloud/Local speech gains audibly across Classic cloud TTS, Local/Piper and Realtime while keeping feedback-cue/sample-preview volumes semantically separate from speech gain.
-6. **RV3 / RV4 — realtime lifecycle validation:** validate inactivity timeout, action-grace deferral, interruption and reconnect/fallback recovery without replaying stale actions.
-7. **RV7 — optional browser Realtime wake gate decision:** keep current direct WebRTC behavior documented, then later decide whether to disable browser Realtime when `WAKE_WORD` is set or implement deterministic browser-side wake detection.
-8. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the common WebMonitor and functional UX/audio milestones are stable.
-9. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI, without duplicating engine configuration screens or Web servers.
-10. **Nice-to-have / backlog:** representative MCP corpus, second-native-MCP fixtures, MCP-specific raw/bulk/automation optimizations and further fallback tuning remain useful but non-blocking and must not interrupt completion of the current LSA roadmap.
+1. **OR4A — validate native Ollama MCP execution on Pi5:** pull the branch, confirm local startup reaches READY without the automatic summary inference, execute one real MCP read and one controlled write, record native tool-call logs, cold/warm latency and CPU, and keep OR4A `[~]` until this succeeds.
+2. **RV2D / CFG-9 — validate the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; run the migrated common handlers on Pi/browser before marking the milestone complete. No historical/second WebMonitor is allowed in the supervised architecture.
+3. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls, backend microphone diagnostic/capture, browser STT/TTS and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
+4. **RV2F / CFG-9 — semantic audio feedback validation:** run audible Classic/Realtime/Local checks for READY, LISTENING/WAIT_WAKE, WAKE_DETECTED, PROCESSING, RESULT_READY, SPEAKING and IDLE before marking RV2F complete.
+5. **RV2F / RV3 — wake compatibility validation:** verify wake ON/OFF behavior in a noisy room: entering `WAIT_WAKE` plays one ready-to-listen cue, ambient speech does not trigger thinking/repeated listening cues, `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event and Classic post-TTS suppression/re-arm remains intact.
+6. **CFG-9 / RV8 — output-gain validation:** verify Cloud/Local speech gains audibly across Classic cloud TTS, Local/Piper and Realtime while keeping feedback-cue/sample-preview volumes semantically separate from speech gain.
+7. **RV3 / RV4 — realtime lifecycle validation:** validate inactivity timeout, action-grace deferral, interruption and reconnect/fallback recovery without replaying stale actions.
+8. **RV7 — optional browser Realtime wake gate decision:** keep current direct WebRTC behavior documented, then later decide whether to disable browser Realtime when `WAKE_WORD` is set or implement deterministic browser-side wake detection.
+9. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the common WebMonitor and functional UX/audio milestones are stable.
+10. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI, without duplicating engine configuration screens or Web servers.
+11. **Nice-to-have / backlog:** representative MCP corpus, second-native-MCP fixtures, MCP-specific raw/bulk/automation optimizations and further fallback tuning remain useful but non-blocking and must not interrupt completion of the current LSA roadmap.
