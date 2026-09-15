@@ -25,6 +25,19 @@ _MCP_SERVER_HEADER = re.compile(
     r'Instructions loaded from MCP server "([^"]+)":\s*\n'
 )
 
+_LOCAL_SYSTEM_PROMPT = (
+    "You are Live Stage Assistant, a conservative tool-driven voice assistant. "
+    "Reply in the user's language. Use only provided tools. For live external "
+    "state or actions, use tools and never invent state, targets, indexes, "
+    "capabilities or results. If a tool is needed, call it before any text. "
+    "Ask for clarification when the target or action is ambiguous. Never claim "
+    "success unless the tool result confirms it. Keep the final answer concise "
+    "plain text."
+)
+_LOCAL_OLLAMA_NUM_CTX = 2048
+_LOCAL_OLLAMA_NUM_PREDICT = 128
+_LOCAL_OLLAMA_TEMPERATURE = 0.0
+
 
 def _tool_result_text(result: Any) -> str:
     if isinstance(result, str):
@@ -109,43 +122,49 @@ def _ollama_tool_schema(tool: Any) -> dict[str, Any]:
     }
 
 
-def _prompt_for_routed_server(system_prompt: str, server_name: str | None) -> str:
-    """Keep the base LSA prompt plus only the routed MCP server instructions.
-
-    MCP prompt merging produces one consolidated prompt. Sending every MCP
-    server's domain instructions to a small local model is unnecessarily
-    expensive once keyword routing has already selected one server. This
-    helper only trims prompt context; it never changes which tools are
-    eligible. If the expected merge markers are absent, preserve the original
-    prompt rather than guessing.
-    """
+def _mcp_instruction_blocks(system_prompt: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split the consolidated prompt into base text and MCP-owned instruction blocks."""
     prompt = str(system_prompt or "").strip()
-    if not prompt or not server_name or _MCP_PROMPT_MARKER not in prompt:
-        return prompt
+    if not prompt or _MCP_PROMPT_MARKER not in prompt:
+        return prompt, []
 
     base_prompt, _, mcp_section = prompt.partition(_MCP_PROMPT_MARKER)
     matches = list(_MCP_SERVER_HEADER.finditer(mcp_section))
-    if not matches:
-        return prompt
-
-    wanted = str(server_name).strip()
+    blocks: list[tuple[str, str]] = []
     for index, match in enumerate(matches):
-        if match.group(1) != wanted:
-            continue
         body_start = match.end()
         body_end = matches[index + 1].start() if index + 1 < len(matches) else len(mcp_section)
         body = mcp_section[body_start:body_end].strip()
-        if not body:
-            return base_prompt.strip()
-        return (
-            f"{base_prompt.strip()}\n\n"
-            f'Instructions loaded from MCP server "{wanted}":\n\n'
-            f"{body}"
-        ).strip()
+        if body:
+            blocks.append((match.group(1), body))
+    return base_prompt.strip(), blocks
 
-    # The route exists but the merged prompt has no matching server block.
-    # Preserve the full prompt rather than silently discarding instructions.
-    return prompt
+
+def _compact_local_prompt(system_prompt: str, server_name: str | None) -> str:
+    """Build the small-model prompt without re-sending the verbose Classic base prompt.
+
+    The MCP server remains authoritative for domain instructions. Routing only
+    chooses which server block is relevant; when there is no route, every MCP
+    block remains present so routing is never repurposed as a tool/no-tool gate.
+    If a non-standard prompt has no MCP merge markers, keep it after the compact
+    safety contract instead of silently discarding custom instructions.
+    """
+    base_prompt, blocks = _mcp_instruction_blocks(system_prompt)
+    if not blocks:
+        if base_prompt and base_prompt != _LOCAL_SYSTEM_PROMPT:
+            return f"{_LOCAL_SYSTEM_PROMPT}\n\n{base_prompt}".strip()
+        return _LOCAL_SYSTEM_PROMPT
+
+    selected_blocks = blocks
+    if server_name:
+        matching = [(name, body) for name, body in blocks if name == server_name]
+        if matching:
+            selected_blocks = matching
+
+    parts = [_LOCAL_SYSTEM_PROMPT]
+    for name, body in selected_blocks:
+        parts.append(f'MCP server "{name}" instructions:\n{body}')
+    return "\n\n".join(parts).strip()
 
 
 def _duration_seconds(payload: dict[str, Any], key: str) -> float:
@@ -177,8 +196,6 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
         adapter = getattr(self.agent, "adapter", None) if self.agent else None
         if adapter is not None and hasattr(adapter, "tools"):
             return _unique_tools_by_name(list(getattr(adapter, "tools", []) or []))
-        # Backward-compatible fallback for mcp_use versions that do not expose
-        # adapter.tools separately.
         return _unique_tools_by_name(list(self.mcp_all_tools or []))
 
     def _native_routed_tools(self, server_name: str, native_tools: list[Any]) -> list[Any]:
@@ -187,12 +204,44 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
         routed_ids = {id(tool) for tool in routed}
         return [tool for tool in native_tools if id(tool) in routed_ids]
 
+    def _native_agent_input(
+        self,
+        text: str,
+        speaker_result: SpeakerRecognitionResult | None,
+    ) -> str:
+        """Avoid Classic runtime boilerplate when there is no speaker context to convey."""
+        clean_text = str(text or "").strip()
+        if speaker_result is None:
+            return clean_text
+        return self._with_runtime_instructions(clean_text, speaker_result=speaker_result)
+
     async def _invoke_native_tool(self, tool: Any, arguments: dict[str, Any]) -> Any:
         if hasattr(tool, "ainvoke"):
             return await tool.ainvoke(arguments)
         if hasattr(tool, "invoke"):
             return await asyncio.to_thread(tool.invoke, arguments)
         raise RuntimeError(f"MCP tool '{getattr(tool, 'name', '<unnamed>')}' is not invokable")
+
+    def _native_ollama_payload(
+        self,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+            "keep_alive": "10m",
+            "options": {
+                "temperature": _LOCAL_OLLAMA_TEMPERATURE,
+                "num_ctx": _LOCAL_OLLAMA_NUM_CTX,
+                "num_predict": _LOCAL_OLLAMA_NUM_PREDICT,
+            },
+        }
+        if tool_schemas:
+            payload["tools"] = tool_schemas
+        return payload
 
     def _native_ollama_chat_sync(
         self,
@@ -202,16 +251,7 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
         timeout_seconds: float,
     ) -> dict[str, Any]:
         """Call the local Ollama REST API directly, without LangChain model execution."""
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "think": False,
-            "keep_alive": "10m",
-        }
-        if tool_schemas:
-            payload["tools"] = tool_schemas
-
+        payload = self._native_ollama_payload(messages, tool_schemas)
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         endpoint = f"{str(self.ollama_base_url).rstrip('/')}/api/chat"
         request = urllib.request.Request(
@@ -278,7 +318,7 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
             json.dumps(tool_schemas, ensure_ascii=False, separators=(",", ":"))
         )
 
-        turn_prompt = _prompt_for_routed_server(self.system_prompt, route_server)
+        turn_prompt = _compact_local_prompt(self.system_prompt, route_server)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": turn_prompt},
             {"role": "user", "content": agent_input},
@@ -288,7 +328,8 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
         print(
             f"[OLLAMA NATIVE MCP CONTEXT: route={route_server or 'all'} "
             f"prompt_chars={len(turn_prompt)} input_chars={len(agent_input)} "
-            f"schema_chars={schema_chars} tools={len(selected_tools)}]"
+            f"schema_chars={schema_chars} tools={len(selected_tools)} "
+            f"num_ctx={_LOCAL_OLLAMA_NUM_CTX} num_predict={_LOCAL_OLLAMA_NUM_PREDICT}]"
         )
 
         def remaining_budget() -> float:
@@ -300,16 +341,9 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
         max_steps = max(1, int(self.mcp_agent_max_steps))
         for step in range(1, max_steps + 1):
             remaining = remaining_budget()
+            payload = self._native_ollama_payload(messages, tool_schemas)
             payload_chars = len(
-                json.dumps(
-                    {
-                        "model": self.model,
-                        "messages": messages,
-                        "tools": tool_schemas,
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             )
             print(
                 f"[OLLAMA NATIVE API START: step={step} route={route_server or 'all'} "
@@ -424,7 +458,7 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
                 speaker_result=speaker_result,
             )
 
-        agent_input = self._with_runtime_instructions(text, speaker_result=speaker_result)
+        agent_input = self._native_agent_input(text, speaker_result)
         route = self._select_mcp_tool_route(text)
         confirmation_route = False
         if not route and self.pending_mcp_confirmation_route and self._is_mcp_confirmation_reply(text):
