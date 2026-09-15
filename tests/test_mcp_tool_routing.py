@@ -3,8 +3,8 @@ import asyncio
 from voice_assistant import agent
 from voice_assistant.ollama_native_mcp import (
     NativeOllamaMcpVoiceAssistant,
+    _compact_local_prompt,
     _ollama_tool_schema,
-    _prompt_for_routed_server,
 )
 
 
@@ -65,6 +65,17 @@ def _native_assistant(*, routing_enabled: bool = True) -> NativeOllamaMcpVoiceAs
     return assistant
 
 
+def _merged_prompt() -> str:
+    return (
+        "VERY LONG CLASSIC BASE RULES THAT SHOULD NOT BE SENT TO LOCAL OLLAMA\n"
+        "\nAdditional instructions loaded from MCP servers:\n\n"
+        'Instructions loaded from MCP server "mixer":\n\n'
+        "MIXER RULES\n\n"
+        'Instructions loaded from MCP server "qlcplus":\n\n'
+        "QLC RULES"
+    )
+
+
 def test_native_ollama_no_route_keeps_all_actual_mcp_tools_available() -> None:
     assistant = _native_assistant()
     mixer_tool = _FakeTool("mixer_tool")
@@ -113,32 +124,21 @@ def test_native_ollama_route_only_narrows_to_selected_actual_mcp_tools() -> None
     assert captured == [(["qlc_tool"], "qlcplus")]
 
 
-def test_routed_prompt_keeps_base_and_only_selected_server_instructions() -> None:
-    merged = (
-        "BASE RULES\n"
-        "\nAdditional instructions loaded from MCP servers:\n\n"
-        'Instructions loaded from MCP server "mixer":\n\n'
-        "MIXER RULES\n\n"
-        'Instructions loaded from MCP server "qlcplus":\n\n'
-        "QLC RULES"
-    )
+def test_compact_local_prompt_drops_verbose_base_and_keeps_selected_server() -> None:
+    qlc_prompt = _compact_local_prompt(_merged_prompt(), "qlcplus")
 
-    qlc_prompt = _prompt_for_routed_server(merged, "qlcplus")
-
-    assert "BASE RULES" in qlc_prompt
+    assert "Live Stage Assistant" in qlc_prompt
     assert "QLC RULES" in qlc_prompt
     assert "MIXER RULES" not in qlc_prompt
+    assert "VERY LONG CLASSIC BASE RULES" not in qlc_prompt
 
 
-def test_unrouted_prompt_is_not_trimmed() -> None:
-    merged = (
-        "BASE RULES\n"
-        "\nAdditional instructions loaded from MCP servers:\n\n"
-        'Instructions loaded from MCP server "mixer":\n\n'
-        "MIXER RULES"
-    )
+def test_compact_local_prompt_unrouted_keeps_all_mcp_server_instructions() -> None:
+    prompt = _compact_local_prompt(_merged_prompt(), None)
 
-    assert _prompt_for_routed_server(merged, None) == merged
+    assert "MIXER RULES" in prompt
+    assert "QLC RULES" in prompt
+    assert "VERY LONG CLASSIC BASE RULES" not in prompt
 
 
 def test_ollama_tool_schema_uses_generic_langchain_tool_metadata() -> None:
@@ -152,16 +152,34 @@ def test_ollama_tool_schema_uses_generic_langchain_tool_metadata() -> None:
     assert schema["function"]["parameters"]["properties"]["target"]["type"] == "string"
 
 
-def test_native_ollama_tool_loop_uses_direct_api_and_routed_compact_prompt() -> None:
+def test_native_ollama_payload_is_bounded_for_pi() -> None:
     assistant = _native_assistant()
-    assistant.system_prompt = (
-        "BASE RULES\n"
-        "\nAdditional instructions loaded from MCP servers:\n\n"
-        'Instructions loaded from MCP server "mixer":\n\n'
-        "MIXER RULES\n\n"
-        'Instructions loaded from MCP server "qlcplus":\n\n'
-        "QLC RULES"
+    payload = assistant._native_ollama_payload(
+        [{"role": "user", "content": "test"}],
+        [],
     )
+
+    assert payload["think"] is False
+    assert payload["stream"] is False
+    assert payload["options"] == {
+        "temperature": 0.0,
+        "num_ctx": 2048,
+        "num_predict": 128,
+    }
+
+
+def test_native_ollama_without_speaker_context_sends_raw_user_text() -> None:
+    assistant = _native_assistant()
+    assistant._with_runtime_instructions = lambda *args, **kwargs: "SHOULD NOT BE USED"
+
+    result = assistant._native_agent_input("  qlc liste tous les contrôles  ", None)
+
+    assert result == "qlc liste tous les contrôles"
+
+
+def test_native_ollama_tool_loop_uses_direct_api_and_compact_routed_prompt() -> None:
+    assistant = _native_assistant()
+    assistant.system_prompt = _merged_prompt()
     tool = _FakeTool("qlc_get_state")
     calls: list[tuple[list[dict], list[dict], float]] = []
 
@@ -190,9 +208,10 @@ def test_native_ollama_tool_loop_uses_direct_api_and_routed_compact_prompt() -> 
     assert result == "QLC est prêt."
     first_messages, first_tools, _ = calls[0]
     assert first_messages[0]["role"] == "system"
-    assert "BASE RULES" in first_messages[0]["content"]
+    assert "Live Stage Assistant" in first_messages[0]["content"]
     assert "QLC RULES" in first_messages[0]["content"]
     assert "MIXER RULES" not in first_messages[0]["content"]
+    assert "VERY LONG CLASSIC BASE RULES" not in first_messages[0]["content"]
     assert first_tools[0]["function"]["name"] == "qlc_get_state"
 
 
