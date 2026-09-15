@@ -1,8 +1,8 @@
 """Native Ollama MCP execution for the supervised local Classic engine.
 
 This module keeps local Ollama tool execution independent from ``mcp_use``'s
-agent executor while reusing the same discovered LangChain MCP tools and MCP
-sessions. It deliberately contains no mixer-, lighting-, or vendor-specific
+agent executor while reusing the same discovered LangChain MCP tool objects and
+MCP sessions. It deliberately contains no mixer-, lighting-, or vendor-specific
 tool logic.
 """
 
@@ -13,8 +13,8 @@ import json
 import re
 import time
 from typing import Any
-
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+import urllib.error
+import urllib.request
 
 from . import agent
 from .speaker_recognition import SpeakerRecognitionResult
@@ -26,25 +26,14 @@ _MCP_SERVER_HEADER = re.compile(
 )
 
 
-def _message_text(message: Any) -> str:
-    content = getattr(message, "content", message)
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text")
-                parts.append(str(text if text is not None else item))
-            else:
-                parts.append(str(item))
-        return "\n".join(part for part in parts if part).strip()
-    return str(content or "").strip()
-
-
 def _tool_result_text(result: Any) -> str:
     if isinstance(result, str):
         return result
+    if hasattr(result, "model_dump"):
+        try:
+            result = result.model_dump(mode="json")
+        except Exception:
+            pass
     try:
         return json.dumps(result, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
@@ -62,6 +51,62 @@ def _unique_tools_by_name(tools: list[Any]) -> list[Any]:
         seen.add(name)
         unique.append(tool)
     return unique
+
+
+def _tool_input_schema(tool: Any) -> dict[str, Any]:
+    """Return the JSON input schema exposed by a generic LangChain MCP tool."""
+    candidates: list[Any] = [
+        getattr(tool, "args_schema", None),
+        getattr(tool, "tool_call_schema", None),
+    ]
+    get_input_schema = getattr(tool, "get_input_schema", None)
+    if callable(get_input_schema):
+        try:
+            candidates.append(get_input_schema())
+        except Exception:
+            pass
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if isinstance(candidate, dict):
+            schema = dict(candidate)
+        elif hasattr(candidate, "model_json_schema"):
+            try:
+                schema = candidate.model_json_schema()
+            except Exception:
+                continue
+        elif hasattr(candidate, "schema"):
+            try:
+                schema = candidate.schema()
+            except Exception:
+                continue
+        else:
+            continue
+        if isinstance(schema, dict):
+            schema = dict(schema)
+            schema.pop("title", None)
+            schema.setdefault("type", "object")
+            schema.setdefault("properties", {})
+            return schema
+
+    return {"type": "object", "properties": {}}
+
+
+def _ollama_tool_schema(tool: Any) -> dict[str, Any]:
+    """Convert a generic LangChain MCP tool into Ollama's function schema."""
+    name = str(getattr(tool, "name", "") or "").strip()
+    if not name:
+        raise ValueError("MCP tool has no callable name")
+    description = str(getattr(tool, "description", "") or "").strip()
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": _tool_input_schema(tool),
+        },
+    }
 
 
 def _prompt_for_routed_server(system_prompt: str, server_name: str | None) -> str:
@@ -103,12 +148,21 @@ def _prompt_for_routed_server(system_prompt: str, server_name: str | None) -> st
     return prompt
 
 
+def _duration_seconds(payload: dict[str, Any], key: str) -> float:
+    value = payload.get(key)
+    if not isinstance(value, (int, float)):
+        return 0.0
+    return float(value) / 1_000_000_000.0
+
+
 class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
-    """Local Ollama assistant using a direct LangChain tool-call loop.
+    """Local Ollama assistant using Ollama's native /api/chat tool loop.
 
     MCP keyword routing keeps its existing meaning: it narrows a turn to one
-    configured MCP server when a route matches. When no route matches, all
-    discovered MCP tools remain candidates.
+    configured MCP server when a route matches. When no route matches, every
+    discovered MCP *tool* remains a candidate. MCP resource/prompt wrappers
+    created by mcp_use are not action tools and are therefore not sent to
+    Ollama as callable functions.
     """
 
     async def refresh_session_llm_summary(self, *, force: bool = False) -> bool:
@@ -118,12 +172,93 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
             return False
         return await super().refresh_session_llm_summary(force=True)
 
+    def _native_callable_mcp_tools(self) -> list[Any]:
+        """Return only actual MCP tools, excluding mcp_use resource/prompt wrappers."""
+        adapter = getattr(self.agent, "adapter", None) if self.agent else None
+        if adapter is not None and hasattr(adapter, "tools"):
+            return _unique_tools_by_name(list(getattr(adapter, "tools", []) or []))
+        # Backward-compatible fallback for mcp_use versions that do not expose
+        # adapter.tools separately.
+        return _unique_tools_by_name(list(self.mcp_all_tools or []))
+
+    def _native_routed_tools(self, server_name: str, native_tools: list[Any]) -> list[Any]:
+        """Intersect a routed server subset with actual MCP tools by object identity."""
+        routed = list(self.mcp_tools_by_server.get(server_name) or [])
+        routed_ids = {id(tool) for tool in routed}
+        return [tool for tool in native_tools if id(tool) in routed_ids]
+
     async def _invoke_native_tool(self, tool: Any, arguments: dict[str, Any]) -> Any:
         if hasattr(tool, "ainvoke"):
             return await tool.ainvoke(arguments)
         if hasattr(tool, "invoke"):
             return await asyncio.to_thread(tool.invoke, arguments)
         raise RuntimeError(f"MCP tool '{getattr(tool, 'name', '<unnamed>')}' is not invokable")
+
+    def _native_ollama_chat_sync(
+        self,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        """Call the local Ollama REST API directly, without LangChain model execution."""
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+            "keep_alive": "10m",
+        }
+        if tool_schemas:
+            payload["tools"] = tool_schemas
+
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        endpoint = f"{str(self.ollama_base_url).rstrip('/')}/api/chat"
+        request = urllib.request.Request(
+            endpoint,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=max(1.0, float(timeout_seconds)),
+            ) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as error:
+            detail = ""
+            try:
+                detail = error.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Ollama /api/chat HTTP {error.code}: {detail or error.reason}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise RuntimeError(f"Ollama /api/chat unavailable: {error.reason}") from error
+
+        try:
+            result = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("Ollama /api/chat returned invalid JSON") from error
+        if not isinstance(result, dict) or not isinstance(result.get("message"), dict):
+            raise RuntimeError("Ollama /api/chat returned no assistant message")
+        return result
+
+    async def _native_ollama_chat(
+        self,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._native_ollama_chat_sync,
+            messages,
+            tool_schemas,
+            timeout_seconds=timeout_seconds,
+        )
 
     async def _run_native_ollama_tool_loop(
         self,
@@ -138,67 +273,112 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
             str(getattr(tool, "name", "") or ""): tool
             for tool in selected_tools
         }
-
-        llm = getattr(self, "_native_ollama_llm", None)
-        if llm is None:
-            llm = self._build_llm()
-            self._native_ollama_llm = llm
-        runnable = llm.bind_tools(selected_tools) if selected_tools else llm
+        tool_schemas = [_ollama_tool_schema(tool) for tool in selected_tools]
+        schema_chars = len(
+            json.dumps(tool_schemas, ensure_ascii=False, separators=(",", ":"))
+        )
 
         turn_prompt = _prompt_for_routed_server(self.system_prompt, route_server)
-        print(
-            f"[OLLAMA NATIVE MCP CONTEXT: route={route_server or 'all'} "
-            f"prompt_chars={len(turn_prompt)} tools={len(selected_tools)}]"
-        )
-        messages: list[Any] = [
-            SystemMessage(content=turn_prompt),
-            HumanMessage(content=agent_input),
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": turn_prompt},
+            {"role": "user", "content": agent_input},
         ]
         deadline = time.monotonic() + max(1.0, float(self.mcp_agent_timeout_seconds))
 
-        async def within_budget(awaitable):
+        print(
+            f"[OLLAMA NATIVE MCP CONTEXT: route={route_server or 'all'} "
+            f"prompt_chars={len(turn_prompt)} input_chars={len(agent_input)} "
+            f"schema_chars={schema_chars} tools={len(selected_tools)}]"
+        )
+
+        def remaining_budget() -> float:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise asyncio.TimeoutError
-            return await asyncio.wait_for(awaitable, timeout=remaining)
+            return remaining
 
         max_steps = max(1, int(self.mcp_agent_max_steps))
         for step in range(1, max_steps + 1):
+            remaining = remaining_budget()
+            payload_chars = len(
+                json.dumps(
+                    {
+                        "model": self.model,
+                        "messages": messages,
+                        "tools": tool_schemas,
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
             print(
-                f"[OLLAMA NATIVE MCP LLM START: step={step} "
-                f"route={route_server or 'all'} prompt_chars={len(turn_prompt)} "
-                f"tools={len(selected_tools)}]"
+                f"[OLLAMA NATIVE API START: step={step} route={route_server or 'all'} "
+                f"payload_chars={payload_chars} tools={len(selected_tools)} "
+                f"budget={remaining:.2f}s]"
             )
             llm_started = time.perf_counter()
-            response = await within_budget(runnable.ainvoke(messages))
+            response = await asyncio.wait_for(
+                self._native_ollama_chat(
+                    messages,
+                    tool_schemas,
+                    timeout_seconds=remaining,
+                ),
+                timeout=remaining,
+            )
             llm_elapsed = time.perf_counter() - llm_started
-            messages.append(response)
-            tool_calls = list(getattr(response, "tool_calls", None) or [])
+
+            assistant_message = dict(response.get("message") or {})
+            content = str(assistant_message.get("content") or "").strip()
+            tool_calls = list(assistant_message.get("tool_calls") or [])
+            history_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": content,
+            }
+            if tool_calls:
+                history_message["tool_calls"] = tool_calls
+            messages.append(history_message)
+
             print(
-                f"[OLLAMA NATIVE MCP LLM: step={step} elapsed={llm_elapsed:.2f}s "
+                f"[OLLAMA NATIVE API: step={step} elapsed={llm_elapsed:.2f}s "
+                f"server_total={_duration_seconds(response, 'total_duration'):.2f}s "
+                f"load={_duration_seconds(response, 'load_duration'):.2f}s "
+                f"prompt_eval={_duration_seconds(response, 'prompt_eval_duration'):.2f}s "
+                f"prompt_tokens={int(response.get('prompt_eval_count') or 0)} "
+                f"eval={_duration_seconds(response, 'eval_duration'):.2f}s "
+                f"eval_tokens={int(response.get('eval_count') or 0)} "
                 f"tool_calls={len(tool_calls)} tools={len(selected_tools)}]"
             )
+
             if not tool_calls:
-                text = _message_text(response)
-                if not text:
-                    raise RuntimeError("Native Ollama returned an empty response without a tool call")
+                if not content:
+                    raise RuntimeError(
+                        "Native Ollama returned an empty response without a tool call"
+                    )
                 total_elapsed = time.perf_counter() - loop_started
                 print(
                     f"[OLLAMA NATIVE MCP DONE: steps={step} total={total_elapsed:.2f}s "
                     f"tools={len(selected_tools)}]"
                 )
-                return text
+                return content
 
-            for index, tool_call in enumerate(tool_calls, start=1):
-                call = dict(tool_call)
-                tool_name = str(call.get("name") or "").strip()
-                arguments = call.get("args")
+            for tool_call in tool_calls:
+                function = tool_call.get("function") if isinstance(tool_call, dict) else None
+                function = function if isinstance(function, dict) else {}
+                tool_name = str(function.get("name") or "").strip()
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
                 if not isinstance(arguments, dict):
                     arguments = {}
-                call_id = str(call.get("id") or f"native_{step}_{index}")
+
                 tool = tool_by_name.get(tool_name)
                 if tool is None:
-                    result_text = f"Tool '{tool_name}' is not available in the selected MCP tool set."
+                    result_text = (
+                        f"Tool '{tool_name}' is not available in the selected MCP tool set."
+                    )
                     print(
                         f"[OLLAMA NATIVE MCP TOOL: {tool_name or '<missing>'} step={step} "
                         "elapsed=0.00s unavailable]"
@@ -206,7 +386,10 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
                 else:
                     tool_started = time.perf_counter()
                     try:
-                        result = await within_budget(self._invoke_native_tool(tool, arguments))
+                        result = await asyncio.wait_for(
+                            self._invoke_native_tool(tool, arguments),
+                            timeout=remaining_budget(),
+                        )
                         result_text = _tool_result_text(result)
                     except asyncio.TimeoutError:
                         raise
@@ -219,10 +402,11 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
                     )
 
                 messages.append(
-                    ToolMessage(
-                        content=result_text,
-                        tool_call_id=call_id,
-                    )
+                    {
+                        "role": "tool",
+                        "tool_name": tool_name,
+                        "content": result_text,
+                    }
                 )
 
         raise RuntimeError(
@@ -251,20 +435,21 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
         if not confirmation_route and not self._is_mcp_confirmation_reply(text):
             self.pending_mcp_confirmation_route = None
 
-        selected_tools = list(self.mcp_all_tools or [])
+        native_tools = self._native_callable_mcp_tools()
+        selected_tools = native_tools
         route_label = "all"
         route_server: str | None = None
         if route:
             server_name = str(route.get("server") or "")
-            routed_tools = list(self.mcp_tools_by_server.get(server_name) or [])
+            routed_tools = self._native_routed_tools(server_name, native_tools)
             if routed_tools:
                 selected_tools = routed_tools
                 route_label = server_name
                 route_server = server_name
             else:
                 print(
-                    f"[OLLAMA NATIVE MCP: route {server_name} has no mapped tools; "
-                    "using all discovered tools]"
+                    f"[OLLAMA NATIVE MCP: route {server_name} has no callable MCP tools; "
+                    "using all discovered MCP tools]"
                 )
 
         selected_tools = _unique_tools_by_name(selected_tools)
