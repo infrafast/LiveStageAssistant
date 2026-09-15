@@ -1,9 +1,12 @@
 import asyncio
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
 from voice_assistant import agent
-from voice_assistant.ollama_native_mcp import NativeOllamaMcpVoiceAssistant
+from voice_assistant.ollama_native_mcp import (
+    NativeOllamaMcpVoiceAssistant,
+    _prompt_for_routed_server,
+)
 
 
 class _FakeAgent:
@@ -50,7 +53,10 @@ def _native_assistant(*, routing_enabled: bool = True) -> NativeOllamaMcpVoiceAs
     assistant.ollama_base_url = "http://localhost:11434"
     assistant.system_prompt = "System"
     assistant.mcp_tool_routing_enabled = routing_enabled
-    assistant.mcp_tool_routes = [{"server": "mixer", "keywords": ["volume"]}]
+    assistant.mcp_tool_routes = [
+        {"server": "mixer", "keywords": ["volume"]},
+        {"server": "qlcplus", "keywords": ["qlc"]},
+    ]
     assistant.pending_mcp_confirmation_route = None
     assistant.mcp_agent_max_steps = 5
     assistant.mcp_agent_timeout_seconds = 1.0
@@ -67,10 +73,10 @@ def test_native_ollama_no_route_keeps_all_tools_available() -> None:
     mixer_tool = _FakeTool("mixer_tool")
     qlc_tool = _FakeTool("qlc_tool")
     assistant.mcp_all_tools = [mixer_tool, qlc_tool]
-    captured: list[list[str]] = []
+    captured: list[tuple[list[str], str | None]] = []
 
-    async def run_native(agent_input, tools):
-        captured.append([tool.name for tool in tools])
+    async def run_native(agent_input, tools, *, route_server=None):
+        captured.append(([tool.name for tool in tools], route_server))
         return "ok"
 
     assistant._run_native_ollama_tool_loop = run_native
@@ -78,7 +84,7 @@ def test_native_ollama_no_route_keeps_all_tools_available() -> None:
     result = asyncio.run(assistant._run_agent_with_optional_tool_routing("qui es tu?"))
 
     assert result == "ok"
-    assert captured == [["mixer_tool", "qlc_tool"]]
+    assert captured == [(["mixer_tool", "qlc_tool"], None)]
 
 
 def test_native_ollama_route_only_narrows_to_selected_mcp_server() -> None:
@@ -90,10 +96,10 @@ def test_native_ollama_route_only_narrows_to_selected_mcp_server() -> None:
         "mixer": [mixer_tool],
         "qlcplus": [qlc_tool],
     }
-    captured: list[list[str]] = []
+    captured: list[tuple[list[str], str | None]] = []
 
-    async def run_native(agent_input, tools):
-        captured.append([tool.name for tool in tools])
+    async def run_native(agent_input, tools, *, route_server=None):
+        captured.append(([tool.name for tool in tools], route_server))
         return "ok"
 
     assistant._run_native_ollama_tool_loop = run_native
@@ -103,7 +109,65 @@ def test_native_ollama_route_only_narrows_to_selected_mcp_server() -> None:
     )
 
     assert result == "ok"
-    assert captured == [["mixer_tool"]]
+    assert captured == [(["mixer_tool"], "mixer")]
+
+
+def test_routed_prompt_keeps_base_and_only_selected_server_instructions() -> None:
+    merged = (
+        "BASE RULES\n"
+        "\nAdditional instructions loaded from MCP servers:\n\n"
+        'Instructions loaded from MCP server "mixer":\n\n'
+        "MIXER RULES\n\n"
+        'Instructions loaded from MCP server "qlcplus":\n\n'
+        "QLC RULES"
+    )
+
+    qlc_prompt = _prompt_for_routed_server(merged, "qlcplus")
+
+    assert "BASE RULES" in qlc_prompt
+    assert "QLC RULES" in qlc_prompt
+    assert "MIXER RULES" not in qlc_prompt
+
+
+def test_unrouted_prompt_is_not_trimmed() -> None:
+    merged = (
+        "BASE RULES\n"
+        "\nAdditional instructions loaded from MCP servers:\n\n"
+        'Instructions loaded from MCP server "mixer":\n\n'
+        "MIXER RULES"
+    )
+
+    assert _prompt_for_routed_server(merged, None) == merged
+
+
+def test_native_ollama_tool_loop_uses_routed_compact_prompt() -> None:
+    assistant = _native_assistant()
+    assistant.system_prompt = (
+        "BASE RULES\n"
+        "\nAdditional instructions loaded from MCP servers:\n\n"
+        'Instructions loaded from MCP server "mixer":\n\n'
+        "MIXER RULES\n\n"
+        'Instructions loaded from MCP server "qlcplus":\n\n'
+        "QLC RULES"
+    )
+    tool = _FakeTool("qlc_get_state")
+    fake_llm = _FakeOllama([AIMessage(content="QLC est prêt.")])
+    assistant._build_llm = lambda: fake_llm
+
+    result = asyncio.run(
+        assistant._run_native_ollama_tool_loop(
+            "état qlc",
+            [tool],
+            route_server="qlcplus",
+        )
+    )
+
+    assert result == "QLC est prêt."
+    first_batch = fake_llm.message_batches[0]
+    assert isinstance(first_batch[0], SystemMessage)
+    assert "BASE RULES" in first_batch[0].content
+    assert "QLC RULES" in first_batch[0].content
+    assert "MIXER RULES" not in first_batch[0].content
 
 
 def test_native_ollama_executes_real_tool_object_and_returns_final_answer() -> None:
@@ -151,10 +215,10 @@ def test_pending_confirmation_reuses_existing_mcp_route() -> None:
         "server": "mixer",
         "keywords": ["volume"],
     }
-    captured: list[list[str]] = []
+    captured: list[tuple[list[str], str | None]] = []
 
-    async def run_native(agent_input, tools):
-        captured.append([tool.name for tool in tools])
+    async def run_native(agent_input, tools, *, route_server=None):
+        captured.append(([tool.name for tool in tools], route_server))
         return "confirmé"
 
     assistant._run_native_ollama_tool_loop = run_native
@@ -162,7 +226,7 @@ def test_pending_confirmation_reuses_existing_mcp_route() -> None:
     result = asyncio.run(assistant._run_agent_with_optional_tool_routing("oui"))
 
     assert result == "confirmé"
-    assert captured == [["mixer_tool"]]
+    assert captured == [(["mixer_tool"], "mixer")]
 
 
 def test_base_voice_assistant_cloud_semantics_are_unchanged() -> None:
