@@ -80,6 +80,7 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
         raise RuntimeError(f"MCP tool '{getattr(tool, 'name', '<unnamed>')}' is not invokable")
 
     async def _run_native_ollama_tool_loop(self, agent_input: str, tools: list[Any]) -> str:
+        loop_started = time.perf_counter()
         selected_tools = _unique_tools_by_name(list(tools or []))
         tool_by_name = {
             str(getattr(tool, "name", "") or ""): tool
@@ -106,13 +107,24 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
 
         max_steps = max(1, int(self.mcp_agent_max_steps))
         for step in range(1, max_steps + 1):
+            llm_started = time.perf_counter()
             response = await within_budget(runnable.ainvoke(messages))
+            llm_elapsed = time.perf_counter() - llm_started
             messages.append(response)
             tool_calls = list(getattr(response, "tool_calls", None) or [])
+            print(
+                f"[OLLAMA NATIVE MCP LLM: step={step} elapsed={llm_elapsed:.2f}s "
+                f"tool_calls={len(tool_calls)} tools={len(selected_tools)}]"
+            )
             if not tool_calls:
                 text = _message_text(response)
                 if not text:
                     raise RuntimeError("Native Ollama returned an empty response without a tool call")
+                total_elapsed = time.perf_counter() - loop_started
+                print(
+                    f"[OLLAMA NATIVE MCP DONE: steps={step} total={total_elapsed:.2f}s "
+                    f"tools={len(selected_tools)}]"
+                )
                 return text
 
             for index, tool_call in enumerate(tool_calls, start=1):
@@ -125,11 +137,12 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
                 tool = tool_by_name.get(tool_name)
                 if tool is None:
                     result_text = f"Tool '{tool_name}' is not available in the selected MCP tool set."
-                else:
                     print(
-                        f"[OLLAMA NATIVE MCP TOOL: {tool_name} step={step} "
-                        f"tools={len(selected_tools)}]"
+                        f"[OLLAMA NATIVE MCP TOOL: {tool_name or '<missing>'} step={step} "
+                        "elapsed=0.00s unavailable]"
                     )
+                else:
+                    tool_started = time.perf_counter()
                     try:
                         result = await within_budget(self._invoke_native_tool(tool, arguments))
                         result_text = _tool_result_text(result)
@@ -137,6 +150,11 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
                         raise
                     except Exception as error:
                         result_text = f"Tool '{tool_name}' failed: {error}"
+                    tool_elapsed = time.perf_counter() - tool_started
+                    print(
+                        f"[OLLAMA NATIVE MCP TOOL: {tool_name} step={step} "
+                        f"elapsed={tool_elapsed:.3f}s tools={len(selected_tools)}]"
+                    )
 
                 messages.append(
                     ToolMessage(
