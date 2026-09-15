@@ -315,7 +315,7 @@ One MCP's permission or transport choice must not implicitly change another MCP.
 
 Offline mode remains cloud-independent and uses Ollama, local faster-whisper, Piper local TTS and local/STDIO MCP servers. Realtime work must not weaken this path. `CONNECTIVITY_MODE=offline` must never dispatch to a cloud realtime provider even if a stale/mistaken online-engine value exists.
 
-On `realtime-voice-architecture`, OR4 is introducing an experimental native Ollama MCP execution loop for the supervised Offline/Local engine. It reuses the existing MCP sessions and discovered LangChain tool objects but bypasses `MCPAgent.run()` during local command execution. MCP routing keywords keep their original meaning: a matching route narrows the candidate tools to one MCP server, while an unrouted turn keeps all discovered MCP tools eligible. Online/OpenAI Classic continues to use the existing `VoiceAssistant`/`mcp_use` path. Automatic session-LLM summarization is skipped during native-local startup so READY is not blocked by an extra Ollama inference; transcript/session fallback context remains available.
+On `realtime-voice-architecture`, OR4 uses an experimental native Ollama MCP execution loop for the supervised Offline/Local engine. It reuses the existing MCP sessions and actual discovered MCP tool objects but bypasses `MCPAgent.run()` and LangChain model execution during local commands: Ollama is called directly through its local `/api/chat` tool-calling API. MCP routing keywords keep their original meaning: a matching route narrows the candidate tools to one MCP server, while an unrouted turn keeps all discovered MCP tools eligible. The local runner uses a compact safety prompt plus MCP-owned domain instructions, bounded Ollama context/generation settings, and omits Classic runtime boilerplate when no speaker context exists. Online/OpenAI Classic continues to use the existing `VoiceAssistant`/`mcp_use` path. Automatic session-LLM summarization is skipped during native-local startup so READY is not blocked by an extra Ollama inference; transcript/session fallback context remains available.
 
 The common `ConnectivityManager` and `EngineSupervisor` implement the production ownership model. Basic Pi5 Online -> Offline -> Online round trips are validated for both Classic and OpenAI Realtime with local loss/READY announcements and without observed audio-device lockup.
 
@@ -830,7 +830,7 @@ Architecture constraints:
 - `assistantOptions.routing` / `MCP_TOOL_ROUTING_ENABLED` remains only an MCP-server narrowing optimization; it is not an intent classifier and must never decide whether tools are available at all;
 - a matching route narrows the candidate set to tools belonging to that MCP server;
 - an unrouted turn keeps all discovered MCP tools eligible;
-- the native runner consumes generic LangChain MCP tool objects and contains no XMSeries-, QLCPlus- or protocol-specific tool names;
+- the native runner consumes generic MCP tool objects and contains no XMSeries-, QLCPlus- or protocol-specific tool names;
 - tool calls are executed sequentially to avoid introducing parallel stage-control writes;
 - online/OpenAI Classic continues to instantiate the base `VoiceAssistant` and keeps the existing `mcp_use` behavior;
 - no automatic tool retry may replay an ambiguous control write.
@@ -838,21 +838,25 @@ Architecture constraints:
 #### OR4A - Direct native tool-loop proof — [~] IMPLEMENTED, PI VALIDATION PENDING
 
 - [x] add a generic `NativeOllamaMcpVoiceAssistant` isolated to the supervised Offline/Local engine;
-- [x] keep existing MCP client/session discovery and reuse the actual discovered LangChain MCP tool objects;
-- [x] call Ollama directly with `bind_tools()`, execute returned tool calls against the real MCP tool object, append `ToolMessage` results, and continue until a final response or the existing command timeout/max-step budget is reached;
+- [x] keep existing MCP client/session discovery and reuse the actual discovered MCP tool objects while excluding `mcp_use` resource/prompt wrappers from callable functions;
+- [x] call Ollama directly through local `/api/chat`, pass generic function schemas, execute returned tool calls against the real MCP tool object, append tool results, and continue until a final response or the existing command timeout/max-step budget is reached;
 - [x] preserve routing semantics: routed turns use that server's tools; unrouted turns retain all discovered tools;
 - [x] preserve pending-confirmation routing behavior;
-- [x] de-duplicate duplicate callable tool names generically before binding because tool-call protocols address tools by name;
+- [x] de-duplicate duplicate callable tool names generically because tool-call protocols address tools by name;
 - [x] skip automatic startup/session LLM summary refresh on the native local path so READY is not delayed by an unrelated Ollama inference; explicit forced summary refresh remains available;
+- [x] use a compact local safety prompt plus MCP-owned instructions instead of the verbose Classic/OpenAI base prompt; no MCP-domain logic is duplicated in LSA;
+- [x] omit Classic runtime boilerplate when no speaker context exists;
+- [x] bound local inference for Pi with `temperature=0`, `num_ctx=2048`, `num_predict=128`, `think=false` and a warm `keep_alive`;
 - [x] remove the temporary diagnostic behavior `no route -> zero tools`;
 - [x] keep cloud/OpenAI Classic on the unchanged base `VoiceAssistant` path;
-- [~] unit coverage added for unrouted-all-tools, routed-server-only, real tool-object invocation/result feedback, confirmation routing and unchanged cloud semantics; execute the tests in the project venv/Pi before promoting the milestone;
-- [~] Pi acceptance: execute at least one real MCP read and one controlled MCP write end-to-end through Ollama, observe the native tool-call log, avoid the historical 45 s timeout, and record cold/warm post-command latency plus CPU behavior. Target warm control latency is <= 15 s and cold first-use latency <= 30 s.
+- [x] Pi unit suite reached 9 passing routing/native-runner tests before the compact-context follow-up; the additional compact-prompt/options/raw-input tests are implemented and require the next Pi run before this milestone can be promoted;
+- [~] Pi latency finding (2026-09-15): direct `/api/chat` with routed QLCPlus already reduced the candidate set to 3 actual tools, but the pre-compaction request still carried `prompt_chars=4437`, `input_chars=455`, `schema_chars=2078`, `payload_chars=7161` and consumed the full 45 s timeout at ~100% CPU before returning a first tool call. This demonstrates that the remaining OR4A blocker is local model context-evaluation cost rather than MCP transport or `mcp_use` agent execution;
+- [~] Pi acceptance: rerun the same QLC read with the compact context, require a first real tool call in materially less than 45 s (target <=15 s warm, <=30 s cold), then execute at least one controlled MCP write and record cold/warm latency plus CPU behavior before marking OR4A complete.
 
 #### OR4B - Generic compact tool selection
 
-- [ ] if OR4A still exposes too many schemas for unrouted/local turns, add a compact MCP-agnostic tool catalogue/selection stage independent from routing keywords;
-- [ ] bind full JSON schemas only for the selected candidate tools;
+- [ ] if OR4A still exposes too many schemas for unrouted/local turns or the mixer route, add a compact MCP-agnostic tool catalogue/selection stage independent from routing keywords;
+- [ ] bind/pass full JSON schemas only for the selected candidate tools;
 - [ ] preserve every discovered MCP as eligible when no routing keyword matches;
 - [ ] benchmark tool-selection overhead and false exclusions on representative mixer, QLCPlus and generic-MCP requests.
 
@@ -1021,7 +1025,7 @@ common WebMonitor services
 
 # 9. Current Next Actions
 
-1. **OR4A — validate native Ollama MCP execution on Pi5:** pull the branch, confirm local startup reaches READY without the automatic summary inference, execute one real MCP read and one controlled write, record native tool-call logs, cold/warm latency and CPU, and keep OR4A `[~]` until this succeeds.
+1. **OR4A — rerun the compact native Ollama MCP proof on Pi5:** pull the branch, run the routing/native unit suite, repeat `qlc liste tous les contrôles`, verify that `prompt_chars`, `input_chars` and `payload_chars` fall substantially below the previous 4437/455/7161 values, and require the first real QLC tool call in materially less than 45 s. If the QLC read succeeds, execute one controlled write and record cold/warm latency plus CPU before moving OR4A from `[~]` to `[x]`.
 2. **RV2D / CFG-9 — validate the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; run the migrated common handlers on Pi/browser before marking the milestone complete. No historical/second WebMonitor is allowed in the supervised architecture.
 3. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls, backend microphone diagnostic/capture, browser STT/TTS and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
 4. **RV2F / CFG-9 — semantic audio feedback validation:** run audible Classic/Realtime/Local checks for READY, LISTENING/WAIT_WAKE, WAKE_DETECTED, PROCESSING, RESULT_READY, SPEAKING and IDLE before marking RV2F complete.
