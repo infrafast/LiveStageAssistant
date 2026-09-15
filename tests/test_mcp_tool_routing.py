@@ -1,18 +1,23 @@
 import asyncio
 
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
-
 from voice_assistant import agent
 from voice_assistant.ollama_native_mcp import (
     NativeOllamaMcpVoiceAssistant,
+    _ollama_tool_schema,
     _prompt_for_routed_server,
 )
 
 
+class _FakeAdapter:
+    def __init__(self, tools=None) -> None:
+        self.tools = list(tools or [])
+
+
 class _FakeAgent:
-    def __init__(self, response: str = "global") -> None:
+    def __init__(self, response: str = "global", *, tools=None) -> None:
         self.response = response
         self.calls: list[tuple[str, int]] = []
+        self.adapter = _FakeAdapter(tools)
 
     async def run(self, agent_input: str, max_steps: int) -> str:
         self.calls.append((agent_input, max_steps))
@@ -20,29 +25,21 @@ class _FakeAgent:
 
 
 class _FakeTool:
-    def __init__(self, name: str, result=None) -> None:
+    def __init__(self, name: str, result=None, *, description: str = "Fake tool") -> None:
         self.name = name
+        self.description = description
+        self.args_schema = {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"},
+            },
+        }
         self.result = {"ok": True} if result is None else result
         self.calls: list[dict] = []
 
     async def ainvoke(self, arguments: dict):
         self.calls.append(dict(arguments))
         return self.result
-
-
-class _FakeOllama:
-    def __init__(self, responses: list[AIMessage]) -> None:
-        self.responses = list(responses)
-        self.bound_tool_names: list[str] = []
-        self.message_batches: list[list] = []
-
-    def bind_tools(self, tools):
-        self.bound_tool_names = [tool.name for tool in tools]
-        return self
-
-    async def ainvoke(self, messages):
-        self.message_batches.append(list(messages))
-        return self.responses.pop(0)
 
 
 def _native_assistant(*, routing_enabled: bool = True) -> NativeOllamaMcpVoiceAssistant:
@@ -68,11 +65,13 @@ def _native_assistant(*, routing_enabled: bool = True) -> NativeOllamaMcpVoiceAs
     return assistant
 
 
-def test_native_ollama_no_route_keeps_all_tools_available() -> None:
+def test_native_ollama_no_route_keeps_all_actual_mcp_tools_available() -> None:
     assistant = _native_assistant()
     mixer_tool = _FakeTool("mixer_tool")
     qlc_tool = _FakeTool("qlc_tool")
-    assistant.mcp_all_tools = [mixer_tool, qlc_tool]
+    prompt_wrapper = _FakeTool("agent_prompt")
+    assistant.agent.adapter.tools = [mixer_tool, qlc_tool]
+    assistant.mcp_all_tools = [mixer_tool, qlc_tool, prompt_wrapper]
     captured: list[tuple[list[str], str | None]] = []
 
     async def run_native(agent_input, tools, *, route_server=None):
@@ -87,14 +86,16 @@ def test_native_ollama_no_route_keeps_all_tools_available() -> None:
     assert captured == [(["mixer_tool", "qlc_tool"], None)]
 
 
-def test_native_ollama_route_only_narrows_to_selected_mcp_server() -> None:
+def test_native_ollama_route_only_narrows_to_selected_actual_mcp_tools() -> None:
     assistant = _native_assistant()
     mixer_tool = _FakeTool("mixer_tool")
     qlc_tool = _FakeTool("qlc_tool")
-    assistant.mcp_all_tools = [mixer_tool, qlc_tool]
+    qlc_prompt_wrapper = _FakeTool("agent_prompt")
+    assistant.agent.adapter.tools = [mixer_tool, qlc_tool]
+    assistant.mcp_all_tools = [mixer_tool, qlc_tool, qlc_prompt_wrapper]
     assistant.mcp_tools_by_server = {
         "mixer": [mixer_tool],
-        "qlcplus": [qlc_tool],
+        "qlcplus": [qlc_tool, qlc_prompt_wrapper],
     }
     captured: list[tuple[list[str], str | None]] = []
 
@@ -105,11 +106,11 @@ def test_native_ollama_route_only_narrows_to_selected_mcp_server() -> None:
     assistant._run_native_ollama_tool_loop = run_native
 
     result = asyncio.run(
-        assistant._run_agent_with_optional_tool_routing("baisse le volume")
+        assistant._run_agent_with_optional_tool_routing("qlc liste tous les contrôles")
     )
 
     assert result == "ok"
-    assert captured == [(["mixer_tool"], "mixer")]
+    assert captured == [(["qlc_tool"], "qlcplus")]
 
 
 def test_routed_prompt_keeps_base_and_only_selected_server_instructions() -> None:
@@ -140,7 +141,18 @@ def test_unrouted_prompt_is_not_trimmed() -> None:
     assert _prompt_for_routed_server(merged, None) == merged
 
 
-def test_native_ollama_tool_loop_uses_routed_compact_prompt() -> None:
+def test_ollama_tool_schema_uses_generic_langchain_tool_metadata() -> None:
+    tool = _FakeTool("read_level", description="Read current level")
+
+    schema = _ollama_tool_schema(tool)
+
+    assert schema["type"] == "function"
+    assert schema["function"]["name"] == "read_level"
+    assert schema["function"]["description"] == "Read current level"
+    assert schema["function"]["parameters"]["properties"]["target"]["type"] == "string"
+
+
+def test_native_ollama_tool_loop_uses_direct_api_and_routed_compact_prompt() -> None:
     assistant = _native_assistant()
     assistant.system_prompt = (
         "BASE RULES\n"
@@ -151,8 +163,21 @@ def test_native_ollama_tool_loop_uses_routed_compact_prompt() -> None:
         "QLC RULES"
     )
     tool = _FakeTool("qlc_get_state")
-    fake_llm = _FakeOllama([AIMessage(content="QLC est prêt.")])
-    assistant._build_llm = lambda: fake_llm
+    calls: list[tuple[list[dict], list[dict], float]] = []
+
+    async def fake_chat(messages, tool_schemas, *, timeout_seconds):
+        calls.append((list(messages), list(tool_schemas), timeout_seconds))
+        return {
+            "message": {
+                "role": "assistant",
+                "content": "QLC est prêt.",
+            },
+            "total_duration": 5_000_000,
+            "prompt_eval_count": 25,
+            "eval_count": 4,
+        }
+
+    assistant._native_ollama_chat = fake_chat
 
     result = asyncio.run(
         assistant._run_native_ollama_tool_loop(
@@ -163,52 +188,72 @@ def test_native_ollama_tool_loop_uses_routed_compact_prompt() -> None:
     )
 
     assert result == "QLC est prêt."
-    first_batch = fake_llm.message_batches[0]
-    assert isinstance(first_batch[0], SystemMessage)
-    assert "BASE RULES" in first_batch[0].content
-    assert "QLC RULES" in first_batch[0].content
-    assert "MIXER RULES" not in first_batch[0].content
+    first_messages, first_tools, _ = calls[0]
+    assert first_messages[0]["role"] == "system"
+    assert "BASE RULES" in first_messages[0]["content"]
+    assert "QLC RULES" in first_messages[0]["content"]
+    assert "MIXER RULES" not in first_messages[0]["content"]
+    assert first_tools[0]["function"]["name"] == "qlc_get_state"
 
 
 def test_native_ollama_executes_real_tool_object_and_returns_final_answer() -> None:
     assistant = _native_assistant()
     tool = _FakeTool("read_level", {"level": -12.0})
+    assistant.agent.adapter.tools = [tool]
     assistant.mcp_all_tools = [tool]
-    fake_llm = _FakeOllama(
-        [
-            AIMessage(
-                content="",
-                tool_calls=[
+    responses = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
                     {
-                        "name": "read_level",
-                        "args": {"target": "main"},
-                        "id": "call-1",
-                        "type": "tool_call",
+                        "type": "function",
+                        "function": {
+                            "name": "read_level",
+                            "arguments": {"target": "main"},
+                        },
                     }
                 ],
-            ),
-            AIMessage(content="Le niveau est moins 12 dB."),
-        ]
-    )
-    assistant._build_llm = lambda: fake_llm
+            },
+            "prompt_eval_count": 40,
+            "eval_count": 8,
+        },
+        {
+            "message": {
+                "role": "assistant",
+                "content": "Le niveau est moins 12 dB.",
+            },
+            "prompt_eval_count": 55,
+            "eval_count": 9,
+        },
+    ]
+    message_batches: list[list[dict]] = []
+
+    async def fake_chat(messages, tool_schemas, *, timeout_seconds):
+        message_batches.append([dict(message) for message in messages])
+        return responses.pop(0)
+
+    assistant._native_ollama_chat = fake_chat
 
     result = asyncio.run(
         assistant._run_native_ollama_tool_loop("quel est le niveau ?", [tool])
     )
 
     assert result == "Le niveau est moins 12 dB."
-    assert fake_llm.bound_tool_names == ["read_level"]
     assert tool.calls == [{"target": "main"}]
     assert any(
-        isinstance(message, ToolMessage)
-        and message.tool_call_id == "call-1"
-        for message in fake_llm.message_batches[-1]
+        message.get("role") == "tool"
+        and message.get("tool_name") == "read_level"
+        and "-12.0" in message.get("content", "")
+        for message in message_batches[-1]
     )
 
 
 def test_pending_confirmation_reuses_existing_mcp_route() -> None:
     assistant = _native_assistant()
     mixer_tool = _FakeTool("mixer_tool")
+    assistant.agent.adapter.tools = [mixer_tool]
     assistant.mcp_all_tools = [mixer_tool]
     assistant.mcp_tools_by_server = {"mixer": [mixer_tool]}
     assistant.pending_mcp_confirmation_route = {
