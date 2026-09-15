@@ -18,10 +18,11 @@ from dotenv import dotenv_values, load_dotenv
 
 from . import agent
 from .child_command_channel import child_monitor_from_env
+from .ollama_native_mcp import NativeOllamaMcpVoiceAssistant
 from .prompt_contract import configured_system_prompt
 from .prompt_files import DEFAULT_STT_PROMPT_PATH, prompt_text_from_values
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
-from .speaker_recognition import SpeakerProfile, SpeakerRecognitionResult
+from .speaker_recognition import SpeakerProfile
 from .wake_word import get_configured_wake_words
 
 
@@ -111,41 +112,6 @@ def _speaker_profiles(values: dict[str, Any]) -> list[SpeakerProfile]:
     return profiles
 
 
-class ClassicVoiceAssistant(agent.VoiceAssistant):
-    """Classic assistant with a local-only fast path for unrouted Ollama turns.
-
-    Cloud providers deliberately keep ``VoiceAssistant`` routing semantics.
-    When MCP keyword routing is enabled, a generic Ollama turn that matches no
-    MCP server gets no tool schemas, avoiding the full MCP tool payload on
-    resource-constrained local hosts. Pending MCP confirmations still use the
-    normal routed path.
-    """
-
-    async def _run_agent_with_optional_tool_routing(
-        self,
-        text: str,
-        speaker_result: SpeakerRecognitionResult | None = None,
-    ) -> str:
-        route = self._select_mcp_tool_route(text)
-        pending_confirmation = bool(
-            not route
-            and self.pending_mcp_confirmation_route
-            and self._is_mcp_confirmation_reply(text)
-        )
-        if (
-            self.mcp_tool_routing_enabled
-            and self.llm_provider == "ollama"
-            and not route
-            and not pending_confirmation
-        ):
-            if not self._is_mcp_confirmation_reply(text):
-                self.pending_mcp_confirmation_route = None
-            agent_input = self._with_runtime_instructions(text, speaker_result=speaker_result)
-            print("[MCP CALL: no route, no tools (ollama)]")
-            return await self._run_agent_with_tools(agent_input, [])
-        return await super()._run_agent_with_optional_tool_routing(text, speaker_result=speaker_result)
-
-
 def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
     """Build one Classic/Local engine from a profile without constructing a GUI."""
     path = Path(env_file).expanduser().resolve()
@@ -183,7 +149,8 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
     local_gain = max(0.0, min(2.0, _float(values, "LOCAL_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
     speech_gain = local_gain if tts_config.backend_provider == "piper" or offline else cloud_gain
 
-    assistant = ClassicVoiceAssistant(
+    assistant_class = NativeOllamaMcpVoiceAssistant if offline else agent.VoiceAssistant
+    assistant = assistant_class(
         openai_api_key=_secret(values, "OPENAI_API_KEY"),
         elevenlabs_api_key=_secret(values, "ELEVENLABS_API_KEY"),
         model=str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or agent.DEFAULT_OLLAMA_MODEL).strip()
