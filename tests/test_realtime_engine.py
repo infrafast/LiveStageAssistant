@@ -128,7 +128,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.instructions, "Validation runner prompt.")
         self.assertNotIn("Global LSA prompt.", config.instructions)
 
-    def test_realtime_prompt_adds_final_tool_silence_contract(self):
+    def test_realtime_prompt_uses_common_prompt_contract_without_extra_contract(self):
         prompt = compose_realtime_instructions(
             base_prompt="Base prompt.",
             mcp_prompt="MCP prompt.",
@@ -136,8 +136,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Base prompt.", prompt)
         self.assertIn("MCP prompt.", prompt)
-        self.assertIn("Realtime live-control output contract:", prompt)
-        self.assertGreater(prompt.rfind("Realtime live-control output contract:"), prompt.rfind("MCP prompt."))
+        self.assertNotIn("Realtime live-control output contract:", prompt)
 
     def test_native_mcp_context_is_metadata_not_implicit_prompt_mutation(self):
         native_instructions = "Use only identifiers and operation semantics provided by this MCP server."
