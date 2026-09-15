@@ -1,6 +1,7 @@
 import asyncio
 
-from voice_assistant.agent import VoiceAssistant
+from voice_assistant import agent
+from voice_assistant.classic_engine import ClassicVoiceAssistant
 
 
 class _FakeAgent:
@@ -13,8 +14,8 @@ class _FakeAgent:
         return self.response
 
 
-def _routing_assistant(*, provider: str, routing_enabled: bool = True) -> VoiceAssistant:
-    assistant = object.__new__(VoiceAssistant)
+def _routing_assistant(*, provider: str, routing_enabled: bool = True) -> ClassicVoiceAssistant:
+    assistant = object.__new__(ClassicVoiceAssistant)
     assistant.agent = _FakeAgent()
     assistant.llm_provider = provider
     assistant.mcp_tool_routing_enabled = routing_enabled
@@ -68,6 +69,39 @@ def test_ollama_unrouted_turn_keeps_global_tools_when_routing_disabled() -> None
         raise AssertionError("Disabled routing must preserve the legacy global-agent path")
 
     assistant._run_agent_with_tools = fail_if_subset_is_used
+
+    result = asyncio.run(assistant._run_agent_with_optional_tool_routing("qui es tu?"))
+
+    assert result == "global"
+    assert len(assistant.agent.calls) == 1
+
+
+def test_pending_confirmation_stays_on_normal_routed_path() -> None:
+    assistant = _routing_assistant(provider="ollama")
+    assistant.pending_mcp_confirmation_route = {"server": "mixer", "keywords": ["mix"]}
+    assistant.mcp_tools_by_server = {"mixer": [object()]}
+    assistant.agent.response = "confirmé"
+
+    result = asyncio.run(assistant._run_agent_with_optional_tool_routing("oui"))
+
+    assert result == "confirmé"
+    assert len(assistant.agent.calls) == 1
+
+
+def test_base_voice_assistant_cloud_semantics_are_unchanged() -> None:
+    assistant = object.__new__(agent.VoiceAssistant)
+    assistant.agent = _FakeAgent()
+    assistant.llm_provider = "openai"
+    assistant.mcp_tool_routing_enabled = True
+    assistant.mcp_tool_routes = [{"server": "mixer", "keywords": ["mix"]}]
+    assistant.pending_mcp_confirmation_route = None
+    assistant.mcp_agent_max_steps = 20
+    assistant.mcp_agent_timeout_seconds = 1.0
+    assistant.mcp_all_tools = [object()]
+    assistant.mcp_tools_by_server = {}
+    assistant.session_context_size = 0
+    assistant.session_context_store = None
+    assistant.speaker_recognition_requested = False
 
     result = asyncio.run(assistant._run_agent_with_optional_tool_routing("qui es tu?"))
 
