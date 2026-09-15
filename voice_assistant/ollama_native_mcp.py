@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from typing import Any
 
@@ -17,6 +18,12 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from . import agent
 from .speaker_recognition import SpeakerRecognitionResult
+
+
+_MCP_PROMPT_MARKER = "\nAdditional instructions loaded from MCP servers:"
+_MCP_SERVER_HEADER = re.compile(
+    r'Instructions loaded from MCP server "([^"]+)":\s*\n'
+)
 
 
 def _message_text(message: Any) -> str:
@@ -57,6 +64,45 @@ def _unique_tools_by_name(tools: list[Any]) -> list[Any]:
     return unique
 
 
+def _prompt_for_routed_server(system_prompt: str, server_name: str | None) -> str:
+    """Keep the base LSA prompt plus only the routed MCP server instructions.
+
+    MCP prompt merging produces one consolidated prompt. Sending every MCP
+    server's domain instructions to a small local model is unnecessarily
+    expensive once keyword routing has already selected one server. This
+    helper only trims prompt context; it never changes which tools are
+    eligible. If the expected merge markers are absent, preserve the original
+    prompt rather than guessing.
+    """
+    prompt = str(system_prompt or "").strip()
+    if not prompt or not server_name or _MCP_PROMPT_MARKER not in prompt:
+        return prompt
+
+    base_prompt, _, mcp_section = prompt.partition(_MCP_PROMPT_MARKER)
+    matches = list(_MCP_SERVER_HEADER.finditer(mcp_section))
+    if not matches:
+        return prompt
+
+    wanted = str(server_name).strip()
+    for index, match in enumerate(matches):
+        if match.group(1) != wanted:
+            continue
+        body_start = match.end()
+        body_end = matches[index + 1].start() if index + 1 < len(matches) else len(mcp_section)
+        body = mcp_section[body_start:body_end].strip()
+        if not body:
+            return base_prompt.strip()
+        return (
+            f"{base_prompt.strip()}\n\n"
+            f'Instructions loaded from MCP server "{wanted}":\n\n'
+            f"{body}"
+        ).strip()
+
+    # The route exists but the merged prompt has no matching server block.
+    # Preserve the full prompt rather than silently discarding instructions.
+    return prompt
+
+
 class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
     """Local Ollama assistant using a direct LangChain tool-call loop.
 
@@ -79,7 +125,13 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
             return await asyncio.to_thread(tool.invoke, arguments)
         raise RuntimeError(f"MCP tool '{getattr(tool, 'name', '<unnamed>')}' is not invokable")
 
-    async def _run_native_ollama_tool_loop(self, agent_input: str, tools: list[Any]) -> str:
+    async def _run_native_ollama_tool_loop(
+        self,
+        agent_input: str,
+        tools: list[Any],
+        *,
+        route_server: str | None = None,
+    ) -> str:
         loop_started = time.perf_counter()
         selected_tools = _unique_tools_by_name(list(tools or []))
         tool_by_name = {
@@ -93,8 +145,13 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
             self._native_ollama_llm = llm
         runnable = llm.bind_tools(selected_tools) if selected_tools else llm
 
+        turn_prompt = _prompt_for_routed_server(self.system_prompt, route_server)
+        print(
+            f"[OLLAMA NATIVE MCP CONTEXT: route={route_server or 'all'} "
+            f"prompt_chars={len(turn_prompt)} tools={len(selected_tools)}]"
+        )
         messages: list[Any] = [
-            SystemMessage(content=self.system_prompt),
+            SystemMessage(content=turn_prompt),
             HumanMessage(content=agent_input),
         ]
         deadline = time.monotonic() + max(1.0, float(self.mcp_agent_timeout_seconds))
@@ -107,6 +164,11 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
 
         max_steps = max(1, int(self.mcp_agent_max_steps))
         for step in range(1, max_steps + 1):
+            print(
+                f"[OLLAMA NATIVE MCP LLM START: step={step} "
+                f"route={route_server or 'all'} prompt_chars={len(turn_prompt)} "
+                f"tools={len(selected_tools)}]"
+            )
             llm_started = time.perf_counter()
             response = await within_budget(runnable.ainvoke(messages))
             llm_elapsed = time.perf_counter() - llm_started
@@ -191,12 +253,14 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
 
         selected_tools = list(self.mcp_all_tools or [])
         route_label = "all"
+        route_server: str | None = None
         if route:
             server_name = str(route.get("server") or "")
             routed_tools = list(self.mcp_tools_by_server.get(server_name) or [])
             if routed_tools:
                 selected_tools = routed_tools
                 route_label = server_name
+                route_server = server_name
             else:
                 print(
                     f"[OLLAMA NATIVE MCP: route {server_name} has no mapped tools; "
@@ -207,7 +271,11 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
         print(
             f"[OLLAMA NATIVE MCP: route={route_label} tools={len(selected_tools)}]"
         )
-        response = await self._run_native_ollama_tool_loop(agent_input, selected_tools)
+        response = await self._run_native_ollama_tool_loop(
+            agent_input,
+            selected_tools,
+            route_server=route_server,
+        )
 
         if route and self._assistant_response_requests_confirmation(response):
             self.pending_mcp_confirmation_route = route
