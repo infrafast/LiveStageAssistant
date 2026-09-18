@@ -915,7 +915,7 @@ Implement only the high-value basic mixer grammar first; do not port all prompt 
 
 #### OR4B3 - LSA deterministic Local engine — MERGED / AUTOMATED CI VALIDATED
 
-PR #10 is merged into `realtime-voice-architecture` as `e244af4a2f5d474005ff6803c5818aa25f4f87aa`. A dedicated `local_engine.py` reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. PR and post-merge CI passed on Python 3.11/3.12. End-to-end Pi acceptance remains pending.
+PR #10 is merged into `realtime-voice-architecture` as `e244af4a2f5d474005ff6803c5818aa25f4f87aa`. A dedicated `local_engine.py` reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. PR and post-merge CI passed on Python 3.11/3.12. Raspberry Pi read-path acceptance passed on 18 September 2026 with both `mixer` and `qlcplus` gateways discovered and all four acceptance cases passing. Controlled live writes remain pending.
 
 Create a real Local engine instead of mapping `local` to Classic+Ollama.
 
@@ -976,7 +976,7 @@ Cleanup happens **after OR4B3 live validation**, not before.
 
 - [x] pin one gateway protocol/core version known to work across LSA + XMSeries-MCP + QLCPlus-MCP: both gateway servers pin `stage-command-core@fa9f8baef06a668efb18b1bfc50060335689f287`, while LSA requires `lsa-command-gateway/v1`;
 - [x] incompatible gateway version -> Local engine marks that MCP unsupported; protocol-schema discovery is regression-tested and never attempts a best-effort write;
-- [~] validate STDIO first; the domain-neutral Pi/rack harness is merged as `63019ba4089b7b9c6d06ac5b307914fca8645a5e` with PR + post-merge Python 3.11/3.12 CI green and produces JSON latency evidence; real rack execution remains pending. Validate persistent local HTTP only with an explicitly gateway-enabled instance;
+- [~] validate STDIO first; the domain-neutral Pi/rack harness is merged as `63019ba4089b7b9c6d06ac5b307914fca8645a5e` with PR + post-merge Python 3.11/3.12 CI green and produces JSON latency evidence. Real Raspberry Pi read-path acceptance passed on 18 September 2026: both `mixer` and `qlcplus` gateways were discovered under `lsa-command-gateway/v1`, all 4 corpus cases passed, analysis latency was p50 3.0 ms / p95 6.4 ms and total latency p50 5.9 ms / p95 11.7 ms. The QLC write case was analyzed but intentionally not executed because `--allow-writes` was omitted; controlled live writes remain pending. Validate persistent local HTTP only with an explicitly gateway-enabled instance;
 - [~] gateway-disabled MCP regression tests preserve the pre-OR4 low-level tool/prompt inventory; live cloud/external-client confirmation remains pending;
 - [x] local gateway tools are disabled by default and absent from normal MCP/cloud tool inventories unless the dedicated Local child overlay enables them;
 - [~] automated tests cover approval, clarification routing, stale-plan/identity and duplicate/one-shot write protection; timeout behavior remains part of the live cross-repository gate;
