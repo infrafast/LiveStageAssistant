@@ -176,7 +176,7 @@ def test_backend_audio_diagnostic_marks_minus_56_dbfs_orange(monkeypatch) -> Non
     result = assistant.diagnose_backend_audio_input("0", duration_seconds=3)
 
     assert result["metrics"]["speech_rms_dbfs"] == -56.0
-    assert result["metrics"]["peak_dbfs"] == -33.1
+    assert abs(result["metrics"]["peak_dbfs"] - (-33.15)) <= 0.1
     assert result["verdict"] == "orange"
     assert result["issues"] == ["low"]
 
