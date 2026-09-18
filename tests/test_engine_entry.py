@@ -35,3 +35,22 @@ def test_engine_entry_keeps_classic_route(monkeypatch):
 
     assert engine_entry.main() == 18
     assert calls == [("classic", "/tmp/online.env")]
+
+
+def test_local_child_does_not_own_loader_under_common_runtime(monkeypatch):
+    from voice_assistant import agent, local_engine
+
+    calls = []
+    monkeypatch.setenv("LSA_COMMON_STARTUP_LIFECYCLE", "1")
+    monkeypatch.setattr(local_engine, "run", lambda env: calls.append(env) or 0)
+
+    original_start = agent.VoiceAssistant.start_startup_loader_sound
+    original_stop = agent.VoiceAssistant.stop_startup_loader_sound
+    try:
+        assert engine_entry.run_local("/tmp/offline.env") == 0
+        assert calls == ["/tmp/offline.env"]
+        assert agent.VoiceAssistant.start_startup_loader_sound is not original_start
+        assert agent.VoiceAssistant.stop_startup_loader_sound is not original_stop
+    finally:
+        agent.VoiceAssistant.start_startup_loader_sound = original_start
+        agent.VoiceAssistant.stop_startup_loader_sound = original_stop

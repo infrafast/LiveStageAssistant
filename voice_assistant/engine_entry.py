@@ -61,7 +61,15 @@ def run_classic(env_file: str) -> int:
 
 
 def run_local(env_file: str) -> int:
+    from voice_assistant import agent
     from voice_assistant import local_engine
+
+    # The common runtime owns the startup-loader lifecycle for every engine.
+    # Local still uses the configured profile for its audio devices and
+    # semantic sounds, but must not start a second loader in the child.
+    if os.getenv("LSA_COMMON_STARTUP_LIFECYCLE") == "1":
+        agent.VoiceAssistant.start_startup_loader_sound = lambda self: None
+        agent.VoiceAssistant.stop_startup_loader_sound = lambda self: None
 
     return local_engine.run(env_file)
 

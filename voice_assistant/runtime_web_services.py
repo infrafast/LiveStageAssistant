@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
+from .backend_audio_devices import list_backend_audio_devices
 from .backend_audio_input import BackendAudioInputService
 from .backend_audio_sample import BackendAudioSamplePlayer, speaker_profile_sample_path
 from .backend_tts import BackendTtsTester
@@ -598,6 +599,17 @@ class RuntimeWebServices:
         ]
         backend_input = str(values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
         backend_output = str(values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
+        backend_audio_devices = list_backend_audio_devices()
+        for direction, selected in (("inputs", backend_input), ("outputs", backend_output)):
+            if selected and not any(item.get("id") == selected for item in backend_audio_devices[direction]):
+                backend_audio_devices[direction].append({
+                    "id": selected,
+                    "label": f"{selected} (configured, unavailable)",
+                    "name": selected,
+                    "default": False,
+                    "available": False,
+                    "reason": "Configured in the active .env but not currently detected",
+                })
         return {
             "provider": provider,
             "selected_connectivity_mode": connectivity,
@@ -659,10 +671,8 @@ class RuntimeWebServices:
             "speaker_recognition_runtime": {},
             "selected_speaker_profiles_max": max(0, min(5, self._int(values, "SPEAKER_PROFILES_MAX", 5))),
             "speaker_profiles": self._speaker_profiles(values),
-            # Device enumeration moves to the common audio service. Preserve the
-            # selected ids meanwhile so the current config remains visible.
-            "backend_audio_inputs": ([{"id": backend_input, "label": backend_input, "name": backend_input, "default": False}] if backend_input else []),
-            "backend_audio_outputs": ([{"id": backend_output, "label": backend_output, "name": backend_output, "default": False}] if backend_output else []),
+            "backend_audio_inputs": backend_audio_devices["inputs"],
+            "backend_audio_outputs": backend_audio_devices["outputs"],
             "selected_backend_audio_input_device": backend_input,
             "selected_backend_audio_output_device": backend_output,
             "thinking_sounds": self._wav_options(),
