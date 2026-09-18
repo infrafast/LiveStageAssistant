@@ -88,3 +88,33 @@ def startup_ready_message(
         "Assistant vocal prêt à exécuter des commandes, {tool_count} outils disponibles !",
     )
     return template.format(tool_count=count) + wake_word_suffix
+
+
+def startup_deterministic_ready_message(
+    *,
+    stt_language: str | None,
+    gateway_count: int,
+    wake_words: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    """Build the shared deterministic-Local READY announcement."""
+    locale = load_locale(stt_language)
+    count = max(0, int(gateway_count or 0))
+    normalized_wake_words = [str(item).strip() for item in (wake_words or []) if str(item).strip()]
+    wake_word_suffix = _wake_word_suffix(locale, normalized_wake_words)
+    language = str(locale.get("locale") or "fr").strip().lower()
+
+    if count <= 0:
+        base = (
+            "Deterministic local assistant ready, but no MCP command gateway is available."
+            if language == "en"
+            else "Assistant local déterministe prêt, mais aucune commande MCP n'est disponible."
+        )
+        return base + wake_word_suffix
+
+    if language == "en":
+        noun = "gateway" if count == 1 else "gateways"
+        base = f"Deterministic local assistant ready, {count} MCP {noun} available."
+    else:
+        noun = "passerelle" if count == 1 else "passerelles"
+        base = f"Assistant local déterministe prêt, {count} {noun} MCP disponible{'s' if count != 1 else ''}."
+    return base + wake_word_suffix
