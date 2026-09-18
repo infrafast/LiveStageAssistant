@@ -571,6 +571,103 @@ def run_payload_delta_diagnosis(base_url: str, model: str, timeout: float) -> No
 
 
 
+def run_steady_state_diagnosis(
+    base_url: str,
+    model: str,
+    timeout: float,
+    repeats: int,
+) -> None:
+    """Measure repeated warm tool calls with one resident runner and no unloads."""
+    print(" STEADY-STATE diagnosis")
+
+    try:
+        unload_model(base_url, model)
+    except Exception:
+        pass
+    load_started = time.perf_counter()
+    load_model(base_url, model, "10m")
+    load_elapsed = time.perf_counter() - load_started
+    resident = running_models(base_url)
+    print(
+        f"  preload={load_elapsed:.2f}s "
+        f"resident={','.join(resident) if resident else '<none>'}"
+    )
+
+    variants = [
+        (
+            "legacy-monte",
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": LEGACY_PROMPT},
+                    {"role": "user", "content": "monte Claude"},
+                ],
+                "tools": LEGACY_TOOLS,
+                "stream": False,
+            },
+            "adjust_level",
+        ),
+        (
+            "resolve-current-no-num-ctx",
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": BASELINE_PROMPT},
+                    {"role": "user", "content": "résous Claude"},
+                ],
+                "tools": [TOOLS["resolve_target"]],
+                "stream": False,
+                "think": False,
+                "keep_alive": "10m",
+                "options": {
+                    "temperature": 0,
+                    "num_predict": 48,
+                },
+            },
+            "resolve_target",
+        ),
+    ]
+
+    for label, payload, expected in variants:
+        timings: list[float] = []
+        print(f"  {label}")
+        for i in range(1, max(1, repeats) + 1):
+            started = time.perf_counter()
+            try:
+                response = http_json(
+                    f"{base_url.rstrip('/')}/api/chat",
+                    payload,
+                    timeout,
+                )
+            except Exception as exc:
+                elapsed = time.perf_counter() - started
+                print(f"    run {i}: ERROR after {elapsed:.2f}s: {exc}")
+                continue
+
+            elapsed = time.perf_counter() - started
+            timings.append(elapsed)
+            message = response.get("message") or {}
+            calls = message.get("tool_calls") or []
+            described = describe_calls(calls)
+            ok = len(described) == 1 and described[0][0] == expected
+            print(
+                f"    run {i}: {elapsed:.2f}s "
+                f"load={duration_s(response, 'load_duration'):.2f}s "
+                f"prompt_eval={duration_s(response, 'prompt_eval_duration'):.2f}s/"
+                f"{int(response.get('prompt_eval_count') or 0)}tok "
+                f"eval={duration_s(response, 'eval_duration'):.2f}s/"
+                f"{int(response.get('eval_count') or 0)}tok "
+                f"{'CORRECT' if ok else 'WRONG'}"
+            )
+        if timings:
+            ordered = sorted(timings)
+            median = ordered[len(ordered) // 2]
+            print(
+                f"    summary: min={min(timings):.2f}s "
+                f"median={median:.2f}s max={max(timings):.2f}s"
+            )
+
+
 def run_case(
     base_url: str,
     model: str,
@@ -685,6 +782,12 @@ def main() -> int:
         action="store_true",
         help="Run only the four-call legacy-vs-current payload A/B diagnosis.",
     )
+    parser.add_argument(
+        "--steady-only",
+        action="store_true",
+        help="Run repeated warm calls with one resident runner and no unloads.",
+    )
+    parser.add_argument("--repeats", type=int, default=3)
     args = parser.parse_args()
 
     models = [item.strip() for item in args.models.split(",") if item.strip()]
@@ -711,6 +814,21 @@ def main() -> int:
 
         if args.delta_only:
             run_payload_delta_diagnosis(args.base_url, model, args.timeout)
+            try:
+                unload_model(args.base_url, model)
+                print(f"  unloaded tested model: {model}")
+            except Exception as exc:
+                print(f"  warning: could not unload tested model {model}: {exc}")
+            print()
+            continue
+
+        if args.steady_only:
+            run_steady_state_diagnosis(
+                args.base_url,
+                model,
+                args.timeout,
+                args.repeats,
+            )
             try:
                 unload_model(args.base_url, model)
                 print(f"  unloaded tested model: {model}")
