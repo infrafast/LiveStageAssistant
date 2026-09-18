@@ -234,8 +234,14 @@ def build_assistant(
         reload_event=None,
         web_monitor=command_monitor,
     )
+    profile_label = "Local deterministic engine" if assistant_class_override is not None else "Classic engine"
+    identity_label = (
+        f"runtime={assistant.llm_provider}/{assistant.model}"
+        if assistant_class_override is not None
+        else f"llm={assistant.llm_provider}/{assistant.model}"
+    )
     print(
-        f"Classic engine profile: connectivity={connectivity} llm={assistant.llm_provider}/{assistant.model} "
+        f"{profile_label} profile: connectivity={connectivity} {identity_label} "
         f"tts={assistant.tts_provider} speech_gain={speech_gain:.2f}",
         flush=True,
     )
