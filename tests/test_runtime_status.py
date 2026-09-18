@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from voice_assistant.runtime import _update_mcp_status_from_line
 from voice_assistant.runtime_status import (
     MCPRuntimeStatus,
     RuntimeStatus,
@@ -84,3 +85,35 @@ def test_runtime_status_tracker_updates_only_named_server(tmp_path: Path):
     loaded = read_status_file(path)
     assert loaded["ready"] is True
     assert loaded["model"] == "model-z"
+
+
+def test_local_gateway_log_lines_update_actual_mcp_health(tmp_path: Path):
+    path = tmp_path / "runtime-status.json"
+    tracker = RuntimeStatusTracker(
+        path,
+        RuntimeStatus(
+            connectivity="offline",
+            engine="local",
+            provider="local",
+            model="deterministic",
+            mcp=(
+                MCPRuntimeStatus("mixer", "stdio", "stdio", "open", healthy=None),
+                MCPRuntimeStatus("qlcplus", "stdio", "stdio", "open", healthy=None),
+            ),
+        ),
+    )
+
+    _update_mcp_status_from_line(
+        tracker,
+        "LSA Local gateway: mixer protocol=lsa-command-gateway/v1 permission=open",
+    )
+    _update_mcp_status_from_line(
+        tracker,
+        "Local gateway unsupported: qlcplus: lsa-command-gateway/v1 tools not exposed",
+    )
+
+    loaded = read_status_file(path)
+    assert loaded["mcp"][0]["healthy"] is True
+    assert "compatible deterministic" in loaded["mcp"][0]["detail"]
+    assert loaded["mcp"][1]["healthy"] is False
+    assert "unavailable" in loaded["mcp"][1]["detail"]
