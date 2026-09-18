@@ -112,8 +112,19 @@ def _speaker_profiles(values: dict[str, Any]) -> list[SpeakerProfile]:
     return profiles
 
 
-def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
-    """Build one Classic/Local engine from a profile without constructing a GUI."""
+def build_assistant(
+    env_file: str | Path,
+    *,
+    assistant_class_override: type[agent.VoiceAssistant] | None = None,
+    llm_provider_override: str | None = None,
+    model_override: str | None = None,
+) -> agent.VoiceAssistant:
+    """Build one speech engine from a profile without constructing a GUI.
+
+    Overrides exist for the deterministic Local engine so it can reuse the
+    proven microphone/wake/Whisper/Piper stack without constructing an LLM.
+    Classic callers use the historical defaults unchanged.
+    """
     path = Path(env_file).expanduser().resolve()
     values: dict[str, Any] = dict(dotenv_values(path))
     load_dotenv(path, override=True)
@@ -149,14 +160,20 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
     local_gain = max(0.0, min(2.0, _float(values, "LOCAL_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
     speech_gain = local_gain if tts_config.backend_provider == "piper" or offline else cloud_gain
 
-    assistant_class = NativeOllamaMcpVoiceAssistant if offline else agent.VoiceAssistant
+    assistant_class = assistant_class_override or (NativeOllamaMcpVoiceAssistant if offline else agent.VoiceAssistant)
+    resolved_model = model_override if model_override is not None else (
+        str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or agent.DEFAULT_OLLAMA_MODEL).strip()
+        if offline
+        else str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
+    )
+    resolved_provider = llm_provider_override if llm_provider_override is not None else (
+        "ollama" if offline else str(values.get("LLM_PROVIDER") or "openai").strip().lower()
+    )
     assistant = assistant_class(
         openai_api_key=_secret(values, "OPENAI_API_KEY"),
         elevenlabs_api_key=_secret(values, "ELEVENLABS_API_KEY"),
-        model=str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or agent.DEFAULT_OLLAMA_MODEL).strip()
-        if offline
-        else str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip(),
-        llm_provider="ollama" if offline else str(values.get("LLM_PROVIDER") or "openai").strip().lower(),
+        model=resolved_model,
+        llm_provider=resolved_provider,
         ollama_base_url=str(values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip(),
         stt_provider="local-whisper" if offline else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
         local_whisper_model=str(values.get("LOCAL_WHISPER_MODEL") or "base").strip(),
