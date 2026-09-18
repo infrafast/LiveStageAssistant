@@ -895,20 +895,22 @@ QLCPlus is the first minimal vertical slice because its current exact-caption sa
 - [~] automated corpus covers state/list plan classification, exact caption/case behavior, accent/separator mismatch, stale project generation and duplicate-write prevention; additional explicit no-match/not-ready/token-expiry cases remain useful before live acceptance;
 - [ ] measure analysis+execution overhead inside MCP excluding QLC native action: target <100 ms typical on Pi5.
 
-#### OR4B2 - XMSeries-MCP local gateway MVP
+#### OR4B2 - XMSeries-MCP local gateway MVP — IN PROGRESS
+
+Implementation is active in XMSeries-MCP PR #11 on `or4b2-deterministic-gateway`. The branch pins `stage-command-core@fa9f8baef06a668efb18b1bfc50060335689f287`, reuses the current XMSeries resolver/OSC client, and adds only the high-value basic grammar. Automated CI is the next gate; Pi/LSA live acceptance is not yet validated.
 
 Implement only the high-value basic mixer grammar first; do not port all prompt semantics in one change.
 
-- [ ] gateway disabled by default and enabled only for Local-engine sessions;
-- [ ] reuse existing live name resolver and protocol-aware low-level functions rather than duplicating resolution/OSC logic;
-- [ ] phase 1 intents: mixer status, named-target level read, absolute level write, relative level up/down, mute/unmute;
-- [ ] preserve bare-name global family resolution and current exact/contains/fuzzy safety rules;
-- [ ] ambiguous exact/contains and fuzzy-only matches return clarification, never a write plan;
-- [ ] bind plan to resolved target identity and relevant mixer/cache generation; revalidate safely before write when required;
-- [ ] Main LR default behavior remains MCP-owned;
-- [ ] deterministic localized response text comes from XMSeries-MCP;
-- [ ] existing low-level OSC MCP tools and PROMPT remain unchanged for cloud agents;
-- [ ] corpus includes French and English representative commands plus STT-like punctuation/case variants;
+- [~] gateway disabled by default and enabled only for Local-engine sessions;
+- [~] reuse existing live name resolver and protocol-aware low-level functions rather than duplicating resolution/OSC logic;
+- [~] phase 1 intents implemented in branch: mixer status, named-target level read, absolute dB level write, relative level up/down, mute/unmute;
+- [~] preserve bare-name global family resolution and current exact/contains/structured/fuzzy safety rules;
+- [~] ambiguous contains/structured and fuzzy-only matches return clarification, never a write plan;
+- [~] bind plan to resolved target identity and re-resolve before every write; stale identity changes fail closed;
+- [~] Main LR/façade alias behavior remains MCP-owned;
+- [~] deterministic localized response text comes from XMSeries-MCP;
+- [~] existing low-level OSC MCP tools and PROMPT remain unchanged for cloud agents;
+- [~] corpus includes French and English representative commands; STT-like punctuation/case expansion remains pending;
 - [ ] target analysis+execution overhead excluding mixer/network I/O: <100 ms typical on Pi5.
 
 #### OR4B3 - LSA deterministic Local engine
