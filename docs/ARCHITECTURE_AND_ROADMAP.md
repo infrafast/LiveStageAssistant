@@ -941,9 +941,9 @@ Basic XMSeries read/write acceptance is complete, so advanced parity is now unlo
 - [~] source -> destination sends and structured ownership phrases: channel -> bus absolute/relative commands implemented; live rack acceptance still pending;
 - [~] dB and percent, absolute and relative semantics: implemented for single targets and channel -> bus; live rack acceptance still pending;
 - [ ] speaker-context defaults without moving speaker business logic into LSA;
-- [ ] bulk/group operations;
+- [~] bulk/group operations: XMSeries-MCP PR #14 merged as `f98d9ac0c09b9a98a61bde8b574a86aef7ece0ac` with Node 20.20/22 CI green; deterministic parser parity now covers selected/all/all-except bus mute and channel-send dB writes to selected/all buses, plus Main LR shorthand such as `monte le volume de 10%`; live Pi acceptance pending;
 - [~] fades/ramps and delayed actions, with all timing owned by XMSeries-MCP automation: fade-in/out, progressive absolute/relative ramps, explicit from/to ranges and delayed level changes implemented. Live rack validation now confirms `baisse progressivement batterie à -30 dB en 2 secondes` executed as a real progressive fade to -30 dB and `mets batterie à -27 dB dans 2 secondes` executed as a real delayed level change after the requested 2-second wait. Source-to-bus ramps remain pending;
-- [~] cancellation/status for automation jobs: XMSeries-MCP PR #13 merged as `43aa59c79b8424993d20339610c40309cdd2117f` with Node 20.20/22 CI green; LSA remains unchanged and only transports the opaque gateway plan; live Pi acceptance pending;
+- [x] cancellation/status for automation jobs: XMSeries-MCP PR #13 merged as `43aa59c79b8424993d20339610c40309cdd2117f` with Node 20.20/22 CI green; live Pi acceptance confirmed that a long fade could be listed while running, cancelled via `annule la dernière automation`, and the channel restored afterwards; LSA remained unchanged and only transported the opaque gateway plan;
 - [ ] expand multilingual/STT corpus only from observed commands; avoid unconstrained fuzzy NLP;
 - [ ] maintain a domain corpus as the regression source of truth and review PROMPT changes against the same semantic cases to limit cloud/local drift.
 
