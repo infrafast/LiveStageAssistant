@@ -976,12 +976,14 @@ Cleanup happens **after OR4B3 live validation**, not before.
 
 - [x] pin one gateway protocol/core version known to work across LSA + XMSeries-MCP + QLCPlus-MCP: both gateway servers pin `stage-command-core@fa9f8baef06a668efb18b1bfc50060335689f287`, while LSA requires `lsa-command-gateway/v1`;
 - [x] incompatible gateway version -> Local engine marks that MCP unsupported; protocol-schema discovery is regression-tested and never attempts a best-effort write;
-- [ ] validate STDIO first; validate persistent local HTTP only with an explicitly gateway-enabled instance;
+- [~] validate STDIO first; `scripts/or4c_local_gateway_acceptance.py` now provides the domain-neutral Pi/rack acceptance harness and JSON latency evidence; real rack execution remains pending. Validate persistent local HTTP only with an explicitly gateway-enabled instance;
 - [~] gateway-disabled MCP regression tests preserve the pre-OR4 low-level tool/prompt inventory; live cloud/external-client confirmation remains pending;
 - [x] local gateway tools are disabled by default and absent from normal MCP/cloud tool inventories unless the dedicated Local child overlay enables them;
 - [~] automated tests cover approval, clarification routing, stale-plan/identity and duplicate/one-shot write protection; timeout behavior remains part of the live cross-repository gate;
 - [ ] measure accepted-transcript -> MCP action latency, CPU and RAM with QLC+, Whisper/Piper and rack services active;
 - [ ] target simple deterministic command completion <=1 s excluding STT/TTS, and materially below historical Ollama CPU load.
+
+Live rack procedure: [OR4C Raspberry Pi deterministic gateway acceptance](OR4C_PI_ACCEPTANCE.md).
 
 #### OR4D - Production cutover
 

@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "text": "statut mixer",
+      "expected": "ready",
+      "effect": "read"
+    },
+    {
+      "text": "qlc état",
+      "expected": "ready",
+      "effect": "read"
+    },
+    {
+      "text": "liste tous les contrôles qlc",
+      "expected": "ready",
+      "effect": "read"
+    },
+    {
+      "text": "qlc __REMPLACER_PAR_UNE_CAPTION_EXACTE__",
+      "expected": "ready",
+      "effect": "write",
+      "execute": false
+    }
+  ]
+}
