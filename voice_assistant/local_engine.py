@@ -16,6 +16,7 @@ from dotenv import dotenv_values
 from . import agent
 from . import classic_engine
 from .local_gateway_runtime import DeterministicGatewayOrchestrator
+from .startup_messages import startup_deterministic_ready_message
 
 
 class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
@@ -24,6 +25,7 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.local_gateway_orchestrator: DeterministicGatewayOrchestrator | None = None
+        self.local_gateway_names: tuple[str, ...] = ()
         # Explicit non-LLM identity used by logs/diagnostics.
         self.llm_provider = "local"
         self.model = "deterministic"
@@ -49,10 +51,9 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
             )
             discovered = await orchestrator.start()
             self.local_gateway_orchestrator = orchestrator
+            self.local_gateway_names = tuple(discovered)
             self.mcp_client = orchestrator.client
-            # Startup messaging expects a tool count. Count only the two
-            # reserved gateway tools per capable MCP, not ordinary cloud tools.
-            self.mcp_all_tools = [object() for _ in range(len(discovered) * 2)]
+            self.mcp_all_tools = []
             if not discovered:
                 self.mcp_initialization_error = (
                     "No MCP server exposes the compatible deterministic Local gateway"
@@ -71,6 +72,17 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
             self.mcp_initialization_error = str(exc)
             print(f"LSA Local MCP initialization failed: {exc}", flush=True)
             return False
+
+    def _startup_ready_message(
+        self,
+        loaded_servers: list[str],
+        failed_servers: dict[str, str] | None = None,
+    ) -> str:
+        return startup_deterministic_ready_message(
+            stt_language=self.stt_language,
+            gateway_count=len(self.local_gateway_names),
+            wake_words=getattr(self, "wake_words", []),
+        )
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
         print("LSA Local ready: deterministic", flush=True)
