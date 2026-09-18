@@ -119,8 +119,14 @@ async def _run_case(
     started = time.perf_counter()
     candidates = orchestrator._routed_servers(text)
 
+    context_value = case.get("context")
+    context = dict(context_value) if isinstance(context_value, Mapping) else None
+
     results = await asyncio.gather(
-        *(orchestrator._analyze(server, text) for server in candidates),
+        *(
+            orchestrator._analyze(server, text, context=context)
+            for server in candidates
+        ),
         return_exceptions=True,
     )
     analysis_ms = (time.perf_counter() - started) * 1000.0
@@ -200,6 +206,7 @@ async def _run_case(
     total_ms = (time.perf_counter() - started) * 1000.0
     return {
         "text": text,
+        "context": context,
         "expected": expected,
         "actual": actual,
         "server": selected_server or None,
