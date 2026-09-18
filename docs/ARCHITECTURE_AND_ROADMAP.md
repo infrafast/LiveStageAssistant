@@ -881,19 +881,19 @@ Target analysis response:
 
 Clarification returns `status=clarification`, localized `responseText` and an opaque `continuationToken`; execution returns structured success/error plus localized `responseText`. LSA must never inspect domain plan internals.
 
-#### OR4B1 - QLCPlus-MCP local gateway vertical slice
+#### OR4B1 - QLCPlus-MCP local gateway vertical slice — IMPLEMENTED / AUTOMATED CI VALIDATED
 
-QLCPlus is the first minimal vertical slice because its current exact-caption safety policy is small and already server-authoritative.
+QLCPlus is the first minimal vertical slice because its current exact-caption safety policy is small and already server-authoritative. QLCPlus-MCP PR #7 is merged on `main` as `97ebf54670d2e3e70841ce803f1897a9d2a7e0a0`. Node 20.20/22 `npm ci` + TypeScript build + test CI is green. LiveStageAssistant/Pi end-to-end acceptance and Pi latency measurement remain pending.
 
-- [ ] gateway registration is disabled by default and enabled only by the Local-engine environment/capability flag;
-- [ ] implement deterministic intents for local state/list requests and explicit QLC button commands;
-- [ ] preserve the exact execution identity rule: case-insensitive only; spaces, punctuation, accents, `_` and `-` remain significant;
-- [ ] shared normalization may help identify the command prefix but must never normalize the caption used for authorization/execution;
-- [ ] bind plans to the current native project/inventory generation and reject stale plans;
-- [ ] produce deterministic localized success/error/clarification text so LSA needs no LLM response formatter;
-- [ ] existing `qlc_get_state`, `qlc_list_widgets`, `qlc_button_press`, PROMPT and cloud-agent behavior remain unchanged;
-- [ ] unit corpus: exact caption, case-only variant, list-all, partial discovery, no-match, accent/separator mismatch, not-ready, project generation change;
-- [ ] target analysis+execution overhead inside MCP excluding QLC native action: <100 ms typical on Pi5.
+- [x] gateway registration is disabled by default and enabled only by the Local-engine environment/capability flag;
+- [x] implement deterministic intents for local state/list requests and explicit QLC button commands;
+- [x] preserve the exact execution identity rule: case-insensitive only; spaces, punctuation, accents, `_` and `-` remain significant;
+- [x] shared normalization may help identify the command prefix but never normalizes the caption used for authorization/execution;
+- [x] bind button plans to the current native project/inventory generation and reject stale plans;
+- [x] produce deterministic localized success/error/clarification text so LSA needs no LLM response formatter;
+- [x] existing `qlc_get_state`, `qlc_list_widgets`, `qlc_button_press`, PROMPT and cloud/ordinary tool inventory remain unchanged when the Local gateway is disabled;
+- [~] automated corpus covers state/list plan classification, exact caption/case behavior, accent/separator mismatch, stale project generation and duplicate-write prevention; additional explicit no-match/not-ready/token-expiry cases remain useful before live acceptance;
+- [ ] measure analysis+execution overhead inside MCP excluding QLC native action: target <100 ms typical on Pi5.
 
 #### OR4B2 - XMSeries-MCP local gateway MVP
 
