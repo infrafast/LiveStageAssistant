@@ -170,6 +170,40 @@ async def test_routing_analyzes_only_matching_server_then_executes_once():
 
 
 @pytest.mark.asyncio
+async def test_generic_context_is_forwarded_to_analyze_calls():
+    mixer = FakeSession(
+        analyze=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "recognized": True,
+            "status": "ready",
+            "effect": "read",
+            "planToken": "ctx-plan",
+        },
+        execute=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "ok": True,
+            "responseText": "ok",
+        },
+    )
+    orchestrator = DeterministicGatewayOrchestrator(
+        config(("mixer", stdio_entry())),
+        client=FakeClient({"mixer": mixer}),
+    )
+    await orchestrator.start()
+    context = {
+        "speaker": {
+            "name": "Laurent",
+            "confidence": 0.91,
+            "backend": "resemblyzer",
+        }
+    }
+
+    assert await orchestrator.handle("monte mon retour", context=context) == "ok"
+    assert mixer.calls[0][0] == ANALYZE_TOOL
+    assert mixer.calls[0][1]["context"] == context
+
+
+@pytest.mark.asyncio
 async def test_unrouted_one_claim_executes_and_multiple_claims_never_execute():
     def claim(label):
         return FakeSession(
