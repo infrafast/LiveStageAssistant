@@ -27,6 +27,8 @@ The service restarts automatically after crashes with `Restart=always` and `Rest
 
 The installer copies `.env.online` and `.env.offline` to `/etc/livestageassistant/` and makes that directory writable by `pi`. The service sets `ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant`, so `auto` loads `.env.online` when internet is reachable and `.env.offline` when it is not. Both profiles point `MCP_CONFIG` to `raspi_service_pack_stdio/mcp_servers_raspi.json`, so the stdio MCP servers keep using repo-relative paths to the sibling MCP folders. The web Config -> MCP Servers routing editor writes to the active `MCP_CONFIG`; keep that JSON writable by `pi` if you move it outside the repo.
 
+The bundled XR16 mixer entry explicitly sets `OSC_CHANNEL_COUNT=16`, `OSC_BUS_COUNT=4`, `OSC_FX_COUNT=4` and `OSC_DCA_COUNT=4`. Keep those limits aligned with the actual mixer model: deterministic name resolution scans only the configured ranges, and oversized XR counts can otherwise cause reads against unsupported indexes.
+
 When the active profile is offline with `LLM_PROVIDER=ollama`, the assistant verifies the local Ollama API. If Ollama is not already running and `OLLAMA_BASE_URL` is local, it starts `ollama serve`, ensures the selected model is available, and stops only that LSA-started Ollama process when internet returns or the service stops. Set `OLLAMA_AUTO_START=false` if you want to manage Ollama entirely outside Live Stage Assistant.
 
 ## Prerequisites
