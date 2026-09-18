@@ -397,8 +397,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
                                 |
                        Common WebMonitor
 ```
-## RV prompt and spoken-language policyThe VAD has no language prompt. Prompting applies to the realtime model/session, not speech-boundary detection.At engine instantiation, LSA logs the exact final consolidated prompt that is sent to the selected LLM path. Classic/OpenAI/Ollama log the prompt after freshness and MCP prompt merging, backend Realtime logs the prompt after MCP prompt merging and realtime voice-control contract composition, and browser Realtime logs the instructions passed to the browser session secret flow.`ASSISTANT_SYSTEM_PROMPT` and `STT_PROMPT` are prompt-file references, not inline prompt bodies. By default they point to `data/prompt/assistant_system_prompt.md` and `data/prompt/stt_prompt.md`. The Web GUI exposes these values as dropdowns populated from `data/prompt/*.md` and `data/prompt/*.txt`; the selected file path is persisted in the active env profile and resolved relative to the env profile directory first, then relative to the project root for CLI, service and Docker execution.```text
-PROMPT.md / general LSA instructions
+## RV prompt and spoken-language policyThe VAD has no language prompt. Prompting applies to the realtime model/session, not speech-boundary detection.At engine instantiation, LSA logs the exact final consolidated prompt that is sent to the selected LLM path. Classic/OpenAI/Ollama log the prompt after freshness and MCP prompt merging, backend Realtime logs the prompt after MCP prompt merging and realtime voice-control contract composition, and browser Realtime logs the instructions passed to the browser session secret flow.`ASSISTANT_SYSTEM_PROMPT` and `STT_PROMPT` are prompt-file references, not inline prompt bodies. By default they point to `data/prompt/assistant_system_prompt.md` and `data/prompt/stt_prompt.md`. The Web GUI exposes these values as dropdowns populated from `data/prompt/*.md` and `data/prompt/*.txt`; the selected file path is persisted in the active env profile and resolved relative to the env profile directory first, then relative to the project root for CLI, service and Docker execution.```textPROMPT.md / general LSA instructions
               +
 realtime voice addendum
               =
@@ -797,8 +796,7 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 - [x] future engines require no separate network watcher implementation.
 ### OR3 - Local TTS for offline mode — FUNCTIONALLY VALIDATED ON PI5
 - [x] shared local-TTS adapter without coupling it to Realtime provider code;- [x] `.env.offline` remains fully cloud-independent;
-- [x] local speech model/settings documented and installed automatically;
-- [x] local-engine responses routed through local TTS on Pi5;
+- [x] local speech model/settings documented and installed automatically;- [x] local-engine responses routed through local TTS on Pi5;
 - [x] common-runtime Internet-loss/offline-transition and local READY announcements validated;
 - [x] historical system-TTS implementation removed after local-TTS validation;
 - [~] qualitative voice validation complete; quantitative synthesis latency/CPU/RAM/startup measurements remain optional;
@@ -821,7 +819,7 @@ Architecture constraints:
 - existing low-level MCP tools remain available for cloud agents, Realtime and diagnostics;
 - no automatic retry may replay an ambiguous control write.
 
-#### OR4A - Native Ollama tool-calling feasibility — [~] STEADY-STATE MODEL SELECTION
+#### OR4A - Native Ollama tool-calling feasibility — [x] BENCHMARKED, NOT SELECTED FOR STAGE-CONTROL PATH
 
 - [x] implemented a generic `NativeOllamaMcpVoiceAssistant` isolated to the supervised Offline/Local engine;
 - [x] reused actual discovered MCP tools while excluding resource/prompt wrappers from callable functions;
@@ -841,11 +839,13 @@ Architecture constraints:
 - [~] first delta-only run was invalid for warm A/B comparison because it began with no resident model; A/B timed out cold and C/D each reported ~6.5-7.4 s model load plus ~7.4-7.7 s prompt evaluation before generation. The harness now unloads/reloads explicitly before every A/B/C/D variant, verifies residency via `/api/ps`, and measures inference only after a load-only `messages=[]` request, matching Ollama's documented model-load contract.
 - [x] follow-up under low base load (~15% CPU) showed `resolve_target` minimal and correct in 11.93 s, while the same call under ~60% base CPU took 19.52 s; CPU contention is therefore a first-order latency factor for Pi5 local inference. The same run showed `D resolve+runtime-options` reporting `load=6.26 s` after preload because OR4 forced `num_ctx=2048` while the resident runner used the default context. Ollama treats `num_ctx` as a runner option; changing it can force a runner reload;
 - [x] OR4 runtime no longer sends request-level `num_ctx`; it keeps Ollama's resident/default context and retains only `temperature=0`, bounded `num_predict`, `think=false` and `keep_alive`. Unit expectation updated accordingly;
-- [~] steady-state benchmark added: preload one model once, keep one runner resident, then repeat warm legacy and current one-tool calls without unload/reload. Run this for `llama3.2:3b` and `llama3.2:1b` before selecting the offline planner model. This measures realistic service behavior rather than repeated cold starts.
+- [x] steady-state benchmark completed with one resident runner and representative services active. For `llama3.2:3b`, the current one-tool resolver produced correct warm calls in 9.50-9.73 s after a first 19.89 s cache/cold-path call; legacy tool calls remained 15.38-17.80 s warm. For `llama3.2:1b`, the current resolver produced 9.73-10.21 s warm after a 13.58 s first call, while legacy calls were 13.39-13.72 s and included an incorrect tool decision. The 1B therefore provides no material latency advantage and worse reliability;
+- [x] CPU remained effectively saturated at 100% throughout local Ollama inference in both low-background-load and services-active tests. Background service load materially increases latency because Ollama is CPU-only on this Pi;
+- [x] production conclusion: OR4A proves native local Ollama tool calling is technically functional but unsuitable for the stage-control critical path on the current Pi5. A realistic command often requires resolver/tool/final-response passes, so even the best ~9-10 s warm single-pass result implies roughly 20-30 s for multi-step commands while monopolizing CPU. Keep OR4A code as an experimental/reference path only; do not select 1B or 3B as the production command planner.
 
-The OR4A code remains an experimental reference. OR4B stays a candidate pivot but must not replace OR4A until the isolated benchmark is conclusive.
+The OR4A code remains an experimental reference for offline conversation/research. OR4B is now the selected next direction for the production stage-control command path.
 
-#### OR4B - Deterministic MCP natural-command gateway — CANDIDATE PIVOT
+#### OR4B - Deterministic MCP natural-command gateway — NEXT
 
 **Target contract:** each MCP that wants fast Offline/Local command handling may expose a generic LSA command gateway while retaining all existing low-level tools.
 
