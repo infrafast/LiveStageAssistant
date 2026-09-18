@@ -79,6 +79,8 @@ Explicit online or offline engine profiles can also be started through the commo
 .venv/bin/python -m voice_assistant.runtime --env-file .env.offline
 ```
 
+The repository-level `.env.offline` uses `mcp_servers.json`. For the bundled XR16 rack profile, that file pins XMSeries-MCP to 16 channels, 4 buses, 4 FX returns and 4 DCA groups so deterministic name resolution does not scan unsupported XR indexes. The Raspberry Pi service profile uses `raspi_service_pack_stdio/mcp_servers_raspi.json`, which carries the same XR16 limits.
+
 On Windows PowerShell, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
 
 When the web monitor is enabled, startup prints an address similar to:
