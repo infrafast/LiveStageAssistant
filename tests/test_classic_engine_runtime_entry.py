@@ -59,6 +59,34 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
         self.assertEqual(assistant.kwargs["tts_provider"], "piper")
         self.assertEqual(assistant.kwargs["backend_tts_volume"], 1.25)
 
+
+    def test_deterministic_local_override_forces_local_speech_even_online(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_file = root / ".env"
+            env_file.write_text(
+                "CONNECTIVITY_MODE=online\n"
+                "STT_PROVIDER=openai-whisper\n"
+                "CLOUD_TTS_PROVIDER=openai\n"
+                "CLOUD_TTS_OUTPUT_GAIN=0.25\n"
+                "LOCAL_TTS_OUTPUT_GAIN=1.25\n"
+                "STT_LANGUAGE=fr\n",
+                encoding="utf-8",
+            )
+            assistant = classic_engine.build_assistant(
+                env_file,
+                assistant_class_override=DummyAssistant,
+                llm_provider_override="local",
+                model_override="deterministic",
+                force_local_speech=True,
+            )
+
+        self.assertEqual(assistant.kwargs["llm_provider"], "local")
+        self.assertEqual(assistant.kwargs["model"], "deterministic")
+        self.assertEqual(assistant.kwargs["stt_provider"], "local-whisper")
+        self.assertEqual(assistant.kwargs["tts_provider"], "piper")
+        self.assertEqual(assistant.kwargs["backend_tts_volume"], 1.25)
+
     def test_speaker_profile_slug_is_local_and_stable(self):
         profiles = classic_engine._speaker_profiles(
             {
