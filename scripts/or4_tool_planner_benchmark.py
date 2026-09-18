@@ -429,6 +429,114 @@ def run_legacy_exact(base_url: str, model: str, timeout: float) -> None:
         print(f"    LEGACY PARITY: {'CORRECT' if ok else 'WRONG'} expected={expected}")
 
 
+def run_payload_delta_diagnosis(base_url: str, model: str, timeout: float) -> None:
+    """Four-call A/B diagnosis between the working legacy and current OR4 payloads."""
+    print(" PAYLOAD DELTA diagnosis")
+
+    variants = [
+        (
+            "A legacy-minimal",
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": LEGACY_PROMPT},
+                    {"role": "user", "content": "monte Claude"},
+                ],
+                "tools": LEGACY_TOOLS,
+                "stream": False,
+            },
+            "adjust_level",
+        ),
+        (
+            "B legacy+runtime-options",
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": LEGACY_PROMPT},
+                    {"role": "user", "content": "monte Claude"},
+                ],
+                "tools": LEGACY_TOOLS,
+                "stream": False,
+                "think": False,
+                "keep_alive": "10m",
+                "options": {
+                    "temperature": 0,
+                    "num_ctx": 2048,
+                    "num_predict": 48,
+                },
+            },
+            "adjust_level",
+        ),
+        (
+            "C resolve-minimal",
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": BASELINE_PROMPT},
+                    {"role": "user", "content": "résous Claude"},
+                ],
+                "tools": [TOOLS["resolve_target"]],
+                "stream": False,
+            },
+            "resolve_target",
+        ),
+        (
+            "D resolve+runtime-options",
+            {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": BASELINE_PROMPT},
+                    {"role": "user", "content": "résous Claude"},
+                ],
+                "tools": [TOOLS["resolve_target"]],
+                "stream": False,
+                "think": False,
+                "keep_alive": "10m",
+                "options": {
+                    "temperature": 0,
+                    "num_ctx": 2048,
+                    "num_predict": 48,
+                },
+            },
+            "resolve_target",
+        ),
+    ]
+
+    for label, payload, expected in variants:
+        started = time.perf_counter()
+        try:
+            response = http_json(
+                f"{base_url.rstrip('/')}/api/chat",
+                payload,
+                timeout,
+            )
+        except Exception as exc:
+            elapsed = time.perf_counter() - started
+            print(f"  {label}: ERROR after {elapsed:.2f}s: {exc}")
+            continue
+
+        elapsed = time.perf_counter() - started
+        message = response.get("message") or {}
+        calls = message.get("tool_calls") or []
+        described = describe_calls(calls)
+        print(
+            f"  {label}: {elapsed:.2f}s "
+            f"load={duration_s(response, 'load_duration'):.2f}s "
+            f"prompt_eval={duration_s(response, 'prompt_eval_duration'):.2f}s/"
+            f"{int(response.get('prompt_eval_count') or 0)}tok "
+            f"eval={duration_s(response, 'eval_duration'):.2f}s/"
+            f"{int(response.get('eval_count') or 0)}tok "
+            f"tool_calls={len(calls)}"
+        )
+        for idx, (name, arguments) in enumerate(described, start=1):
+            print(
+                f"    call[{idx}]={name or '<none>'} "
+                f"args={json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
+            )
+        ok = len(described) == 1 and described[0][0] == expected
+        print(f"    DELTA: {'CORRECT' if ok else 'WRONG'} expected={expected}")
+
+
 def run_case(
     base_url: str,
     model: str,
@@ -538,6 +646,11 @@ def main() -> int:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--max-step-seconds", type=float, default=10.0)
+    parser.add_argument(
+        "--delta-only",
+        action="store_true",
+        help="Run only the four-call legacy-vs-current payload A/B diagnosis.",
+    )
     args = parser.parse_args()
 
     models = [item.strip() for item in args.models.split(",") if item.strip()]
@@ -561,6 +674,16 @@ def main() -> int:
         isolate_model(args.base_url, model)
         active = running_models(args.base_url)
         print(f"  resident models before cases: {', '.join(active) if active else '<none>'}")
+
+        if args.delta_only:
+            run_payload_delta_diagnosis(args.base_url, model, args.timeout)
+            try:
+                unload_model(args.base_url, model)
+                print(f"  unloaded tested model: {model}")
+            except Exception as exc:
+                print(f"  warning: could not unload tested model {model}: {exc}")
+            print()
+            continue
 
         run_reference_repo_style(args.base_url, model, args.timeout)
         run_legacy_exact(args.base_url, model, args.timeout)
