@@ -51,6 +51,30 @@ python scripts/or4c_local_gateway_acceptance.py --env-file .env.offline --corpus
 
 The harness never retries a write. A failed, stale, ambiguous or rejected plan remains failed.
 
+## Optional runtime context in a corpus case
+
+A corpus case may include an optional `context` object. The harness forwards it unchanged to `lsa_local_analyze_command`. This is useful for validating domain-owned behavior that depends on neutral host metadata, such as recognized-speaker context.
+
+Example:
+
+```json
+{
+  "text": "monte mon retour de 3 dB",
+  "expected": "ready",
+  "effect": "write",
+  "execute": false,
+  "context": {
+    "speaker": {
+      "name": "Laurent",
+      "confidence": 0.91,
+      "backend": "resemblyzer"
+    }
+  }
+}
+```
+
+The harness does not interpret the context. Each MCP remains responsible for its own domain semantics.
+
 ## Evidence to retain
 
 Keep the two JSON reports with the tested Git commits and rack configuration. OR4C/OR4D should only be marked live-validated after the report is reviewed together with observed mixer/QLC behavior.
