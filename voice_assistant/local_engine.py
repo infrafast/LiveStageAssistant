@@ -125,9 +125,21 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
             detail = self.mcp_initialization_error or "aucun gateway compatible"
             return f"Mode Local disponible, mais aucune commande MCP déterministe n'est disponible. Détail : {detail}"
 
+        command_context: dict[str, Any] = {}
+        if speaker_result is not None:
+            speaker_name = str(getattr(speaker_result, "speaker", "") or "unknown").strip() or "unknown"
+            command_context["speaker"] = {
+                "name": speaker_name,
+                "confidence": float(getattr(speaker_result, "confidence", 0.0) or 0.0),
+                "backend": str(getattr(speaker_result, "backend", "") or "none"),
+            }
+
         self.semantic_audio.transition(agent.SemanticAudioState.PROCESSING)
         try:
-            return await orchestrator.handle(text)
+            return await orchestrator.handle(
+                text,
+                context=command_context or None,
+            )
         except asyncio.CancelledError:
             self.semantic_audio.transition(agent.SemanticAudioState.IDLE)
             raise
