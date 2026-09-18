@@ -18,6 +18,7 @@ from dotenv import dotenv_values
 from voice_assistant.startup_messages import startup_connectivity_message
 
 CLASSIC_READY_MARKER = "LSA Classic ready:"
+LOCAL_READY_MARKER = "LSA Local ready:"
 
 
 def run_classic(env_file: str) -> int:
@@ -59,6 +60,12 @@ def run_classic(env_file: str) -> int:
     return classic_engine.run(env_file)
 
 
+def run_local(env_file: str) -> int:
+    from voice_assistant import local_engine
+
+    return local_engine.run(env_file)
+
+
 def run_realtime(env_file: str, provider: str) -> int:
     from voice_assistant.realtime import service
     from voice_assistant.realtime import wake_runtime
@@ -81,6 +88,8 @@ def main() -> int:
         return run_realtime(args.env_file, "openai")
     if args.engine == "gemini-live":
         return run_realtime(args.env_file, "gemini")
+    if args.engine == "local":
+        return run_local(args.env_file)
     return run_classic(args.env_file)
 
 

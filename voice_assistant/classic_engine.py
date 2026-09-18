@@ -112,14 +112,27 @@ def _speaker_profiles(values: dict[str, Any]) -> list[SpeakerProfile]:
     return profiles
 
 
-def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
-    """Build one Classic/Local engine from a profile without constructing a GUI."""
+def build_assistant(
+    env_file: str | Path,
+    *,
+    assistant_class_override: type[agent.VoiceAssistant] | None = None,
+    llm_provider_override: str | None = None,
+    model_override: str | None = None,
+    force_local_speech: bool = False,
+) -> agent.VoiceAssistant:
+    """Build one speech engine from a profile without constructing a GUI.
+
+    Overrides exist for the deterministic Local engine so it can reuse the
+    proven microphone/wake/Whisper/Piper stack without constructing an LLM.
+    Classic callers use the historical defaults unchanged.
+    """
     path = Path(env_file).expanduser().resolve()
     values: dict[str, Any] = dict(dotenv_values(path))
     load_dotenv(path, override=True)
 
     connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
     offline = connectivity == "offline"
+    local_speech = offline or force_local_speech
     tts_config = agent.resolve_tts_config_from_values(values)
     wake_words = get_configured_wake_words()
     monitor_mode = agent.normalize_backend_audio_monitor_mode(str(values.get("BACKEND_AUDIO_MONITOR_MODE") or "off"))
@@ -136,7 +149,15 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
     context_store = SessionContextStore(session_dir, summary_max_chars=DEFAULT_SUMMARY_MAX_CHARS)
     speaker_profiles = _speaker_profiles(values)
     command_monitor = child_monitor_from_env()
-    system_prompt = configured_system_prompt(required=False, fallback=agent.DEFAULT_ASSISTANT_SYSTEM_PROMPT, log_prefix="Classic prompt")
+    system_prompt = (
+        ""
+        if force_local_speech
+        else configured_system_prompt(
+            required=False,
+            fallback=agent.DEFAULT_ASSISTANT_SYSTEM_PROMPT,
+            log_prefix="Classic prompt",
+        )
+    )
     stt_prompt = prompt_text_from_values(
         values,
         "STT_PROMPT",
@@ -147,23 +168,29 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
 
     cloud_gain = max(0.0, min(2.0, _float(values, "CLOUD_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
     local_gain = max(0.0, min(2.0, _float(values, "LOCAL_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
-    speech_gain = local_gain if tts_config.backend_provider == "piper" or offline else cloud_gain
+    speech_gain = local_gain if tts_config.backend_provider == "piper" or local_speech else cloud_gain
 
-    assistant_class = NativeOllamaMcpVoiceAssistant if offline else agent.VoiceAssistant
-    assistant = assistant_class(
-        openai_api_key=_secret(values, "OPENAI_API_KEY"),
-        elevenlabs_api_key=_secret(values, "ELEVENLABS_API_KEY"),
-        model=str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or agent.DEFAULT_OLLAMA_MODEL).strip()
+    assistant_class = assistant_class_override or (NativeOllamaMcpVoiceAssistant if offline else agent.VoiceAssistant)
+    resolved_model = model_override if model_override is not None else (
+        str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or agent.DEFAULT_OLLAMA_MODEL).strip()
         if offline
-        else str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip(),
-        llm_provider="ollama" if offline else str(values.get("LLM_PROVIDER") or "openai").strip().lower(),
+        else str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
+    )
+    resolved_provider = llm_provider_override if llm_provider_override is not None else (
+        "ollama" if offline else str(values.get("LLM_PROVIDER") or "openai").strip().lower()
+    )
+    assistant = assistant_class(
+        openai_api_key=None if force_local_speech else _secret(values, "OPENAI_API_KEY"),
+        elevenlabs_api_key=None if force_local_speech else _secret(values, "ELEVENLABS_API_KEY"),
+        model=resolved_model,
+        llm_provider=resolved_provider,
         ollama_base_url=str(values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip(),
-        stt_provider="local-whisper" if offline else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
+        stt_provider="local-whisper" if local_speech else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
         local_whisper_model=str(values.get("LOCAL_WHISPER_MODEL") or "base").strip(),
         stt_language=str(values.get("STT_LANGUAGE") or "fr").strip(),
         stt_prompt=stt_prompt,
         stt_timeout_seconds=max(1.0, _float(values, "STT_TIMEOUT_SECONDS", agent.DEFAULT_STT_TIMEOUT_SECONDS)),
-        tts_provider=tts_config.backend_provider,
+        tts_provider="piper" if force_local_speech else tts_config.backend_provider,
         web_tts_enabled=False,
         elevenlabs_voice_id=str(values.get("ELEVENLABS_VOICE_ID") or agent.DEFAULT_ELEVENLABS_VOICE_ID).strip(),
         thinking_sound_file=str(values.get("THINKING_SOUND_FILE") or "thinking.wav").strip(),
@@ -189,7 +216,7 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
         backend_wake_word_pre_roll_ms=max(0, min(5000, _int(values, "BACKEND_WAKE_WORD_PRE_ROLL_MS", agent.DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS))),
         backend_wake_word_cooldown_ms=max(0, min(10000, _int(values, "BACKEND_WAKE_WORD_COOLDOWN_MS", agent.DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS))),
         backend_wake_word_vad_threshold=backend_wake_vad,
-        backend_stt_enabled=str(values.get("STT_INPUT") or "both").strip().lower() in {"both", "backend"},
+        backend_stt_enabled=force_local_speech or str(values.get("STT_INPUT") or "both").strip().lower() in {"both", "backend"},
         tts_speed=max(0.6, min(1.8, _float(values, "WEB_TTS_SPEED", 1.0))),
         backend_tts_volume=speech_gain,
         backend_audio_output_pan=agent.normalize_audio_pan(_float(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0)),
@@ -217,8 +244,14 @@ def build_assistant(env_file: str | Path) -> agent.VoiceAssistant:
         reload_event=None,
         web_monitor=command_monitor,
     )
+    profile_label = "Local deterministic engine" if assistant_class_override is not None else "Classic engine"
+    identity_label = (
+        f"runtime={assistant.llm_provider}/{assistant.model}"
+        if assistant_class_override is not None
+        else f"llm={assistant.llm_provider}/{assistant.model}"
+    )
     print(
-        f"Classic engine profile: connectivity={connectivity} llm={assistant.llm_provider}/{assistant.model} "
+        f"{profile_label} profile: connectivity={connectivity} {identity_label} "
         f"tts={assistant.tts_provider} speech_gain={speech_gain:.2f}",
         flush=True,
     )

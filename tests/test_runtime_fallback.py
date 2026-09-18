@@ -33,20 +33,16 @@ def test_select_fallback_does_not_loop_back_to_previous_failure():
     ) == ""
 
 
-def test_local_engine_identity_uses_ollama_model():
+def test_local_engine_identity_is_deterministic_and_ignores_ollama_settings():
     provider, model, voice = engine_identity(
         "local",
-        {"LLM_PROVIDER": "ollama", "OLLAMA_MODEL": "qwen3:8b", "OPENAI_MODEL": "gpt-4.1-mini"},
+        {
+            "LLM_PROVIDER": "ollama",
+            "OLLAMA_MODEL": "qwen3:8b",
+            "OFFLINE_MODEL": "legacy-model",
+            "OPENAI_MODEL": "gpt-4.1-mini",
+        },
     )
-    assert provider == "ollama"
-    assert model == "qwen3:8b"
+    assert provider == "local"
+    assert model == "deterministic"
     assert voice == ""
-
-
-def test_local_engine_identity_supports_legacy_offline_model():
-    provider, model, _voice = engine_identity(
-        "local",
-        {"LLM_PROVIDER": "ollama", "OFFLINE_MODEL": "qwen3:8b"},
-    )
-    assert provider == "ollama"
-    assert model == "qwen3:8b"

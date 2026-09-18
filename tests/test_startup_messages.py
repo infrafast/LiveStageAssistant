@@ -49,6 +49,24 @@ class StartupMessageTests(unittest.TestCase):
             "Assistant vocal prêt à exécuter des commandes, 16 outils disponibles ! Wake word actif, prononcez momo pour me réveiller.",
         )
 
+    def test_deterministic_local_ready_message_uses_shared_wake_suffix(self):
+        self.assertEqual(
+            startup_ready_message(tool_count=0, 
+                stt_language="fr",
+                deterministic_gateway_count=2,
+                wake_words=["momo"],
+            ),
+            "Assistant local déterministe prêt, 2 passerelles MCP disponibles. Wake word actif, prononcez momo pour me réveiller.",
+        )
+        self.assertEqual(
+            startup_ready_message(tool_count=0, 
+                stt_language="fr",
+                deterministic_gateway_count=0,
+                wake_words=[],
+            ),
+            "Assistant local déterministe prêt, mais aucune commande MCP n'est disponible.",
+        )
+
     def test_connectivity_message_uses_shared_i18n_contract(self):
         self.assertEqual(
             startup_connectivity_message(stt_language="fr", connectivity="online"),

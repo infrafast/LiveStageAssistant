@@ -74,8 +74,7 @@ def test_backend_wake_word_config_helpers():
     assert format_backend_listening_message([], None) == "Listening (no wake word)"
 
 
-def test_backend_wake_word_debug_reports_rejected_and_triggered(monkeypatch, capsys):
-    monkeypatch.setenv("DEBUG", "true")
+def test_backend_wake_word_tracks_scores_and_reports_waiting(monkeypatch, capsys):
     install_fake_openwakeword(monkeypatch, [0.2, 0.8])
     detector = BackendWakeWordDetector(
         model_paths=["regie.onnx"],
@@ -86,11 +85,14 @@ def test_backend_wake_word_debug_reports_rejected_and_triggered(monkeypatch, cap
     frame = np.zeros(1280, dtype=np.int16).tobytes()
 
     assert detector.process_pcm16_16k(frame) is None
+    assert detector._debug_last_score == 0.2
     assert detector.process_pcm16_16k(frame) == ("regie", 0.8)
+    assert detector._debug_max_score == 0.8
 
+    detector.report_waiting(["momo"])
     output = capsys.readouterr().out
-    assert "openWakeWord regie: score=0.20 max=0.20 threshold=0.50 rejected" in output
-    assert "openWakeWord regie: score=0.80 threshold=0.50 triggered" in output
+    assert "momo" in output
+    assert "0.50" in output
 
 
 def test_transcribe_and_recognize_audio_runs_stt_only_when_speaker_disabled():

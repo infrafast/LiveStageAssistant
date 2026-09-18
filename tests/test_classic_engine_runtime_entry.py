@@ -22,7 +22,10 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
             root = Path(tmp)
             env_file = root / ".env"
             env_file.write_text(text, encoding="utf-8")
-            with mock.patch.object(classic_engine.agent, "VoiceAssistant", DummyAssistant):
+            with (
+                mock.patch.object(classic_engine.agent, "VoiceAssistant", DummyAssistant),
+                mock.patch.object(classic_engine, "NativeOllamaMcpVoiceAssistant", DummyAssistant),
+            ):
                 assistant = classic_engine.build_assistant(env_file)
             return assistant
 
@@ -53,6 +56,40 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
         )
         self.assertIsNone(assistant.kwargs["web_monitor"])
         self.assertEqual(assistant.kwargs["llm_provider"], "ollama")
+        self.assertEqual(assistant.kwargs["tts_provider"], "piper")
+        self.assertTrue(assistant.kwargs["backend_stt_enabled"])
+        self.assertIsNone(assistant.kwargs["openai_api_key"])
+        self.assertIsNone(assistant.kwargs["elevenlabs_api_key"])
+        self.assertEqual(assistant.kwargs["backend_tts_volume"], 1.25)
+
+
+    def test_deterministic_local_override_forces_local_speech_even_online(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            env_file = root / ".env"
+            env_file.write_text(
+                "CONNECTIVITY_MODE=online\n"
+                "STT_PROVIDER=openai-whisper\n"
+                "STT_INPUT=browser\n"
+                "CLOUD_TTS_PROVIDER=openai\n"
+                "OPENAI_API_KEY_FILE=/definitely/missing/openai.key\n"
+                "ELEVENLABS_API_KEY_FILE=/definitely/missing/elevenlabs.key\n"
+                "CLOUD_TTS_OUTPUT_GAIN=0.25\n"
+                "LOCAL_TTS_OUTPUT_GAIN=1.25\n"
+                "STT_LANGUAGE=fr\n",
+                encoding="utf-8",
+            )
+            assistant = classic_engine.build_assistant(
+                env_file,
+                assistant_class_override=DummyAssistant,
+                llm_provider_override="local",
+                model_override="deterministic",
+                force_local_speech=True,
+            )
+
+        self.assertEqual(assistant.kwargs["llm_provider"], "local")
+        self.assertEqual(assistant.kwargs["model"], "deterministic")
+        self.assertEqual(assistant.kwargs["stt_provider"], "local-whisper")
         self.assertEqual(assistant.kwargs["tts_provider"], "piper")
         self.assertEqual(assistant.kwargs["backend_tts_volume"], 1.25)
 

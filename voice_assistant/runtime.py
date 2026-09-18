@@ -23,7 +23,7 @@ from typing import Mapping
 from dotenv import dotenv_values
 
 from voice_assistant.connectivity_manager import ConnectivityEvent, ConnectivityManager
-from voice_assistant.engine_entry import CLASSIC_READY_MARKER
+from voice_assistant.engine_entry import CLASSIC_READY_MARKER, LOCAL_READY_MARKER
 from voice_assistant.local_tts import speak_local_status
 from voice_assistant.runtime_status import RuntimeStatus, RuntimeStatusTracker, configured_mcp_statuses
 from voice_assistant.runtime_web_services import RuntimeWebServices
@@ -116,6 +116,8 @@ def select_fallback_engine(
 
 
 def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str, str]:
+    if engine == "local":
+        return ("local", "deterministic", "")
     if engine == "openai-realtime":
         return (
             "openai",
@@ -150,6 +152,8 @@ def engine_command(engine: str, env_file: Path) -> list[str]:
 
 
 def ready_marker(engine: str) -> str:
+    if engine == "local":
+        return LOCAL_READY_MARKER
     return "LSA Realtime ready:" if engine in {"openai-realtime", "gemini-live"} else CLASSIC_READY_MARKER
 
 
@@ -179,6 +183,29 @@ def _terminate_process(process: subprocess.Popen, *, timeout: float = 6.0) -> No
 
 
 def _update_mcp_status_from_line(tracker: RuntimeStatusTracker, line: str) -> None:
+    local_ready_prefix = "LSA Local gateway: "
+    if line.startswith(local_ready_prefix):
+        server = line[len(local_ready_prefix):].split(" ", 1)[0].strip()
+        if server:
+            tracker.set_mcp(
+                server,
+                healthy=True,
+                detail="compatible deterministic Local gateway",
+            )
+        return
+    local_unavailable_prefix = "Local gateway unavailable: "
+    local_unsupported_prefix = "Local gateway unsupported: "
+    for prefix in (local_unavailable_prefix, local_unsupported_prefix):
+        if line.startswith(prefix):
+            server = line[len(prefix):].split(":", 1)[0].strip()
+            if server:
+                tracker.set_mcp(
+                    server,
+                    healthy=False,
+                    detail="deterministic Local gateway unavailable",
+                )
+            return
+
     prefix = "Realtime MCP auto selection: "
     if line.startswith(prefix) and " -> " in line:
         server, result = line[len(prefix):].strip().split(" -> ", 1)
@@ -287,9 +314,12 @@ def run_engine_session(
 ) -> tuple[int | None, ConnectivityEvent | None, bool]:
     print(f"LSA runtime: engine={engine} connectivity={'online' if online else 'offline'} env={env_file}", flush=True)
 
-    if engine not in {"openai-realtime", "gemini-live"}:
+    if engine == "classic":
         for item in status_tracker.status.mcp:
-            status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=True, detail="local MCP path selected")
+            status_tracker.set_mcp(item.name, effective_transport="stdio", healthy=True, detail="classic local MCP path selected")
+    elif engine == "local":
+        for item in status_tracker.status.mcp:
+            status_tracker.set_mcp(item.name, healthy=None, detail="discovering deterministic Local gateway")
 
     loader = StartupLoader(ROOT, values)
     loader.start()

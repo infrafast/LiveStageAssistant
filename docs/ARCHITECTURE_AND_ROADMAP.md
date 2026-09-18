@@ -913,24 +913,26 @@ Implement only the high-value basic mixer grammar first; do not port all prompt 
 - [~] corpus includes French and English representative commands; STT-like punctuation/case expansion remains pending;
 - [ ] target analysis+execution overhead excluding mixer/network I/O: <100 ms typical on Pi5.
 
-#### OR4B3 - LSA deterministic Local engine
+#### OR4B3 - LSA deterministic Local engine — IN PROGRESS
+
+Implementation is active on `or4b3-deterministic-local-engine`. A dedicated `local_engine.py` now reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. Automated CI and end-to-end Pi acceptance are still pending.
 
 Create a real Local engine instead of mapping `local` to Classic+Ollama.
 
-- [ ] add a dedicated Local engine/runtime path that never constructs ChatOllama, MCPAgent or a local LLM;
-- [ ] retain local Whisper, Piper, wake word, VAD, semantic audio cues, speaker recognition and common runtime ownership;
-- [ ] open MCP sessions directly for local command-gateway discovery/invocation using the existing canonical MCP inventory and transport policy;
-- [ ] for locally spawned STDIO MCPs, overlay the gateway-enable environment variable without changing saved cloud MCP configuration;
-- [ ] discover `lsa-command-gateway/v1` capability generically; no XMSeries/QLCPlus names or action grammar in LSA;
-- [ ] routed utterance -> analyze selected MCP only;
-- [ ] unrouted utterance -> analyze all gateway-capable MCPs concurrently;
-- [ ] zero claims -> configured deterministic "not recognized" response; one claim -> continue; multiple claims -> deterministic clarification with no execution;
-- [ ] continuation token pins follow-up to the MCP that requested clarification;
-- [ ] honor existing MCP approval/permission policy based on gateway `effect` before executing a write;
-- [ ] execute exactly one accepted plan; never retry a write after dispatch uncertainty;
-- [ ] use MCP-provided `responseText` for TTS/display and never synthesize domain wording in LSA;
+- [~] add a dedicated Local engine/runtime path that hard-blocks LLM construction and never creates MCPAgent;
+- [~] retain the existing VoiceAssistant speech shell for local Whisper, Piper, wake word, VAD, semantic audio cues, speaker recognition and common runtime ownership;
+- [~] open MCP sessions directly for local command-gateway discovery/invocation from the existing MCP inventory;
+- [~] for locally spawned STDIO MCPs, overlay `LSA_LOCAL_COMMAND_GATEWAY=1` on a copied config without changing saved cloud MCP configuration;
+- [~] discover `lsa-command-gateway/v1` generically by reserved tools + protocol schema; no XMSeries/QLCPlus action grammar in LSA;
+- [~] routed utterance -> analyze selected MCP only;
+- [~] unrouted utterance -> analyze all gateway-capable MCPs concurrently;
+- [~] zero claims -> deterministic not-recognized response; one claim -> continue; multiple claims -> deterministic clarification with no execution;
+- [~] continuation token pins follow-up to the MCP that requested clarification;
+- [~] honor `open|approval` MCP policy based on gateway `effect` before executing a write;
+- [~] execute exactly one accepted plan; no automatic write retry exists in the Local orchestrator;
+- [~] use MCP-provided `responseText` for execution/clarification results; LSA fallback/approval wording remains domain-neutral;
 - [ ] startup READY requires STT/TTS plus at least one configured Local gateway or explicitly reports degraded/no-command capability;
-- [ ] health/runtime status reports `engine=local`, `provider=local`, `model=deterministic` (or equivalent non-LLM identity).
+- [~] runtime identity reports `engine=local`, `provider=local`, `model=deterministic`.
 
 #### OR4B4 - XMSeries advanced deterministic parity
 
