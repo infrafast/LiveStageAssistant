@@ -99,7 +99,12 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertIn("new_handler", self.monitor.handlers)
 
     def test_llm_options_are_available_from_active_profile(self):
-        result = self.services.llm_options()
+        devices = {
+            "inputs": [{"id": "pipewire:source:test-input", "label": "Input", "name": "test-input", "default": False, "available": True}],
+            "outputs": [{"id": "pipewire:sink:test-output", "label": "Output", "name": "test-output", "default": False, "available": True}],
+        }
+        with mock.patch("voice_assistant.runtime_web_services.list_backend_audio_devices", return_value=devices):
+            result = self.services.llm_options()
         self.assertEqual(result["provider"], "openai")
         self.assertEqual(result["selected_model"], "gpt-4.1-mini")
         self.assertEqual(result["selected_connectivity_mode"], "online")
@@ -107,15 +112,27 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertEqual(result["selected_backend_audio_input_device"], "pipewire:source:test-input")
         self.assertEqual(result["selected_backend_audio_output_device"], "pipewire:sink:test-output")
         self.assertTrue(result["models"])
+        self.assertEqual(result["backend_audio_inputs"][0]["id"], "pipewire:source:test-input")
+        self.assertEqual(result["backend_audio_outputs"][0]["id"], "pipewire:sink:test-output")
 
         self.active[0] = self.offline
-        with mock.patch("voice_assistant.runtime_web_services.urllib.request.urlopen", side_effect=OSError("offline")):
+        with mock.patch("voice_assistant.runtime_web_services.list_backend_audio_devices", return_value=devices), mock.patch("voice_assistant.runtime_web_services.urllib.request.urlopen", side_effect=OSError("offline")):
             offline = self.services.llm_options("openai")
         self.assertEqual(offline["provider"], "ollama")
         self.assertEqual(offline["selected_model"], "mistral:7b-instruct-q4_K_M")
         self.assertEqual(offline["selected_connectivity_mode"], "offline")
         self.assertEqual(offline["models"][0]["id"], "mistral:7b-instruct-q4_K_M")
         self.assertIn("configured", offline["models"][0]["label"])
+
+    def test_configured_audio_device_is_preserved_when_not_detected(self):
+        with mock.patch("voice_assistant.runtime_web_services.list_backend_audio_devices", return_value={"inputs": [], "outputs": []}):
+            result = self.services.llm_options()
+        self.assertEqual(result["selected_backend_audio_input_device"], "pipewire:source:test-input")
+        self.assertEqual(result["selected_backend_audio_output_device"], "pipewire:sink:test-output")
+        self.assertEqual(result["backend_audio_inputs"][0]["id"], "pipewire:source:test-input")
+        self.assertFalse(result["backend_audio_inputs"][0]["available"])
+        self.assertEqual(result["backend_audio_outputs"][0]["id"], "pipewire:sink:test-output")
+        self.assertFalse(result["backend_audio_outputs"][0]["available"])
 
     def test_ollama_live_models_are_listed_from_api(self):
         self.active[0] = self.offline
