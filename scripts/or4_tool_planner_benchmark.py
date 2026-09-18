@@ -176,6 +176,41 @@ def installed_models(base_url: str) -> set[str]:
     return names
 
 
+def running_models(base_url: str) -> list[str]:
+    result = http_json(f"{base_url.rstrip('/')}/api/ps", None, 5.0)
+    names: list[str] = []
+    for model in result.get("models") or []:
+        if isinstance(model, dict):
+            name = str(model.get("name") or "").strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def unload_model(base_url: str, model: str) -> None:
+    # Ollama documents keep_alive=0 as immediate unload.
+    http_json(
+        f"{base_url.rstrip('/')}/api/chat",
+        {
+            "model": model,
+            "messages": [],
+            "stream": False,
+            "keep_alive": 0,
+        },
+        10.0,
+    )
+
+
+def isolate_model(base_url: str, model: str) -> None:
+    for running in running_models(base_url):
+        if running != model:
+            try:
+                unload_model(base_url, running)
+                print(f"  unloaded peer model: {running}")
+            except Exception as exc:
+                print(f"  warning: could not unload {running}: {exc}")
+
+
 def duration_s(response: dict[str, Any], key: str) -> float:
     value = response.get(key)
     return float(value) / 1_000_000_000.0 if isinstance(value, (int, float)) else 0.0
@@ -373,6 +408,10 @@ def main() -> int:
             print()
             continue
 
+        isolate_model(args.base_url, model)
+        active = running_models(args.base_url)
+        print(f"  resident models before cases: {', '.join(active) if active else '<none>'}")
+
         model_ok = True
         for case in CASES:
             print(f" CASE {case.name}: {case.user}")
@@ -386,6 +425,11 @@ def main() -> int:
             model_ok = model_ok and ok
 
         print(f" RESULT {model}: {'PASS' if model_ok else 'FAIL'}")
+        try:
+            unload_model(args.base_url, model)
+            print(f"  unloaded tested model: {model}")
+        except Exception as exc:
+            print(f"  warning: could not unload tested model {model}: {exc}")
         print()
         overall = overall and model_ok
 
