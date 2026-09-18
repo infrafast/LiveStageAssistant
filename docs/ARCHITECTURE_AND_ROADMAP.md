@@ -398,7 +398,6 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
                        Common WebMonitor
 ```
 ## RV prompt and spoken-language policyThe VAD has no language prompt. Prompting applies to the realtime model/session, not speech-boundary detection.At engine instantiation, LSA logs the exact final consolidated prompt that is sent to the selected LLM path. Classic/OpenAI/Ollama log the prompt after freshness and MCP prompt merging, backend Realtime logs the prompt after MCP prompt merging and realtime voice-control contract composition, and browser Realtime logs the instructions passed to the browser session secret flow.`ASSISTANT_SYSTEM_PROMPT` and `STT_PROMPT` are prompt-file references, not inline prompt bodies. By default they point to `data/prompt/assistant_system_prompt.md` and `data/prompt/stt_prompt.md`. The Web GUI exposes these values as dropdowns populated from `data/prompt/*.md` and `data/prompt/*.txt`; the selected file path is persisted in the active env profile and resolved relative to the env profile directory first, then relative to the project root for CLI, service and Docker execution.
-
 ```text
 PROMPT.md / general LSA instructions
               +
@@ -798,7 +797,6 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 - [x] Online Classic -> Offline Local -> Online Classic Pi validation;- [ ] recovery when Internet flaps repeatedly;
 - [x] future engines require no separate network watcher implementation.
 ### OR3 - Local TTS for offline mode — FUNCTIONALLY VALIDATED ON PI5
-
 - [x] shared local-TTS adapter without coupling it to Realtime provider code;
 - [x] `.env.offline` remains fully cloud-independent;
 - [x] local speech model/settings documented and installed automatically;
@@ -842,6 +840,7 @@ Architecture constraints:
 - [~] external reference comparison added for `rajeevchandra/mcp-client-server-example`: that client uses the official MCP Python `ClientSession` directly (`list_tools()` -> schemas, `call_tool()` -> execution) and sends the user request through Ollama's OpenAI-compatible `/v1/chat/completions` contract with `tool_choice=auto` and `temperature=0.7`, rather than LSA's current direct `/api/chat` runner. The benchmark now reproduces that request shape with the same synthetic tools/model before the native `/api/chat` parity test; runtime architecture must not be changed until the A/B result is measured.
 - [x] Pi A/B result: the reference `/v1/chat/completions` shape returned `monte Claude` in 8.83 s but selected the wrong `mute_bus` call, so the reference repository's API shape is not a drop-in correctness/performance fix. The legacy direct `/api/chat` payload returned the correct `adjust_level` call warm in 8.34 s (`prompt_eval=0.47 s`, `eval=7.38 s`, 24 generated tokens), while the current OR4 one-tool/mixer/QLC payloads still exceeded 12 s. This proves native Ollama can meet the <=10 s warm target for a simple tool call on the Pi, and narrows the remaining regression to request options and/or current prompt/schema shape rather than MCP transport or raw CPU feasibility alone;
 - [~] focused four-call payload-delta benchmark added: A=legacy minimal, B=legacy + current runtime options, C=current one-tool resolve with minimal payload, D=current resolve + runtime options. This must identify whether added options or prompt/schema shape causes the >12 s regression before changing OR4 runtime architecture.
+- [~] first delta-only run was invalid for warm A/B comparison because it began with no resident model; A/B timed out cold and C/D each reported ~6.5-7.4 s model load plus ~7.4-7.7 s prompt evaluation before generation. The harness now unloads/reloads explicitly before every A/B/C/D variant, verifies residency via `/api/ps`, and measures inference only after a load-only `messages=[]` request, matching Ollama's documented model-load contract.
 
 The OR4A code remains an experimental reference. OR4B stays a candidate pivot but must not replace OR4A until the isolated benchmark is conclusive.
 
