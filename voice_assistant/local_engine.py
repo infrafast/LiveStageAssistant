@@ -130,6 +130,7 @@ def build_assistant(env_file: str | Path) -> DeterministicLocalVoiceAssistant:
         assistant_class_override=DeterministicLocalVoiceAssistant,
         llm_provider_override="local",
         model_override="deterministic",
+        force_local_speech=True,
     )
     if not isinstance(assistant, DeterministicLocalVoiceAssistant):
         raise RuntimeError("Local engine factory returned an unexpected assistant type")
