@@ -226,6 +226,20 @@ def running_models(base_url: str) -> list[str]:
     return names
 
 
+def load_model(base_url: str, model: str, keep_alive: str = "10m") -> None:
+    # Ollama documents messages=[] as a load-only chat request.
+    http_json(
+        f"{base_url.rstrip('/')}/api/chat",
+        {
+            "model": model,
+            "messages": [],
+            "stream": False,
+            "keep_alive": keep_alive,
+        },
+        30.0,
+    )
+
+
 def unload_model(base_url: str, model: str) -> None:
     # Ollama documents keep_alive=0 as immediate unload.
     http_json(
@@ -430,7 +444,12 @@ def run_legacy_exact(base_url: str, model: str, timeout: float) -> None:
 
 
 def run_payload_delta_diagnosis(base_url: str, model: str, timeout: float) -> None:
-    """Four-call A/B diagnosis between the working legacy and current OR4 payloads."""
+    """Four-call A/B diagnosis between the working legacy and current OR4 payloads.
+
+    Each variant starts from an explicitly loaded, resident model. After every
+    variant the model is unloaded, then loaded again, so a timed-out request or
+    prompt cache from the previous variant cannot contaminate the next result.
+    """
     print(" PAYLOAD DELTA diagnosis")
 
     variants = [
@@ -503,6 +522,20 @@ def run_payload_delta_diagnosis(base_url: str, model: str, timeout: float) -> No
     ]
 
     for label, payload, expected in variants:
+        try:
+            unload_model(base_url, model)
+        except Exception:
+            pass
+        load_started = time.perf_counter()
+        load_model(base_url, model, "10m")
+        load_elapsed = time.perf_counter() - load_started
+        resident = running_models(base_url)
+        print(
+            f"  {label}: preload={load_elapsed:.2f}s "
+            f"resident={','.join(resident) if resident else '<none>'}"
+        )
+        time.sleep(0.5)
+
         started = time.perf_counter()
         try:
             response = http_json(
@@ -512,7 +545,7 @@ def run_payload_delta_diagnosis(base_url: str, model: str, timeout: float) -> No
             )
         except Exception as exc:
             elapsed = time.perf_counter() - started
-            print(f"  {label}: ERROR after {elapsed:.2f}s: {exc}")
+            print(f"    ERROR after {elapsed:.2f}s: {exc}")
             continue
 
         elapsed = time.perf_counter() - started
@@ -520,7 +553,7 @@ def run_payload_delta_diagnosis(base_url: str, model: str, timeout: float) -> No
         calls = message.get("tool_calls") or []
         described = describe_calls(calls)
         print(
-            f"  {label}: {elapsed:.2f}s "
+            f"    result={elapsed:.2f}s "
             f"load={duration_s(response, 'load_duration'):.2f}s "
             f"prompt_eval={duration_s(response, 'prompt_eval_duration'):.2f}s/"
             f"{int(response.get('prompt_eval_count') or 0)}tok "
@@ -530,11 +563,12 @@ def run_payload_delta_diagnosis(base_url: str, model: str, timeout: float) -> No
         )
         for idx, (name, arguments) in enumerate(described, start=1):
             print(
-                f"    call[{idx}]={name or '<none>'} "
+                f"      call[{idx}]={name or '<none>'} "
                 f"args={json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
             )
         ok = len(described) == 1 and described[0][0] == expected
-        print(f"    DELTA: {'CORRECT' if ok else 'WRONG'} expected={expected}")
+        print(f"      DELTA: {'CORRECT' if ok else 'WRONG'} expected={expected}")
+
 
 
 def run_case(
