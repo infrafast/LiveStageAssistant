@@ -17,7 +17,8 @@ from dotenv import dotenv_values
 
 from voice_assistant.startup_messages import startup_connectivity_message
 
-CLASSIC_READY_MARKER = "LSA Classic ready:"\nLOCAL_READY_MARKER = "LSA Local ready:"
+CLASSIC_READY_MARKER = "LSA Classic ready:"
+LOCAL_READY_MARKER = "LSA Local ready:"
 
 
 def run_classic(env_file: str) -> int:
