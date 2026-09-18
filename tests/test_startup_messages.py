@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest import mock
 
-from voice_assistant.startup_messages import startup_connectivity_message, startup_ready_message
+from voice_assistant.startup_messages import (startup_connectivity_message, startup_deterministic_ready_message, startup_ready_message)
 from voice_assistant.wake_word import get_configured_wake_words
 
 
@@ -47,6 +47,24 @@ class StartupMessageTests(unittest.TestCase):
                 wake_words=["momo"],
             ),
             "Assistant vocal prêt à exécuter des commandes, 16 outils disponibles ! Wake word actif, prononcez momo pour me réveiller.",
+        )
+
+    def test_deterministic_local_ready_message_uses_shared_wake_suffix(self):
+        self.assertEqual(
+            startup_deterministic_ready_message(
+                stt_language="fr",
+                gateway_count=2,
+                wake_words=["momo"],
+            ),
+            "Assistant local déterministe prêt, 2 passerelles MCP disponibles. Wake word actif, prononcez momo pour me réveiller.",
+        )
+        self.assertEqual(
+            startup_deterministic_ready_message(
+                stt_language="fr",
+                gateway_count=0,
+                wake_words=[],
+            ),
+            "Assistant local déterministe prêt, mais aucune commande MCP n'est disponible.",
         )
 
     def test_connectivity_message_uses_shared_i18n_contract(self):
