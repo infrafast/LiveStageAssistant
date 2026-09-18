@@ -118,6 +118,7 @@ def build_assistant(
     assistant_class_override: type[agent.VoiceAssistant] | None = None,
     llm_provider_override: str | None = None,
     model_override: str | None = None,
+    force_local_speech: bool = False,
 ) -> agent.VoiceAssistant:
     """Build one speech engine from a profile without constructing a GUI.
 
@@ -131,6 +132,7 @@ def build_assistant(
 
     connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
     offline = connectivity == "offline"
+    local_speech = offline or force_local_speech
     tts_config = agent.resolve_tts_config_from_values(values)
     wake_words = get_configured_wake_words()
     monitor_mode = agent.normalize_backend_audio_monitor_mode(str(values.get("BACKEND_AUDIO_MONITOR_MODE") or "off"))
@@ -158,7 +160,7 @@ def build_assistant(
 
     cloud_gain = max(0.0, min(2.0, _float(values, "CLOUD_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
     local_gain = max(0.0, min(2.0, _float(values, "LOCAL_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
-    speech_gain = local_gain if tts_config.backend_provider == "piper" or offline else cloud_gain
+    speech_gain = local_gain if tts_config.backend_provider == "piper" or local_speech else cloud_gain
 
     assistant_class = assistant_class_override or (NativeOllamaMcpVoiceAssistant if offline else agent.VoiceAssistant)
     resolved_model = model_override if model_override is not None else (
@@ -175,12 +177,12 @@ def build_assistant(
         model=resolved_model,
         llm_provider=resolved_provider,
         ollama_base_url=str(values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip(),
-        stt_provider="local-whisper" if offline else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
+        stt_provider="local-whisper" if local_speech else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
         local_whisper_model=str(values.get("LOCAL_WHISPER_MODEL") or "base").strip(),
         stt_language=str(values.get("STT_LANGUAGE") or "fr").strip(),
         stt_prompt=stt_prompt,
         stt_timeout_seconds=max(1.0, _float(values, "STT_TIMEOUT_SECONDS", agent.DEFAULT_STT_TIMEOUT_SECONDS)),
-        tts_provider=tts_config.backend_provider,
+        tts_provider="piper" if force_local_speech else tts_config.backend_provider,
         web_tts_enabled=False,
         elevenlabs_voice_id=str(values.get("ELEVENLABS_VOICE_ID") or agent.DEFAULT_ELEVENLABS_VOICE_ID).strip(),
         thinking_sound_file=str(values.get("THINKING_SOUND_FILE") or "thinking.wav").strip(),
