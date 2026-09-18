@@ -943,7 +943,7 @@ Basic XMSeries read/write acceptance is complete, so advanced parity is now unlo
 - [ ] speaker-context defaults without moving speaker business logic into LSA;
 - [ ] bulk/group operations;
 - [~] fades/ramps and delayed actions, with all timing owned by XMSeries-MCP automation: fade-in/out, progressive absolute/relative ramps, explicit from/to ranges and delayed level changes implemented. Live rack validation now confirms `baisse progressivement batterie à -30 dB en 2 secondes` executed as a real progressive fade to -30 dB and `mets batterie à -27 dB dans 2 secondes` executed as a real delayed level change after the requested 2-second wait. Source-to-bus ramps remain pending;
-- [ ] cancellation/status for automation jobs;
+- [~] cancellation/status for automation jobs: XMSeries-MCP PR #13 merged as `43aa59c79b8424993d20339610c40309cdd2117f` with Node 20.20/22 CI green; LSA remains unchanged and only transports the opaque gateway plan; live Pi acceptance pending;
 - [ ] expand multilingual/STT corpus only from observed commands; avoid unconstrained fuzzy NLP;
 - [ ] maintain a domain corpus as the regression source of truth and review PROMPT changes against the same semantic cases to limit cloud/local drift.
 
