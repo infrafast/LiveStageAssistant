@@ -846,23 +846,23 @@ Architecture rules:
 - [x] production conclusion: local generative tool planning is technically functional but unsuitable for the stage-control critical path on the current Pi5;
 - [ ] remove the experimental native-Ollama runner/benchmarks only after the deterministic Local engine passes its rollback gate.
 
-#### OR4B0 - Shared deterministic command-core contract — NEXT
+#### OR4B0 - Shared deterministic command-core contract — IMPLEMENTED / CI VALIDATED
 
 Create a small independent TypeScript package/repository, provisionally `@infrafast/stage-command-core` / `StageCommandCore`, consumed by XMSeries-MCP and QLCPlus-MCP. It is a library, **not a service** and never runs a separate daemon.
 
 The common package owns only domain-neutral mechanics:
 
-- [ ] versioned wire contract `lsa-command-gateway/v1`;
-- [ ] raw + normalized text representation with source spans; raw execution identifiers must always remain available;
-- [ ] deterministic tokenization/matcher combinators and locale lexicon hooks;
-- [ ] generic number, sign, percentage and duration extraction primitives where useful;
-- [ ] generic analysis/result types and explicit `read|write|none` effect classification;
-- [ ] generic clarification/continuation support;
-- [ ] opaque plan store with cryptographically random token, TTL, one-shot consumption and optional state-generation binding;
-- [ ] common MCP gateway registration helper using reserved local-only tools `lsa_local_analyze_command` and `lsa_local_execute_command`;
-- [ ] common test/corpus harness;
-- [ ] no mixer terms, QLC captions, OSC/native protocol paths or vendor-specific semantics in the shared package;
-- [ ] pin package versions/commits in both MCP lockfiles; do not use a floating Git dependency;
+- [x] versioned wire contract `lsa-command-gateway/v1`;
+- [x] raw + normalized text representation with source spans; raw execution identifiers remain available;
+- [x] deterministic tokenization/matcher primitives and locale hooks;
+- [x] generic number/sign/percentage helpers plus `parse-duration` reuse for durations;
+- [x] generic analysis/result types and explicit `read|write|none` effect classification;
+- [x] generic clarification/continuation support;
+- [x] opaque plan store with cryptographically random token, TTL, one-shot write consumption and stale-plan hook;
+- [x] common Local-only gateway registration helper and reserved tool names;
+- [x] common test/corpus harness;
+- [x] no mixer terms, QLC captions, OSC/native protocol paths or vendor-specific semantics in the shared package;
+- [~] QLCPlus-MCP OR4B1 pins the core by exact Git commit; XMSeries pinning remains for OR4B2;
 - [ ] establish semantic versioning: incompatible gateway schema change requires a protocol-major bump.
 
 Target analysis response:
