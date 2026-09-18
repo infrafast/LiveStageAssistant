@@ -913,9 +913,9 @@ Implement only the high-value basic mixer grammar first; do not port all prompt 
 - [~] corpus includes French and English representative commands; STT-like punctuation/case expansion remains pending;
 - [ ] target analysis+execution overhead excluding mixer/network I/O: <100 ms typical on Pi5.
 
-#### OR4B3 - LSA deterministic Local engine — MERGED / POST-MERGE CI RUNNING
+#### OR4B3 - LSA deterministic Local engine — MERGED / AUTOMATED CI VALIDATED
 
-PR #10 is merged into `realtime-voice-architecture` as `e244af4a2f5d474005ff6803c5818aa25f4f87aa`. A dedicated `local_engine.py` reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. PR CI passed on Python 3.11/3.12; post-merge CI is running. End-to-end Pi acceptance remains pending.
+PR #10 is merged into `realtime-voice-architecture` as `e244af4a2f5d474005ff6803c5818aa25f4f87aa`. A dedicated `local_engine.py` reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. PR and post-merge CI passed on Python 3.11/3.12. End-to-end Pi acceptance remains pending.
 
 Create a real Local engine instead of mapping `local` to Classic+Ollama.
 
