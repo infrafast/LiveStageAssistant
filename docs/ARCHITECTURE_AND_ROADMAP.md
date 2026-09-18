@@ -976,7 +976,7 @@ Cleanup happens **after OR4B3 live validation**, not before.
 
 - [x] pin one gateway protocol/core version known to work across LSA + XMSeries-MCP + QLCPlus-MCP: both gateway servers pin `stage-command-core@fa9f8baef06a668efb18b1bfc50060335689f287`, while LSA requires `lsa-command-gateway/v1`;
 - [x] incompatible gateway version -> Local engine marks that MCP unsupported; protocol-schema discovery is regression-tested and never attempts a best-effort write;
-- [~] validate STDIO first; `scripts/or4c_local_gateway_acceptance.py` now provides the domain-neutral Pi/rack acceptance harness and JSON latency evidence; real rack execution remains pending. Validate persistent local HTTP only with an explicitly gateway-enabled instance;
+- [~] validate STDIO first; the domain-neutral Pi/rack harness is merged as `63019ba4089b7b9c6d06ac5b307914fca8645a5e` with PR + post-merge Python 3.11/3.12 CI green and produces JSON latency evidence; real rack execution remains pending. Validate persistent local HTTP only with an explicitly gateway-enabled instance;
 - [~] gateway-disabled MCP regression tests preserve the pre-OR4 low-level tool/prompt inventory; live cloud/external-client confirmation remains pending;
 - [x] local gateway tools are disabled by default and absent from normal MCP/cloud tool inventories unless the dedicated Local child overlay enables them;
 - [~] automated tests cover approval, clarification routing, stale-plan/identity and duplicate/one-shot write protection; timeout behavior remains part of the live cross-repository gate;
