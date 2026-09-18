@@ -253,6 +253,7 @@ class DeterministicGatewayOrchestrator:
         text: str,
         *,
         continuation_token: str | None = None,
+        context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         session = self.client.get_session(server)
         args: dict[str, Any] = {
@@ -262,6 +263,8 @@ class DeterministicGatewayOrchestrator:
         }
         if continuation_token:
             args["continuationToken"] = continuation_token
+        if context:
+            args["context"] = dict(context)
         result = await session.call_tool(ANALYZE_TOOL, args)
         return _gateway_payload(result)
 
@@ -273,7 +276,12 @@ class DeterministicGatewayOrchestrator:
         )
         return _gateway_payload(result)
 
-    async def handle(self, text: str) -> str:
+    async def handle(
+        self,
+        text: str,
+        *,
+        context: Mapping[str, Any] | None = None,
+    ) -> str:
         normalized = _normalized(text)
 
         if self.pending_approval:
@@ -290,7 +298,12 @@ class DeterministicGatewayOrchestrator:
         if self.pending_continuation:
             pending = self.pending_continuation
             self.pending_continuation = None
-            payload = await self._analyze(pending.server, text, continuation_token=pending.token)
+            payload = await self._analyze(
+                pending.server,
+                text,
+                continuation_token=pending.token,
+                context=context,
+            )
             return await self._resolve_single_claim(pending.server, payload)
 
         candidates = self._routed_servers(text)
@@ -298,7 +311,7 @@ class DeterministicGatewayOrchestrator:
             return "Commande non reconnue."
 
         results = await asyncio.gather(
-            *(self._analyze(server, text) for server in candidates),
+            *(self._analyze(server, text, context=context) for server in candidates),
             return_exceptions=True,
         )
         claims: list[tuple[str, dict[str, Any]]] = []
