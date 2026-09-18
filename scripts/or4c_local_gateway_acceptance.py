@@ -28,6 +28,10 @@ from typing import Any, Mapping
 
 from dotenv import dotenv_values, load_dotenv
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from voice_assistant.classic_engine import _mcp_config
 from voice_assistant.local_gateway_runtime import DeterministicGatewayOrchestrator
 
