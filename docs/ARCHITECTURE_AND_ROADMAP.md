@@ -913,26 +913,26 @@ Implement only the high-value basic mixer grammar first; do not port all prompt 
 - [~] corpus includes French and English representative commands; STT-like punctuation/case expansion remains pending;
 - [ ] target analysis+execution overhead excluding mixer/network I/O: <100 ms typical on Pi5.
 
-#### OR4B3 - LSA deterministic Local engine — IN PROGRESS
+#### OR4B3 - LSA deterministic Local engine — MERGED / POST-MERGE CI RUNNING
 
-Implementation is active on `or4b3-deterministic-local-engine`. A dedicated `local_engine.py` now reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. Automated CI and end-to-end Pi acceptance are still pending.
+PR #10 is merged into `realtime-voice-architecture` as `e244af4a2f5d474005ff6803c5818aa25f4f87aa`. A dedicated `local_engine.py` reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. PR CI passed on Python 3.11/3.12; post-merge CI is running. End-to-end Pi acceptance remains pending.
 
 Create a real Local engine instead of mapping `local` to Classic+Ollama.
 
-- [~] add a dedicated Local engine/runtime path that hard-blocks LLM construction and never creates MCPAgent;
-- [~] retain the existing VoiceAssistant speech shell for local Whisper, Piper, wake word, VAD, semantic audio cues, speaker recognition and common runtime ownership;
-- [~] open MCP sessions directly for local command-gateway discovery/invocation from the existing MCP inventory;
-- [~] for locally spawned STDIO MCPs, overlay `LSA_LOCAL_COMMAND_GATEWAY=1` on a copied config without changing saved cloud MCP configuration;
-- [~] discover `lsa-command-gateway/v1` generically by reserved tools + protocol schema; no XMSeries/QLCPlus action grammar in LSA;
-- [~] routed utterance -> analyze selected MCP only;
-- [~] unrouted utterance -> analyze all gateway-capable MCPs concurrently;
-- [~] zero claims -> deterministic not-recognized response; one claim -> continue; multiple claims -> deterministic clarification with no execution;
-- [~] continuation token pins follow-up to the MCP that requested clarification;
-- [~] honor `open|approval` MCP policy based on gateway `effect` before executing a write;
-- [~] execute exactly one accepted plan; no automatic write retry exists in the Local orchestrator;
-- [~] use MCP-provided `responseText` for execution/clarification results; LSA fallback/approval wording remains domain-neutral;
-- [ ] startup READY requires STT/TTS plus at least one configured Local gateway or explicitly reports degraded/no-command capability;
-- [~] runtime identity reports `engine=local`, `provider=local`, `model=deterministic`.
+- [x] add a dedicated Local engine/runtime path that hard-blocks LLM construction and never creates MCPAgent;
+- [x] retain the existing VoiceAssistant speech shell for local Whisper, Piper, wake word, VAD, semantic audio cues, speaker recognition and common runtime ownership;
+- [x] open MCP sessions directly for local command-gateway discovery/invocation from the existing MCP inventory;
+- [x] for locally spawned STDIO MCPs, overlay `LSA_LOCAL_COMMAND_GATEWAY=1` on a copied config without changing saved cloud MCP configuration;
+- [x] discover `lsa-command-gateway/v1` generically by reserved tools + protocol schema; no XMSeries/QLCPlus action grammar in LSA;
+- [x] routed utterance -> analyze selected MCP only;
+- [x] unrouted utterance -> analyze all gateway-capable MCPs concurrently;
+- [x] zero claims -> deterministic not-recognized response; one claim -> continue; multiple claims -> deterministic clarification with no execution;
+- [x] continuation token pins follow-up to the MCP that requested clarification;
+- [x] honor `open|approval` MCP policy based on gateway `effect` before executing a write;
+- [x] execute exactly one accepted plan; no automatic write retry exists in the Local orchestrator;
+- [x] use MCP-provided `responseText` for execution/clarification results; LSA fallback/approval wording remains domain-neutral;
+- [x] startup READY reports deterministic gateway availability and explicitly reports degraded/no-command capability when none is compatible;
+- [x] runtime identity reports `engine=local`, `provider=local`, `model=deterministic`.
 
 #### OR4B4 - XMSeries advanced deterministic parity
 
