@@ -173,6 +173,28 @@ def _text_content(result: Any) -> str:
     return "\n".join(part for part in parts if part).strip()
 
 
+def _brief_gateway_error(server: str, error: Exception) -> str:
+    """Return a short user-facing error while logs retain the full exception."""
+    detail = _normalized(str(error))
+    label = str(server or "mcp").strip() or "mcp"
+
+    if "mixeur est deconnecte" in detail or "mixer disconnected" in detail:
+        if "lire les noms osc" in detail or "read the osc names" in detail:
+            return f"Erreur {label} : impossible de résoudre les noms, le mixeur ne répond pas."
+        return f"Erreur {label} : le mixeur ne répond pas."
+
+    if "timeout" in detail or "timed out" in detail or "delai" in detail:
+        return f"Erreur {label} : délai d’attente dépassé."
+
+    if "protocol mismatch" in detail:
+        return f"Erreur {label} : protocole de passerelle incompatible."
+
+    if "returned invalid json" in detail or "returned no payload" in detail:
+        return f"Erreur {label} : réponse MCP invalide."
+
+    return f"Erreur {label} pendant l’analyse de la commande."
+
+
 def _gateway_payload(result: Any) -> dict[str, Any]:
     if bool(getattr(result, "isError", False)):
         raise RuntimeError(_text_content(result) or "MCP gateway tool returned an error")
@@ -315,14 +337,19 @@ class DeterministicGatewayOrchestrator:
             return_exceptions=True,
         )
         claims: list[tuple[str, dict[str, Any]]] = []
+        failures: list[tuple[str, Exception]] = []
         for server, result in zip(candidates, results):
             if isinstance(result, Exception):
                 print(f"Local gateway analysis failed: {server}: {result}", flush=True)
+                failures.append((server, result))
                 continue
             if result.get("recognized") is True and str(result.get("status") or "") in {"ready", "clarification"}:
                 claims.append((server, result))
 
         if not claims:
+            if failures:
+                server, error = failures[0]
+                return _brief_gateway_error(server, error)
             return "Commande non reconnue."
         if len(claims) > 1:
             names = ", ".join(server for server, _payload in claims)
