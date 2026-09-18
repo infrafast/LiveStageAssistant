@@ -936,16 +936,18 @@ Create a real Local engine instead of mapping `local` to Classic+Ollama.
 
 #### OR4B4 - XMSeries advanced deterministic parity
 
-Only after basic mixer commands are live-validated:
+Basic XMSeries read/write acceptance is complete, so advanced parity is now unlocked. XMSeries-MCP PR #12 merged as `968c94f69d4bd007191fff1762101707a94c70b5` with Node 20.20/22 PR CI green. The implementation remains entirely MCP-side and reuses existing resolver, OSC and automation code; LSA still only sees `lsa-command-gateway/v1`.
 
-- [ ] source -> destination sends and structured ownership phrases;
-- [ ] dB and percent, absolute and relative semantics;
+- [~] source -> destination sends and structured ownership phrases: channel -> bus absolute/relative commands implemented; live rack acceptance still pending;
+- [~] dB and percent, absolute and relative semantics: implemented for single targets and channel -> bus; live rack acceptance still pending;
 - [ ] speaker-context defaults without moving speaker business logic into LSA;
 - [ ] bulk/group operations;
-- [ ] fades/ramps and delayed actions, with all timing owned by XMSeries-MCP automation;
+- [~] fades/ramps and delayed actions, with all timing owned by XMSeries-MCP automation: fade-in/out, progressive absolute/relative ramps, explicit from/to ranges and delayed level changes implemented; live rack acceptance pending;
 - [ ] cancellation/status for automation jobs;
 - [ ] expand multilingual/STT corpus only from observed commands; avoid unconstrained fuzzy NLP;
 - [ ] maintain a domain corpus as the regression source of truth and review PROMPT changes against the same semantic cases to limit cloud/local drift.
+
+Temporal semantics are deterministic in XMSeries-MCP: `en N secondes` means ramp duration; `dans N secondes` means delay before action. Fade-in/out with no explicit target defaults to Main LR/façade.
 
 #### OR4B5 - GUI/config migration
 
