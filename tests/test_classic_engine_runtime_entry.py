@@ -22,7 +22,10 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
             root = Path(tmp)
             env_file = root / ".env"
             env_file.write_text(text, encoding="utf-8")
-            with mock.patch.object(classic_engine.agent, "VoiceAssistant", DummyAssistant):
+            with (
+                mock.patch.object(classic_engine.agent, "VoiceAssistant", DummyAssistant),
+                mock.patch.object(classic_engine, "NativeOllamaMcpVoiceAssistant", DummyAssistant),
+            ):
                 assistant = classic_engine.build_assistant(env_file)
             return assistant
 
