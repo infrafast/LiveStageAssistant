@@ -1,7 +1,7 @@
 {
   "cases": [
     {
-      "text": "statut mixer",
+      "text": "statut mixeur",
       "expected": "ready",
       "effect": "read"
     },
