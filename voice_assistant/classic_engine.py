@@ -180,8 +180,8 @@ def build_assistant(
         "ollama" if offline else str(values.get("LLM_PROVIDER") or "openai").strip().lower()
     )
     assistant = assistant_class(
-        openai_api_key=_secret(values, "OPENAI_API_KEY"),
-        elevenlabs_api_key=_secret(values, "ELEVENLABS_API_KEY"),
+        openai_api_key=None if force_local_speech else _secret(values, "OPENAI_API_KEY"),
+        elevenlabs_api_key=None if force_local_speech else _secret(values, "ELEVENLABS_API_KEY"),
         model=resolved_model,
         llm_provider=resolved_provider,
         ollama_base_url=str(values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip(),
@@ -216,7 +216,7 @@ def build_assistant(
         backend_wake_word_pre_roll_ms=max(0, min(5000, _int(values, "BACKEND_WAKE_WORD_PRE_ROLL_MS", agent.DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS))),
         backend_wake_word_cooldown_ms=max(0, min(10000, _int(values, "BACKEND_WAKE_WORD_COOLDOWN_MS", agent.DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS))),
         backend_wake_word_vad_threshold=backend_wake_vad,
-        backend_stt_enabled=str(values.get("STT_INPUT") or "both").strip().lower() in {"both", "backend"},
+        backend_stt_enabled=force_local_speech or str(values.get("STT_INPUT") or "both").strip().lower() in {"both", "backend"},
         tts_speed=max(0.6, min(1.8, _float(values, "WEB_TTS_SPEED", 1.0))),
         backend_tts_volume=speech_gain,
         backend_audio_output_pan=agent.normalize_audio_pan(_float(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0)),
