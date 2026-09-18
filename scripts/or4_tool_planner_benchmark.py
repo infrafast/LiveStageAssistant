@@ -318,6 +318,62 @@ def describe_calls(calls: list[Any]) -> list[tuple[str, dict[str, Any]]]:
     return described
 
 
+def run_reference_repo_style(base_url: str, model: str, timeout: float) -> None:
+    """Mirror rajeevchandra/mcp-client-server-example's Ollama request shape.
+
+    The reference repo uses Ollama's OpenAI-compatible /v1 endpoint through
+    openai.ChatCompletion.create(), with user-only messages, MCP-derived function
+    schemas, tool_choice=auto and temperature=0.7. We use raw HTTP here so the
+    benchmark does not depend on openai==0.28, but the JSON contract is the same.
+    """
+    print(" REFERENCE repo-style OpenAI-compatible parity")
+    cases = [
+        ("coupe Claude", "mute_bus"),
+        ("monte Claude", "adjust_level"),
+    ]
+    endpoint = f"{base_url.rstrip('/')}/v1/chat/completions"
+    for user, expected in cases:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": user}],
+            "tools": LEGACY_TOOLS,
+            "tool_choice": "auto",
+            "temperature": 0.7,
+            "stream": False,
+        }
+        started = time.perf_counter()
+        try:
+            response = http_json(endpoint, payload, timeout)
+        except Exception as exc:
+            elapsed = time.perf_counter() - started
+            print(f"  {user!r}: ERROR after {elapsed:.2f}s: {exc}")
+            continue
+
+        elapsed = time.perf_counter() - started
+        choices = response.get("choices") or []
+        choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+        message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+        calls = message.get("tool_calls") or []
+        described = describe_calls(calls)
+        usage = response.get("usage") if isinstance(response.get("usage"), dict) else {}
+        print(
+            f"  {user!r}: {elapsed:.2f}s "
+            f"prompt_tokens={int(usage.get('prompt_tokens') or 0)} "
+            f"completion_tokens={int(usage.get('completion_tokens') or 0)} "
+            f"tool_calls={len(calls)}"
+        )
+        for idx, (name, arguments) in enumerate(described, start=1):
+            print(
+                f"    call[{idx}]={name or '<none>'} "
+                f"args={json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
+            )
+        content = str(message.get("content") or "")
+        if content:
+            print(f"    content={content[:200]!r}")
+        ok = len(described) == 1 and described[0][0] == expected
+        print(f"    REFERENCE PARITY: {'CORRECT' if ok else 'WRONG'} expected={expected}")
+
+
 def run_legacy_exact(base_url: str, model: str, timeout: float) -> None:
     """Reproduce the exact successful 2026-09-15 native Ollama payload shape.
 
@@ -506,6 +562,7 @@ def main() -> int:
         active = running_models(args.base_url)
         print(f"  resident models before cases: {', '.join(active) if active else '<none>'}")
 
+        run_reference_repo_style(args.base_url, model, args.timeout)
         run_legacy_exact(args.base_url, model, args.timeout)
 
         model_ok = True
