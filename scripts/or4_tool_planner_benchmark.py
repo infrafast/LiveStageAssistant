@@ -89,6 +89,45 @@ TOOLS = {
 }
 
 
+LEGACY_PROMPT = (
+    "Tu contrôles une console audio. Utilise les outils disponibles. "
+    "monte/augmente signifie augmenter le niveau. coupe/mute signifie muter."
+)
+
+LEGACY_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "mute_bus",
+            "description": "Mute or unmute a named bus.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "mute": {"type": "boolean"},
+                },
+                "required": ["name", "mute"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "adjust_level",
+            "description": "Raise or lower the level of a named target.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "direction": {"type": "string", "enum": ["up", "down"]},
+                },
+                "required": ["name", "direction"],
+            },
+        },
+    },
+]
+
+
 BASELINE_PROMPT = (
     "You are a strict tool planner. Use the provided tool silently. "
     "Resolve the user-provided target name exactly; do not answer with JSON text."
@@ -279,6 +318,61 @@ def describe_calls(calls: list[Any]) -> list[tuple[str, dict[str, Any]]]:
     return described
 
 
+def run_legacy_exact(base_url: str, model: str, timeout: float) -> None:
+    """Reproduce the exact successful 2026-09-15 native Ollama payload shape.
+
+    Deliberately no think/keep_alive/options fields: model + messages + tools +
+    stream:false only, matching the earlier CLI/native API experiment.
+    """
+    print(" LEGACY exact native-tool parity")
+    cases = [
+        ("coupe Claude", "mute_bus"),
+        ("monte Claude", "adjust_level"),
+    ]
+    for user, expected in cases:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": LEGACY_PROMPT},
+                {"role": "user", "content": user},
+            ],
+            "tools": LEGACY_TOOLS,
+            "stream": False,
+        }
+        started = time.perf_counter()
+        try:
+            response = http_json(
+                f"{base_url.rstrip('/')}/api/chat",
+                payload,
+                timeout,
+            )
+        except Exception as exc:
+            elapsed = time.perf_counter() - started
+            print(f"  {user!r}: ERROR after {elapsed:.2f}s: {exc}")
+            continue
+
+        elapsed = time.perf_counter() - started
+        message = response.get("message") or {}
+        calls = message.get("tool_calls") or []
+        described = describe_calls(calls)
+        print(
+            f"  {user!r}: {elapsed:.2f}s "
+            f"load={duration_s(response, 'load_duration'):.2f}s "
+            f"prompt_eval={duration_s(response, 'prompt_eval_duration'):.2f}s/"
+            f"{int(response.get('prompt_eval_count') or 0)}tok "
+            f"eval={duration_s(response, 'eval_duration'):.2f}s/"
+            f"{int(response.get('eval_count') or 0)}tok "
+            f"tool_calls={len(calls)}"
+        )
+        for idx, (name, arguments) in enumerate(described, start=1):
+            print(
+                f"    call[{idx}]={name or '<none>'} "
+                f"args={json.dumps(arguments, ensure_ascii=False, sort_keys=True)}"
+            )
+        ok = len(described) == 1 and described[0][0] == expected
+        print(f"    LEGACY PARITY: {'CORRECT' if ok else 'WRONG'} expected={expected}")
+
+
 def run_case(
     base_url: str,
     model: str,
@@ -411,6 +505,8 @@ def main() -> int:
         isolate_model(args.base_url, model)
         active = running_models(args.base_url)
         print(f"  resident models before cases: {', '.join(active) if active else '<none>'}")
+
+        run_legacy_exact(args.base_url, model, args.timeout)
 
         model_ok = True
         for case in CASES:
