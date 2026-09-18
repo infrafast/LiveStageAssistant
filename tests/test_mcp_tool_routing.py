@@ -163,9 +163,9 @@ def test_native_ollama_payload_is_bounded_for_pi() -> None:
     assert payload["stream"] is False
     assert payload["options"] == {
         "temperature": 0.0,
-        "num_ctx": 2048,
         "num_predict": 128,
     }
+    assert "num_ctx" not in payload["options"]
 
 
 def test_native_ollama_without_speaker_context_sends_raw_user_text() -> None:
