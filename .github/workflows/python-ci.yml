@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - realtime-voice-architecture
-      - or4b3-deterministic-local-engine
   pull_request:
     branches:
       - realtime-voice-architecture
