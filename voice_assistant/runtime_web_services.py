@@ -600,6 +600,16 @@ class RuntimeWebServices:
         backend_input = str(values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
         backend_output = str(values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
         backend_audio_devices = list_backend_audio_devices()
+        for direction, selected in (("inputs", backend_input), ("outputs", backend_output)):
+            if selected and not any(item.get("id") == selected for item in backend_audio_devices[direction]):
+                backend_audio_devices[direction].append({
+                    "id": selected,
+                    "label": f"{selected} (configured, unavailable)",
+                    "name": selected,
+                    "default": False,
+                    "available": False,
+                    "reason": "Configured in the active .env but not currently detected",
+                })
         return {
             "provider": provider,
             "selected_connectivity_mode": connectivity,
