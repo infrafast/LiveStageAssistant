@@ -16,7 +16,7 @@ from dotenv import dotenv_values
 from . import agent
 from . import classic_engine
 from .local_gateway_runtime import DeterministicGatewayOrchestrator
-from .startup_messages import startup_deterministic_ready_message
+from .startup_messages import startup_ready_message
 
 
 class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
@@ -78,10 +78,11 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
         loaded_servers: list[str],
         failed_servers: dict[str, str] | None = None,
     ) -> str:
-        return startup_deterministic_ready_message(
+        return startup_ready_message(
             stt_language=self.stt_language,
-            gateway_count=len(self.local_gateway_names),
+            tool_count=0,
             wake_words=getattr(self, "wake_words", []),
+            deterministic_gateway_count=len(self.local_gateway_names),
         )
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
