@@ -23,7 +23,7 @@ from typing import Mapping
 from dotenv import dotenv_values
 
 from voice_assistant.connectivity_manager import ConnectivityEvent, ConnectivityManager
-from voice_assistant.engine_entry import CLASSIC_READY_MARKER
+from voice_assistant.engine_entry import CLASSIC_READY_MARKER, LOCAL_READY_MARKER
 from voice_assistant.local_tts import speak_local_status
 from voice_assistant.runtime_status import RuntimeStatus, RuntimeStatusTracker, configured_mcp_statuses
 from voice_assistant.runtime_web_services import RuntimeWebServices
@@ -116,6 +116,8 @@ def select_fallback_engine(
 
 
 def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str, str]:
+    if engine == "local":
+        return ("local", "deterministic", "")
     if engine == "openai-realtime":
         return (
             "openai",
@@ -150,6 +152,8 @@ def engine_command(engine: str, env_file: Path) -> list[str]:
 
 
 def ready_marker(engine: str) -> str:
+    if engine == "local":
+        return LOCAL_READY_MARKER
     return "LSA Realtime ready:" if engine in {"openai-realtime", "gemini-live"} else CLASSIC_READY_MARKER
 
 
