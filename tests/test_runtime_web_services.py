@@ -221,6 +221,36 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertIn("WAKE_WORD=momo", saved)
         self.assertIn("OFFLINE_MODEL=mistral:7b-instruct-q4_K_M", saved)
 
+    def test_backend_micro_test_uses_selected_device_and_gain(self):
+        expected = {"ok": True, "device": "USB mic"}
+        with mock.patch.object(self.services._backend_audio_input, "diagnose", return_value=expected) as diagnose:
+            result = self.services.backend_audio_diagnostic("pipewire:source:test-input", 1.25)
+        self.assertEqual(result, expected)
+        diagnose.assert_called_once()
+        kwargs = diagnose.call_args.kwargs
+        self.assertEqual(kwargs["selected_device"], "pipewire:source:test-input")
+        self.assertEqual(kwargs["input_gain"], 1.25)
+        self.assertEqual(kwargs["values"]["BACKEND_AUDIO_INPUT_DEVICE"], "pipewire:source:test-input")
+
+    def test_backend_output_test_forwards_selected_output_device(self):
+        expected = {"ok": True}
+        options = {
+            "provider": "openai",
+            "voice": "alloy",
+            "output_device": "pipewire:sink:test-output",
+            "volume": 0.8,
+            "pan": -0.2,
+        }
+        with mock.patch.object(self.services._backend_tts_tester, "test", return_value=expected) as tester:
+            result = self.services.backend_tts_test("test output", options)
+        self.assertEqual(result, expected)
+        tester.assert_called_once()
+        args = tester.call_args.args
+        kwargs = tester.call_args.kwargs
+        self.assertEqual(args[0], "test output")
+        self.assertEqual(kwargs["options"]["output_device"], "pipewire:sink:test-output")
+        self.assertEqual(kwargs["values"]["BACKEND_AUDIO_OUTPUT_DEVICE"], "pipewire:sink:test-output")
+
     def test_auto_profile_list_is_locked_to_connectivity(self):
         result = self.services.list_env_profiles()
         self.assertTrue(result["auto_mode"])
