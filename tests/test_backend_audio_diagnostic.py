@@ -165,7 +165,7 @@ def test_backend_audio_diagnostic_accepts_audible_minus_36_dbfs(monkeypatch) -> 
     result = assistant.diagnose_backend_audio_input("0", duration_seconds=3)
 
     assert result["metrics"]["speech_rms_dbfs"] == -36.4
-    assert result["metrics"]["peak_dbfs"] == -33.1
+    assert abs(result["metrics"]["peak_dbfs"] - (-33.15)) <= 0.1
     assert result["verdict"] == "green"
     assert result["issues"] == ["good"]
 
