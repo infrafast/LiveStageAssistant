@@ -63,11 +63,13 @@ class FakeOrchestrator:
     def __init__(self, *, effect="read"):
         self.effect = effect
         self.executions = []
+        self.contexts = []
 
     def _routed_servers(self, _text):
         return ("gateway",)
 
-    async def _analyze(self, server, text):
+    async def _analyze(self, server, text, *, context=None):
+        self.contexts.append(context)
         return {
             "protocol": "lsa-command-gateway/v1",
             "recognized": True,
@@ -127,6 +129,31 @@ async def test_read_executes_but_write_requires_explicit_allow_flag():
     assert result["passed"] is True
     assert result["executed"] is True
     assert len(allowed.executions) == 1
+
+
+@pytest.mark.asyncio
+async def test_case_context_is_forwarded_to_gateway_analysis():
+    orchestrator = FakeOrchestrator(effect="read")
+    context = {
+        "speaker": {
+            "name": "Laurent",
+            "confidence": 0.91,
+            "backend": "resemblyzer",
+        }
+    }
+    result = await harness._run_case(
+        orchestrator,
+        {
+            "text": "monte mon retour",
+            "expected": "ready",
+            "effect": "read",
+            "context": context,
+        },
+        allow_writes=False,
+    )
+    assert result["passed"] is True
+    assert orchestrator.contexts == [context]
+    assert result["context"] == context
 
 
 def test_harness_is_directly_runnable_from_repository_root():
