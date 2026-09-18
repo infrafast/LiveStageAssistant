@@ -91,6 +91,18 @@ def _enabled(entry: Mapping[str, Any]) -> bool:
     return entry.get("enabled", True) is not False
 
 
+def _expand_env(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _expand_env(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(item) for item in value]
+    if isinstance(value, tuple):
+        return [_expand_env(item) for item in value]
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    return value
+
+
 def _local_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     local = {
         str(key): value
@@ -103,7 +115,7 @@ def _local_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
         env_map = dict(env) if isinstance(env, Mapping) else {}
         env_map["LSA_LOCAL_COMMAND_GATEWAY"] = "1"
         local["env"] = env_map
-    return local
+    return _expand_env(local)
 
 
 def local_gateway_mcp_config(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -324,7 +336,7 @@ class DeterministicGatewayOrchestrator:
         server_config = self.servers.get(server)
         if effect == "write" and server_config and server_config.permission == "approval":
             self.pending_approval = PendingApproval(server=server, plan_token=plan_token)
-            return "Cette commande va modifier la scène. Confirmer ?"
+            return "Cette commande va effectuer une action. Confirmer ?"
 
         executed = await self._execute(server, plan_token)
         if executed.get("ok") is True:
