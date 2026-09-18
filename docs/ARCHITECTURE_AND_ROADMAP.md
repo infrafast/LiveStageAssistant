@@ -974,12 +974,12 @@ Cleanup happens **after OR4B3 live validation**, not before.
 
 #### OR4C - Cross-repository safety and compatibility gate
 
-- [ ] pin one gateway protocol/core version known to work across LSA + XMSeries-MCP + QLCPlus-MCP;
-- [ ] incompatible gateway version -> Local engine marks that MCP unsupported; never attempts a best-effort write;
+- [x] pin one gateway protocol/core version known to work across LSA + XMSeries-MCP + QLCPlus-MCP: both gateway servers pin `stage-command-core@fa9f8baef06a668efb18b1bfc50060335689f287`, while LSA requires `lsa-command-gateway/v1`;
+- [x] incompatible gateway version -> Local engine marks that MCP unsupported; protocol-schema discovery is regression-tested and never attempts a best-effort write;
 - [ ] validate STDIO first; validate persistent local HTTP only with an explicitly gateway-enabled instance;
-- [ ] verify cloud LSA and external ordinary MCP clients see the pre-OR4 low-level tool/prompt behavior when gateway enablement is absent;
-- [ ] verify local gateway tools are absent from normal cloud model tool inventories;
-- [ ] validate approval, clarification, timeout, stale-token, one-shot token and duplicate-write protections;
+- [~] gateway-disabled MCP regression tests preserve the pre-OR4 low-level tool/prompt inventory; live cloud/external-client confirmation remains pending;
+- [x] local gateway tools are disabled by default and absent from normal MCP/cloud tool inventories unless the dedicated Local child overlay enables them;
+- [~] automated tests cover approval, clarification routing, stale-plan/identity and duplicate/one-shot write protection; timeout behavior remains part of the live cross-repository gate;
 - [ ] measure accepted-transcript -> MCP action latency, CPU and RAM with QLC+, Whisper/Piper and rack services active;
 - [ ] target simple deterministic command completion <=1 s excluding STT/TTS, and materially below historical Ollama CPU load.
 
