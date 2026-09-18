@@ -247,6 +247,38 @@ async def test_unrouted_one_claim_executes_and_multiple_claims_never_execute():
 
 
 @pytest.mark.asyncio
+async def test_analysis_failure_is_not_reported_as_unrecognized():
+    async def failing_analyze(_args):
+        raise RuntimeError("Le mixeur est deconnecté: impossible de lire les noms OSC (channel 17)")
+
+    mixer = FakeSession(analyze=failing_analyze)
+    orchestrator = DeterministicGatewayOrchestrator(
+        config(("mixer", stdio_entry())),
+        client=FakeClient({"mixer": mixer}),
+    )
+    await orchestrator.start()
+
+    response = await orchestrator.handle("mets la guitare de anto sur claude à -5db")
+    assert response == "Erreur mixer : impossible de résoudre les noms, le mixeur ne répond pas."
+
+
+@pytest.mark.asyncio
+async def test_generic_analysis_failure_stays_concise():
+    async def failing_analyze(_args):
+        raise RuntimeError("unexpected internal resolver failure with implementation details")
+
+    mixer = FakeSession(analyze=failing_analyze)
+    orchestrator = DeterministicGatewayOrchestrator(
+        config(("mixer", stdio_entry())),
+        client=FakeClient({"mixer": mixer}),
+    )
+    await orchestrator.start()
+
+    response = await orchestrator.handle("commande")
+    assert response == "Erreur mixer pendant l’analyse de la commande."
+
+
+@pytest.mark.asyncio
 async def test_zero_claim_never_executes():
     one = FakeSession()
     two = FakeSession()
