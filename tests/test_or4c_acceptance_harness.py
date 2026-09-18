@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -125,3 +127,20 @@ async def test_read_executes_but_write_requires_explicit_allow_flag():
     assert result["passed"] is True
     assert result["executed"] is True
     assert len(allowed.executions) == 1
+
+
+def test_harness_is_directly_runnable_from_repository_root():
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "or4c_local_gateway_acceptance.py"),
+            "--help",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "--allow-writes" in completed.stdout
