@@ -54,3 +54,23 @@ The harness never retries a write. A failed, stale, ambiguous or rejected plan r
 ## Evidence to retain
 
 Keep the two JSON reports with the tested Git commits and rack configuration. OR4C/OR4D should only be marked live-validated after the report is reviewed together with observed mixer/QLC behavior.
+
+
+## OR4B4 XMSeries advanced acceptance
+
+After the basic XMSeries MVP has passed live, use the dedicated template:
+
+```bash
+cp scripts/or4b4_xm_acceptance_corpus.example.json /tmp/or4b4-xm.json
+vi /tmp/or4b4-xm.json
+```
+
+Replace `__CHANNEL__` with an exact safe channel name and `__BUS__` with an exact safe mix-bus name. The template covers absolute/relative percent, channel-to-bus routing, progressive ramps and delayed level actions.
+
+Run the analysis-only pass first:
+
+```bash
+.venv/bin/python scripts/or4c_local_gateway_acceptance.py --env-file .env.offline --corpus /tmp/or4b4-xm.json --json-report /tmp/or4b4-xm-read.json
+```
+
+For live writes, enable `"execute": true` only for the individual cases currently under observation and add `--allow-writes`. Automation jobs return as soon as they are accepted by XMSeries-MCP, so confirm the final mixer state after the requested ramp/delay interval before marking that case live-validated. Do not run overlapping ramp/delay cases on the same target when validating final state.
