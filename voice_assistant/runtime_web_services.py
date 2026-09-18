@@ -61,42 +61,6 @@ GEMINI_LIVE_VOICE_OPTIONS = [{"id": voice, "label": voice} for voice in ("Kore",
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
 DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
-# Engine-neutral operator audio settings must survive Online <-> Offline engine
-# transitions. They are mirrored between the paired runtime profiles when the
-# common supervisor owns profile selection. Provider/model/connectivity keys
-# remain profile-specific.
-SHARED_AUDIO_PROFILE_KEYS = {
-    "CLOUD_TTS_OUTPUT_GAIN",
-    "LOCAL_TTS_OUTPUT_GAIN",
-    "BACKEND_AUDIO_INPUT_DEVICE",
-    "BACKEND_AUDIO_INPUT_GAIN",
-    "BACKEND_AUDIO_OUTPUT_DEVICE",
-    "THINKING_SOUND_FILE",
-    "READY_SOUND_FILE",
-    "LISTENING_SOUND_FILE",
-    "WAKE_DETECTED_SOUND_FILE",
-    "STARTUP_LOADER_SOUND_ENABLED",
-    "STARTUP_LOADER_SOUND_FILE",
-    "COMMAND_ACK_SOUND_FILE",
-    "COMMAND_ACK_SOUND_ENABLED",
-    "BACKEND_TTS_VOLUME",
-    "BACKEND_AUDIO_OUTPUT_PAN",
-    "BACKEND_AUDIO_MONITOR_MODE",
-    "BACKEND_AUDIO_MONITOR_VOLUME",
-    "VAD_SPEECH_THRESHOLD",
-    "VAD_NEGATIVE_THRESHOLD",
-    "VAD_MIN_SPEECH_MS",
-    "VAD_MIN_SILENCE_MS",
-    "VAD_SPEECH_PAD_MS",
-    "VAD_MAX_SPEECH_SECONDS",
-    "BACKEND_WAKE_WORD_MODEL_PATHS",
-    "BACKEND_WAKE_WORD_MODEL_NAMES",
-    "BACKEND_WAKE_WORD_THRESHOLD",
-    "BACKEND_WAKE_WORD_PRE_ROLL_MS",
-    "BACKEND_WAKE_WORD_COOLDOWN_MS",
-    "BACKEND_WAKE_WORD_VAD_THRESHOLD",
-}
-
 
 class RuntimeWebServices:
     """Common mutable services behind the single runtime WebMonitor."""
@@ -939,16 +903,6 @@ class RuntimeWebServices:
         with self._lock:
             profile = self.active_profile()
             self._write_env(profile, updates)
-            if self.automatic_profiles:
-                sibling_name = ".env.offline" if profile.name == ".env.online" else ".env.online"
-                sibling = profile.parent / sibling_name
-                if sibling.is_file():
-                    shared_updates = {
-                        key: value
-                        for key, value in updates.items()
-                        if key in SHARED_AUDIO_PROFILE_KEYS
-                    }
-                    self._write_env(sibling, shared_updates)
             self._refresh_monitor_config()
         return {
             "saved": True,
