@@ -149,7 +149,15 @@ def build_assistant(
     context_store = SessionContextStore(session_dir, summary_max_chars=DEFAULT_SUMMARY_MAX_CHARS)
     speaker_profiles = _speaker_profiles(values)
     command_monitor = child_monitor_from_env()
-    system_prompt = configured_system_prompt(required=False, fallback=agent.DEFAULT_ASSISTANT_SYSTEM_PROMPT, log_prefix="Classic prompt")
+    system_prompt = (
+        ""
+        if force_local_speech
+        else configured_system_prompt(
+            required=False,
+            fallback=agent.DEFAULT_ASSISTANT_SYSTEM_PROMPT,
+            log_prefix="Classic prompt",
+        )
+    )
     stt_prompt = prompt_text_from_values(
         values,
         "STT_PROMPT",
