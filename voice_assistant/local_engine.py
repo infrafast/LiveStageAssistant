@@ -72,6 +72,10 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
             print(f"LSA Local MCP initialization failed: {exc}", flush=True)
             return False
 
+    async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
+        print("LSA Local ready: deterministic", flush=True)
+        await super().announce_startup_ready(loaded_servers)
+
     async def process_command(self, text: str, speaker_result=None) -> str:
         """Process a transcript only through deterministic MCP gateways."""
         print(f"\nYou said: {text}")
