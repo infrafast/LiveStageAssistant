@@ -61,7 +61,7 @@ def test_offline_profiles_are_cloud_independent_and_use_implicit_piper():
         assert values["STT_PROVIDER"] == "local-whisper"
         assert values["STT_INPUT"] == "backend"
         assert "TTS_PROVIDER" not in values
-        assert not any(key.startswith("LOCAL_TTS_") for key in values)
+        assert values["LOCAL_TTS_OUTPUT_GAIN"] == "1.00"
         assert values["PIPER_VOICE"] == "fr_FR-siwis-medium"
         assert values["PIPER_DATA_DIR"] == "data/piper"
         assert values["WEB_TTS_PROVIDER"] == "none"
