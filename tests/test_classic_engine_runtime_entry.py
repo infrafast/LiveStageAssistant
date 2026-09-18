@@ -57,6 +57,9 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
         self.assertIsNone(assistant.kwargs["web_monitor"])
         self.assertEqual(assistant.kwargs["llm_provider"], "ollama")
         self.assertEqual(assistant.kwargs["tts_provider"], "piper")
+        self.assertTrue(assistant.kwargs["backend_stt_enabled"])
+        self.assertIsNone(assistant.kwargs["openai_api_key"])
+        self.assertIsNone(assistant.kwargs["elevenlabs_api_key"])
         self.assertEqual(assistant.kwargs["backend_tts_volume"], 1.25)
 
 
@@ -67,7 +70,10 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
             env_file.write_text(
                 "CONNECTIVITY_MODE=online\n"
                 "STT_PROVIDER=openai-whisper\n"
+                "STT_INPUT=browser\n"
                 "CLOUD_TTS_PROVIDER=openai\n"
+                "OPENAI_API_KEY_FILE=/definitely/missing/openai.key\n"
+                "ELEVENLABS_API_KEY_FILE=/definitely/missing/elevenlabs.key\n"
                 "CLOUD_TTS_OUTPUT_GAIN=0.25\n"
                 "LOCAL_TTS_OUTPUT_GAIN=1.25\n"
                 "STT_LANGUAGE=fr\n",
