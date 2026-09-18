@@ -942,7 +942,7 @@ Basic XMSeries read/write acceptance is complete, so advanced parity is now unlo
 - [~] dB and percent, absolute and relative semantics: implemented for single targets and channel -> bus; live rack acceptance still pending;
 - [ ] speaker-context defaults without moving speaker business logic into LSA;
 - [ ] bulk/group operations;
-- [~] fades/ramps and delayed actions, with all timing owned by XMSeries-MCP automation: fade-in/out, progressive absolute/relative ramps, explicit from/to ranges and delayed level changes implemented; live rack acceptance pending;
+- [~] fades/ramps and delayed actions, with all timing owned by XMSeries-MCP automation: fade-in/out, progressive absolute/relative ramps, explicit from/to ranges and delayed level changes implemented. Live rack validation now confirms `baisse progressivement batterie à -30 dB en 2 secondes` executed as a real progressive fade to -30 dB; delayed actions and source-to-bus ramps remain pending;
 - [ ] cancellation/status for automation jobs;
 - [ ] expand multilingual/STT corpus only from observed commands; avoid unconstrained fuzzy NLP;
 - [ ] maintain a domain corpus as the regression source of truth and review PROMPT changes against the same semantic cases to limit cloud/local drift.
