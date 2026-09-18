@@ -34,7 +34,6 @@ _LOCAL_SYSTEM_PROMPT = (
     "success unless the tool result confirms it. Keep the final answer concise "
     "plain text."
 )
-_LOCAL_OLLAMA_NUM_CTX = 2048
 _LOCAL_OLLAMA_NUM_PREDICT = 128
 _LOCAL_OLLAMA_TEMPERATURE = 0.0
 
@@ -235,7 +234,6 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
             "keep_alive": "10m",
             "options": {
                 "temperature": _LOCAL_OLLAMA_TEMPERATURE,
-                "num_ctx": _LOCAL_OLLAMA_NUM_CTX,
                 "num_predict": _LOCAL_OLLAMA_NUM_PREDICT,
             },
         }
@@ -329,7 +327,7 @@ class NativeOllamaMcpVoiceAssistant(agent.VoiceAssistant):
             f"[OLLAMA NATIVE MCP CONTEXT: route={route_server or 'all'} "
             f"prompt_chars={len(turn_prompt)} input_chars={len(agent_input)} "
             f"schema_chars={schema_chars} tools={len(selected_tools)} "
-            f"num_ctx={_LOCAL_OLLAMA_NUM_CTX} num_predict={_LOCAL_OLLAMA_NUM_PREDICT}]"
+            f"num_ctx=default num_predict={_LOCAL_OLLAMA_NUM_PREDICT}]"
         )
 
         def remaining_budget() -> float:
