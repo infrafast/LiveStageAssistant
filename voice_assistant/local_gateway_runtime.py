@@ -18,6 +18,8 @@ from typing import Any, Mapping
 
 from mcp_use import MCPClient
 
+from .i18n import localized_error_text
+
 GATEWAY_PROTOCOL = "lsa-command-gateway/v1"
 ANALYZE_TOOL = "lsa_local_analyze_command"
 EXECUTE_TOOL = "lsa_local_execute_command"
@@ -311,7 +313,16 @@ class DeterministicGatewayOrchestrator:
             if normalized in YES_WORDS:
                 self.pending_approval = None
                 payload = await self._execute(pending.server, pending.plan_token)
-                return str(payload.get("responseText") or ("Commande exécutée." if payload.get("ok") else "La commande a échoué."))
+                if payload.get("ok") is True:
+                    return str(payload.get("responseText") or ("Commande exécutée." if self.locale.startswith("fr") else "Command executed."))
+                raw = str(payload.get("responseText") or "")
+                print(f"Local gateway execution failed: {pending.server}: {raw}", flush=True)
+                return localized_error_text(
+                    self.locale,
+                    domain=pending.server,
+                    error=raw,
+                    error_code=str(payload.get("errorCode") or ""),
+                )
             if normalized in NO_WORDS:
                 self.pending_approval = None
                 return "Commande annulée."
@@ -380,8 +391,15 @@ class DeterministicGatewayOrchestrator:
 
         executed = await self._execute(server, plan_token)
         if executed.get("ok") is True:
-            return str(executed.get("responseText") or "Commande exécutée.")
-        return str(executed.get("responseText") or "La commande a échoué.")
+            return str(executed.get("responseText") or ("Commande exécutée." if self.locale.startswith("fr") else "Command executed."))
+        raw = str(executed.get("responseText") or "")
+        print(f"Local gateway execution failed: {server}: {raw}", flush=True)
+        return localized_error_text(
+            self.locale,
+            domain=server,
+            error=raw,
+            error_code=str(executed.get("errorCode") or ""),
+        )
 
     async def close(self) -> None:
         if self._owns_client and getattr(self.client, "sessions", None):
