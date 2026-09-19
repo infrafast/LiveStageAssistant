@@ -44,3 +44,38 @@ def test_final_spoken_guard_sanitizes_obvious_technical_errors():
 def test_final_spoken_guard_leaves_normal_assistant_text_unchanged():
     text = "ANTO réactivé."
     assert sanitize_spoken_response("fr", text) == text
+
+
+def test_cloud_api_error_messages_follow_selected_locale():
+    from voice_assistant.agent import classify_cloud_api_error
+
+    fr = classify_cloud_api_error(
+        RuntimeError("insufficient_quota"),
+        provider="OpenAI",
+        stage="stt",
+        locale="fr",
+    )
+    en = classify_cloud_api_error(
+        RuntimeError("insufficient_quota"),
+        provider="OpenAI",
+        stage="stt",
+        locale="en",
+    )
+
+    assert fr is not None and fr.message.startswith("Plus de crédit API OpenAI")
+    assert en is not None and en.message.startswith("The OpenAI API has no remaining credit")
+
+
+def test_cloud_auth_error_does_not_expose_provider_exception_detail():
+    from voice_assistant.agent import classify_cloud_api_error
+
+    raw = "401 unauthorized secret diagnostic payload"
+    result = classify_cloud_api_error(
+        RuntimeError(raw),
+        provider="OpenAI",
+        stage="llm",
+        locale="fr",
+    )
+    assert result is not None
+    assert result.message == "Clé API OpenAI invalide ou refusée."
+    assert "secret diagnostic payload" not in result.message
