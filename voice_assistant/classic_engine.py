@@ -18,7 +18,6 @@ from dotenv import dotenv_values, load_dotenv
 
 from . import agent
 from .child_command_channel import child_monitor_from_env
-from .ollama_native_mcp import NativeOllamaMcpVoiceAssistant
 from .prompt_contract import configured_system_prompt
 from .prompt_files import DEFAULT_STT_PROMPT_PATH, prompt_text_from_values
 from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
@@ -116,7 +115,6 @@ def build_assistant(
     env_file: str | Path,
     *,
     assistant_class_override: type[agent.VoiceAssistant] | None = None,
-    llm_provider_override: str | None = None,
     model_override: str | None = None,
     force_local_speech: bool = False,
 ) -> agent.VoiceAssistant:
@@ -131,8 +129,7 @@ def build_assistant(
     load_dotenv(path, override=True)
 
     connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
-    offline = connectivity == "offline"
-    local_speech = offline or force_local_speech
+    local_speech = force_local_speech
     tts_config = agent.resolve_tts_config_from_values(values)
     wake_words = get_configured_wake_words()
     monitor_mode = agent.normalize_backend_audio_monitor_mode(str(values.get("BACKEND_AUDIO_MONITOR_MODE") or "off"))
@@ -170,21 +167,16 @@ def build_assistant(
     local_gain = max(0.0, min(2.0, _float(values, "LOCAL_TTS_OUTPUT_GAIN", _float(values, "BACKEND_TTS_VOLUME", 1.0))))
     speech_gain = local_gain if tts_config.backend_provider == "piper" or local_speech else cloud_gain
 
-    assistant_class = assistant_class_override or (NativeOllamaMcpVoiceAssistant if offline else agent.VoiceAssistant)
-    resolved_model = model_override if model_override is not None else (
-        str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or agent.DEFAULT_OLLAMA_MODEL).strip()
-        if offline
-        else str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
-    )
-    resolved_provider = llm_provider_override if llm_provider_override is not None else (
-        "ollama" if offline else str(values.get("LLM_PROVIDER") or "openai").strip().lower()
-    )
+    assistant_class = assistant_class_override or agent.VoiceAssistant
+    if connectivity == "offline" and assistant_class_override is None:
+        raise RuntimeError("Cloud Classic cannot run from an offline profile; use VOICE_ENGINE=local")
+    resolved_model = model_override if model_override is not None else str(
+        values.get("OPENAI_MODEL") or "gpt-4.1-mini"
+    ).strip()
     assistant = assistant_class(
         openai_api_key=None if force_local_speech else _secret(values, "OPENAI_API_KEY"),
         elevenlabs_api_key=None if force_local_speech else _secret(values, "ELEVENLABS_API_KEY"),
         model=resolved_model,
-        llm_provider=resolved_provider,
-        ollama_base_url=str(values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip(),
         stt_provider="local-whisper" if local_speech else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
         local_whisper_model=str(values.get("LOCAL_WHISPER_MODEL") or "base").strip(),
         stt_language=str(values.get("STT_LANGUAGE") or "fr").strip(),
