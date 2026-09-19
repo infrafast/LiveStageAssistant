@@ -185,8 +185,7 @@ READY_SOUND_FILE=
 STARTUP_LOADER_SOUND_ENABLED=false
 STARTUP_LOADER_SOUND_FILE=loader.wav
 
-# Offline/local speech defaults.
-LOCAL_TTS_PROVIDER=piper
+# Offline/local speech defaults. Piper is the Local engine's fixed TTS implementation.
 PIPER_VOICE=fr_FR-siwis-medium
 PIPER_DATA_DIR=data/piper
 
@@ -194,12 +193,14 @@ WAKE_WORD=
 BACKEND_WAKE_WORD_MODEL_PATHS=
 BACKEND_WAKE_WORD_MODEL_NAMES=
 
+# Cloud Classic agent-only controls live in online/cloud profiles.
 MCP_AGENT_MEMORY_ENABLED=true
 MCP_AGENT_TIMEOUT_SECONDS=45
 MCP_AGENT_MAX_STEPS=20
 MCP_TOOL_ROUTING_ENABLED=true
-MCP_CONFIG=mcp_servers.json
 
+# Shared runtime/session/MCP inventory.
+MCP_CONFIG=mcp_servers.json
 SESSION_CONTEXT_SIZE=6000
 SESSION_CONTEXT_DIR=.contexts
 ```
@@ -208,7 +209,7 @@ Configuration ownership:
 
 ```text
 .env profile
-  -> connectivity / voice engine / provider / audio defaults
+  -> connectivity / execution mode / Cloud engine / audio defaults
   -> common semantic feedback sounds
   -> cloud/local speech-output gains
   -> MCP_CONFIG path
@@ -952,30 +953,28 @@ Basic XMSeries read/write acceptance is complete, so advanced parity is now unlo
 
 Temporal semantics are deterministic in XMSeries-MCP: `en N secondes` means ramp duration; `dans N secondes` means delay before action. Fade-in/out with no explicit target defaults to Main LR/façade.
 
-#### OR4B5 - GUI/config migration
+#### OR4B5 - GUI/config migration — IMPLEMENTED / CI VALIDATED
 
-The GUI now separates `Mode = Local déterministe / Cloud`. Local is not an LLM model; Cloud exposes the retained cloud engines (Classic, OpenAI Realtime, Gemini Live). Offline forces Local, while online allows either Local or Cloud.
+The GUI separates `Mode = Local déterministe / Cloud`. Local is not an LLM model; Cloud exposes the retained cloud engines (Classic, OpenAI Realtime, Gemini Live). Offline forces Local, while online allows either Local or Cloud.
 
-- [ ] Offline connectivity still forces/selects `Voice engine = Local`;
-- [ ] hide Provider, LLM model, Session Context, MCP Steps and system-prompt controls when Local is active;
-- [ ] keep Tool Routing visible because it remains useful for deterministic server narrowing;
-- [ ] add a Local detail/status such as "Local deterministic MCP commands" rather than a fake model choice;
-- [ ] make `/api/llm-options` and config-save logic engine-aware so Local does not require `provider` or `model`;
-- [x] runtime/config status reports Local as `local/deterministic` with no local model identifier;
-- [ ] preserve all cloud Classic/OpenAI Realtime/Gemini GUI controls and saved values unchanged;
-- [ ] update every locale file under `assets/i18n/` in the same change.
+- [x] Offline connectivity forces/selects Local;
+- [x] hide Cloud-only model/context/MCPAgent/system-prompt controls when Local is active;
+- [x] keep deterministic per-MCP routing configuration in the MCP section while hiding the Cloud-only global Tool Routing toggle in Local;
+- [x] Local status reports `local/deterministic` rather than a fake provider/model;
+- [x] `/api/llm-options` and config-save logic are engine-aware; Local requires neither provider nor model and no longer persists Cloud-agent keys;
+- [x] preserve Classic/OpenAI Realtime/Gemini Cloud controls and saved online values;
+- [x] Local/Cloud labels are present in every supported locale file under `assets/i18n/`;
+- [x] regression tests lock the Local/Cloud selector, Cloud-engine mapping and absence of retired provider controls.
 
-#### OR4B6 - Offline profile, installer and dependency cleanup
+#### OR4B6 - Offline profile, installer and dependency cleanup — IMPLEMENTED / CI VALIDATED
 
-Cleanup happens **after OR4B3 live validation**, not before.
-
-- [x] `.env.offline`: keep `CONNECTIVITY_MODE=offline`, local STT/Piper/audio/MCP settings and explicit `VOICE_ENGINE=local`; retired local-LLM keys removed;
-- [ ] update `.env.example` and profile migration logic;
-- [x] installer/service-pack no longer installs, pulls or manages a local LLM; user-owned installations remain untouched;
-- [x] obsolete local-LLM installer knobs removed;
-- [x] local-LLM manager/runner/startup code and direct local-LLM dependency removed;
-- [ ] preserve cloud LLM dependencies/paths required by Classic and Realtime;
-- [x] OR4 local-LLM benchmark scripts retired after preserving the decision record here;
+- [x] `.env.offline` and Raspberry offline profile retain only Local runtime/audio/STT/Piper/session/MCP settings plus explicit `VOICE_ENGINE=local`;
+- [x] `.env.example`, online/offline profiles and service-pack profiles contain no retired Ollama/local-LLM keys;
+- [x] installer/service-pack no longer installs, pulls, starts, migrates or manages a local LLM; user-owned installations remain untouched;
+- [x] obsolete local-LLM installer knobs, migration code, manager/runner/startup code and direct dependency removed;
+- [x] Cloud dependencies and OpenAI/Realtime paths required by Classic and Realtime remain intact;
+- [x] OR4 local-LLM benchmark/probe scripts retired after preserving the architecture decision record;
+- [x] repository-wide regression guard prevents Ollama/local-LLM artifacts from returning to runtime profiles/code.
 
 #### OR4C - Cross-repository safety and compatibility gate
 
