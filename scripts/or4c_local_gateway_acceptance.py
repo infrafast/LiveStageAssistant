@@ -191,7 +191,6 @@ async def _run(args: argparse.Namespace) -> int:
         "allow_writes": bool(args.allow_writes),
         "gateways": [],
         "cases": [],
-        "llm_processes_before": llm_before,
     }
 
     try:
@@ -232,7 +231,7 @@ async def _run(args: argparse.Namespace) -> int:
     finally:
         await orchestrator.close()
 
-    report["passed"] = all_cases_pass
+    report["passed"] = all(bool(item.get("passed")) for item in report["cases"])
 
     print(
         "RESULT: " + ("PASS" if report["passed"] else "FAIL"),
