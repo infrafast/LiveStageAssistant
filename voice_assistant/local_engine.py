@@ -158,7 +158,6 @@ def build_assistant(env_file: str | Path) -> DeterministicLocalVoiceAssistant:
     assistant = classic_engine.build_assistant(
         env_file,
         assistant_class_override=DeterministicLocalVoiceAssistant,
-        llm_provider_override="local",
         model_override="deterministic",
         force_local_speech=True,
     )
