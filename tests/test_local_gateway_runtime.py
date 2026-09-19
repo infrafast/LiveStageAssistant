@@ -259,7 +259,7 @@ async def test_analysis_failure_is_not_reported_as_unrecognized():
     await orchestrator.start()
 
     response = await orchestrator.handle("mets la guitare de anto sur claude à -5db")
-    assert response == "Erreur mixer : impossible de résoudre les noms, le mixeur ne répond pas."
+    assert response == "La commande mixeur a échoué : le périphérique ne répond pas"
 
 
 @pytest.mark.asyncio
@@ -275,7 +275,79 @@ async def test_generic_analysis_failure_stays_concise():
     await orchestrator.start()
 
     response = await orchestrator.handle("commande")
-    assert response == "Erreur mixer pendant l’analyse de la commande."
+    assert response == "La commande mixeur a échoué : une erreur technique est survenue"
+
+
+@pytest.mark.asyncio
+async def test_oscxr_route_mute_failure_is_localized_and_raw_detail_stays_in_logs(capsys):
+    raw = (
+        "La commande mixeur a échoué : Unsupported for OSCXR: "
+        "Channel-to-bus mute is not losslessly supported: OSCXR exposes "
+        "/ch/13/mix/on as whole-channel mute, not bus 3 mute."
+    )
+    mixer = FakeSession(
+        analyze=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "recognized": True,
+            "status": "ready",
+            "effect": "write",
+            "planToken": "route-mute",
+        },
+        execute=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "ok": False,
+            "errorCode": "execution_failed",
+            "responseText": raw,
+        },
+    )
+    orchestrator = DeterministicGatewayOrchestrator(
+        config(("mixer", stdio_entry())),
+        client=FakeClient({"mixer": mixer}),
+        locale="fr",
+    )
+    await orchestrator.start()
+
+    response = await orchestrator.handle("mute Batterie sur Anto")
+    assert response == (
+        "La commande mixeur a échoué : "
+        "le mute d’une voie vers un bus séparé n’est pas pris en charge avec OSCXR"
+    )
+    assert "/ch/13/mix/on" not in response
+    captured = capsys.readouterr().out
+    assert "/ch/13/mix/on" in captured
+
+
+@pytest.mark.asyncio
+async def test_oscxr_route_mute_failure_uses_english_i18n_when_selected():
+    raw = "Unsupported for OSCXR: Channel-to-bus mute is not losslessly supported"
+    mixer = FakeSession(
+        analyze=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "recognized": True,
+            "status": "ready",
+            "effect": "write",
+            "planToken": "route-mute",
+        },
+        execute=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "ok": False,
+            "errorCode": "execution_failed",
+            "responseText": raw,
+        },
+    )
+    orchestrator = DeterministicGatewayOrchestrator(
+        config(("mixer", stdio_entry())),
+        client=FakeClient({"mixer": mixer}),
+        locale="en",
+    )
+    await orchestrator.start()
+
+    response = await orchestrator.handle("mute Batterie sur Anto")
+    assert response == (
+        "The mixer command failed : "
+        "per-bus mute for an input channel is not supported with OSCXR"
+    )
+    assert "losslessly" not in response
 
 
 @pytest.mark.asyncio
