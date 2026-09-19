@@ -3238,14 +3238,15 @@ class VoiceAssistant:
     def _command_dedupe_key(self, text: str) -> str:
         return re.sub(r"\s+", " ", (text or "").strip().lower())
 
-    def _should_skip_duplicate_command(self, text: str) -> bool:
+    def _should_skip_duplicate_command(self, text: str, *, suppress: bool = True) -> bool:
         key = self._command_dedupe_key(text)
         if not key:
             return False
 
         now = time.monotonic()
         if (
-            self.last_processed_command_key == key
+            suppress
+            and self.last_processed_command_key == key
             and now - self.last_processed_command_at <= DUPLICATE_COMMAND_SUPPRESS_SECONDS
         ):
             return True
@@ -6278,9 +6279,12 @@ class VoiceAssistant:
 
                 text = self.pending_injected_command
                 self.pending_injected_command = None
+                command_was_injected = bool(text)
+                text_from_fallback = False
                 speaker_result = SpeakerRecognitionResult()
                 if not text and self.web_monitor:
                     text = self.web_monitor.pop_injected_command()
+                    command_was_injected = bool(text)
                 text, injected_speaker_result = self.injected_command_parts(text)
                 if (
                     injected_speaker_result.speaker != UNKNOWN_SPEAKER
@@ -6291,7 +6295,6 @@ class VoiceAssistant:
                 if text:
                     print(f"Injected command consumed: {text}")
                 else:
-                    text_from_fallback = False
                     if not self.microphone_available:
                         text = await self.wait_for_text_fallback_command()
                         if self.reload_event and self.reload_event.is_set():
@@ -6371,10 +6374,15 @@ class VoiceAssistant:
                             self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         text = command_text
 
-                if self._should_skip_duplicate_command(text):
+                if self._should_skip_duplicate_command(
+                    text,
+                    suppress=not (command_was_injected or text_from_fallback),
+                ):
                     print(f"Duplicate command ignored: {text}")
                     self.semantic_audio.transition(self._semantic_listening_state())
                     self._set_backend_audio_state(self._backend_listening_state(), "duplicate command")
+                    if self.web_monitor:
+                        self.web_monitor.set_assistant_busy(False)
                     continue
 
                 # Process command
