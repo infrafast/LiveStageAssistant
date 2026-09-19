@@ -530,9 +530,6 @@ class RuntimeWebServices:
         connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
         selected_model = str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
         models = [{"id": selected_model, "label": selected_model}] if selected_model else []
-        provider = "openai"
-        options_message = ""
-
         cloud_tts = str(values.get("CLOUD_TTS_PROVIDER") or "").strip().lower()
         if not cloud_tts:
             backend_provider = str(values.get("TTS_PROVIDER") or "").strip().lower()
@@ -579,7 +576,6 @@ class RuntimeWebServices:
             "selected_connectivity_mode": connectivity,
             "models": models,
             "selected_model": selected_model,
-            "message": options_message,
             "cloud_tts_providers": CLOUD_TTS_PROVIDER_OPTIONS,
             "selected_cloud_tts_provider": cloud_tts,
             "selected_stt_input": stt_input,
