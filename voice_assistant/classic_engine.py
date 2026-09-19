@@ -238,9 +238,9 @@ def build_assistant(
     )
     profile_label = "Local deterministic engine" if assistant_class_override is not None else "Classic engine"
     identity_label = (
-        f"runtime={assistant.llm_provider}/{assistant.model}"
+        "runtime=local/deterministic"
         if assistant_class_override is not None
-        else f"llm={assistant.llm_provider}/{assistant.model}"
+        else f"llm=openai/{assistant.model}"
     )
     print(
         f"{profile_label} profile: connectivity={connectivity} {identity_label} "
