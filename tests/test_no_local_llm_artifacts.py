@@ -15,8 +15,16 @@ def test_retired_local_llm_stack_is_absent_from_runtime_and_profiles():
         ROOT / ".env.example",
         ROOT / ".env.online",
         ROOT / ".env.offline",
+        ROOT / ".env.codespace",
+        ROOT / ".env.localhttp",
+        ROOT / ".env.tailscale",
+        ROOT / "container/config/.env.infrafast",
+        ROOT / "container/config/.env.localhost",
+        ROOT / "container/config/.env.tailscaleHTTP",
+        ROOT / "container/config/.env.tailscaleSTDIO",
         ROOT / "raspi_service_pack_stdio/.env.online",
         ROOT / "raspi_service_pack_stdio/.env.offline",
+        ROOT / "scripts/install.ps1",
     ]
     banned = (
         "langchain_ollama",
