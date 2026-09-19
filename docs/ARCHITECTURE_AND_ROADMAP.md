@@ -550,6 +550,8 @@ Realtime cold first transaction in the same series: **$0.0772088**. The warm tra
 
 Interpretation: the cost request is closed for the current representative transaction. Do not generalize 9.22x to every future prompt/tool shape; repeat only if model, provider, MCP routing or conversation-context policy changes materially.
 
+Post-validation cleanup (2026-09-19): the historical measurements above are retained as the architecture decision record, while the temporary RV0/RV1/RV2 latency/cost instrumentation, probes and benchmark scripts used to obtain them have been removed from production code. Functional timeout/watchdog/VAD/cooldown timing remains because it is runtime behavior, not benchmark instrumentation.
+
 ### RV2F - Semantic user audio feedback parity — PRIORITY
 
 **Goal:** preserve and generalize the Classic user-facing audio-state behavior across Realtime, Local and future engines so the operator always knows whether LSA is starting, ready, waiting for wake, listening, processing, ready to answer or speaking.
