@@ -159,7 +159,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
     def test_turn_tracker_keeps_turn_busy_until_expected_response_after_tool(self):
         tracker = realtime_service.RealtimeTurnTracker(action_grace_seconds=0)
         tracker.start_text_turn()
-        tracker.response_started_event("resp_1", 1.0)
+        tracker.response_started_event("resp_1")
         tracker.tool_started()
         tracker.response_done("resp_1")
         self.assertTrue(tracker.has_pending_work())
@@ -170,7 +170,7 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
         tracker.tool_followup_requested()
         self.assertTrue(tracker.has_pending_work())
 
-        tracker.response_started_event("resp_2", 2.0)
+        tracker.response_started_event("resp_2")
         self.assertTrue(tracker.has_pending_work())
         tracker.response_done("resp_2")
         self.assertFalse(tracker.has_pending_work())
@@ -284,7 +284,6 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 queue,
                 set(),
-                {},
                 stop_event,
                 semantic,
                 provider_failure,
@@ -323,7 +322,6 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 queue,
                 set(),
-                {},
                 stop_event,
                 semantic,
                 provider_failure,
@@ -366,7 +364,6 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 queue,
                 interrupted,
-                {},
                 stop_event,
                 semantic,
                 provider_failure,
@@ -412,7 +409,6 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 queue,
                 set(),
-                {},
                 stop_event,
                 semantic,
                 provider_failure,
@@ -455,7 +451,6 @@ class RealtimeEngineTests(unittest.IsolatedAsyncioTestCase):
                 None,
                 queue,
                 set(),
-                {},
                 stop_event,
                 semantic,
                 provider_failure,
