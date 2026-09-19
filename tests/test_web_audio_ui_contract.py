@@ -44,4 +44,6 @@ def test_engine_gui_exposes_local_or_cloud_without_local_llm_provider():
     assert 'id="llm-provider"' not in html
     assert 'function selectedVoiceEngine()' in js
     assert 'return cloudEngine?.value || "classic";' in js
+    assert 'const engine = selectedVoiceEngine();' in js
     assert "llmProvider" not in js
+    assert "provider,\n            model," not in js
