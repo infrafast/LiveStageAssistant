@@ -60,7 +60,6 @@ OPENAI_REALTIME_VOICE_OPTIONS = [
 GEMINI_LIVE_MODEL_OPTIONS = [{"id": "gemini-3.1-flash-live-preview", "label": "gemini-3.1-flash-live-preview"}]
 GEMINI_LIVE_VOICE_OPTIONS = [{"id": voice, "label": voice} for voice in ("Kore", "Puck", "Charon", "Fenrir", "Aoede")]
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
-DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 
 class RuntimeWebServices:
@@ -116,26 +115,6 @@ class RuntimeWebServices:
 
     def _values(self, profile: Path | None = None) -> dict[str, Any]:
         return dict(dotenv_values(profile or self.active_profile()))
-
-    @staticmethod
-    def _ollama_models(values: dict[str, Any], configured_model: str) -> tuple[list[dict[str, str]], str]:
-        """List live Ollama models, falling back to the configured model if the API is temporarily unavailable."""
-        base_url = str(values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip().rstrip("/")
-        try:
-            with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2.0) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            names = sorted(
-                str(item.get("name") or "").strip()
-                for item in (payload.get("models") or [])
-                if isinstance(item, dict) and str(item.get("name") or "").strip()
-            )
-            models = [{"id": name, "label": name} for name in names]
-            if configured_model and configured_model not in names:
-                models.append({"id": configured_model, "label": f"{configured_model} (configured)"})
-            return models, ""
-        except Exception as error:
-            fallback = [{"id": configured_model, "label": f"{configured_model} (configured)"}] if configured_model else []
-            return fallback, f"Ollama API unavailable at {base_url}: {error}"
 
     def backend_audio_sample(self, filename: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
         self._backend_audio_sample_player.update_values(self._values())
@@ -545,24 +524,14 @@ class RuntimeWebServices:
             })
         return result
 
-    def llm_options(self, requested_provider: str | None = None) -> dict[str, Any]:
-        """Return GUI options from the active profile without constructing an engine."""
+    def llm_options(self, _requested_provider: str | None = None) -> dict[str, Any]:
+        """Return engine-oriented GUI options from the active profile."""
         values = self._values()
         connectivity = str(values.get("CONNECTIVITY_MODE") or "online").strip().lower()
-        current_provider = str(values.get("LLM_PROVIDER") or ("ollama" if connectivity == "offline" else "openai")).strip().lower()
-        provider = str(requested_provider or current_provider).strip().lower()
-        if provider not in {"openai", "ollama"}:
-            provider = current_provider if current_provider in {"openai", "ollama"} else "openai"
-        if connectivity == "offline":
-            provider = "ollama"
-
-        if provider == "ollama":
-            selected_model = str(values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
-            models, ollama_message = self._ollama_models(values, selected_model)
-        else:
-            selected_model = str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
-            models = [{"id": selected_model, "label": selected_model}] if selected_model else []
-            ollama_message = ""
+        selected_model = str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
+        models = [{"id": selected_model, "label": selected_model}] if selected_model else []
+        provider = "openai"
+        options_message = ""
 
         cloud_tts = str(values.get("CLOUD_TTS_PROVIDER") or "").strip().lower()
         if not cloud_tts:
@@ -593,10 +562,6 @@ class RuntimeWebServices:
         voice_engine = str(values.get("VOICE_ENGINE") or ("local" if connectivity == "offline" else "classic")).strip().lower()
         realtime_models, realtime_voices = self._realtime_options(values, voice_engine)
         openai_realtime_models = self._openai_realtime_models(values)
-        providers = [
-            {"id": "openai", "label": "OpenAI", "available": connectivity != "offline", "reason": None if connectivity != "offline" else "offline"},
-            {"id": "ollama", "label": "Ollama", "available": True, "reason": None},
-        ]
         backend_input = str(values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
         backend_output = str(values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
         backend_audio_devices = list_backend_audio_devices()
@@ -611,12 +576,10 @@ class RuntimeWebServices:
                     "reason": "Configured in the active .env but not currently detected",
                 })
         return {
-            "provider": provider,
             "selected_connectivity_mode": connectivity,
-            "providers": providers,
             "models": models,
             "selected_model": selected_model,
-            "message": ollama_message,
+            "message": options_message,
             "cloud_tts_providers": CLOUD_TTS_PROVIDER_OPTIONS,
             "selected_cloud_tts_provider": cloud_tts,
             "selected_stt_input": stt_input,
@@ -683,6 +646,13 @@ class RuntimeWebServices:
             "selected_startup_loader_sound_file": startup_file,
             "selected_command_ack_sound_file": command_ack,
             "selected_voice_engine": voice_engine,
+            "selected_execution_mode": "local" if voice_engine == "local" else "cloud",
+            "selected_cloud_engine": voice_engine if voice_engine != "local" else "classic",
+            "cloud_engines": [
+                {"id": "classic", "label": "Classic"},
+                {"id": "openai-realtime", "label": "OpenAI Realtime"},
+                {"id": "gemini-live", "label": "Gemini Live"},
+            ],
             "realtime_models": realtime_models,
             "realtime_voices": realtime_voices,
             "openai_realtime_models": openai_realtime_models,
@@ -702,7 +672,6 @@ class RuntimeWebServices:
 
     def save_llm_config(
         self,
-        provider: str,
         model: str,
         cloud_tts_provider: str,
         tts_output: str,
@@ -765,25 +734,14 @@ class RuntimeWebServices:
         if self.automatic_profiles and requested_connectivity != active_connectivity:
             raise ValueError("connectivity is controlled automatically by the runtime; switch network state instead")
 
-        provider = str(provider or "").strip().lower()
-        if active_connectivity == "offline":
-            provider = "ollama"
-        elif provider != "openai":
-            raise ValueError("online mode uses the cloud LLM provider; local Ollama belongs to the offline profile")
-        model = str(model or "").strip()
-        if not model and active_connectivity == "offline":
-            model = str(values.get("OFFLINE_MODEL") or values.get("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
-        elif not model:
-            model = str(values.get("OPENAI_MODEL") or "").strip()
-        if not model:
-            raise ValueError("Model is required")
+        model = str(model or values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
 
         stt_input = str(stt_input or "both").strip().lower()
         if stt_input not in {"both", "backend", "browser", "silent"}:
             raise ValueError(f"unsupported STT input: {stt_input}")
         cloud_tts_provider = str(cloud_tts_provider or "none").strip().lower()
         tts_output = str(tts_output or "silent").strip().lower()
-        if active_connectivity == "offline":
+        if active_connectivity == "offline" or str(voice_engine or "").strip().lower() == "local":
             cloud_tts_provider = "none"
             tts_output = "backend"
             tts_provider = "piper"
@@ -817,7 +775,9 @@ class RuntimeWebServices:
             backend_audio_monitor_mode = "off"
 
         requested_engine = str(voice_engine or ("local" if active_connectivity == "offline" else "classic")).strip().lower()
-        allowed_engines = {"local"} if active_connectivity == "offline" else {"classic", "openai-realtime", "gemini-live"}
+        if active_connectivity == "offline":
+            requested_engine = "local"
+        allowed_engines = {"local"} if active_connectivity == "offline" else {"local", "classic", "openai-realtime", "gemini-live"}
         if requested_engine not in allowed_engines:
             raise ValueError(f"voice_engine must be one of: {', '.join(sorted(allowed_engines))}")
         cloud_tts_output_gain = max(0.0, min(2.0, float(cloud_tts_output_gain)))
@@ -842,7 +802,6 @@ class RuntimeWebServices:
             "VOICE_ENGINE": requested_engine,
             "CLOUD_TTS_OUTPUT_GAIN": f"{cloud_tts_output_gain:.2f}",
             "LOCAL_TTS_OUTPUT_GAIN": f"{local_tts_output_gain:.2f}",
-            "LLM_PROVIDER": provider,
             "STT_INPUT": stt_input,
             "STT_LANGUAGE": normalize_locale(stt_language),
             "WAKE_WORD": wake_word,
@@ -897,13 +856,12 @@ class RuntimeWebServices:
         elif requested_engine == "gemini-live":
             updates["GEMINI_LIVE_MODEL"] = realtime_model
             updates["GEMINI_LIVE_VOICE"] = realtime_voice
-        if provider == "ollama":
-            updates["OLLAMA_MODEL"] = model
-            updates["OFFLINE_MODEL"] = model
-            updates["STT_PROVIDER"] = "local-whisper"
-        else:
-            updates["OPENAI_MODEL"] = model
-            updates["STT_PROVIDER"] = str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower()
+        updates["OPENAI_MODEL"] = model
+        updates["STT_PROVIDER"] = (
+            "local-whisper"
+            if requested_engine == "local"
+            else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower()
+        )
 
         for index in range(1, 6):
             entry = speaker_profiles[index - 1] if index <= len(speaker_profiles) and isinstance(speaker_profiles[index - 1], dict) else {}
