@@ -82,7 +82,6 @@
     const sessionSummaryPopover = document.querySelector("#session-summary-popover");
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const panels = Array.from(document.querySelectorAll(".tab-panel"));
-	    const llmProvider = document.querySelector("#llm-provider");
 	    const llmModel = document.querySelector("#llm-model");
 	    const sessionContextSize = document.querySelector("#session-context-size");
     const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
@@ -215,6 +214,8 @@
     const llmMessage = document.querySelector("#llm-message");
     const panelConfig = document.querySelector("#panel-config");
     const voiceEngine = document.querySelector("#voice-engine");
+    const cloudEngine = document.querySelector("#cloud-engine");
+    const cloudEngineField = document.querySelector("#cloud-engine-field");
     const realtimeModel = document.querySelector("#realtime-model");
     const realtimeModelField = document.querySelector("#realtime-model-field");
     const realtimeVoice = document.querySelector("#realtime-voice");
@@ -231,7 +232,6 @@
     const classicInterruptField = document.querySelector("#classic-interrupt-field");
     const classicVadDetails = document.querySelector("#classic-vad-details");
     const classicVadOnlyControls = Array.from(document.querySelectorAll(".classic-vad-only"));
-    const llmProviderField = document.querySelector("#llm-provider-field");
     const llmModelField = document.querySelector("#llm-model-field");
     const sttInputField = document.querySelector("#stt-input-field");
     const mcpDetails = document.querySelector("#mcp-servers-details");
@@ -518,7 +518,7 @@
         );
         elevenLines.unshift(`Caractères utilisés: ${formatNumber(elevenlabs.characters.used)}`);
       }
-      const engine = voiceEngine?.value || "classic";
+      const engine = selectedVoiceEngine();
       const offline = selectedConnectivityMode() === "offline";
       const cards = [];
       if (!offline && ["classic", "openai-realtime"].includes(engine)) {
@@ -3131,6 +3131,11 @@
       if (selected && select.value !== selected) select.value = selected;
     }
 
+    function selectedVoiceEngine() {
+      if (selectedConnectivityMode() === "offline" || voiceEngine?.value === "local") return "local";
+      return cloudEngine?.value || "classic";
+    }
+
     function syncRealtimeDropdownOptions() {
       if (!lastLlmOptions || !realtimeModel || !realtimeVoice) return;
       const engine = voiceEngine?.value || "classic";
@@ -3164,11 +3169,12 @@
       return JSON.stringify({
         env_profile: activeEnvProfile,
         connectivity_mode: selectedConnectivityMode(),
-        voice_engine: voiceEngine?.value || "classic",
+        execution_mode: voiceEngine?.value || "cloud",
+        voice_engine: selectedVoiceEngine(),
+        cloud_engine: cloudEngine?.value || "classic",
         realtime_model: String(realtimeModel?.value || "").trim(),
         realtime_voice: String(realtimeVoice?.value || "").trim(),
         speech_output_gain: Number(speechOutputGain?.value || 1),
-        provider: llmProvider.value || "",
         model: llmModel.value || "",
         session_context_size: Number(sessionContextSize.value || 0),
         mcp_agent_max_steps: Number(mcpAgentMaxSteps.value || 20),
@@ -3232,11 +3238,11 @@
 
     function syncSpeechOutputGainLabel() {
       if (!speechOutputGain) return;
-      const offline = selectedConnectivityMode() === "offline";
-      const locality = offline ? "Local" : "Cloud";
+      const local = selectedVoiceEngine() === "local";
+      const locality = local ? "Local" : "Cloud";
       speechOutputGainLabel.textContent = `${locality} · ${Number(speechOutputGain.value || 1).toFixed(2)}×`;
-      speechOutputGainHint.textContent = offline
-        ? "Gain applied to fully local speech output."
+      speechOutputGainHint.textContent = local
+        ? "Gain applied to deterministic Local speech output."
         : "Gain applied to cloud-generated speech, including Realtime.";
     }
 
@@ -3325,34 +3331,36 @@
     }
 
     function syncVoiceEngineControls() {
-      if (!voiceEngine) return;
+      if (!voiceEngine || !cloudEngine) return;
       const offline = selectedConnectivityMode() === "offline";
       if (offline) voiceEngine.value = "local";
-      const realtime = !offline && ["openai-realtime", "gemini-live"].includes(voiceEngine.value);
-      const browserRealtime = !offline && voiceEngine.value === "openai-realtime";
+      const engine = selectedVoiceEngine();
+      const local = engine === "local";
+      const realtime = !local && ["openai-realtime", "gemini-live"].includes(engine);
+      const classic = !local && engine === "classic";
+      const browserRealtime = !local && engine === "openai-realtime";
       voiceEngine.disabled = offline;
-      for (const item of voiceEngine.options) item.disabled = offline ? item.value !== "local" : item.value === "local";
+      for (const item of voiceEngine.options) item.disabled = offline ? item.value !== "local" : false;
+      cloudEngineField.classList.toggle("hidden", local);
+      cloudEngine.disabled = local || offline;
       realtimeModelField.classList.toggle("hidden", !realtime);
       realtimeVoiceField.classList.toggle("hidden", !realtime);
       syncRealtimeDropdownOptions();
       if (realtimeBrowserField) realtimeBrowserField.classList.toggle("hidden", !browserRealtime);
       if (!browserRealtime && realtimeBrowserPeer) stopBrowserRealtime();
-      llmProviderField.classList.toggle("hidden", realtime);
-      llmModelField.classList.toggle("hidden", realtime);
+      llmModelField.classList.toggle("hidden", !classic);
       classicSttPromptField.classList.toggle("hidden", realtime);
       classicInterruptField.classList.toggle("hidden", realtime);
       sttInputField.classList.toggle("hidden", realtime);
       classicVadDetails.classList.remove("hidden");
       for (const element of classicVadOnlyControls) element.classList.toggle("hidden", realtime);
-      for (const element of cloudAudioControls) element.classList.toggle("hidden", realtime || offline);
-      for (const field of [elevenlabsVoiceField, openaiTtsVoiceField]) field.classList.toggle("hidden", realtime);
+      for (const element of cloudAudioControls) element.classList.toggle("hidden", !classic);
+      for (const field of [elevenlabsVoiceField, openaiTtsVoiceField]) field.classList.toggle("hidden", !classic);
       webTtsVolumeField.classList.add("hidden");
       backendTtsVolumeField.classList.add("hidden");
-      currentClassicCloudSpeech = !offline && ["openai", "elevenlabs"].includes(String(cloudTtsProvider.value || "").toLowerCase());
-      speechOutputGainField.classList.toggle("hidden", !(realtime || offline || currentClassicCloudSpeech));
-      if (cloudApiDetails) {
-        cloudApiDetails.classList.toggle("hidden", offline);
-      }
+      currentClassicCloudSpeech = classic && ["openai", "elevenlabs"].includes(String(cloudTtsProvider.value || "").toLowerCase());
+      speechOutputGainField.classList.toggle("hidden", !(local || realtime || currentClassicCloudSpeech));
+      if (cloudApiDetails) cloudApiDetails.classList.toggle("hidden", local || offline);
       if (lastCloudApiStatus) renderCloudApiStatus(lastCloudApiStatus);
       syncSpeechOutputGainLabel();
     }
@@ -3721,7 +3729,7 @@
         connectVnc({ force: true });
       } finally {
         envProfile.disabled = !envProfileSwitchingEnabled || envProfile.options.length <= 1;
-        llmSave.disabled = !llmProvider.value;
+        llmSave.disabled = false;
       }
     }
 
@@ -4748,8 +4756,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               text: ttsTestPhrase,
-              provider,
-              model: config.model || "",
+                model: config.model || "",
               voice,
               speed,
               volume: backendVolume,
@@ -4988,23 +4995,24 @@
     function syncTtsProviderControls() {
       const connectivityMode = selectedConnectivityMode();
       const offline = connectivityMode === "offline";
-      const engine = voiceEngine?.value || "classic";
-      const classic = !offline && engine === "classic";
-      const realtimeEngine = !offline && ["openai-realtime", "gemini-live"].includes(engine);
+      const engine = selectedVoiceEngine();
+      const local = engine === "local";
+      const classic = !local && engine === "classic";
+      const realtimeEngine = !local && ["openai-realtime", "gemini-live"].includes(engine);
       const provider = cloudTtsProvider.value || "none";
       const output = selectedTtsOutput();
       const forceSilent = classic && provider === "none";
       const classicVoicePreviewUnavailable = output === "silent" || (output === "backend" && !backendAudioCapabilities.output);
       const realtimeVoicePreviewUnavailable = !backendAudioCapabilities.output;
       for (const element of cloudAudioControls) element.classList.toggle("hidden", !classic);
-      offlineAudioSummary.classList.toggle("hidden", !offline);
+      offlineAudioSummary.classList.toggle("hidden", !local);
       for (const input of ttsOutputInputs) {
         const enabled = ttsOutputAvailable(input.value)
           && (!forceSilent || input.value === "silent")
           && (!offline || input.value === "backend" || input.value === "silent")
-          && (classic || offline);
+          && (classic || local);
         setSegmentOptionEnabled(input, enabled, ttsOutputUnavailableReason(input.value));
-        if (offline) {
+        if (local) {
           input.checked = input.value === (ttsOutputAvailable("backend") ? "backend" : "silent");
         } else if (classic) {
           input.checked = forceSilent ? input.value === "silent" : input.value === firstAvailableTtsOutput(output);
@@ -5018,7 +5026,7 @@
       realtimeVoice.disabled = !realtimeEngine || realtimeVoice.options.length === 0 || !realtimeVoice.value;
       openaiTtsSpeed.disabled = !((classic && provider !== "none") || realtimeEngine);
       webTtsVolume.disabled = !classic || provider === "none" || selectedTtsOutput() !== "browser";
-      backendTtsVolume.disabled = !classic && !offline ? true : selectedTtsOutput() !== "backend";
+      backendTtsVolume.disabled = !classic && !local ? true : selectedTtsOutput() !== "backend";
       backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
       webTtsVolumeField.title = webTtsVolume.disabled ? "WEB_TTS_VOLUME - actif seulement avec TTS Output Browser" : "WEB_TTS_VOLUME";
       backendTtsVolumeField.title = backendTtsVolume.disabled ? "BACKEND_TTS_VOLUME - actif seulement avec TTS Output Backend" : "BACKEND_TTS_VOLUME";
@@ -5070,9 +5078,7 @@
 
     function syncConnectivityControls() {
       if (selectedConnectivityMode() === "offline") {
-        if ([...llmProvider.options].some((option) => option.value === "ollama")) {
-          llmProvider.value = "ollama";
-        }
+        voiceEngine.value = "local";
         if ([...cloudTtsProvider.options].some((option) => option.value === "none")) {
           cloudTtsProvider.value = "none";
         }
@@ -5239,11 +5245,10 @@
       }
     }
 
-	    async function loadLlmOptions(provider, preferredModel, connectivityOverride = "") {
+	    async function loadLlmOptions(preferredModel = "", connectivityOverride = "") {
       if (llmOptionsLoading) return false;
       const shouldMarkClean = !connectivityOverride;
       llmOptionsLoading = true;
-	      llmProvider.disabled = true;
 	      llmModel.disabled = true;
       for (const input of connectivityModeInputs) input.disabled = true;
 	        sessionContextSize.disabled = true;
@@ -5285,29 +5290,19 @@
         llmSave.disabled = true;
       llmMessage.textContent = tr("loading_llm_options", "Loading LLM options...");
       try {
-        const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-        const response = await fetch(apiUrl(`/api/llm-options${suffix}`), { cache: "no-store" });
+        const response = await fetch(apiUrl("/api/llm-options"), { cache: "no-store" });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         lastLlmOptions = data;
 
-	        const selectedProvider = data.provider || provider || "";
         setSelectedConnectivityMode(connectivityOverride || data.selected_connectivity_mode || "online");
-        voiceEngine.value = data.selected_voice_engine || (selectedConnectivityMode() === "offline" ? "local" : "classic");
+        const selectedEngine = data.selected_voice_engine || (selectedConnectivityMode() === "offline" ? "local" : "classic");
+        voiceEngine.value = selectedEngine === "local" ? "local" : "cloud";
+        cloudEngine.value = data.selected_cloud_engine || (selectedEngine === "local" ? "classic" : selectedEngine);
         syncRealtimeDropdownOptions();
         currentCloudGain = Number(data.selected_cloud_tts_output_gain ?? 1);
         currentLocalGain = Number(data.selected_local_tts_output_gain ?? 1);
-        speechOutputGain.value = String(selectedConnectivityMode() === "offline" ? currentLocalGain : currentCloudGain);
-	        llmProvider.replaceChildren();
-        for (const item of data.providers || []) {
-          const label = item.available === false && item.reason
-            ? `${item.label || item.id} (${item.reason})`
-            : (item.label || item.id);
-          llmProvider.appendChild(option(label, item.id, item.available === false, item.id === selectedProvider));
-        }
-        if (selectedProvider && llmProvider.value !== selectedProvider) {
-          llmProvider.value = selectedProvider;
-        }
+        speechOutputGain.value = String(selectedVoiceEngine() === "local" ? currentLocalGain : currentCloudGain);
         setSessionContextSize(data.selected_session_context_size || 0);
         setMcpAgentMaxSteps(data.selected_mcp_agent_max_steps || 20);
         setSelectedMcpToolRoutingEnabled(Boolean(data.selected_mcp_tool_routing_enabled));
@@ -5571,7 +5566,6 @@
       } catch (error) {
         llmMessage.textContent = `LLM options unavailable: ${error}`;
       } finally {
-	        llmProvider.disabled = false;
 	        llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
         for (const input of connectivityModeInputs) input.disabled = connectivityLocked;
 	        sessionContextSize.disabled = false;
@@ -5603,7 +5597,7 @@
         commandAckSound.disabled = commandAckSound.options.length === 0;
         syncCommandAckSoundControls();
         syncAudioSampleControls();
-        llmSave.disabled = !llmProvider.value;
+        llmSave.disabled = false;
         llmOptionsLoading = false;
       }
       return true;
@@ -5612,9 +5606,8 @@
     async function syncLlmControls(data) {
       if (llmControlsInitialized) return;
       const env = (data.config && data.config.env) || {};
-      const provider = String(env.LLM_PROVIDER || "openai").toLowerCase();
       const model = String(env.OPENAI_MODEL || "");
-      const loaded = await loadLlmOptions(provider, model);
+      const loaded = await loadLlmOptions(model);
       if (loaded !== false) {
         llmControlsInitialized = true;
       }
@@ -6051,14 +6044,10 @@
       tab.addEventListener("click", () => activateTab(tab.id));
     }
 
-	    llmProvider.addEventListener("change", () => {
-	      loadLlmOptions(llmProvider.value, "", selectedConnectivityMode());
-	    });
-
     for (const input of connectivityModeInputs) {
       input.addEventListener("change", () => {
         const mode = selectedConnectivityMode();
-        loadLlmOptions(mode === "offline" ? "ollama" : "openai", "", mode);
+        loadLlmOptions("", mode);
       });
     }
 
@@ -6160,7 +6149,17 @@
     speakerMargin.addEventListener("input", syncSpeakerLabels);
     if (cloudApiDetails) loadCloudApiStatus();
     if (cloudApiRefresh) cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
-    voiceEngine.addEventListener("change", () => { syncVoiceEngineControls(); syncTtsProviderControls(); syncConfigActionState(); });
+    voiceEngine.addEventListener("change", () => {
+      syncVoiceEngineControls();
+      syncTtsProviderControls();
+      speechOutputGain.value = String(selectedVoiceEngine() === "local" ? currentLocalGain : currentCloudGain);
+      syncConfigActionState();
+    });
+    cloudEngine.addEventListener("change", () => {
+      syncVoiceEngineControls();
+      syncTtsProviderControls();
+      syncConfigActionState();
+    });
     realtimeModel.addEventListener("change", syncConfigActionState);
     realtimeVoice.addEventListener("change", syncConfigActionState);
     if (realtimeBrowserToggle) {
@@ -6181,7 +6180,6 @@
     llmSave.addEventListener("click", async () => {
       if (!hasUnsavedConfigChanges() && restartRequired) { await requestRuntimeRestart(); return; }
       const restartAfterSave = restartRequired;
-      const provider = llmProvider.value;
       const model = llmModel.value;
       const sessionContextSizeValue = Number(sessionContextSize.value || 0);
       const mcpAgentMaxStepsValue = Number(mcpAgentMaxSteps.value || 20);
@@ -6229,13 +6227,12 @@
       const speakerThresholdValue = Number(speakerThreshold.value || 0.75);
       const speakerMarginValue = Number(speakerMargin.value || 0.10);
       const speakerProfilesValue = collectSpeakerProfiles();
-      const voiceEngineValue = voiceEngine.value || (connectivityModeValue === "offline" ? "local" : "classic");
+      const voiceEngineValue = selectedVoiceEngine();
       const realtimeModelValue = String(realtimeModel.value || "").trim() || "gpt-realtime-2.1";
       const realtimeVoiceValue = String(realtimeVoice.value || "").trim() || "marin";
       const speechGainValue = Number(speechOutputGain.value || 1);
-      const cloudGainValue = connectivityModeValue === "offline" ? currentCloudGain : speechGainValue;
-      const localGainValue = connectivityModeValue === "offline" ? speechGainValue : currentLocalGain;
-      if (!provider) return;
+      const cloudGainValue = voiceEngineValue === "local" ? currentCloudGain : speechGainValue;
+      const localGainValue = voiceEngineValue === "local" ? speechGainValue : currentLocalGain;
 
       llmSave.disabled = true;
       llmMessage.textContent = tr("saving", "Saving...");
