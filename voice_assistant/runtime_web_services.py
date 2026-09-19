@@ -874,7 +874,6 @@ class RuntimeWebServices:
             self._refresh_monitor_config()
         return {
             "saved": True,
-            "provider": provider,
             "model": model,
             "voice_engine": requested_engine,
             "connectivity_mode": active_connectivity,
