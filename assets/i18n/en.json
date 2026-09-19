@@ -266,6 +266,14 @@
     "disconnected": "the device is not responding",
     "invalid_request": "the request is no longer valid",
     "not_found": "the requested target could not be found",
-    "generic_detail": "a technical error occurred"
+    "generic_detail": "a technical error occurred",
+    "cloud_quota_openai": "The OpenAI API has no remaining credit. Switch to local mode or add credit.",
+    "cloud_quota_elevenlabs": "The ElevenLabs API has no remaining voice credit.",
+    "cloud_quota_generic": "This cloud service has no remaining API credit.",
+    "cloud_auth": "The {provider} API key is invalid or was refused.",
+    "cloud_rate_limit": "The {provider} API rate limit was reached. Try again shortly.",
+    "command_timeout": "The request is taking too long. Try again with a simpler request.",
+    "context_limit": "The model context limit was reached. Use a larger-context model or reduce the active MCP tools.",
+    "mcp_connection_lost": "The MCP server connection was lost. The MCP session will restart; then run the command again."
   }
 }
