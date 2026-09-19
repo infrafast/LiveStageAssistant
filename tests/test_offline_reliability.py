@@ -57,7 +57,10 @@ def test_offline_profiles_are_cloud_independent_and_use_implicit_piper():
             values[key] = value.strip().strip('"')
 
         assert values["CONNECTIVITY_MODE"] == "offline"
-        assert values["LLM_PROVIDER"] == "ollama"
+        assert values["VOICE_ENGINE"] == "local"
+        assert "LLM_PROVIDER" not in values
+        assert not any(key.startswith("OLLAMA_") for key in values)
+        assert "OFFLINE_MODEL" not in values
         assert values["STT_PROVIDER"] == "local-whisper"
         assert values["STT_INPUT"] == "backend"
         assert "TTS_PROVIDER" not in values
