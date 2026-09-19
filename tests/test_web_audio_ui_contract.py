@@ -38,8 +38,8 @@ def test_engine_gui_exposes_local_or_cloud_without_local_llm_provider():
     html = (ROOT / "assets/web/index.html").read_text(encoding="utf-8")
     js = (ROOT / "assets/web/app.js").read_text(encoding="utf-8")
 
-    assert '<option value="local">Local déterministe</option>' in html
-    assert '<option value="cloud">Cloud</option>' in html
+    assert '<option value="local" data-i18n="local_deterministic">Local déterministe</option>' in html
+    assert '<option value="cloud" data-i18n="cloud">Cloud</option>' in html
     assert 'id="cloud-engine"' in html
     assert 'id="llm-provider"' not in html
     assert 'function selectedVoiceEngine()' in js
