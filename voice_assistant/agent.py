@@ -223,7 +223,13 @@ class CloudApiUserError(RuntimeError):
         self.kind = kind
 
 
-def classify_cloud_api_error(error: Exception | str, *, provider: str = "cloud", stage: str = "api") -> CloudApiUserError | None:
+def classify_cloud_api_error(
+    error: Exception | str,
+    *,
+    provider: str = "cloud",
+    stage: str = "api",
+    locale: str = "fr",
+) -> CloudApiUserError | None:
     """Return a concise user-facing API error when a provider failure is recognizable."""
     raw = str(error or "").strip()
     lowered = raw.lower()
@@ -244,18 +250,21 @@ def classify_cloud_api_error(error: Exception | str, *, provider: str = "cloud",
         "free tier credits",
     )
     if any(marker in lowered for marker in quota_markers):
+        errors = load_locale(locale).get("errors") or {}
         if provider_label.lower() == "openai":
-            message = "Plus de crédit API OpenAI. Passe en mode local ou ajoute du crédit."
+            message = str(errors.get("cloud_quota_openai") or "Plus de crédit API OpenAI. Passe en mode local ou ajoute du crédit.")
         elif provider_label.lower() == "elevenlabs":
-            message = "Plus de crédit API ElevenLabs pour la voix."
+            message = str(errors.get("cloud_quota_elevenlabs") or "Plus de crédit API ElevenLabs pour la voix.")
         else:
-            message = "Plus de crédit API pour ce service cloud."
+            message = str(errors.get("cloud_quota_generic") or "Plus de crédit API pour ce service cloud.")
         return CloudApiUserError(message, provider=provider_label, stage=stage_label, kind="quota")
 
     auth_markers = ("invalid_api_key", "invalid api key", "unauthorized", "status code: 401", "status_code: 401")
     if any(marker in lowered for marker in auth_markers):
+        errors = load_locale(locale).get("errors") or {}
+        template = str(errors.get("cloud_auth") or "Clé API {provider} invalide ou refusée.")
         return CloudApiUserError(
-            f"Clé API {provider_label} invalide ou refusée.",
+            template.replace("{provider}", provider_label),
             provider=provider_label,
             stage=stage_label,
             kind="auth",
@@ -263,8 +272,10 @@ def classify_cloud_api_error(error: Exception | str, *, provider: str = "cloud",
 
     rate_markers = ("rate_limit_exceeded", "rate limit", "too many requests", "status code: 429", "status_code: 429")
     if any(marker in lowered for marker in rate_markers):
+        errors = load_locale(locale).get("errors") or {}
+        template = str(errors.get("cloud_rate_limit") or "Limite temporaire API {provider} atteinte. Réessaie dans un moment.")
         return CloudApiUserError(
-            f"Limite temporaire API {provider_label} atteinte. Réessaie dans un moment.",
+            template.replace("{provider}", provider_label),
             provider=provider_label,
             stage=stage_label,
             kind="rate_limit",
@@ -5165,7 +5176,7 @@ class VoiceAssistant:
             return self.normalize_stt_command_text(text) if text else None
 
         except Exception as e:
-            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt")
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt", locale=self.stt_language or "fr")
             if cloud_error:
                 print(f"OpenAI Whisper failed: {cloud_error.message} ({e})")
                 raise cloud_error from e
@@ -5204,7 +5215,7 @@ class VoiceAssistant:
         try:
             response = self.openai_stt_client.audio.transcriptions.create(**kwargs)
         except Exception as e:
-            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt")
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt", locale=self.stt_language or "fr")
             if cloud_error:
                 print(f"Web OpenAI transcription failed: {cloud_error.message} ({e})")
                 raise cloud_error from e
@@ -5352,7 +5363,7 @@ class VoiceAssistant:
                     TTS_STOP_EVENT.clear()
                     audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
             except Exception as exc:
-                cloud_error = classify_cloud_api_error(exc, provider="OpenAI", stage="tts")
+                cloud_error = classify_cloud_api_error(exc, provider="OpenAI", stage="tts", locale=self.stt_language or "fr")
                 detail = cloud_error.message if cloud_error else str(exc)
                 print(f"OpenAI TTS generation failed; using Piper: {detail}")
                 return self.text_to_speech_piper(text)
@@ -5385,7 +5396,7 @@ class VoiceAssistant:
                     audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
                     audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
             except Exception as exc:
-                cloud_error = classify_cloud_api_error(exc, provider="ElevenLabs", stage="tts")
+                cloud_error = classify_cloud_api_error(exc, provider="ElevenLabs", stage="tts", locale=self.stt_language or "fr")
                 detail = cloud_error.message if cloud_error else str(exc)
                 print(f"ElevenLabs TTS generation failed; using Piper: {detail}")
                 return self.text_to_speech_piper(text)
@@ -6084,24 +6095,26 @@ class VoiceAssistant:
             self.semantic_audio.transition(SemanticAudioState.IDLE)
             raise
         except asyncio.TimeoutError:
-            return "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple."
+            errors = load_locale(self.stt_language or "fr").get("errors") or {}
+            return str(errors.get("command_timeout") or "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple.")
         except Exception as e:
             error_text = str(e)
-            cloud_error = classify_cloud_api_error(e, provider="OpenAI" if self.llm_provider == "openai" else self.llm_provider, stage="llm")
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI" if self.llm_provider == "openai" else self.llm_provider, stage="llm", locale=self.stt_language or "fr")
             if cloud_error:
                 print(f"LLM cloud API failed: {cloud_error.message} ({e})")
                 return cloud_error.message
             if "context_length_exceeded" in error_text or "maximum context length" in error_text:
-                return (
-                    "I reached the model context limit because tool definitions are too large for the current model. "
-                    "Please switch to a larger-context model (for example gpt-4o-mini or gpt-4o), "
-                    "or reduce enabled MCP servers/tools."
+                errors = load_locale(self.stt_language or "fr").get("errors") or {}
+                return str(
+                    errors.get("context_limit")
+                    or "La limite de contexte du modèle a été atteinte. Utilise un modèle avec un contexte plus grand ou réduis les outils MCP actifs."
                 )
             if self._is_mcp_connection_loss_error(error_text):
                 self.mcp_reconnect_after_response = True
-                return (
-                    "La connexion au serveur MCP a été perdue pendant l'appel outil. "
-                    "Je vais redémarrer la session MCP, puis tu pourras relancer la commande."
+                errors = load_locale(self.stt_language or "fr").get("errors") or {}
+                return str(
+                    errors.get("mcp_connection_lost")
+                    or "La connexion au serveur MCP a été perdue. La session MCP va être redémarrée ; relance ensuite la commande."
                 )
             print(f"Command processing failed: {error_text}", flush=True)
             return localized_error_text(
