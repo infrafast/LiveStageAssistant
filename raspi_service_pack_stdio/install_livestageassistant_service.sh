@@ -133,13 +133,13 @@ ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_MODEL_PATH" ""
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_CONFIG_PATH" ""
 ensure_env_value_if_missing "$OFFLINE_ENV" "PIPER_LENGTH_SCALE" "1.00"
 
-# Keep the deployed offline LLM profile aligned with the installer/runtime defaults.
-# Older profiles stored the local model in OPENAI_MODEL; migrate them to the
-# provider-specific Ollama keys so the runtime, UI and ChatOllama use one value.
-ensure_env_value_if_missing "$OFFLINE_ENV" "OLLAMA_MODEL" "qwen3:8b"
-ensure_env_value_if_missing "$OFFLINE_ENV" "OFFLINE_MODEL" "qwen3:8b"
-ensure_env_value_if_missing "$OFFLINE_ENV" "OLLAMA_BASE_URL" "http://localhost:11434"
-ensure_env_value_if_missing "$OFFLINE_ENV" "OLLAMA_AUTO_START" "true"
+# Deterministic Local has no generative LLM. Preserve site-specific audio/
+# speech settings but remove legacy local-model keys from deployed profiles.
+remove_env_key "$OFFLINE_ENV" "LLM_PROVIDER"
+remove_env_key "$OFFLINE_ENV" "OLLAMA_MODEL"
+remove_env_key "$OFFLINE_ENV" "OFFLINE_MODEL"
+remove_env_key "$OFFLINE_ENV" "OLLAMA_BASE_URL"
+remove_env_key "$OFFLINE_ENV" "OLLAMA_AUTO_START"
 remove_env_key "$OFFLINE_ENV" "OPENAI_MODEL"
 
 sudo cp "$SCRIPT_DIR/livestageassistant.service" /etc/systemd/system/livestageassistant.service
@@ -154,7 +154,7 @@ sudo chmod +x /usr/local/bin/livestageassistant
 sudo systemctl daemon-reload
 
 echo
-echo "Installation complete. Existing runtime env profiles were preserved and offline TTS was migrated to implicit Piper configuration."
+echo "Installation complete. Existing runtime env profiles were preserved and the offline profile was migrated to deterministic Local + Piper configuration."
 echo "Next steps:"
 echo "  1) Check $ONLINE_ENV and $OFFLINE_ENV"
 echo "  2) Make sure /home/pi/XMSeries-MCP and /home/pi/QLCPlus-MCP exist and are built"
