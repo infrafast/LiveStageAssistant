@@ -32,3 +32,16 @@ def test_backend_audio_selectors_are_driven_by_backend_capabilities():
     assert 'backendAudioCapabilities.output = Array.isArray(data.backend_audio_outputs)' in js
     assert 'backendAudioInputField.classList.toggle("hidden"' in js
     assert 'backendAudioOutputField.classList.toggle("hidden"' in js
+
+
+def test_engine_gui_exposes_local_or_cloud_without_local_llm_provider():
+    html = (ROOT / "assets/web/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "assets/web/app.js").read_text(encoding="utf-8")
+
+    assert '<option value="local">Local déterministe</option>' in html
+    assert '<option value="cloud">Cloud</option>' in html
+    assert 'id="cloud-engine"' in html
+    assert 'id="llm-provider"' not in html
+    assert 'function selectedVoiceEngine()' in js
+    assert 'return cloudEngine?.value || "classic";' in js
+    assert "llmProvider" not in js
