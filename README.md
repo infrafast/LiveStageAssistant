@@ -210,7 +210,9 @@ WEB_TTS_PROVIDER=none
 
 Offline profiles use `VOICE_ENGINE=local`: local Whisper handles STT, the deterministic parser delegates domain semantics to MCP command gateways, and Piper handles local TTS. Local mode is also selectable while online; cloud engines require connectivity.
 
-On Linux/Raspberry, `./scripts/install.sh` also installs the local voice extras used by the current and experimental voice paths: openWakeWord ONNX resources, realtime WebSocket transport support, Piper local TTS, and the default French Piper voice `fr_FR-siwis-medium`.
+In the Web GUI, **Mode** is intentionally limited to **Local déterministe** or **Cloud**. When Cloud is selected, **Cloud engine** chooses Classic, OpenAI Realtime or Gemini Live. There is no local generative LLM/provider/model choice: Ollama was retired after the deterministic Local path was validated.
+
+On Linux/Raspberry, `./scripts/install.sh` installs only the supported local voice/runtime extras: openWakeWord ONNX resources, realtime WebSocket transport support, Piper local TTS, and the default French Piper voice `fr_FR-siwis-medium`.
 
 ### Wake Word
 
