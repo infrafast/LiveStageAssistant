@@ -2,46 +2,48 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BANNED = (
+    "langchain_ollama",
+    "ChatOllama",
+    "LocalOllamaManager",
+    "NativeOllama",
+    "OLLAMA_",
+    "OFFLINE_MODEL",
+    "LLM_PROVIDER=",
+    "qwen3:",
+    "ollama serve",
+    "ollama pull",
+)
+TEXT_SUFFIXES = {".py", ".toml", ".sh", ".ps1", ".json", ".js", ".html", ".css"}
+
+
+def runtime_text_files():
+    for path in ROOT.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(ROOT)
+        if any(part in {".git", ".venv", "node_modules", "__pycache__"} for part in relative.parts):
+            continue
+        if str(relative).startswith("assets/web/static/"):
+            continue
+        if str(relative).startswith("docs/"):
+            continue  # Historical architecture decision record may mention the retired experiment.
+        if relative.name in {"README.md", "AGENT.md"}:
+            continue
+        if relative == Path("tests/test_no_local_llm_artifacts.py"):
+            continue
+        if path.suffix in TEXT_SUFFIXES or relative.name.startswith(".env"):
+            yield path
 
 
 def test_retired_local_llm_stack_is_absent_from_runtime_and_profiles():
-    paths = [
-        ROOT / "pyproject.toml",
-        ROOT / "scripts/install.sh",
-        ROOT / "voice_assistant/agent.py",
-        ROOT / "voice_assistant/classic_engine.py",
-        ROOT / "voice_assistant/runtime.py",
-        ROOT / "voice_assistant/runtime_web_services.py",
-        ROOT / ".env.example",
-        ROOT / ".env.online",
-        ROOT / ".env.offline",
-        ROOT / ".env.codespace",
-        ROOT / ".env.localhttp",
-        ROOT / ".env.tailscale",
-        ROOT / "container/config/.env.infrafast",
-        ROOT / "container/config/.env.localhost",
-        ROOT / "container/config/.env.tailscaleHTTP",
-        ROOT / "container/config/.env.tailscaleSTDIO",
-        ROOT / "raspi_service_pack_stdio/.env.online",
-        ROOT / "raspi_service_pack_stdio/.env.offline",
-        ROOT / "scripts/install.ps1",
-    ]
-    banned = (
-        "langchain_ollama",
-        "ChatOllama",
-        "LocalOllamaManager",
-        "NativeOllama",
-        "OLLAMA_",
-        "OFFLINE_MODEL",
-        "LLM_PROVIDER=",
-        "qwen3:",
-        "ollama serve",
-        "ollama pull",
-    )
-    for path in paths:
+    violations = []
+    for path in runtime_text_files():
         text = path.read_text(encoding="utf-8")
-        for token in banned:
-            assert token not in text, f"{token!r} must not remain in {path.relative_to(ROOT)}"
+        for token in BANNED:
+            if token in text:
+                violations.append(f"{path.relative_to(ROOT)}: {token}")
+    assert violations == [], "Retired local-LLM artifacts remain:\n" + "\n".join(violations)
 
 
 def test_local_cloud_gui_contract_has_no_retired_provider_selector_or_payload():
