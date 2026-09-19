@@ -11,7 +11,7 @@ Live Stage Assistant is a voice-enabled assistant for musicians and stage operat
 - Optional speaker recognition.
 - Browser-based chat/configuration interface.
 - Online mode with cloud AI services.
-- Offline mode with Ollama, local Whisper and Piper TTS.
+- Deterministic Local mode with local Whisper, Piper TTS and MCP command gateways; no local LLM is required.
 - MCP integration for XMSeries-MCP, QLCPlus-MCP and other compatible servers.
 
 ## Prerequisites
@@ -165,7 +165,7 @@ If the monitor is exposed on your LAN or NAS, set `WEB_PASSWORD` in the active e
 
 The repository includes Docker profiles for different MCP network layouts. Select the profile that matches your deployment from the web config or through `ASSISTANT_ENV_FILE`. HTTP MCP profiles are appropriate when XMSeries-MCP/QLCPlus-MCP already run as reachable services; STDIO profiles are appropriate when the container starts mounted local MCP server scripts itself.
 
-In bridge networking, an MCP or Ollama service running outside the container must be addressed with a reachable LAN/Tailscale/service address, not `127.0.0.1`.
+In bridge networking, an MCP service running outside the container must be addressed with a reachable LAN/Tailscale/service address, not `127.0.0.1`.
 
 Browser microphone access over a NAS/LAN address may require HTTPS depending on the browser. If backend audio passthrough is unavailable, LSA remains usable through browser audio or text commands.
 
@@ -185,7 +185,6 @@ Typical online settings include:
 ```env
 CONNECTIVITY_MODE=online
 VOICE_ENGINE=classic
-LLM_PROVIDER=openai
 OPENAI_MODEL=gpt-4.1-mini
 STT_LANGUAGE=fr
 STT_INPUT=both
@@ -202,7 +201,6 @@ Typical offline Piper settings are:
 
 ```env
 CONNECTIVITY_MODE=offline
-LLM_PROVIDER=ollama
 STT_PROVIDER=local-whisper
 LOCAL_TTS_PROVIDER=piper
 PIPER_VOICE=fr_FR-siwis-medium
@@ -210,7 +208,7 @@ PIPER_DATA_DIR=data/piper
 WEB_TTS_PROVIDER=none
 ```
 
-Offline profiles use `LLM_PROVIDER=ollama` with `OLLAMA_BASE_URL=http://localhost:11434`. When `OLLAMA_AUTO_START=true`, Live Stage Assistant checks the local Ollama API, starts `ollama serve` only if nothing is already running, verifies or pulls the selected model, and stops only the Ollama process it started itself when switching back online or shutting down. The Linux/Raspberry install script also installs Ollama when missing and pulls `qwen3:8b` by default; override that with `LSA_OLLAMA_MODEL=<model>`.
+Offline profiles use `VOICE_ENGINE=local`: local Whisper handles STT, the deterministic parser delegates domain semantics to MCP command gateways, and Piper handles local TTS. Local mode is also selectable while online; cloud engines require connectivity.
 
 On Linux/Raspberry, `./scripts/install.sh` also installs the local voice extras used by the current and experimental voice paths: openWakeWord ONNX resources, realtime WebSocket transport support, Piper local TTS, and the default French Piper voice `fr_FR-siwis-medium`.
 
@@ -294,7 +292,7 @@ Run explicitly with:
 .venv/bin/python -m voice_assistant.runtime --env-file .env.offline
 ```
 
-and verify the offline profile uses Ollama, local Whisper, Piper and local/STDIO MCP servers.
+and verify the offline profile uses the deterministic Local engine, local Whisper, Piper and local/STDIO MCP servers.
 
 ## Development And Maintenance
 
