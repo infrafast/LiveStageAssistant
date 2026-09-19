@@ -28,9 +28,9 @@ def runtime_text_files():
             continue
         if str(relative).startswith("docs/"):
             continue  # Historical architecture decision record may mention the retired experiment.
+        if str(relative).startswith("tests/"):
+            continue  # Regression tests may intentionally assert that retired keys are absent.
         if relative.name in {"README.md", "AGENT.md"}:
-            continue
-        if relative == Path("tests/test_no_local_llm_artifacts.py"):
             continue
         if path.suffix in TEXT_SUFFIXES or relative.name.startswith(".env"):
             yield path
