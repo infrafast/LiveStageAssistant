@@ -1354,7 +1354,7 @@
     }
 
     function isOpenAiRealtimeSelected() {
-      return selectedConnectivityMode() !== "offline" && String(voiceEngine?.value || "") === "openai-realtime";
+      return selectedConnectivityMode() !== "offline" && selectedVoiceEngine() === "openai-realtime";
     }
 
     function browserSttDisabledReason(kind = "conversation") {
