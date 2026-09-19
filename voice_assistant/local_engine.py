@@ -27,9 +27,6 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
         super().__init__(*args, **kwargs)
         self.local_gateway_orchestrator: DeterministicGatewayOrchestrator | None = None
         self.local_gateway_names: tuple[str, ...] = ()
-        # Explicit non-LLM identity used by logs/diagnostics.
-        self.llm_provider = "local"
-        self.model = "deterministic"
         self.agent = None
 
     def _build_llm(self):
