@@ -16,6 +16,7 @@ from dotenv import dotenv_values
 from . import agent
 from . import classic_engine
 from .local_gateway_runtime import DeterministicGatewayOrchestrator
+from .i18n import localized_error_text
 from .startup_messages import startup_ready_message
 
 
@@ -145,7 +146,11 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
             raise
         except Exception as exc:
             print(f"LSA Local deterministic command failed: {exc}", flush=True)
-            return "La commande locale n'a pas pu être exécutée."
+            return localized_error_text(
+                self.stt_language or "fr",
+                domain="command",
+                error=exc,
+            )
 
 
 def build_assistant(env_file: str | Path) -> DeterministicLocalVoiceAssistant:
