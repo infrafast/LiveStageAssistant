@@ -2257,14 +2257,11 @@ class VoiceAssistant:
             reload_event: Optional event used by auto mode to interrupt and reload the assistant
             web_monitor: Optional read-only web monitor for runtime state
         """
-        assistant_init_started_at = time.perf_counter()
-
         # Audio configuration
         self.audio_format = pyaudio.paInt16
         self.channels = 1
         self.rate = 16000
         self.chunk = 1024
-        stage_started_at = time.perf_counter()
         self.vad = SileroVadGate(
             vad_model_path,
             threshold=vad_speech_threshold,
@@ -2273,10 +2270,6 @@ class VoiceAssistant:
             min_silence_ms=vad_min_silence_ms,
             speech_pad_ms=vad_speech_pad_ms,
             max_speech_seconds=vad_max_speech_seconds,
-        )
-        print(
-            f"Startup timing: Silero VAD initialized in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
         )
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.tts_provider = tts_provider.lower()
@@ -2339,14 +2332,8 @@ class VoiceAssistant:
         self.last_speaker_result = SpeakerRecognitionResult()
 
         # Initialize audio components
-        stage_started_at = time.perf_counter()
         with suppress_native_stderr():
             self.audio = pyaudio.PyAudio()
-        print(
-            f"Startup timing: PyAudio initialized in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
-        stage_started_at = time.perf_counter()
         (
             self.audio_input_device_index,
             self.audio_input_device_status,
@@ -2375,13 +2362,6 @@ class VoiceAssistant:
             if self.audio_output_device_status == "configured"
             else None
         )
-        print(
-            "Startup timing: backend audio devices resolved "
-            f"in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
-        stage_started_at = time.perf_counter()
-        input_format_status = "skipped"
         if self.audio_input_device_status not in {"invalid", "unavailable"}:
             input_format = (
                 pipewire_backend_input_format()
@@ -2393,20 +2373,13 @@ class VoiceAssistant:
                 )
             )
             if input_format["ok"]:
-                input_format_status = "ready"
                 self.channels = int(input_format["channels"])
                 self.rate = int(input_format["rate"])
                 self.chunk = int(input_format["chunk"])
                 self.audio_input_device_detail = f"{self.audio_input_device_detail}; {input_format['detail']}"
             else:
-                input_format_status = "unavailable"
                 self.audio_input_device_status = "unavailable"
                 self.audio_input_device_detail = f"{self.audio_input_device_detail}; {input_format['detail']}"
-        print(
-            "Startup timing: backend audio input format "
-            f"{input_format_status} in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
         if self.audio_input_device_status == "invalid":
             print(f"Backend audio input invalid: {self.audio_input_device_detail}")
         if self.audio_output_device_status == "invalid":
@@ -2425,8 +2398,6 @@ class VoiceAssistant:
         self.startup_loader_sound_thread: threading.Thread | None = None
         self.start_startup_loader_sound()
 
-        stage_started_at = time.perf_counter()
-        speaker_validation_status = "disabled"
         if self.speaker_recognition_enabled:
             try:
                 self.speaker_recognizer = build_speaker_recognizer(
@@ -2438,18 +2409,11 @@ class VoiceAssistant:
                 )
                 if self.speaker_recognizer:
                     self.speaker_recognizer.validate_runtime()
-                speaker_validation_status = "ready"
             except Exception as e:
                 print(f"Speaker recognition unavailable: {e}")
                 self.speaker_recognition_enabled = False
                 self.speaker_recognizer = None
                 self.speaker_recognition_unavailable_reason = str(e)
-                speaker_validation_status = "unavailable"
-        print(
-            "Startup timing: speaker recognition validation "
-            f"{speaker_validation_status} in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
 
         # Speech-to-text configuration
         self.openai_api_key = openai_api_key
@@ -2479,13 +2443,7 @@ class VoiceAssistant:
                 api_key=openai_api_key,
             )
         if self.stt_provider == "local-whisper":
-            stage_started_at = time.perf_counter()
-            preload_status = "ready" if self._load_local_whisper_model() else "unavailable"
-            print(
-                "Startup timing: local Whisper preload "
-                f"{preload_status} in {time.perf_counter() - stage_started_at:.3f}s",
-                flush=True,
-            )
+            self._load_local_whisper_model()
 
         self.model = model
         self.llm_provider = llm_provider.lower()
@@ -2610,10 +2568,6 @@ class VoiceAssistant:
         os.makedirs(self.notes_dir, exist_ok=True)
 
         self._log_configured_mcp_prompt_sources()
-        print(
-            f"Startup timing: VoiceAssistant constructed in {time.perf_counter() - assistant_init_started_at:.3f}s",
-            flush=True,
-        )
 
     def _backend_input_ready(self) -> bool:
         """Return true only when backend STT can use the configured input route."""
@@ -3800,10 +3754,6 @@ class VoiceAssistant:
 
         stream = None
         monitor_stream = None
-        capture_started_at = time.perf_counter()
-        wake_detected_at: float | None = None
-        command_speech_started_at: float | None = None
-        command_speech_ended_at: float | None = None
         self.backend_audio_capture_lock.acquire()
         try:
             if self.backend_audio_diagnostic_requested.is_set():
@@ -3919,7 +3869,6 @@ class VoiceAssistant:
                     if detection:
                         detected_label, detected_score = detection
                         wake_detected = True
-                        wake_detected_at = time.perf_counter()
                         self.last_backend_streaming_wake_detected = True
                         self._set_backend_audio_state(
                             BackendAudioState.CAPTURE_COMMAND,
@@ -3982,7 +3931,6 @@ class VoiceAssistant:
                     speech_candidate_ms += chunk_ms
                     if speech_candidate_ms >= self.vad.min_speech_ms:
                         has_speech = True
-                        command_speech_started_at = time.perf_counter()
                         frames = wake_audio_frames + pre_roll + speech_candidate
                         recorded_speech_ms = speech_candidate_ms
                         wake_command_armed = False
@@ -4033,15 +3981,6 @@ class VoiceAssistant:
                 self._set_backend_audio_state(self._backend_listening_state(), "wake not detected")
                 return None
 
-            command_speech_ended_at = time.perf_counter()
-            self._debug_backend_capture_timing(
-                capture_started_at=capture_started_at,
-                wake_detected_at=wake_detected_at,
-                command_speech_started_at=command_speech_started_at,
-                command_speech_ended_at=command_speech_ended_at,
-                endpoint_silence_ms=silence_ms,
-                wake_required=wake_detector_active,
-            )
             print("Processing...")
             return b"".join(frames)
 
@@ -4054,29 +3993,6 @@ class VoiceAssistant:
             self._close_audio_stream(monitor_stream)
             self._close_audio_stream(stream)
             self.backend_audio_capture_lock.release()
-
-    def _debug_backend_capture_timing(
-        self,
-        *,
-        capture_started_at: float,
-        wake_detected_at: float | None,
-        command_speech_started_at: float | None,
-        command_speech_ended_at: float,
-        endpoint_silence_ms: float,
-        wake_required: bool,
-    ) -> None:
-        if not debug_logging_enabled():
-            return
-        parts = []
-        if wake_required and wake_detected_at is not None:
-            parts.append(f"wake_detection={(wake_detected_at - capture_started_at) * 1000.0:.0f}ms")
-        if command_speech_started_at is not None:
-            origin = wake_detected_at if wake_detected_at is not None else capture_started_at
-            parts.append(f"command_start={(command_speech_started_at - origin) * 1000.0:.0f}ms")
-            parts.append(f"command_audio={(command_speech_ended_at - command_speech_started_at) * 1000.0:.0f}ms")
-        parts.append(f"endpoint_silence={endpoint_silence_ms:.0f}ms")
-        parts.append(f"total_capture={(command_speech_ended_at - capture_started_at) * 1000.0:.0f}ms")
-        print(f"Backend audio timing: {', '.join(parts)}", flush=True)
 
     def diagnose_backend_audio_input(
         self,
@@ -4677,7 +4593,6 @@ class VoiceAssistant:
 
     def audio_to_text_with_timeout(self, audio_data: bytes) -> str | None:
         """Transcribe one utterance without allowing STT to freeze the main loop."""
-        started_at = time.perf_counter()
         print(f"STT started (timeout {self.stt_timeout_seconds:.1f}s).", flush=True)
         try:
             text = self._run_timed_stage(
@@ -4691,7 +4606,6 @@ class VoiceAssistant:
         except Exception as error:
             print(f"STT failed: {error}. Returning to listening.", flush=True)
             return None
-        print(f"STT finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
         return text
 
     def recognize_speaker_with_timeout(
@@ -4705,7 +4619,6 @@ class VoiceAssistant:
         if not self.speaker_recognition_enabled or not self.speaker_recognizer or not audio_data:
             return self.recognize_speaker(audio_data, already_wav=already_wav, publish_result=publish_result)
 
-        started_at = time.perf_counter()
         print(
             f"Speaker recognition started (timeout {self.speaker_recognition_timeout_seconds:.1f}s).",
             flush=True,
@@ -4746,7 +4659,6 @@ class VoiceAssistant:
                 reason=f"error: {error}",
             )
 
-        print(f"Speaker recognition finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
         return result
 
     def _speaker_recognition_should_run(self, audio_data: bytes | None) -> bool:
@@ -4773,28 +4685,18 @@ class VoiceAssistant:
             return transcribe_operation(), SpeakerRecognitionResult()
 
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="voice-assistant-audio-analysis")
-        timings: dict[str, float] = {"started_at": time.perf_counter()}
         wait_for_workers = True
 
-        def run_timed(label: str, operation):
-            timings[f"{label}_start"] = time.perf_counter()
-            try:
-                return operation()
-            finally:
-                timings[f"{label}_end"] = time.perf_counter()
-
         try:
-            stt_future = executor.submit(lambda: run_timed("stt", transcribe_operation))
-            speaker_future = executor.submit(lambda: run_timed("speaker", speaker_operation))
+            stt_future = executor.submit(transcribe_operation)
+            speaker_future = executor.submit(speaker_operation)
             text = stt_future.result()
             if not text:
                 wait_for_workers = False
                 executor.shutdown(wait=False, cancel_futures=True)
-                self._debug_audio_analysis_timing(timings, include_speaker=False)
                 return text, SpeakerRecognitionResult()
             speaker_result = speaker_future.result()
             self.last_speaker_result = speaker_result
-            self._debug_audio_analysis_timing(timings, include_speaker=True)
             return text, speaker_result
         except Exception:
             wait_for_workers = False
@@ -4802,19 +4704,6 @@ class VoiceAssistant:
             raise
         finally:
             executor.shutdown(wait=wait_for_workers)
-
-    def _debug_audio_analysis_timing(self, timings: dict[str, float], *, include_speaker: bool) -> None:
-        if not debug_logging_enabled():
-            return
-        stt_ms = (timings.get("stt_end", 0.0) - timings.get("stt_start", 0.0)) * 1000.0
-        speaker_ms = (
-            (timings.get("speaker_end", 0.0) - timings.get("speaker_start", 0.0)) * 1000.0
-            if include_speaker
-            else 0.0
-        )
-        total_ms = (time.perf_counter() - timings.get("started_at", time.perf_counter())) * 1000.0
-        speaker_detail = f", speaker={speaker_ms:.0f}ms" if include_speaker else ""
-        print(f"Audio analysis timing: stt={stt_ms:.0f}ms{speaker_detail}, total={total_ms:.0f}ms", flush=True)
 
     def recognize_speaker(
         self,
@@ -5230,7 +5119,6 @@ class VoiceAssistant:
         model: str = "whisper-1",
     ) -> str | None:
         """Transcribe browser audio with the same bounded STT guard as backend audio."""
-        started_at = time.perf_counter()
         print(f"Web STT started (timeout {self.stt_timeout_seconds:.1f}s).", flush=True)
         try:
             text = self._run_timed_stage(
@@ -5241,7 +5129,6 @@ class VoiceAssistant:
         except TimeoutError as error:
             print(f"Web STT timed out: {error}.", flush=True)
             raise TimeoutError("Web speech transcription timed out; please try again.") from error
-        print(f"Web STT finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
         return text
 
     def speaker_audio_from_web_bytes(self, audio_data: bytes, mime_type: str) -> bytes | None:
