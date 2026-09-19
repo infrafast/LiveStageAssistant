@@ -12,45 +12,6 @@ if (-not $env:UV_LINK_MODE) {
     $env:UV_LINK_MODE = "copy"
 }
 
-$OllamaModel = if ($env:LSA_OLLAMA_MODEL) { $env:LSA_OLLAMA_MODEL } else { "qwen3:8b" }
-if ($env:LSA_SKIP_OLLAMA -eq "1") {
-    Write-Host "Skipping Ollama setup because LSA_SKIP_OLLAMA=1."
-} else {
-    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
-        $winget = Get-Command winget -ErrorAction SilentlyContinue
-        if ($winget) {
-            Write-Host "Installing Ollama with winget for local/offline mode."
-            winget install --id Ollama.Ollama -e
-        } else {
-            Write-Warning "Ollama was not found and winget is unavailable. Install Ollama manually for offline mode."
-        }
-    }
-    if (Get-Command ollama -ErrorAction SilentlyContinue) {
-        $ollamaListOk = $false
-        try {
-            ollama list | Out-Null
-            $ollamaListOk = $true
-        } catch {
-            Write-Host "Ollama is installed but not running. Start it, then pull $OllamaModel for offline mode."
-        }
-        if ($ollamaListOk) {
-            $hasModel = $false
-            try {
-                ollama show $OllamaModel | Out-Null
-                $hasModel = $true
-            } catch {
-                $hasModel = $false
-            }
-            if ($hasModel) {
-                Write-Host "Ollama model $OllamaModel is already available."
-            } else {
-                Write-Host "Pulling Ollama model $OllamaModel for local/offline mode."
-                ollama pull $OllamaModel
-            }
-        }
-    }
-}
-
 if (-not (Test-Path ".venv")) {
     uv venv
 }
