@@ -252,5 +252,20 @@
     "backend_audio_diagnostic_vad_parameters": "Active threshold: {threshold}; minimum continuous speech: {duration} ms; detected: {detected}s.",
     "backend_audio_diagnostic_error": "Backend microphone diagnostic failed.",
     "backend_audio_diagnostic_error_detail": "Backend microphone diagnostic failed: {error}"
+  },
+  "errors": {
+    "command_failed": "The command failed",
+    "mixer_command_failed": "The mixer command failed",
+    "lighting_command_failed": "The lighting command failed",
+    "oscxr_channel_bus_mute_unsupported": "per-bus mute for an input channel is not supported with OSCXR",
+    "oscxr_matrix_unsupported": "matrix control is not available with OSCXR",
+    "oscxr_channel_aux_unsupported": "sending an input channel to a dedicated AUX output is not available with OSCXR",
+    "oscxr_operation_unsupported": "this function is not available with the OSCXR protocol",
+    "stale_command": "the target changed; run the command again",
+    "timeout": "the operation timed out",
+    "disconnected": "the device is not responding",
+    "invalid_request": "the request is no longer valid",
+    "not_found": "the requested target could not be found",
+    "generic_detail": "a technical error occurred"
   }
 }
