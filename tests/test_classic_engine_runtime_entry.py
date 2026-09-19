@@ -11,7 +11,7 @@ from voice_assistant import classic_engine
 class DummyAssistant:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
-        self.llm_provider = kwargs["llm_provider"]
+        self.llm_provider = "openai"
         self.model = kwargs["model"]
         self.tts_provider = kwargs["tts_provider"]
 
@@ -22,17 +22,13 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
             root = Path(tmp)
             env_file = root / ".env"
             env_file.write_text(text, encoding="utf-8")
-            with (
-                mock.patch.object(classic_engine.agent, "VoiceAssistant", DummyAssistant),
-                mock.patch.object(classic_engine, "NativeOllamaMcpVoiceAssistant", DummyAssistant),
-            ):
+            with mock.patch.object(classic_engine.agent, "VoiceAssistant", DummyAssistant):
                 assistant = classic_engine.build_assistant(env_file)
             return assistant
 
     def test_online_classic_is_web_free_and_uses_cloud_gain(self):
         assistant = self._build(
             "CONNECTIVITY_MODE=online\n"
-            "LLM_PROVIDER=openai\n"
             "OPENAI_MODEL=gpt-4.1-mini\n"
             "TTS_PROVIDER=openai\n"
             "CLOUD_TTS_PROVIDER=openai\n"
@@ -41,26 +37,15 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
             "STT_LANGUAGE=fr\n"
         )
         self.assertIsNone(assistant.kwargs["web_monitor"])
-        self.assertEqual(assistant.kwargs["llm_provider"], "openai")
+        self.assertNotIn("llm_provider", assistant.kwargs)
         self.assertEqual(assistant.kwargs["backend_tts_volume"], 0.42)
 
-    def test_offline_local_is_web_free_and_uses_local_gain(self):
-        assistant = self._build(
-            "CONNECTIVITY_MODE=offline\n"
-            "LLM_PROVIDER=ollama\n"
-            "OLLAMA_MODEL=mistral:7b-instruct-q4_K_M\n"
-            "TTS_PROVIDER=piper\n"
-            "CLOUD_TTS_OUTPUT_GAIN=0.25\n"
-            "LOCAL_TTS_OUTPUT_GAIN=1.25\n"
-            "STT_LANGUAGE=fr\n"
-        )
-        self.assertIsNone(assistant.kwargs["web_monitor"])
-        self.assertEqual(assistant.kwargs["llm_provider"], "ollama")
-        self.assertEqual(assistant.kwargs["tts_provider"], "piper")
-        self.assertTrue(assistant.kwargs["backend_stt_enabled"])
-        self.assertIsNone(assistant.kwargs["openai_api_key"])
-        self.assertIsNone(assistant.kwargs["elevenlabs_api_key"])
-        self.assertEqual(assistant.kwargs["backend_tts_volume"], 1.25)
+    def test_cloud_classic_rejects_offline_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text("CONNECTIVITY_MODE=offline\nVOICE_ENGINE=local\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "Cloud Classic cannot run"):
+                classic_engine.build_assistant(env_file)
 
 
     def test_deterministic_local_override_forces_local_speech_even_online(self):
@@ -82,12 +67,11 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
             assistant = classic_engine.build_assistant(
                 env_file,
                 assistant_class_override=DummyAssistant,
-                llm_provider_override="local",
                 model_override="deterministic",
                 force_local_speech=True,
             )
 
-        self.assertEqual(assistant.kwargs["llm_provider"], "local")
+        self.assertNotIn("llm_provider", assistant.kwargs)
         self.assertEqual(assistant.kwargs["model"], "deterministic")
         self.assertEqual(assistant.kwargs["stt_provider"], "local-whisper")
         self.assertEqual(assistant.kwargs["tts_provider"], "piper")
