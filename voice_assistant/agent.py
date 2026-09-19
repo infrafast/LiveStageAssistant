@@ -49,7 +49,7 @@ from mcp_use import MCPAgent, MCPClient
 from pydantic import AnyUrl
 
 try:
-    from .i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text
+    from .i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text, sanitize_spoken_response
     from .local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from .web_monitor import WebMonitor, build_service_state
     from .semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
@@ -81,7 +81,7 @@ try:
         validate_wav_bytes,
     )
 except ImportError:
-    from i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text
+    from i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text, sanitize_spoken_response
     from local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from web_monitor import WebMonitor, build_service_state
     from semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
@@ -6489,6 +6489,10 @@ class VoiceAssistant:
                     continue
 
                 response = await process_task
+                sanitized_response = sanitize_spoken_response(self.stt_language or "fr", response)
+                if sanitized_response != response:
+                    print(f"Technical user-facing error sanitized before chat/TTS: {response}", flush=True)
+                    response = sanitized_response
                 if self.reload_event and self.reload_event.is_set():
                     print("Auto environment reload requested. Discarding current response.")
                     if self.web_monitor:
