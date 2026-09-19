@@ -64,7 +64,6 @@ class RuntimeWebServicesTests(unittest.TestCase):
         )
         self.online.write_text(
             "CONNECTIVITY_MODE=online\n"
-            "LLM_PROVIDER=openai\n"
             "OPENAI_MODEL=gpt-4.1-mini\n"
             "VOICE_ENGINE=openai-realtime\n"
             + common,
@@ -72,8 +71,7 @@ class RuntimeWebServicesTests(unittest.TestCase):
         )
         self.offline.write_text(
             "CONNECTIVITY_MODE=offline\n"
-            "LLM_PROVIDER=ollama\n"
-            "OLLAMA_MODEL=mistral:7b-instruct-q4_K_M\n"
+            "VOICE_ENGINE=local\n"
             + common,
             encoding="utf-8",
         )
@@ -105,7 +103,8 @@ class RuntimeWebServicesTests(unittest.TestCase):
         }
         with mock.patch("voice_assistant.runtime_web_services.list_backend_audio_devices", return_value=devices):
             result = self.services.llm_options()
-        self.assertEqual(result["provider"], "openai")
+        self.assertEqual(result["selected_execution_mode"], "cloud")
+        self.assertEqual(result["selected_cloud_engine"], "openai-realtime")
         self.assertEqual(result["selected_model"], "gpt-4.1-mini")
         self.assertEqual(result["selected_connectivity_mode"], "online")
         self.assertEqual(result["selected_stt_language"], "fr")
@@ -117,12 +116,10 @@ class RuntimeWebServicesTests(unittest.TestCase):
 
         self.active[0] = self.offline
         with mock.patch("voice_assistant.runtime_web_services.list_backend_audio_devices", return_value=devices), mock.patch("voice_assistant.runtime_web_services.urllib.request.urlopen", side_effect=OSError("offline")):
-            offline = self.services.llm_options("openai")
-        self.assertEqual(offline["provider"], "ollama")
-        self.assertEqual(offline["selected_model"], "mistral:7b-instruct-q4_K_M")
+            offline = self.services.llm_options()
+        self.assertEqual(offline["selected_execution_mode"], "local")
+        self.assertEqual(offline["selected_voice_engine"], "local")
         self.assertEqual(offline["selected_connectivity_mode"], "offline")
-        self.assertEqual(offline["models"][0]["id"], "mistral:7b-instruct-q4_K_M")
-        self.assertIn("configured", offline["models"][0]["label"])
 
     def test_configured_audio_device_is_preserved_when_not_detected(self):
         with mock.patch("voice_assistant.runtime_web_services.list_backend_audio_devices", return_value={"inputs": [], "outputs": []}):
@@ -134,34 +131,10 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertEqual(result["backend_audio_outputs"][0]["id"], "pipewire:sink:test-output")
         self.assertFalse(result["backend_audio_outputs"][0]["available"])
 
-    def test_ollama_live_models_are_listed_from_api(self):
-        self.active[0] = self.offline
-        payload = json.dumps({
-            "models": [
-                {"name": "qwen3:8b"},
-                {"name": "mistral:7b-instruct-q4_K_M"},
-            ]
-        }).encode("utf-8")
-
-        class Response:
-            def __enter__(self): return self
-            def __exit__(self, *args): return False
-            def read(self): return payload
-
-        with mock.patch("voice_assistant.runtime_web_services.urllib.request.urlopen", return_value=Response()):
-            result = self.services.llm_options()
-
-        self.assertEqual(
-            [item["id"] for item in result["models"]],
-            ["mistral:7b-instruct-q4_K_M", "qwen3:8b"],
-        )
-        self.assertIn("Common runtime options loaded from active profile", result["message"])
-
-    def test_offline_save_uses_existing_model_when_ui_model_is_empty(self):
+    def test_offline_save_persists_deterministic_local_engine(self):
         self.active[0] = self.offline
 
         result = self.services.save_llm_config(
-            provider="ollama",
             model="",
             cloud_tts_provider="none",
             tts_output="backend",
@@ -216,10 +189,13 @@ class RuntimeWebServicesTests(unittest.TestCase):
             local_tts_output_gain=1.0,
         )
 
-        self.assertEqual(result["model"], "mistral:7b-instruct-q4_K_M")
+        self.assertEqual(result["voice_engine"], "local")
         saved = self.offline.read_text(encoding="utf-8")
         self.assertIn("WAKE_WORD=momo", saved)
-        self.assertIn("OFFLINE_MODEL=mistral:7b-instruct-q4_K_M", saved)
+        self.assertIn("VOICE_ENGINE=local", saved)
+        self.assertIn("STT_PROVIDER=local-whisper", saved)
+        self.assertNotIn("OLLAMA_", saved)
+        self.assertNotIn("OFFLINE_MODEL=", saved)
 
     def test_backend_micro_test_uses_selected_device_and_gain(self):
         expected = {"ok": True, "device": "USB mic"}
