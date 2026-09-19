@@ -50,7 +50,7 @@ from pydantic import AnyUrl
 try:
     from .i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text, sanitize_spoken_response
     from .local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
-    from .web_monitor import WebMonitor, build_service_state
+    from .web_monitor import WebMonitor
     from .semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .stage_timeout import TimedStageRunner
@@ -82,7 +82,7 @@ try:
 except ImportError:
     from i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text, sanitize_spoken_response
     from local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
-    from web_monitor import WebMonitor, build_service_state
+    from web_monitor import WebMonitor
     from semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from stage_timeout import TimedStageRunner
@@ -2333,7 +2333,6 @@ class VoiceAssistant:
             self._load_local_whisper_model()
 
         self.model = model
-        self.llm_provider = "openai"
 
         # ElevenLabs client for text-to-speech
         self.elevenlabs_client = None
