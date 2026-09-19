@@ -2604,25 +2604,6 @@ class WebMonitor:
             return snapshot
 
 
-def build_service_state(
-    *,
-    llm_provider: str,
-    model: str,
-    stt_provider: str,
-    tts_provider: str,
-    mcp_config: dict[str, Any] | None,
-    mcp_status: str = "configured",
-) -> dict[str, dict[str, str]]:
-    server_names = sorted((mcp_config or {}).get("mcpServers", {}).keys())
-    mcp_detail = ", ".join(server_names) if server_names else "no configured servers"
-    return {
-        "LLM": {"status": "configured", "detail": f"{llm_provider} / {model}"},
-        "STT": {"status": "configured", "detail": stt_provider},
-        "TTS": {"status": "configured", "detail": tts_provider},
-        "MCP": {"status": mcp_status, "detail": mcp_detail},
-    }
-
-
 VNC_HTML = """<!doctype html>
 <html lang="en">
 <head>
