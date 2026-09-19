@@ -6,7 +6,7 @@ Live Stage Assistant is a voice-enabled assistant for musicians and stage operat
 
 - Voice input with OpenAI Whisper or local Whisper.
 - Voice output through OpenAI, ElevenLabs, local Piper, browser TTS, backend TTS, or silent text mode.
-- Selectable Classic or OpenAI Realtime online voice engine.
+- Cloud engines: Classic, OpenAI Realtime, or Gemini Live.
 - Optional wake word.
 - Optional speaker recognition.
 - Browser-based chat/configuration interface.
@@ -43,7 +43,7 @@ cd LiveStageAssistant
 .\scripts\install.ps1
 ```
 
-The installer creates the Python environment and installs Classic and Realtime voice support plus the local/offline components when possible. Piper is installed automatically and the default French voice `fr_FR-siwis-medium` is downloaded into `data/piper`.
+The installer creates the Python environment and installs the supported Cloud engines plus deterministic Local voice/runtime components. Piper is installed automatically and the default French voice `fr_FR-siwis-medium` is downloaded into `data/piper`.
 
 To download or restore the default French Piper voice manually:
 
@@ -197,15 +197,18 @@ WEB_MONITOR_PORT=8765
 MCP_CONFIG=mcp_servers.json
 ```
 
-Typical offline Piper settings are:
+Typical deterministic Local settings are:
 
 ```env
 CONNECTIVITY_MODE=offline
+VOICE_ENGINE=local
 STT_PROVIDER=local-whisper
-LOCAL_TTS_PROVIDER=piper
+STT_INPUT=backend
+CLOUD_TTS_PROVIDER=none
 PIPER_VOICE=fr_FR-siwis-medium
 PIPER_DATA_DIR=data/piper
 WEB_TTS_PROVIDER=none
+MCP_CONFIG=mcp_servers.json
 ```
 
 Offline profiles use `VOICE_ENGINE=local`: local Whisper handles STT, the deterministic parser delegates domain semantics to MCP command gateways, and Piper handles local TTS. Local mode is also selectable while online; cloud engines require connectivity.
