@@ -252,5 +252,20 @@
     "backend_audio_diagnostic_vad_parameters": "Seuil actif : {threshold} ; parole continue minimale : {duration} ms ; détectée : {detected} s.",
     "backend_audio_diagnostic_error": "Échec du diagnostic du microphone backend.",
     "backend_audio_diagnostic_error_detail": "Échec du diagnostic du microphone backend : {error}"
+  },
+  "errors": {
+    "command_failed": "La commande a échoué",
+    "mixer_command_failed": "La commande mixeur a échoué",
+    "lighting_command_failed": "La commande éclairage a échoué",
+    "oscxr_channel_bus_mute_unsupported": "le mute d’une voie vers un bus séparé n’est pas pris en charge avec OSCXR",
+    "oscxr_matrix_unsupported": "les matrices ne sont pas disponibles avec OSCXR",
+    "oscxr_channel_aux_unsupported": "l’envoi d’une voie vers une sortie AUX dédiée n’est pas disponible avec OSCXR",
+    "oscxr_operation_unsupported": "cette fonction n’est pas disponible avec le protocole OSCXR",
+    "stale_command": "la cible a changé ; relance la commande",
+    "timeout": "le délai d’attente a été dépassé",
+    "disconnected": "le périphérique ne répond pas",
+    "invalid_request": "la requête n’est plus valide",
+    "not_found": "la cible demandée est introuvable",
+    "generic_detail": "une erreur technique est survenue"
   }
 }
