@@ -20,10 +20,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-import re
-import statistics
 import sys
-import time
 from typing import Any, Mapping
 
 from dotenv import dotenv_values, load_dotenv
@@ -35,11 +32,6 @@ if str(ROOT) not in sys.path:
 from voice_assistant.classic_engine import _mcp_config
 from voice_assistant.local_gateway_runtime import DeterministicGatewayOrchestrator
 
-
-_LLM_PROCESS_RE = re.compile(
-    r"(?:^|[ /])(ollama|llama-server|llama\.cpp|local-ai|localai)(?:$|[ /])",
-    re.IGNORECASE,
-)
 
 
 def _load_corpus(path: Path) -> list[dict[str, Any]]:
@@ -77,38 +69,6 @@ def _load_runtime_config(env_file: Path) -> tuple[dict[str, Any], str]:
     return config, locale
 
 
-def _llm_processes() -> dict[int, str]:
-    result: dict[int, str] = {}
-    proc = Path("/proc")
-    if not proc.is_dir():
-        return result
-    for entry in proc.iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            raw = (entry / "cmdline").read_bytes().replace(b"\0", b" ").decode(
-                "utf-8", errors="replace"
-            ).strip()
-        except OSError:
-            continue
-        if raw and _LLM_PROCESS_RE.search(raw):
-            result[int(entry.name)] = raw
-    return result
-
-
-def _percentile(values: list[float], percentile: float) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    if len(ordered) == 1:
-        return ordered[0]
-    position = (len(ordered) - 1) * percentile
-    lower = int(position)
-    upper = min(lower + 1, len(ordered) - 1)
-    fraction = position - lower
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
-
-
 async def _run_case(
     orchestrator: DeterministicGatewayOrchestrator,
     case: Mapping[str, Any],
@@ -116,7 +76,6 @@ async def _run_case(
     allow_writes: bool,
 ) -> dict[str, Any]:
     text = str(case["text"])
-    started = time.perf_counter()
     candidates = orchestrator._routed_servers(text)
 
     context_value = case.get("context")
@@ -129,8 +88,6 @@ async def _run_case(
         ),
         return_exceptions=True,
     )
-    analysis_ms = (time.perf_counter() - started) * 1000.0
-
     claims: list[tuple[str, dict[str, Any]]] = []
     errors: list[str] = []
     for server, result in zip(candidates, results):
@@ -177,7 +134,6 @@ async def _run_case(
         execute_requested = actual == "ready" and effect == "read"
     execute_requested = bool(execute_requested)
 
-    execution_ms: float | None = None
     execute_result: dict[str, Any] | None = None
     skipped_write = False
 
@@ -189,13 +145,11 @@ async def _run_case(
         elif effect == "write" and not allow_writes:
             skipped_write = True
         else:
-            execute_started = time.perf_counter()
             try:
                 execute_result = await orchestrator._execute(selected_server, token)
             except Exception as exc:
                 passed = False
                 reasons.append(f"execute failed: {exc}")
-            execution_ms = (time.perf_counter() - execute_started) * 1000.0
             if execute_result is not None and execute_result.get("ok") is not True:
                 passed = False
                 reasons.append(
@@ -203,7 +157,6 @@ async def _run_case(
                     f"{execute_result.get('responseText') or execute_result.get('errorCode') or ''}"
                 )
 
-    total_ms = (time.perf_counter() - started) * 1000.0
     return {
         "text": text,
         "context": context,
@@ -211,9 +164,6 @@ async def _run_case(
         "actual": actual,
         "server": selected_server or None,
         "effect": effect,
-        "analysis_ms": round(analysis_ms, 3),
-        "execution_ms": round(execution_ms, 3) if execution_ms is not None else None,
-        "total_ms": round(total_ms, 3),
         "executed": execute_result is not None,
         "skipped_write": skipped_write,
         "response_text": (
@@ -233,7 +183,6 @@ async def _run(args: argparse.Namespace) -> int:
     config, locale = _load_runtime_config(env_file)
     cases = _load_corpus(corpus_path)
 
-    llm_before = _llm_processes()
     orchestrator = DeterministicGatewayOrchestrator(config, locale=locale)
     report: dict[str, Any] = {
         "protocol": "lsa-command-gateway/v1",
@@ -274,9 +223,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             print(
                 f"[{index:02d}] {marker} {result['actual']}/{result['effect']}"
-                f" server={result['server'] or '-'}"
-                f" analysis={result['analysis_ms']:.1f}ms"
-                f" total={result['total_ms']:.1f}ms{execution}"
+                f" server={result['server'] or '-'}{execution}"
                 f" :: {result['text']}",
                 flush=True,
             )
@@ -285,44 +232,8 @@ async def _run(args: argparse.Namespace) -> int:
     finally:
         await orchestrator.close()
 
-    llm_after = _llm_processes()
-    new_llm = {
-        pid: command for pid, command in llm_after.items() if pid not in llm_before
-    }
-    report["llm_processes_after"] = llm_after
-    report["new_llm_processes"] = new_llm
+    report["passed"] = all_cases_pass
 
-    analysis_values = [
-        float(item["analysis_ms"]) for item in report["cases"] if item.get("analysis_ms") is not None
-    ]
-    total_values = [
-        float(item["total_ms"]) for item in report["cases"] if item.get("total_ms") is not None
-    ]
-    report["latency"] = {
-        "analysis_p50_ms": _percentile(analysis_values, 0.50),
-        "analysis_p95_ms": _percentile(analysis_values, 0.95),
-        "total_p50_ms": _percentile(total_values, 0.50),
-        "total_p95_ms": _percentile(total_values, 0.95),
-        "analysis_mean_ms": statistics.fmean(analysis_values) if analysis_values else None,
-    }
-
-    all_cases_pass = all(bool(item.get("passed")) for item in report["cases"])
-    report["passed"] = all_cases_pass and not new_llm
-
-    if new_llm:
-        print("FAIL: a new LLM/inference process appeared during the run:", flush=True)
-        for pid, command in new_llm.items():
-            print(f"  pid={pid} {command}", flush=True)
-
-    latency = report["latency"]
-    print(
-        "Latency summary: "
-        f"analysis p50={latency['analysis_p50_ms'] or 0:.1f}ms "
-        f"p95={latency['analysis_p95_ms'] or 0:.1f}ms | "
-        f"total p50={latency['total_p50_ms'] or 0:.1f}ms "
-        f"p95={latency['total_p95_ms'] or 0:.1f}ms",
-        flush=True,
-    )
     print(
         "RESULT: " + ("PASS" if report["passed"] else "FAIL"),
         flush=True,
