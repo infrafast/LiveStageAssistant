@@ -78,7 +78,7 @@ def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
     if not online:
         return "local"
     engine = str(values.get("VOICE_ENGINE") or "classic").strip().lower()
-    if engine not in {"classic", "openai-realtime", "gemini-live"}:
+    if engine not in {"local", "classic", "openai-realtime", "gemini-live"}:
         print(f"Invalid VOICE_ENGINE={engine!r}; falling back to classic.", flush=True)
         return "classic"
     return engine
@@ -93,7 +93,7 @@ def fallback_engine_candidates(values: Mapping[str, object], *, online: bool) ->
     result: list[str] = []
     for item in raw.split(","):
         name = item.strip()
-        if name not in {"classic", "openai-realtime", "gemini-live"}:
+        if name not in {"local", "classic", "openai-realtime", "gemini-live"}:
             print(f"Ignoring invalid VOICE_ENGINE_FALLBACK entry {name!r}.", flush=True)
             continue
         if name not in result:
@@ -130,13 +130,7 @@ def engine_identity(engine: str, values: Mapping[str, object]) -> tuple[str, str
             str(values.get("GEMINI_LIVE_MODEL") or "gemini-3.1-flash-live-preview").strip(),
             str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip(),
         )
-    provider = str(values.get("LLM_PROVIDER") or ("ollama" if engine == "local" else "openai")).strip().lower()
-    if provider == "ollama":
-        model = str(values.get("OLLAMA_MODEL") or values.get("OFFLINE_MODEL") or "qwen3:8b").strip()
-    else:
-        model_keys = {"openai": "OPENAI_MODEL", "anthropic": "ANTHROPIC_MODEL"}
-        model = str(values.get(model_keys.get(provider, "MODEL")) or "").strip()
-    return provider, model, ""
+    return ("openai", str(values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip(), "")
 
 
 def engine_command(engine: str, env_file: Path) -> list[str]:
