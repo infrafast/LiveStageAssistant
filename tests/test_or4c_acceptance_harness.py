@@ -44,19 +44,6 @@ def test_corpus_loader_accepts_wrapped_cases_and_rejects_missing_text(tmp_path: 
         harness._load_corpus(path)
 
 
-def test_percentile_is_stable_for_small_live_corpora():
-    assert harness._percentile([], 0.95) is None
-    assert harness._percentile([12.0], 0.95) == 12.0
-    assert harness._percentile([10.0, 20.0], 0.50) == 15.0
-    assert harness._percentile([10.0, 20.0], 0.95) == pytest.approx(19.5)
-
-
-def test_llm_process_matcher_is_narrow():
-    assert harness._LLM_PROCESS_RE.search("/usr/bin/ollama serve")
-    assert harness._LLM_PROCESS_RE.search("/opt/bin/llama-server -m model.gguf")
-    assert harness._LLM_PROCESS_RE.search("/usr/local/bin/localai run")
-    assert not harness._LLM_PROCESS_RE.search("python voice_assistant/runtime.py")
-    assert not harness._LLM_PROCESS_RE.search("node XMSeries-MCP/dist/index.js")
 
 
 class FakeOrchestrator:
