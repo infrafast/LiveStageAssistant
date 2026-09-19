@@ -29,11 +29,11 @@ The installer copies `.env.online` and `.env.offline` to `/etc/livestageassistan
 
 The bundled XR16 mixer entry explicitly sets `OSC_CHANNEL_COUNT=16`, `OSC_BUS_COUNT=4`, `OSC_FX_COUNT=4` and `OSC_DCA_COUNT=4`. Keep those limits aligned with the actual mixer model: deterministic name resolution scans only the configured ranges, and oversized XR counts can otherwise cause reads against unsupported indexes.
 
-When the active profile is offline with `LLM_PROVIDER=ollama`, the assistant verifies the local Ollama API. If Ollama is not already running and `OLLAMA_BASE_URL` is local, it starts `ollama serve`, ensures the selected model is available, and stops only that LSA-started Ollama process when internet returns or the service stops. Set `OLLAMA_AUTO_START=false` if you want to manage Ollama entirely outside Live Stage Assistant.
+When the active profile is offline, `VOICE_ENGINE=local` selects the deterministic Local engine. It uses local Whisper, Piper and local/STDIO MCP command gateways; no local LLM service is started or required.
 
 ## Prerequisites
 
-Run the repository install script before installing the service. It installs the system packages used by backend audio capture/playback and cloud TTS MP3 playback, the Python dependencies, openWakeWord ONNX resources, realtime transport support, Piper local TTS with a default French voice, and Ollama with a default local model:
+Run the repository install script before installing the service. It installs the system packages used by backend audio capture/playback and cloud TTS MP3 playback, the Python dependencies, openWakeWord ONNX resources, realtime transport support, and Piper local TTS with a default French voice:
 
 ```bash
 cd /home/pi/LiveStageAssistant
@@ -49,7 +49,7 @@ sudo apt install curl ca-certificates portaudio19-dev alsa-utils ffmpeg pipewire
 
 `alsa-utils` provides tools such as `aplay` for ALSA device checks, `pipewire-bin` provides `pw-cat`/`pw-record` for targeted PipeWire backend input, and `ffmpeg` is required for backend OpenAI/ElevenLabs MP3 TTS playback. It is also used to decode browser WebM/Opus audio before optional Resemblyzer speaker recognition. Without `ffmpeg`, backend cloud TTS playback is skipped and browser-side speaker recognition may return `unknown`.
 
-By default, the script installs Ollama if it is missing, starts it temporarily if needed, pulls `qwen3:8b`, and then stops only the temporary install-time server. Set `LSA_SKIP_OLLAMA=1` to skip Ollama, or `LSA_OLLAMA_MODEL=<model>` to pull another model.
+The installer intentionally does not install or manage a local LLM. Existing user-owned Ollama installations are left untouched.
 
 On Linux/Raspberry, Piper is installed with `piper-tts` and the default French voice files are downloaded to:
 
