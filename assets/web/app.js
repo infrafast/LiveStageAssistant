@@ -4712,7 +4712,7 @@
     }
 
     function selectedVoiceTestConfig(kind) {
-      const engine = voiceEngine?.value || "classic";
+      const engine = selectedVoiceEngine();
       if (kind === "realtime" || ["openai-realtime", "gemini-live"].includes(engine)) {
         if (engine === "openai-realtime") {
           return { provider: "openai-realtime", model: realtimeModel.value || "", voice: realtimeVoice.value || "" };
