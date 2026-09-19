@@ -68,7 +68,7 @@ Do not create a separate document to track milestone work.
 ## Important Local Profiles
 
 - `.env.online` is the cloud profile and should stay coherent with `CONNECTIVITY_MODE=online`.
-- `.env.offline` is the local profile and should stay coherent with `CONNECTIVITY_MODE=offline`, Ollama, local Whisper, Piper local TTS and offline MCP config. Piper is the implicit and only local TTS implementation; do not introduce a local TTS provider selector, a legacy local TTS provider token or fallback into offline/OR3 configuration.
+- `.env.offline` is the local profile and should stay coherent with `CONNECTIVITY_MODE=offline`, `VOICE_ENGINE=local`, local Whisper, Piper local TTS and offline MCP config. Local means deterministic parser + MCP command gateways, never a local LLM. Piper is the implicit and only local TTS implementation; do not introduce a local TTS provider selector, a legacy local TTS provider token or fallback into offline/OR3 configuration.
 - `.env.infrafasthttp` may be ignored by Git but is an active local profile; check it when the user asks about all env files or local profile behavior.
 
 Before finishing code/config changes, run the relevant lightweight checks, usually:
