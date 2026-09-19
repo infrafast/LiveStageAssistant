@@ -731,13 +731,24 @@ class RuntimeWebServices:
             raise ValueError("connectivity is controlled automatically by the runtime; switch network state instead")
 
         model = str(model or values.get("OPENAI_MODEL") or "gpt-4.1-mini").strip()
+        requested_engine = str(
+            voice_engine or ("local" if active_connectivity == "offline" else "classic")
+        ).strip().lower()
+        if active_connectivity == "offline":
+            requested_engine = "local"
+        allowed_engines = (
+            {"local"} if active_connectivity == "offline"
+            else {"local", "classic", "openai-realtime", "gemini-live"}
+        )
+        if requested_engine not in allowed_engines:
+            raise ValueError(f"voice_engine must be one of: {', '.join(sorted(allowed_engines))}")
 
         stt_input = str(stt_input or "both").strip().lower()
         if stt_input not in {"both", "backend", "browser", "silent"}:
             raise ValueError(f"unsupported STT input: {stt_input}")
         cloud_tts_provider = str(cloud_tts_provider or "none").strip().lower()
         tts_output = str(tts_output or "silent").strip().lower()
-        if active_connectivity == "offline" or str(voice_engine or "").strip().lower() == "local":
+        if requested_engine == "local":
             cloud_tts_provider = "none"
             tts_output = "backend"
             tts_provider = "piper"
@@ -770,12 +781,6 @@ class RuntimeWebServices:
         if backend_audio_monitor_mode == "rejected" and not wake_word:
             backend_audio_monitor_mode = "off"
 
-        requested_engine = str(voice_engine or ("local" if active_connectivity == "offline" else "classic")).strip().lower()
-        if active_connectivity == "offline":
-            requested_engine = "local"
-        allowed_engines = {"local"} if active_connectivity == "offline" else {"local", "classic", "openai-realtime", "gemini-live"}
-        if requested_engine not in allowed_engines:
-            raise ValueError(f"voice_engine must be one of: {', '.join(sorted(allowed_engines))}")
         cloud_tts_output_gain = max(0.0, min(2.0, float(cloud_tts_output_gain)))
         local_tts_output_gain = max(0.0, min(2.0, float(local_tts_output_gain)))
         if requested_engine in {"openai-realtime", "gemini-live"}:
