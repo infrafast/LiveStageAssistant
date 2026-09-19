@@ -141,8 +141,8 @@ def localized_error_text(
 
     if (
         "disconnected" in normalized
-        or "deconnecte" in normalized
-        or "déconnecté" in normalized
+        or "deconnect" in normalized
+        or "déconnect" in normalized
         or "connection refused" in normalized
         or "connexion" in normalized and "perdue" in normalized
     ):
