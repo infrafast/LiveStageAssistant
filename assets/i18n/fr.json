@@ -266,6 +266,14 @@
     "disconnected": "le périphérique ne répond pas",
     "invalid_request": "la requête n’est plus valide",
     "not_found": "la cible demandée est introuvable",
-    "generic_detail": "une erreur technique est survenue"
+    "generic_detail": "une erreur technique est survenue",
+    "cloud_quota_openai": "Plus de crédit API OpenAI. Passe en mode local ou ajoute du crédit.",
+    "cloud_quota_elevenlabs": "Plus de crédit API ElevenLabs pour la voix.",
+    "cloud_quota_generic": "Plus de crédit API pour ce service cloud.",
+    "cloud_auth": "Clé API {provider} invalide ou refusée.",
+    "cloud_rate_limit": "Limite temporaire API {provider} atteinte. Réessaie dans un moment.",
+    "command_timeout": "La demande prend trop de temps à s’exécuter. Réessaie avec une demande plus simple.",
+    "context_limit": "La limite de contexte du modèle a été atteinte. Utilise un modèle avec un contexte plus grand ou réduis les outils MCP actifs.",
+    "mcp_connection_lost": "La connexion au serveur MCP a été perdue. La session MCP va être redémarrée ; relance ensuite la commande."
   }
 }
