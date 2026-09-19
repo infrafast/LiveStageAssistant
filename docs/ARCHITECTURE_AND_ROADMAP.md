@@ -161,7 +161,6 @@ VOICE_ENGINE=classic
 OPENAI_REALTIME_MODEL=gpt-realtime-2.1
 OPENAI_REALTIME_VOICE=marin
 
-LLM_PROVIDER=openai
 OPENAI_MODEL=gpt-4.1-mini
 
 STT_PROVIDER=openai-whisper
@@ -313,9 +312,9 @@ One MCP's permission or transport choice must not implicitly change another MCP.
 
 ## 1.9 Offline reliability
 
-Offline mode remains cloud-independent and uses Ollama, local faster-whisper, Piper local TTS and local/STDIO MCP servers. Realtime work must not weaken this path. `CONNECTIVITY_MODE=offline` must never dispatch to a cloud realtime provider even if a stale/mistaken online-engine value exists.
+Offline mode remains cloud-independent and uses the deterministic Local engine, local faster-whisper, Piper local TTS and local/STDIO MCP command gateways. `CONNECTIVITY_MODE=offline` always selects Local and never dispatches to a cloud engine. When connectivity is online, Local remains selectable alongside Cloud.
 
-On `realtime-voice-architecture`, OR4 has completed a native-Ollama tool-calling feasibility spike for the supervised Offline/Local engine. Direct `/api/chat`, compact prompts, routed tool subsets and smaller local models were all benchmarked on Pi5, but the control path remained CPU-bound and failed the latency target even for a single synthetic tool. OR4 therefore no longer treats generative local tool selection as the production command path. The next design keeps MCP servers authoritative and moves deterministic natural-command interpretation into an optional MCP command-gateway contract; LSA remains domain-agnostic and only orchestrates server selection, analyze/execute flow and safety. MCP routing keywords keep their original meaning as a server-narrowing optimization, never a tool-vs-conversation gate. Online/OpenAI Classic remains unchanged.
+On `realtime-voice-architecture`, OR4 established that generative local tool planning was unsuitable for the Pi5 stage-control critical path. The production Local engine therefore uses deterministic natural-command interpretation and MCP command gateways; LSA remains domain-agnostic and orchestrates server selection, analyze/execute flow and safety. The experimental local-LLM/Ollama implementation and its benchmark harnesses have now been removed. Cloud Classic and Realtime engines remain available online.
 
 The common `ConnectivityManager` and `EngineSupervisor` implement the production ownership model. Basic Pi5 Online -> Offline -> Online round trips are validated for both Classic and OpenAI Realtime with local loss/READY announcements and without observed audio-device lockup.
 
@@ -397,7 +396,7 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
                                 |
                        Common WebMonitor
 ```
-## RV prompt and spoken-language policyThe VAD has no language prompt. Prompting applies to the realtime model/session, not speech-boundary detection.At engine instantiation, LSA logs the exact final consolidated prompt that is sent to the selected LLM path. Classic/OpenAI/Ollama log the prompt after freshness and MCP prompt merging, backend Realtime logs the prompt after MCP prompt merging and realtime voice-control contract composition, and browser Realtime logs the instructions passed to the browser session secret flow.`ASSISTANT_SYSTEM_PROMPT` and `STT_PROMPT` are prompt-file references, not inline prompt bodies. By default they point to `data/prompt/assistant_system_prompt.md` and `data/prompt/stt_prompt.md`. The Web GUI exposes these values as dropdowns populated from `data/prompt/*.md` and `data/prompt/*.txt`; the selected file path is persisted in the active env profile and resolved relative to the env profile directory first, then relative to the project root for CLI, service and Docker execution.```textPROMPT.md / general LSA instructions              +
+## RV prompt and spoken-language policyThe VAD has no language prompt. Prompting applies to the realtime model/session, not speech-boundary detection.At engine instantiation, LSA logs the exact final consolidated prompt that is sent to the selected LLM path. Classic/OpenAI logs the prompt after freshness and MCP prompt merging, backend Realtime logs the prompt after MCP prompt merging and realtime voice-control contract composition, and browser Realtime logs the instructions passed to the browser session secret flow.`ASSISTANT_SYSTEM_PROMPT` and `STT_PROMPT` are prompt-file references, not inline prompt bodies. By default they point to `data/prompt/assistant_system_prompt.md` and `data/prompt/stt_prompt.md`. The Web GUI exposes these values as dropdowns populated from `data/prompt/*.md` and `data/prompt/*.txt`; the selected file path is persisted in the active env profile and resolved relative to the env profile directory first, then relative to the project root for CLI, service and Docker execution.```textPROMPT.md / general LSA instructions              +
 realtime voice addendum
               =
 realtime session instructions
@@ -675,7 +674,7 @@ Startup ready wording is composed once in `voice_assistant/startup_messages.py` 
 
 Voice preview is exposed next to the selected voice control rather than as a separate global button. Classic OpenAI/ElevenLabs, OpenAI Realtime and Gemini Live use the common `/api/backend-tts-test` path for backend playback previews; Classic browser TTS preview still uses the browser TTS path when browser output is selected.
 
-Offline LLM startup is managed locally when `LLM_PROVIDER=ollama`. The assistant checks `OLLAMA_BASE_URL`, starts `ollama serve` only when the URL is localhost and no Ollama API is already reachable, then verifies or pulls the selected model before constructing the LangChain Ollama client. `OLLAMA_AUTO_START=false` disables this automatic service startup. When auto mode later switches back online, or when the assistant shuts down, LSA stops only the Ollama process it started itself and never stops an instance that was already running before LSA needed it.
+Local mode has no LLM lifecycle. No local model service is started, stopped, pulled or monitored by LSA.
 
 The Linux/Raspberry install script provisions the local voice/runtime stack used by the classic and experimental voice paths: openWakeWord ONNX package resources, WebSocket realtime transport support, Piper local TTS, the default French Piper voice `fr_FR-siwis-medium`, Ollama, and the default install-time model `qwen3:8b`. The script may start `ollama serve` temporarily only to pull the model; it stops only that install-time process and does not stop an Ollama instance that was already running.
 
@@ -704,7 +703,7 @@ The Linux/Raspberry install script provisions the local voice/runtime stack used
 - [ ] optional Mixing Station.
 
 ### MK6 - Raspberry/offline validation
-- [ ] full local/Ollama query path;
+- [x] deterministic Local query path through MCP command gateways;
 - [ ] cache/update recovery tests.
 
 ---
@@ -763,7 +762,7 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 
 ### OR0 - Profile contract — STRUCTURALLY VALIDATED
 
-- [x] offline remains Ollama + local Whisper + Piper local TTS + local/STDIO MCP;
+- [x] offline uses deterministic Local + local Whisper + Piper local TTS + local/STDIO MCP command gateways;
 - [x] connectivity and voice engine remain independent configuration axes;
 - [x] offline must never start a cloud realtime provider;
 - [x] network status announcement semantics centralized and Pi-validated for the basic Classic/Realtime round trips;
@@ -809,6 +808,8 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 
 **Product decision:** the production Offline/Local path no longer uses a local LLM. Local speech remains fully local (backend microphone/VAD/wake word -> local Whisper -> deterministic MCP command gateway -> Piper), while cloud/LLM engines keep their existing agent, prompt and low-level MCP tool behavior unchanged.
 
+**Local/Cloud GUI cleanup (2026-09-19):** the retired local-LLM/Ollama implementation, dependency, installer path, profile keys and benchmark tests have been removed. The Web GUI now models execution explicitly as Local deterministic or Cloud; selecting Cloud then chooses Classic, OpenAI Realtime or Gemini Live. This advances the GUI consolidation milestone without changing remaining validation gates.
+
 Target local path:
 
 ```text
@@ -846,7 +847,7 @@ Architecture rules:
 - [x] representative warm single tool decisions remained roughly 9-10 s at best and worsened substantially under rack CPU load, with Ollama saturating CPU during inference;
 - [x] smaller 1B did not materially improve latency and produced a wrong tool decision in the steady-state corpus;
 - [x] production conclusion: local generative tool planning is technically functional but unsuitable for the stage-control critical path on the current Pi5;
-- [ ] remove the experimental native-Ollama runner/benchmarks only after the deterministic Local engine passes its rollback gate.
+- [x] experimental native local-LLM runner, dependency and benchmark harnesses removed after deterministic Local validation.
 
 #### OR4B0 - Shared deterministic command-core contract — IMPLEMENTED / CI VALIDATED
 
@@ -919,7 +920,7 @@ Implement only the high-value basic mixer grammar first; do not port all prompt 
 
 PR #10 is merged into `realtime-voice-architecture` as `e244af4a2f5d474005ff6803c5818aa25f4f87aa`. A dedicated `local_engine.py` reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. PR and post-merge CI passed on Python 3.11/3.12. Raspberry Pi read-path acceptance passed on 18 September 2026 with both `mixer` and `qlcplus` gateways discovered and all four acceptance cases passing. A second live run with `--allow-writes` then executed the exact QLC command `qlc wave`; the harness reported `PASS ready/write ... executed` and the operator confirmed that the `wave` button was physically pressed in QLC+. Controlled XMSeries writes were live-validated on 18 September 2026 using channel `batterie`: mute, unmute, absolute level set to -30 dB, then relative +3 dB all executed successfully; the operator confirmed the live mixer state ended at -27 dB. The live run reported analysis p50 10.0 ms / p95 12.8 ms and total p50 78.8 ms / p95 84.1 ms. This clears the basic XMSeries MVP live gate and unlocks OR4B4 advanced semantics.
 
-Create a real Local engine instead of mapping `local` to Classic+Ollama.
+Create and keep a real deterministic Local engine, independent from the Cloud Classic LLM path.
 
 - [x] add a dedicated Local engine/runtime path that hard-blocks LLM construction and never creates MCPAgent;
 - [x] retain the existing VoiceAssistant speech shell for local Whisper, Piper, wake word, VAD, semantic audio cues, speaker recognition and common runtime ownership;
@@ -953,14 +954,14 @@ Temporal semantics are deterministic in XMSeries-MCP: `en N secondes` means ramp
 
 #### OR4B5 - GUI/config migration
 
-The current GUI already has `Voice engine = Local`, but Offline still forces `LLM_PROVIDER=ollama` and shows Provider/LLM controls. The Local engine is not an LLM model.
+The GUI now separates `Mode = Local déterministe / Cloud`. Local is not an LLM model; Cloud exposes the retained cloud engines (Classic, OpenAI Realtime, Gemini Live). Offline forces Local, while online allows either Local or Cloud.
 
 - [ ] Offline connectivity still forces/selects `Voice engine = Local`;
 - [ ] hide Provider, LLM model, Session Context, MCP Steps and system-prompt controls when Local is active;
 - [ ] keep Tool Routing visible because it remains useful for deterministic server narrowing;
 - [ ] add a Local detail/status such as "Local deterministic MCP commands" rather than a fake model choice;
 - [ ] make `/api/llm-options` and config-save logic engine-aware so Local does not require `provider` or `model`;
-- [ ] runtime/config status must not report Ollama/model identifiers for Local;
+- [x] runtime/config status reports Local as `local/deterministic` with no local model identifier;
 - [ ] preserve all cloud Classic/OpenAI Realtime/Gemini GUI controls and saved values unchanged;
 - [ ] update every locale file under `assets/i18n/` in the same change.
 
@@ -968,13 +969,13 @@ The current GUI already has `Voice engine = Local`, but Offline still forces `LL
 
 Cleanup happens **after OR4B3 live validation**, not before.
 
-- [ ] `.env.offline`: keep `CONNECTIVITY_MODE=offline`, local STT/Piper/audio/MCP settings; remove `LLM_PROVIDER=ollama`, `OLLAMA_MODEL`, `OFFLINE_MODEL`, `OLLAMA_BASE_URL`, `OLLAMA_AUTO_START`; set/retain explicit `VOICE_ENGINE=local`;
+- [x] `.env.offline`: keep `CONNECTIVITY_MODE=offline`, local STT/Piper/audio/MCP settings and explicit `VOICE_ENGINE=local`; retired local-LLM keys removed;
 - [ ] update `.env.example` and profile migration logic;
-- [ ] stop installing/pulling Ollama in `scripts/install.sh` / PowerShell / Raspberry service-pack setup; do not uninstall a user-owned Ollama installation;
-- [ ] remove obsolete installer knobs such as `LSA_SKIP_OLLAMA` / `LSA_OLLAMA_MODEL`;
-- [ ] remove LocalOllamaManager, native Ollama runner, Ollama-only startup code and direct `langchain-ollama` dependency once no production path references them;
+- [x] installer/service-pack no longer installs, pulls or manages a local LLM; user-owned installations remain untouched;
+- [x] obsolete local-LLM installer knobs removed;
+- [x] local-LLM manager/runner/startup code and direct local-LLM dependency removed;
 - [ ] preserve cloud LLM dependencies/paths required by Classic and Realtime;
-- [ ] retire OR4 Ollama benchmark scripts after their measured conclusions are preserved here.
+- [x] OR4 local-LLM benchmark scripts retired after preserving the decision record here;
 
 #### OR4C - Cross-repository safety and compatibility gate
 
@@ -994,10 +995,10 @@ Live rack procedure: [OR4C Raspberry Pi deterministic gateway acceptance](OR4C_P
 - [ ] Pi5 live corpus: XMSeries basic + advanced representative commands, QLC exact buttons/listing, routed and unrouted turns;
 - [ ] Online Classic -> Offline Local -> Online Classic regression with cloud behavior unchanged;
 - [ ] Online Realtime -> Offline Local -> Online Realtime regression with cloud behavior unchanged;
-- [ ] Internet-loss transition reaches Local READY without Ollama installed;
-- [ ] clean install on Pi without Ollama;
-- [ ] upgrade install from an existing Ollama-based profile migrates safely;
-- [ ] only after all gates pass: remove experimental Ollama local implementation and mark OR4 complete.
+- [~] Internet-loss transition reaches Local READY with no local LLM dependency; code path complete, final Pi reconnect recette remains;
+- [~] clean install contains no local-LLM installation step; final fresh-Pi installation recette remains;
+- [~] repository profiles no longer contain local-LLM keys; existing user-owned local-LLM software is ignored and left untouched;
+- [x] experimental local-LLM implementation removed; OR4 production direction is deterministic Local.
 
 ---
 
@@ -1150,7 +1151,7 @@ common WebMonitor services
 
 # 9. Current Next Actions
 
-1. **OR4A — rerun the compact native Ollama MCP proof on Pi5:** pull the branch, run the routing/native unit suite, repeat `qlc liste tous les contrôles`, verify that `prompt_chars`, `input_chars` and `payload_chars` fall substantially below the previous 4437/455/7161 values, and require the first real QLC tool call in materially less than 45 s. If the QLC read succeeds, execute one controlled write and record cold/warm latency plus CPU before moving OR4A from `[~]` to `[x]`.
+1. **OR4 Local acceptance:** validate the deterministic Local engine on Pi5 with representative mixer and QLC command-gateway commands, including online-selected Local and automatic offline Local. No local-LLM benchmark is part of the production roadmap.
 2. **RV2D / CFG-9 — validate the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; run the migrated common handlers on Pi/browser before marking the milestone complete. No historical/second WebMonitor is allowed in the supervised architecture.
 3. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls, backend microphone diagnostic/capture, browser STT/TTS and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
 4. **RV2F / CFG-9 — semantic audio feedback validation:** run audible Classic/Realtime/Local checks for READY, LISTENING/WAIT_WAKE, WAKE_DETECTED, PROCESSING, RESULT_READY, SPEAKING and IDLE before marking RV2F complete.
