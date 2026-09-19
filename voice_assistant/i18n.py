@@ -85,3 +85,77 @@ def i18n_text(locale_data: dict[str, Any], dotted_key: str, fallback: str) -> st
             return fallback
         current = current[part]
     return str(current) if current is not None else fallback
+
+
+def localized_error_text(
+    locale: str | None,
+    *,
+    domain: str = "command",
+    error: Exception | str | None = None,
+    error_code: str | None = None,
+) -> str:
+    """Return a concise localized user-facing error without leaking technical details."""
+    data = load_locale(locale)
+    errors = data.get("errors") if isinstance(data.get("errors"), dict) else {}
+    raw = str(error or "").strip()
+    normalized = raw.casefold()
+    code = str(error_code or "").strip().casefold()
+
+    domain_key = {
+        "mixer": "mixer_command_failed",
+        "mixeur": "mixer_command_failed",
+        "qlcplus": "lighting_command_failed",
+        "lighting": "lighting_command_failed",
+        "command": "command_failed",
+    }.get(str(domain or "").strip().casefold(), "command_failed")
+
+    prefix = str(errors.get(domain_key) or errors.get("command_failed") or "La commande a échoué.")
+
+    if "unsupported for oscxr" in normalized:
+        if "channel-to-bus mute" in normalized:
+            detail = str(
+                errors.get("oscxr_channel_bus_mute_unsupported")
+                or "le mute d’une voie vers un bus séparé n’est pas pris en charge sur ce mixeur."
+            )
+        elif "matrix" in normalized:
+            detail = str(errors.get("oscxr_matrix_unsupported") or "les matrices ne sont pas disponibles sur ce mixeur.")
+        elif "channel sends to aux" in normalized or "channel-to-aux" in normalized:
+            detail = str(
+                errors.get("oscxr_channel_aux_unsupported")
+                or "l’envoi d’une voie vers une sortie AUX dédiée n’est pas disponible sur ce mixeur."
+            )
+        else:
+            detail = str(
+                errors.get("oscxr_operation_unsupported")
+                or "cette fonction n’est pas disponible avec le protocole OSCXR."
+            )
+        return f"{prefix} : {detail}"
+
+    if code in {"stale_plan", "expired_token"} or "stale_target" in normalized:
+        detail = str(errors.get("stale_command") or "la cible a changé ; relance la commande.")
+        return f"{prefix} : {detail}"
+
+    if "timeout" in normalized or "timed out" in normalized or "délai" in normalized:
+        detail = str(errors.get("timeout") or "le délai d’attente a été dépassé.")
+        return f"{prefix} : {detail}"
+
+    if (
+        "disconnected" in normalized
+        or "deconnecte" in normalized
+        or "déconnecté" in normalized
+        or "connection refused" in normalized
+        or "connexion" in normalized and "perdue" in normalized
+    ):
+        detail = str(errors.get("disconnected") or "le périphérique ne répond pas.")
+        return f"{prefix} : {detail}"
+
+    if code in {"invalid_token", "invalid_request"} or "protocol mismatch" in normalized:
+        detail = str(errors.get("invalid_request") or "la requête n’est plus valide.")
+        return f"{prefix} : {detail}"
+
+    if "not found" in normalized or "introuvable" in normalized:
+        detail = str(errors.get("not_found") or "la cible demandée est introuvable.")
+        return f"{prefix} : {detail}"
+
+    detail = str(errors.get("generic_detail") or "une erreur technique est survenue.")
+    return f"{prefix} : {detail}"
