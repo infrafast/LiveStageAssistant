@@ -275,5 +275,9 @@
     "command_timeout": "The request is taking too long. Try again with a simpler request.",
     "context_limit": "The model context limit was reached. Use a larger-context model or reduce the active MCP tools.",
     "mcp_connection_lost": "The MCP server connection was lost. The MCP session will restart; then run the command again."
-  }
+  },
+  "execution_mode": "Mode",
+  "local_deterministic": "Deterministic Local",
+  "cloud": "Cloud",
+  "cloud_engine": "Cloud engine"
 }
