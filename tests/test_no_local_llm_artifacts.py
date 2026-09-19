@@ -39,15 +39,7 @@ def runtime_text_files():
 def test_retired_local_llm_stack_is_absent_from_runtime_and_profiles():
     violations = []
     for path in runtime_text_files():
-        lines = path.read_text(encoding="utf-8").splitlines()
-        active_text = "\n".join(
-            line
-            for line in lines
-            if not (
-                path.name == "install_livestageassistant_service.sh"
-                and line.strip().startswith("remove_env_key ")
-            )
-        )
+        active_text = path.read_text(encoding="utf-8")
         for token in BANNED:
             if token in active_text:
                 violations.append(f"{path.relative_to(ROOT)}: {token}")
@@ -62,7 +54,13 @@ def test_local_cloud_gui_contract_has_no_retired_provider_selector_or_payload():
     assert '<option value="cloud" data-i18n="cloud">Cloud</option>' in html
     assert 'id="cloud-engine"' in html
     assert 'id="llm-provider"' not in html
+    assert 'id="session-context-size-field"' in html
+    assert 'id="mcp-agent-max-steps-field"' in html
+    assert 'id="mcp-tool-routing-field"' in html
+    assert 'id="cloud-prompt-section"' in html
     assert "llmProvider" not in js
     assert 'const engine = selectedVoiceEngine();' in js
     assert 'return cloudEngine?.value || "classic";' in js
+    assert 'selectedVoiceEngine() === "openai-realtime"' in js
+    assert 'for (const element of cloudAgentControls) element.classList.toggle("hidden", local);' in js
     assert "provider,\n            model," not in js
