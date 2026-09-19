@@ -159,3 +159,27 @@ def localized_error_text(
 
     detail = str(errors.get("generic_detail") or "une erreur technique est survenue.")
     return f"{prefix} : {detail}"
+
+
+def sanitize_spoken_response(locale: str | None, response: str) -> str:
+    """Last-resort guard that prevents obvious technical error details from reaching chat/TTS."""
+    text = str(response or "").strip()
+    lowered = text.casefold()
+    technical_markers = (
+        "unsupported for oscxr",
+        "traceback (most recent call last)",
+        "runtimeerror:",
+        "exception:",
+        "sorry, i encountered an error:",
+        "mcp gateway tool returned an error",
+        "connection refused",
+        "timed out",
+    )
+    mixer_prefixes = (
+        "la commande mixeur a échoué",
+        "the mixer command failed",
+    )
+    if any(marker in lowered for marker in technical_markers) or any(lowered.startswith(prefix) for prefix in mixer_prefixes):
+        domain = "mixer" if ("mixeur" in lowered or "mixer" in lowered or "oscxr" in lowered) else "command"
+        return localized_error_text(locale, domain=domain, error=text)
+    return text
