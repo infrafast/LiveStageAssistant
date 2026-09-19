@@ -1623,33 +1623,27 @@ class WebMonitor:
                 def _handle_llm_options(self, query: str) -> None:
                     handler = monitor._llm_options_handler
                     if handler is None:
-                        self.send_error(503, "LLM configuration is not available")
+                        self.send_error(503, "Engine configuration is not available")
                         return
 
-                    provider_values = parse_qs(query).get("provider") or [None]
-                    provider = provider_values[0]
                     try:
-                        result = handler(provider)
+                        result = handler(None)
                     except Exception as e:
-                        self.send_error(500, f"Could not list LLM options: {e}")
+                        self.send_error(500, f"Could not list engine options: {e}")
                         return
                     self._send_json(result)
 
                 def _handle_llm_config_save(self) -> None:
                     handler = monitor._llm_config_save_handler
                     if handler is None:
-                        self.send_error(503, "LLM configuration is not available")
+                        self.send_error(503, "Engine configuration is not available")
                         return
 
                     payload = self._read_json_body(max_bytes=2 * 1024 * 1024)
                     if payload is None:
                         return
 
-                    provider = str(payload.get("provider") or "").strip().lower()
                     model = str(payload.get("model") or "").strip()
-                    if not provider:
-                        self.send_error(400, "Provider is required")
-                        return
                     cloud_tts_provider = str(payload.get("cloud_tts_provider") or "").strip().lower()
                     tts_output = str(payload.get("tts_output") or "").strip().lower()
                     stt_input = str(payload.get("stt_input") or "both").strip().lower()
@@ -1731,7 +1725,6 @@ class WebMonitor:
 
                     try:
                         result = handler(
-                            provider,
                             model,
                             cloud_tts_provider,
                             tts_output,
@@ -1789,7 +1782,7 @@ class WebMonitor:
                         self.send_error(400, str(e))
                         return
                     except Exception as e:
-                        self.send_error(500, f"Could not save LLM configuration: {e}")
+                        self.send_error(500, f"Could not save engine configuration: {e}")
                         return
                     self._send_json(result)
 
