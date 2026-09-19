@@ -233,6 +233,8 @@
     const classicVadDetails = document.querySelector("#classic-vad-details");
     const classicVadOnlyControls = Array.from(document.querySelectorAll(".classic-vad-only"));
     const llmModelField = document.querySelector("#llm-model-field");
+    const cloudAgentControls = Array.from(document.querySelectorAll(".cloud-agent-control"));
+    const cloudPromptSection = document.querySelector("#cloud-prompt-section");
     const sttInputField = document.querySelector("#stt-input-field");
     const mcpDetails = document.querySelector("#mcp-servers-details");
     const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
@@ -3349,6 +3351,8 @@
       if (realtimeBrowserField) realtimeBrowserField.classList.toggle("hidden", !browserRealtime);
       if (!browserRealtime && realtimeBrowserPeer) stopBrowserRealtime();
       llmModelField.classList.toggle("hidden", !classic);
+      for (const element of cloudAgentControls) element.classList.toggle("hidden", local);
+      if (cloudPromptSection) cloudPromptSection.classList.toggle("hidden", local);
       classicSttPromptField.classList.toggle("hidden", realtime);
       classicInterruptField.classList.toggle("hidden", realtime);
       sttInputField.classList.toggle("hidden", realtime);
