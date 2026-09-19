@@ -3138,7 +3138,7 @@
 
     function syncRealtimeDropdownOptions() {
       if (!lastLlmOptions || !realtimeModel || !realtimeVoice) return;
-      const engine = voiceEngine?.value || "classic";
+      const engine = selectedVoiceEngine();
       const modelOptions = engine === "gemini-live"
         ? (lastLlmOptions.gemini_live_models || lastLlmOptions.realtime_models || [])
         : (lastLlmOptions.openai_realtime_models || lastLlmOptions.realtime_models || []);
@@ -6241,7 +6241,6 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            provider,
             model,
             session_context_size: sessionContextSizeValue,
             mcp_agent_max_steps: mcpAgentMaxStepsValue,
