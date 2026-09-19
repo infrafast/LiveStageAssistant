@@ -49,7 +49,7 @@ from mcp_use import MCPAgent, MCPClient
 from pydantic import AnyUrl
 
 try:
-    from .i18n import available_locales, i18n_text, load_locale, normalize_locale
+    from .i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text
     from .local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from .web_monitor import WebMonitor, build_service_state
     from .semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
@@ -81,7 +81,7 @@ try:
         validate_wav_bytes,
     )
 except ImportError:
-    from i18n import available_locales, i18n_text, load_locale, normalize_locale
+    from i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text
     from local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
     from web_monitor import WebMonitor, build_service_state
     from semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
@@ -6103,7 +6103,12 @@ class VoiceAssistant:
                     "La connexion au serveur MCP a été perdue pendant l'appel outil. "
                     "Je vais redémarrer la session MCP, puis tu pourras relancer la commande."
                 )
-            return f"Sorry, I encountered an error: {error_text}"
+            print(f"Command processing failed: {error_text}", flush=True)
+            return localized_error_text(
+                self.stt_language or "fr",
+                domain="command",
+                error=error_text,
+            )
 
     def is_speaker_identity_query(self, text: str) -> bool:
         """Return true for local speaker-recognition diagnostic commands."""
