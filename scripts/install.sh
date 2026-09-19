@@ -49,93 +49,6 @@ install_system_packages() {
     esac
 }
 
-install_ollama() {
-    if [ "${LSA_SKIP_OLLAMA:-}" = "1" ]; then
-        printf '%s\n' "Skipping Ollama setup because LSA_SKIP_OLLAMA=1."
-        return
-    fi
-
-    ollama_model="${LSA_OLLAMA_MODEL:-qwen3:8b}"
-    case "$system" in
-        Linux)
-            if ! command -v ollama >/dev/null 2>&1; then
-                if command -v curl >/dev/null 2>&1; then
-                    printf '%s\n' "Installing Ollama for local/offline mode."
-                    curl -fsSL https://ollama.com/install.sh | sh
-                else
-                    printf '%s\n' "Warning: curl is not available; install Ollama manually for offline mode." >&2
-                    return
-                fi
-            fi
-            ;;
-        Darwin)
-            if ! command -v ollama >/dev/null 2>&1; then
-                if command -v brew >/dev/null 2>&1; then
-                    printf '%s\n' "Installing Ollama with Homebrew for local/offline mode."
-                    brew install ollama
-                else
-                    printf '%s\n' "Warning: Homebrew not found; install Ollama manually for offline mode." >&2
-                    return
-                fi
-            fi
-            ;;
-        *)
-            if ! command -v ollama >/dev/null 2>&1; then
-                printf '%s\n' "Warning: Ollama was not found; install it manually for offline mode." >&2
-                return
-            fi
-            ;;
-    esac
-
-    if ! command -v ollama >/dev/null 2>&1; then
-        printf '%s\n' "Warning: Ollama is still unavailable; skipping model pull." >&2
-        return
-    fi
-
-    ollama_started_pid=""
-    if ! ollama list >/dev/null 2>&1; then
-        printf '%s\n' "Starting Ollama temporarily to pull ${ollama_model} for local/offline mode."
-        ollama serve >/tmp/livestageassistant-ollama-install.log 2>&1 &
-        ollama_started_pid="$!"
-        i=0
-        while [ "$i" -lt 60 ]; do
-            if ollama list >/dev/null 2>&1; then
-                break
-            fi
-            i=$((i + 1))
-            sleep 1
-        done
-        if ! ollama list >/dev/null 2>&1; then
-            if [ -n "$ollama_started_pid" ]; then
-                kill "$ollama_started_pid" >/dev/null 2>&1 || true
-            fi
-            printf '%s\n' "Warning: Ollama did not become ready; skipping model pull. See /tmp/livestageassistant-ollama-install.log." >&2
-            return
-        fi
-    fi
-
-    ollama_pull_status=0
-    if ollama show "$ollama_model" >/dev/null 2>&1; then
-        printf '%s\n' "Ollama model ${ollama_model} is already available."
-    else
-        printf '%s\n' "Pulling Ollama model ${ollama_model} for local/offline mode."
-        if ! ollama pull "$ollama_model"; then
-            ollama_pull_status=1
-        fi
-    fi
-
-    if [ -n "$ollama_started_pid" ]; then
-        printf '%s\n' "Stopping temporary Ollama install server."
-        kill "$ollama_started_pid" >/dev/null 2>&1 || true
-        wait "$ollama_started_pid" >/dev/null 2>&1 || true
-    fi
-
-    if [ "$ollama_pull_status" -ne 0 ]; then
-        printf '%s\n' "Error: failed to pull Ollama model ${ollama_model}." >&2
-        return "$ollama_pull_status"
-    fi
-}
-
 create_venv() {
     if [ -n "${LSA_PYTHON:-}" ]; then
         uv venv --python "$LSA_PYTHON"
@@ -233,7 +146,6 @@ machine="$(uname -m 2>/dev/null || printf unknown)"
 system="$(uname -s 2>/dev/null || printf unknown)"
 
 install_system_packages
-install_ollama
 
 if [ ! -d ".venv" ]; then
     create_venv
