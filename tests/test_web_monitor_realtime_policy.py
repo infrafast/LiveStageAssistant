@@ -22,11 +22,9 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
         local_gain: float = 1.0,
         connectivity: str = "online",
     ) -> dict:
-        provider = "ollama" if connectivity == "offline" else "openai"
-        model = "qwen3:8b" if connectivity == "offline" else "gpt-4.1-mini"
+        model = "gpt-4.1-mini"
         selected_voice_engine = voice_engine or ("local" if connectivity == "offline" else "classic")
         return services.save_llm_config(
-            provider=provider,
             model=model,
             cloud_tts_provider="none",
             tts_output="silent",
