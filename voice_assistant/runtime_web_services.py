@@ -793,10 +793,10 @@ class RuntimeWebServices:
 
         prompt_file_ids = {item["id"] for item in prompt_path_options()}
         stt_prompt = str(stt_prompt or DEFAULT_STT_PROMPT_PATH).strip()
-        system_prompt = str(system_prompt or DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH).strip()
         if stt_prompt not in prompt_file_ids:
             raise ValueError(f"STT prompt file '{stt_prompt}' is not available in data/prompt")
-        if system_prompt not in prompt_file_ids:
+        system_prompt = str(system_prompt or DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH).strip()
+        if requested_engine != "local" and system_prompt not in prompt_file_ids:
             raise ValueError(f"assistant system prompt file '{system_prompt}' is not available in data/prompt")
 
         updates = {
@@ -807,10 +807,7 @@ class RuntimeWebServices:
             "STT_LANGUAGE": normalize_locale(stt_language),
             "WAKE_WORD": wake_word,
             "STT_PROMPT": stt_prompt,
-            "ASSISTANT_SYSTEM_PROMPT": system_prompt,
             "SESSION_CONTEXT_SIZE": str(max(0, min(12000, int(session_context_size)))),
-            "MCP_AGENT_MAX_STEPS": str(max(5, min(60, int(mcp_agent_max_steps)))),
-            "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",
             "INTERRUPT_CONVERSATION_ENABLED": "true" if interrupt_conversation_enabled else "false",
             "BACKEND_AUDIO_INPUT_DEVICE": str(backend_audio_input_device or "").strip(),
             "BACKEND_AUDIO_INPUT_GAIN": f"{max(0.5, min(2.0, float(backend_audio_input_gain))):.2f}",
@@ -851,13 +848,17 @@ class RuntimeWebServices:
             "TTS_PROVIDER": tts_provider,
             "WEB_TTS_PROVIDER": web_tts_provider,
         }
+        if requested_engine != "local":
+            updates["ASSISTANT_SYSTEM_PROMPT"] = system_prompt
+            updates["MCP_AGENT_MAX_STEPS"] = str(max(5, min(60, int(mcp_agent_max_steps))))
+            updates["MCP_TOOL_ROUTING_ENABLED"] = "true" if mcp_tool_routing_enabled else "false"
+            updates["OPENAI_MODEL"] = model
         if requested_engine == "openai-realtime":
             updates["OPENAI_REALTIME_MODEL"] = realtime_model
             updates["OPENAI_REALTIME_VOICE"] = realtime_voice
         elif requested_engine == "gemini-live":
             updates["GEMINI_LIVE_MODEL"] = realtime_model
             updates["GEMINI_LIVE_VOICE"] = realtime_voice
-        updates["OPENAI_MODEL"] = model
         updates["STT_PROVIDER"] = (
             "local-whisper"
             if requested_engine == "local"
