@@ -341,12 +341,12 @@ Provider-native remote MCP requires a provider-reachable endpoint, typically aut
 
 **Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2B STDIO bridge is validated on Pi5. RV2C AUTO safety is validated and AUTO now prefers a configured local STDIO path without a destructive pre-probe; native remains an explicit/remote capability and safe alternate path. RV2E cost characterization is complete for the current representative read scenario, including cold/warm separation. RV2D health/status and single-runtime WebMonitor ownership are implemented and waiting for consolidated Pi/browser validation. Semantic audio feedback parity remains a priority before RV3 wake-word completion.
 
-**Goal:** add selectable low-latency realtime voice beside Classic without decommissioning Classic, while preserving MCP transport flexibility, wake-word behavior, semantic user feedback, speaker/context features, offline operation, GUI configuration and stage safety.
+**Goal:** provide a clean Local/Cloud runtime split: deterministic Local for offline-safe command execution, and selectable Cloud engines (Classic, OpenAI Realtime, Gemini Live), while preserving MCP transport flexibility, wake-word behavior, semantic user feedback, speaker/context features, GUI configuration and stage safety.
 
 ## RV architecture invariants
 
 1. Do not rewrite LSA wholesale.
-2. Classic remains a first-class supported path and the permanent offline/fallback path unless a separate roadmap explicitly changes that decision.
+2. Classic remains a first-class Cloud path. Deterministic Local is the permanent offline path and may also be selected while online; no local generative LLM is part of the supported architecture.
 3. LSA remains MCP-agnostic. Realtime code must contain no XMSeries-, QLCPlus- or other domain-specific execution logic.
 4. Realtime supports provider-native remote MCP and an LSA bridge into the existing MCP client.
 5. STDIO remains a first-class durable capability.
@@ -676,7 +676,7 @@ Voice preview is exposed next to the selected voice control rather than as a sep
 
 Local mode has no LLM lifecycle. No local model service is started, stopped, pulled or monitored by LSA.
 
-The Linux/Raspberry install script provisions the local voice/runtime stack used by the classic and experimental voice paths: openWakeWord ONNX package resources, WebSocket realtime transport support, Piper local TTS, the default French Piper voice `fr_FR-siwis-medium`, Ollama, and the default install-time model `qwen3:8b`. The script may start `ollama serve` temporarily only to pull the model; it stops only that install-time process and does not stop an Ollama instance that was already running.
+The Linux/Raspberry install script provisions only the supported runtime stack: openWakeWord ONNX resources, WebSocket realtime transport support, Piper local TTS and the default French Piper voice `fr_FR-siwis-medium`. Ollama and local generative models are intentionally not installed or managed by LSA.
 
 ### MK0 - Inventory existing retrieval capability
 - [ ] audit current dependencies/code;
