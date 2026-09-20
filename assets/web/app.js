@@ -192,6 +192,8 @@
     const backendAudioOutputPan = document.querySelector("#backend-audio-output-pan");
     const backendAudioOutputPanLabel = document.querySelector("#backend-audio-output-pan-label");
     const sttLanguage = document.querySelector("#stt-language");
+    const localWhisperModelField = document.querySelector("#local-whisper-model-field");
+    const localWhisperModel = document.querySelector("#local-whisper-model");
     const thinkingSoundField = document.querySelector("#thinking-sound-field");
     const thinkingSound = document.querySelector("#thinking-sound");
     const thinkingSoundPlay = document.querySelector("#thinking-sound-play");
@@ -3354,6 +3356,7 @@
       for (const element of cloudAgentControls) element.classList.toggle("hidden", local);
       if (cloudPromptSection) cloudPromptSection.classList.toggle("hidden", local);
       classicSttPromptField.classList.toggle("hidden", realtime);
+      if (localWhisperModelField) localWhisperModelField.classList.toggle("hidden", !local);
       classicInterruptField.classList.toggle("hidden", realtime);
       sttInputField.classList.toggle("hidden", realtime);
       classicVadDetails.classList.remove("hidden");
@@ -5261,6 +5264,7 @@
       wakeWord.disabled = true;
       sttPromptEl.disabled = true;
       sttLanguage.disabled = true;
+      if (localWhisperModel) localWhisperModel.disabled = true;
       assistantSystemPromptEl.disabled = true;
       cloudTtsProvider.disabled = true;
       for (const input of ttsOutputInputs) input.disabled = true;
@@ -5344,6 +5348,16 @@
         }
         if (selectedSttLanguage && sttLanguage.value !== selectedSttLanguage) {
           sttLanguage.value = selectedSttLanguage;
+        }
+        if (localWhisperModel) {
+          localWhisperModel.replaceChildren();
+          const selectedLocalWhisperModel = data.selected_local_whisper_model || "base";
+          for (const item of data.local_whisper_models || [{ id: "base", label: "Base" }, { id: "small", label: "Small" }]) {
+            localWhisperModel.appendChild(option(item.label || item.id, item.id, false, item.id === selectedLocalWhisperModel));
+          }
+          if (selectedLocalWhisperModel && localWhisperModel.value !== selectedLocalWhisperModel) {
+            localWhisperModel.value = selectedLocalWhisperModel;
+          }
         }
 
         llmModel.replaceChildren();
@@ -6166,6 +6180,7 @@
     });
     realtimeModel.addEventListener("change", syncConfigActionState);
     realtimeVoice.addEventListener("change", syncConfigActionState);
+    if (localWhisperModel) localWhisperModel.addEventListener("change", syncConfigActionState);
     if (realtimeBrowserToggle) {
       realtimeBrowserToggle.addEventListener("click", () => startBrowserRealtime().catch(() => {}));
     }
@@ -6197,6 +6212,7 @@
       const ttsOutputValue = selectedTtsOutput();
       const sttInputValue = selectedSttInput();
       const sttLanguageValue = sttLanguage.value || i18nPayload.locale || "fr";
+      const localWhisperModelValue = localWhisperModel?.value || "base";
       const backendAudioInputDevice = backendAudioInput.value;
       const backendAudioInputGainValue = Number(backendAudioInputGain.value || 1);
       const backendAudioOutputDevice = backendAudioOutput.value;
@@ -6255,6 +6271,7 @@
             tts_output: ttsOutputValue,
             stt_input: sttInputValue,
             stt_language: sttLanguageValue,
+            local_whisper_model: localWhisperModelValue,
             backend_audio_input_device: backendAudioInputDevice,
             backend_audio_input_gain: backendAudioInputGainValue,
             backend_audio_output_device: backendAudioOutputDevice,
