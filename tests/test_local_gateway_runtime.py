@@ -351,6 +351,48 @@ async def test_oscxr_route_mute_failure_uses_english_i18n_when_selected():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "expected_detail"),
+    [
+        (
+            "Unsupported for OSCXR: Matrix controls are not mapped in PROTOCOL.md yet.",
+            "les matrices ne sont pas disponibles avec OSCXR",
+        ),
+        (
+            "Unsupported for OSCXR: Channel sends to aux is not mapped in PROTOCOL.md yet.",
+            "l’envoi d’une voie vers une sortie AUX dédiée n’est pas disponible avec OSCXR",
+        ),
+    ],
+)
+async def test_other_oscxr_unsupported_execution_is_localized(raw, expected_detail):
+    mixer = FakeSession(
+        analyze=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "recognized": True,
+            "status": "ready",
+            "effect": "write",
+            "planToken": "unsupported-plan",
+        },
+        execute=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "ok": False,
+            "errorCode": "execution_failed",
+            "responseText": raw,
+        },
+    )
+    orchestrator = DeterministicGatewayOrchestrator(
+        config(("mixer", stdio_entry())),
+        client=FakeClient({"mixer": mixer}),
+        locale="fr",
+    )
+    await orchestrator.start()
+
+    response = await orchestrator.handle("commande mixer")
+    assert response == f"La commande mixeur a échoué : {expected_detail}"
+    assert "Unsupported for OSCXR" not in response
+
+
+@pytest.mark.asyncio
 async def test_zero_claim_never_executes():
     one = FakeSession()
     two = FakeSession()
