@@ -5592,6 +5592,7 @@
         wakeWord.disabled = false;
         sttPromptEl.disabled = false;
         sttLanguage.disabled = sttLanguage.options.length === 0 || !sttLanguage.value;
+        if (localWhisperModel) localWhisperModel.disabled = localWhisperModel.options.length === 0 || !localWhisperModel.value;
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
