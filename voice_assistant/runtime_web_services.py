@@ -580,6 +580,8 @@ class RuntimeWebServices:
             "selected_cloud_tts_provider": cloud_tts,
             "selected_stt_input": stt_input,
             "selected_stt_language": normalize_locale(str(values.get("STT_LANGUAGE") or "fr")),
+            "local_whisper_models": [{"id": "base", "label": "Base"}, {"id": "small", "label": "Small"}],
+            "selected_local_whisper_model": str(values.get("LOCAL_WHISPER_MODEL") or "base").strip().lower(),
             "available_locales": available_locales(),
             "tts_outputs": TTS_OUTPUT_OPTIONS,
             "selected_tts_output": tts_output,
@@ -673,6 +675,7 @@ class RuntimeWebServices:
         tts_output: str,
         stt_input: str,
         stt_language: str,
+        local_whisper_model: str,
         connectivity_mode: str,
         wake_word: str,
         stt_prompt: str,
@@ -743,6 +746,10 @@ class RuntimeWebServices:
         if requested_engine not in allowed_engines:
             raise ValueError(f"voice_engine must be one of: {', '.join(sorted(allowed_engines))}")
 
+        local_whisper_model = str(local_whisper_model or values.get("LOCAL_WHISPER_MODEL") or "base").strip().lower()
+        if local_whisper_model not in {"base", "small"}:
+            raise ValueError("local_whisper_model must be base or small")
+
         stt_input = str(stt_input or "both").strip().lower()
         if stt_input not in {"both", "backend", "browser", "silent"}:
             raise ValueError(f"unsupported STT input: {stt_input}")
@@ -805,6 +812,7 @@ class RuntimeWebServices:
             "LOCAL_TTS_OUTPUT_GAIN": f"{local_tts_output_gain:.2f}",
             "STT_INPUT": stt_input,
             "STT_LANGUAGE": normalize_locale(stt_language),
+            "LOCAL_WHISPER_MODEL": local_whisper_model,
             "WAKE_WORD": wake_word,
             "STT_PROMPT": stt_prompt,
             "SESSION_CONTEXT_SIZE": str(max(0, min(12000, int(session_context_size)))),
