@@ -2199,6 +2199,7 @@ class VoiceAssistant:
         self.backend_wake_word_detector: BackendWakeWordDetector | None = None
         self.backend_wake_word_unavailable_reason = ""
         self.last_backend_streaming_wake_detected = False
+        self.last_backend_wake_detected_at: float | None = None
         self.backend_wake_word_suppress_until = 0.0
         self.backend_audio_state = (
             BackendAudioState.WAIT_WAKE if self.wake_words else BackendAudioState.CAPTURE_COMMAND
@@ -3628,6 +3629,7 @@ class VoiceAssistant:
     ) -> bytes | None:
         """Record audio from microphone."""
         self.last_backend_streaming_wake_detected = False
+        self.last_backend_wake_detected_at = None
         if (
             not self.microphone_available
             or not self._backend_input_ready()
@@ -3774,6 +3776,7 @@ class VoiceAssistant:
                         detected_label, detected_score = detection
                         wake_detected = True
                         self.last_backend_streaming_wake_detected = True
+                        self.last_backend_wake_detected_at = time.monotonic()
                         self._set_backend_audio_state(
                             BackendAudioState.CAPTURE_COMMAND,
                             f"{'interrupt ' if interrupt_capture else ''}wake {detected_label} {detected_score:.2f}",
@@ -3885,6 +3888,9 @@ class VoiceAssistant:
                 self._set_backend_audio_state(self._backend_listening_state(), "wake not detected")
                 return None
 
+            if self.last_backend_wake_detected_at is not None:
+                capture_ms = (time.monotonic() - self.last_backend_wake_detected_at) * 1000.0
+                print(f"Local voice latency: wake→capture-complete {capture_ms:.0f} ms.", flush=True)
             print("Processing...")
             return b"".join(frames)
 
@@ -4498,12 +4504,15 @@ class VoiceAssistant:
     def audio_to_text_with_timeout(self, audio_data: bytes) -> str | None:
         """Transcribe one utterance without allowing STT to freeze the main loop."""
         print(f"STT started (timeout {self.stt_timeout_seconds:.1f}s).", flush=True)
+        stt_started_at = time.monotonic()
         try:
             text = self._run_timed_stage(
                 "stt",
                 self.stt_timeout_seconds,
                 lambda: self.audio_to_text(audio_data),
             )
+            stt_ms = (time.monotonic() - stt_started_at) * 1000.0
+            print(f"Local voice latency: STT {stt_ms:.0f} ms.", flush=True)
         except TimeoutError as error:
             print(f"STT timed out: {error}. Returning to listening.", flush=True)
             return None
@@ -5141,7 +5150,7 @@ class VoiceAssistant:
                 language=self.stt_language,
                 initial_prompt=self.stt_prompt,
                 hotwords=self._local_whisper_hotwords(),
-                beam_size=5,
+                beam_size=3,
                 temperature=0.0,
                 condition_on_previous_text=False,
                 vad_filter=False,
@@ -6164,8 +6173,10 @@ class VoiceAssistant:
                         continue
                     else:
                         self._set_backend_audio_state(BackendAudioState.PROCESSING, "audio captured")
-                        if not self.wake_words:
-                            self.semantic_audio.transition(SemanticAudioState.PROCESSING)
+                        # Capture is complete: start feedback now, before local STT.
+                        # Do not start it at wake detection, because playback while the
+                        # microphone is still recording could contaminate the command.
+                        self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         # Convert to text
                         try:
                             text, speaker_result = self.transcribe_and_recognize_audio(
@@ -6208,6 +6219,9 @@ class VoiceAssistant:
                                 print(f"Command after wake word: {command_text}")
                             self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         elif self.last_backend_streaming_wake_detected:
+                            if self.last_backend_wake_detected_at is not None:
+                                total_ms = (time.monotonic() - self.last_backend_wake_detected_at) * 1000.0
+                                print(f"Local voice latency: wake→STT-result {total_ms:.0f} ms.", flush=True)
                             print("Command accepted after backend streaming wake detection.")
                             self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         text = command_text
