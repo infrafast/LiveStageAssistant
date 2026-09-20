@@ -108,6 +108,8 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertEqual(result["selected_model"], "gpt-4.1-mini")
         self.assertEqual(result["selected_connectivity_mode"], "online")
         self.assertEqual(result["selected_stt_language"], "fr")
+        self.assertEqual(result["selected_local_whisper_model"], "base")
+        self.assertEqual([item["id"] for item in result["local_whisper_models"]], ["base", "small"])
         self.assertEqual(result["selected_backend_audio_input_device"], "pipewire:source:test-input")
         self.assertEqual(result["selected_backend_audio_output_device"], "pipewire:sink:test-output")
         self.assertTrue(result["models"])
@@ -140,6 +142,7 @@ class RuntimeWebServicesTests(unittest.TestCase):
             tts_output="backend",
             stt_input="backend",
             stt_language="fr",
+            local_whisper_model="small",
             connectivity_mode="offline",
             wake_word="momo",
             stt_prompt="",
@@ -198,6 +201,7 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertNotIn("MCP_TOOL_ROUTING_ENABLED=", saved)
         self.assertNotIn("OPENAI_MODEL=", saved)
         self.assertIn("STT_PROVIDER=local-whisper", saved)
+        self.assertIn("LOCAL_WHISPER_MODEL=small", saved)
         self.assertNotIn("OLLAMA_", saved)
         self.assertNotIn("OFFLINE_MODEL=", saved)
 
