@@ -4512,7 +4512,7 @@ class VoiceAssistant:
                 lambda: self.audio_to_text(audio_data),
             )
             stt_ms = (time.monotonic() - stt_started_at) * 1000.0
-            print(f"Local voice latency: STT {stt_ms:.0f} ms.", flush=True)
+            print(f"Local voice latency: STT {stt_ms:.0f} ms ({self.local_whisper_model_name}, beam=1).", flush=True)
         except TimeoutError as error:
             print(f"STT timed out: {error}. Returning to listening.", flush=True)
             return None
@@ -4929,8 +4929,15 @@ class VoiceAssistant:
             print("Local Whisper requires faster-whisper. Install it with: uv pip install -e .")
             return None
 
-        print(f"Loading local Whisper model: {self.local_whisper_model_name}")
-        self.local_whisper_model = WhisperModel(self.local_whisper_model_name, device="auto", compute_type="int8")
+        cpu_threads = max(1, min(4, os.cpu_count() or 1))
+        print(f"Loading local Whisper model: {self.local_whisper_model_name} (int8, cpu_threads={cpu_threads})")
+        self.local_whisper_model = WhisperModel(
+            self.local_whisper_model_name,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=cpu_threads,
+            num_workers=1,
+        )
         return self.local_whisper_model
 
     def audio_to_text(self, audio_data: bytes) -> str | None:
@@ -5150,9 +5157,11 @@ class VoiceAssistant:
                 language=self.stt_language,
                 initial_prompt=self.stt_prompt,
                 hotwords=self._local_whisper_hotwords(),
-                beam_size=3,
+                beam_size=1,
+                best_of=1,
                 temperature=0.0,
                 condition_on_previous_text=False,
+                without_timestamps=True,
                 vad_filter=False,
             )
             text = "".join(segment.text for segment in segments).strip()
