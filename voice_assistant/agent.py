@@ -5104,6 +5104,26 @@ class VoiceAssistant:
             if should_manage_backend_thinking:
                 self.semantic_audio.transition(SemanticAudioState.IDLE)
 
+    def _local_whisper_hotwords(self) -> str:
+        """Return compact domain hints for short deterministic stage commands."""
+        core = [
+            "mets", "monte", "baisse", "mute", "unmute", "coupe", "rallume",
+            "niveau", "volume", "fader", "bus", "retour", "façade", "main",
+            "moins", "plus", "dB", "décibel", "décibels",
+            "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf",
+            "dix", "onze", "douze", "treize", "quatorze", "quinze", "seize",
+            "vingt", "trente", "quarante", "cinquante", "soixante", "quatre-vingt",
+        ]
+        combined: list[str] = []
+        seen: set[str] = set()
+        for item in [*core, *self._mcp_routing_keywords()[:80]]:
+            value = str(item or "").strip()
+            key = value.casefold()
+            if value and key not in seen:
+                seen.add(key)
+                combined.append(value)
+        return ", ".join(combined)
+
     def audio_to_text_local_whisper(self, audio_data: bytes) -> str | None:
         """Convert audio to text using faster-whisper locally."""
         model = self._load_local_whisper_model()
@@ -5116,7 +5136,16 @@ class VoiceAssistant:
                 wav_path = wav_file.name
                 self._write_wav(audio_data, wav_file)
 
-            segments, _info = model.transcribe(wav_path, language=self.stt_language, initial_prompt=self.stt_prompt)
+            segments, _info = model.transcribe(
+                wav_path,
+                language=self.stt_language,
+                initial_prompt=self.stt_prompt,
+                hotwords=self._local_whisper_hotwords(),
+                beam_size=5,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                vad_filter=False,
+            )
             text = "".join(segment.text for segment in segments).strip()
             return self.normalize_stt_command_text(text) if text else None
 
