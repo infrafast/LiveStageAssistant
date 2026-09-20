@@ -2431,7 +2431,8 @@ class VoiceAssistant:
                         self.audio_input_device_detail,
                         self.audio_output_device_status,
                         self.audio_output_device_detail,
-                    )
+                    ),
+                    "Wake word": self._backend_wake_word_service_state(),
                 }
             )
         
@@ -2496,10 +2497,30 @@ class VoiceAssistant:
         except Exception as e:
             self.backend_wake_word_detector = None
             self.backend_wake_word_unavailable_reason = str(e)
+            self._update_wake_word_monitor_status()
             print(f"Backend openWakeWord unavailable; backend wake word disabled: {e}", flush=True)
 
     def _backend_streaming_wake_active(self) -> bool:
         return bool(self.wake_words) and self.backend_wake_word_detector is not None
+
+    def _backend_wake_word_state(self) -> str:
+        if not self.wake_words:
+            return "disabled"
+        return "active" if self._backend_streaming_wake_active() else "unavailable"
+
+    def _backend_wake_word_service_state(self) -> dict[str, str]:
+        state = self._backend_wake_word_state()
+        if state == "disabled":
+            return {"status": "disabled", "detail": "Wake word désactivé"}
+        label = ", ".join(self.wake_words)
+        if state == "active":
+            return {"status": "configured", "detail": f"{label} · openWakeWord opérationnel"}
+        reason = self.backend_wake_word_unavailable_reason or "modèle openWakeWord indisponible"
+        return {"status": "warn", "detail": f"{label} configuré · détection indisponible : {reason}"}
+
+    def _update_wake_word_monitor_status(self) -> None:
+        if self.web_monitor:
+            self.web_monitor.update(services={"Wake word": self._backend_wake_word_service_state()})
 
     def _backend_wake_word_engine_name(self) -> str:
         if self._backend_streaming_wake_active():
@@ -3471,6 +3492,7 @@ class VoiceAssistant:
             tool_count=self._available_mcp_tool_count(),
             failed_servers=failed_servers,
             wake_words=getattr(self, "wake_words", []),
+            wake_word_state=self._backend_wake_word_state(),
         )
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
@@ -3740,6 +3762,7 @@ class VoiceAssistant:
                     except Exception as e:
                         self.backend_wake_word_detector = None
                         self.backend_wake_word_unavailable_reason = str(e)
+                        self._update_wake_word_monitor_status()
                         self.vad.reset()
                         print(
                             "Backend openWakeWord failed during capture; command rejected until wake detection is restored: "
