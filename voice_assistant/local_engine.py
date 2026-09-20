@@ -81,6 +81,7 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
             tool_count=0,
             wake_words=getattr(self, "wake_words", []),
             deterministic_gateway_count=len(self.local_gateway_names),
+            wake_word_state=self._backend_wake_word_state(),
         )
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
