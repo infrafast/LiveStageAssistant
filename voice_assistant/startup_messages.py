@@ -29,12 +29,21 @@ def startup_connectivity_message(*, stt_language: str | None, connectivity: str)
     return text if text.endswith((".", "!", "?")) else text + "."
 
 
-def _wake_word_suffix(locale: Mapping[str, object], wake_words: list[str]) -> str:
+def _wake_word_suffix(
+    locale: Mapping[str, object],
+    wake_words: list[str],
+    wake_word_state: str | None = None,
+) -> str:
     if not wake_words:
         return ""
     language = str(locale.get("locale") or "fr").strip().lower()
     conjunction = "and" if language == "en" else "et"
     joined = human_join(wake_words, conjunction=conjunction)
+    state = str(wake_word_state or "active").strip().lower()
+    if state == "unavailable":
+        if language == "en":
+            return f" Wake word {joined} is configured, but detection is unavailable."
+        return f" Wake word {joined} configuré, mais détection indisponible."
     if language == "en":
         return f" Wake word active, say {joined} to wake me up."
     return f" Wake word actif, prononcez {joined} pour me réveiller."
@@ -48,12 +57,13 @@ def startup_ready_message(
     has_unknown_native_tools: bool = False,
     wake_words: list[str] | tuple[str, ...] | None = None,
     deterministic_gateway_count: int | None = None,
+    wake_word_state: str | None = None,
 ) -> str:
     locale = load_locale(stt_language)
     count = max(0, int(tool_count or 0))
     failed_names = sorted(str(name) for name in (failed_servers or {}).keys() if str(name).strip())
     normalized_wake_words = [str(item).strip() for item in (wake_words or []) if str(item).strip()]
-    wake_word_suffix = _wake_word_suffix(locale, normalized_wake_words)
+    wake_word_suffix = _wake_word_suffix(locale, normalized_wake_words, wake_word_state)
 
     if deterministic_gateway_count is not None:
         gateway_count = max(0, int(deterministic_gateway_count or 0))
