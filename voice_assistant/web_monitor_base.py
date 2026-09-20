@@ -1648,6 +1648,7 @@ class WebMonitor:
                     tts_output = str(payload.get("tts_output") or "").strip().lower()
                     stt_input = str(payload.get("stt_input") or "both").strip().lower()
                     stt_language = normalize_locale(str(payload.get("stt_language") or "fr"))
+                    local_whisper_model = str(payload.get("local_whisper_model") or "base").strip().lower()
                     connectivity_mode = str(payload.get("connectivity_mode") or "").strip().lower()
                     wake_word = str(payload.get("wake_word") or "").strip()
                     stt_prompt = str(payload.get("stt_prompt") or "").strip()
@@ -1730,6 +1731,7 @@ class WebMonitor:
                             tts_output,
                             stt_input,
                             stt_language,
+                            local_whisper_model,
                             connectivity_mode,
                             wake_word,
                             stt_prompt,
