@@ -39,6 +39,30 @@ class StartupMessageTests(unittest.TestCase):
             "Assistant vocal prêt à exécuter des commandes. Wake word actif, prononcez momo pour me réveiller.",
         )
 
+    def test_ready_with_unavailable_wake_word_reports_unavailable(self):
+        self.assertEqual(
+            startup_ready_message(
+                stt_language="fr",
+                tool_count=0,
+                has_unknown_native_tools=True,
+                wake_words=["momo"],
+                wake_word_state="unavailable",
+            ),
+            "Assistant vocal prêt à exécuter des commandes. Wake word momo configuré, mais détection indisponible.",
+        )
+
+    def test_local_ready_with_unavailable_wake_word_reports_unavailable(self):
+        self.assertEqual(
+            startup_ready_message(
+                stt_language="fr",
+                tool_count=0,
+                deterministic_gateway_count=2,
+                wake_words=["momo"],
+                wake_word_state="unavailable",
+            ),
+            "Assistant local déterministe prêt, 2 passerelles MCP disponibles. Wake word momo configuré, mais détection indisponible.",
+        )
+
     def test_ready_keeps_tool_count_with_wake_word(self):
         self.assertEqual(
             startup_ready_message(
