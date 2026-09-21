@@ -129,10 +129,16 @@ class BenchmarkVariant:
     name: str
     model_name: str
     use_prompt: bool
-    use_hotwords: bool
+    hotwords_mode: str = "none"  # none | entities | full
     apply_repair: bool = False
     derived_from: Optional[str] = None
     max_new_tokens: int = 48
+    repetition_penalty: float = 1.0
+    no_repeat_ngram_size: int = 0
+
+    @property
+    def use_hotwords(self) -> bool:
+        return self.hotwords_mode != "none"
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -936,10 +942,10 @@ def load_manifest(output_dir: Path) -> tuple[dict, list[dict]]:
     return manifest, rows
 
 
-def hotwords_string() -> str:
+def _dedupe_hotwords(items: list[str]) -> str:
     seen = set()
     words = []
-    for item in HOTWORD_CORE:
+    for item in items:
         key = item.casefold().strip()
         if key and key not in seen:
             seen.add(key)
@@ -947,23 +953,55 @@ def hotwords_string() -> str:
     return ", ".join(words)
 
 
+def full_hotwords_string() -> str:
+    return _dedupe_hotwords(HOTWORD_CORE)
+
+
+def entity_hotwords_string() -> str:
+    # Intentionally restricted to mixer/domain entity names. Generic command
+    # vocabulary ("mets", "moins", numbers, etc.) stays in STT_PROMPT only.
+    entity_words = [
+        "guitar-clode",
+        "guitar-loran",
+        "guitar-anto",
+        "basse-mike",
+        "Claude",
+        "batterie",
+    ]
+    return _dedupe_hotwords(entity_words)
+
+
 def benchmark_variants(env: dict[str, str]) -> list[BenchmarkVariant]:
-    # Model names in variant labels are intentional and must never inherit the
-    # profile's LOCAL_WHISPER_MODEL. The first benchmark accidentally did so,
-    # causing every "base_*" variant to run with "small" when the Raspberry
-    # profile selected small.
+    del env  # Variant models are explicit and independent from LOCAL_WHISPER_MODEL.
+
+    # Targeted experiment after the broad benchmark:
+    # - prompt is the stable contextual baseline;
+    # - entity-only hotwords test the expected "Mixer Name Registry" behavior;
+    # - guarded variants add conservative anti-repeat decoding;
+    # - *_current retains the previous full-hotword behavior as a control.
     return [
-        BenchmarkVariant("tiny_plain", "tiny", False, False),
-        BenchmarkVariant("tiny_prompt", "tiny", True, False),
-        BenchmarkVariant("tiny_hotwords", "tiny", False, True),
-        BenchmarkVariant("tiny_current", "tiny", True, True),
-        BenchmarkVariant("base_plain", "base", False, False),
-        BenchmarkVariant("base_prompt", "base", True, False),
-        BenchmarkVariant("base_hotwords", "base", False, True),
-        BenchmarkVariant("base_current", "base", True, True),
-        BenchmarkVariant("base_current_repair", "base", True, True, True, "base_current"),
-        BenchmarkVariant("small_current", "small", True, True),
-        BenchmarkVariant("small_current_repair", "small", True, True, True, "small_current"),
+        BenchmarkVariant("base_prompt", "base", True, "none"),
+        BenchmarkVariant("base_prompt_entities", "base", True, "entities"),
+        BenchmarkVariant(
+            "base_prompt_entities_guarded",
+            "base",
+            True,
+            "entities",
+            repetition_penalty=1.10,
+            no_repeat_ngram_size=3,
+        ),
+        BenchmarkVariant("base_current", "base", True, "full"),
+        BenchmarkVariant("small_prompt", "small", True, "none"),
+        BenchmarkVariant("small_prompt_entities", "small", True, "entities"),
+        BenchmarkVariant(
+            "small_prompt_entities_guarded",
+            "small",
+            True,
+            "entities",
+            repetition_penalty=1.10,
+            no_repeat_ngram_size=3,
+        ),
+        BenchmarkVariant("small_current", "small", True, "full"),
     ]
 
 
@@ -1028,6 +1066,9 @@ def score_transcription(
         "model": variant.model_name,
         "prompt": variant.use_prompt,
         "hotwords": variant.use_hotwords,
+        "hotwords_mode": variant.hotwords_mode,
+        "repetition_penalty": variant.repetition_penalty,
+        "no_repeat_ngram_size": variant.no_repeat_ngram_size,
         "repair": variant.apply_repair,
         "phrase_id": row.get("phrase_id"),
         "take": row.get("take"),
@@ -1146,8 +1187,10 @@ def write_benchmark_reports(
     json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     fields = [
-        "variant", "model", "prompt", "hotwords", "repair", "phrase_id", "take", "file",
-        "reference", "transcription", "exact", "wer", "cer", "entity_recall",
+        "variant", "model", "prompt", "hotwords", "hotwords_mode",
+        "repetition_penalty", "no_repeat_ngram_size", "repair",
+        "phrase_id", "take", "file", "reference", "transcription",
+        "exact", "wer", "cer", "entity_recall",
         "latency_seconds", "audio_seconds", "rtf", "audio_outlier", "runaway", "repairs", "error",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -1167,7 +1210,10 @@ def write_benchmark_reports(
         "- Mesures: exact normalisé, WER, CER, rappel des entités, latence et RTF.",
         "- Garde benchmark: max_new_tokens=48 pour empêcher une boucle de décodage de monopoliser un test; "
         "cela ne modifie pas le runtime LSA.",
-        "- Une variante est interrompue après 3 transcriptions manifestement en boucle.",
+        "- Test ciblé: prompt seul vs prompt + hotwords d'entités uniquement, puis même combinaison "
+        "avec repetition_penalty=1.10 et no_repeat_ngram_size=3.",
+        "- Les variantes *_current conservent la liste complète de hotwords précédente comme contrôle.",
+        "- Une variante est interrompue après 3 transcriptions manifestement en boucle."
         "- Le benchmark est autonome: aucun agent LSA ni MCP n'est lancé.",
         "",
         "## Résumé — tous les échantillons",
@@ -1255,14 +1301,13 @@ def write_benchmark_reports(
         "## Limites",
         "",
         "- Le succès du parseur MCP n'est pas mesuré ici: ce benchmark isole volontairement le STT.",
-        "- `base_current` signifie modèle Faster-Whisper base + réglages runtime "
-        "(int8 CPU, beam=1, prompt + hotwords); `small_current` applique les mêmes "
-        "réglages au modèle small. Le modèle réellement configuré dans le profil est "
-        "affiché séparément au lancement.",
-        "- Les hotwords MCP dynamiques du runtime ne sont pas interrogés.",
+        "- `base_current` et `small_current` gardent le comportement historique "
+        "prompt + liste complète de hotwords comme contrôles.",
+        "- Les variantes `*_prompt_entities` simulent le comportement attendu d'un "
+        "Mixer Name Registry: seuls les noms de cibles/destinations rares sont injectés.",
+        "- Les hotwords MCP dynamiques du runtime ne sont pas interrogés; le benchmark "
+        "utilise les entités connues de ce corpus.",
         "- La réparation déterministe est évaluée séparément et ne modifie jamais les WAV.",
-        "- Les variantes tiny sont séparées en plain/prompt/hotwords/current afin d'identifier "
-        "si une instabilité vient du modèle, du prompt, des hotwords ou de leur combinaison.",
         "- Canary/Zipformer/whisper.cpp ne sont pas installés automatiquement: le script ne modifie pas "
         "les dépendances du Raspberry pendant une mesure.",
         "",
@@ -1283,7 +1328,8 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
     repo_root = Path.cwd()
     stt_prompt = resolve_text_setting(env.get("STT_PROMPT", ""), repo_root)
     language = (env.get("STT_LANGUAGE") or "fr").strip() or "fr"
-    hotwords = hotwords_string()
+    full_hotwords = full_hotwords_string()
+    entity_hotwords = entity_hotwords_string()
     variants = benchmark_variants(env)
 
     print("\n=== LSA STT BENCHMARK ===")
@@ -1294,17 +1340,19 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
     print(f"Outliers conservés     : {len(outliers)}" + (f" ({', '.join(outliers)})" if outliers else ""))
     print(f"Langue                 : {language}")
     print(f"Prompt STT             : {'oui' if stt_prompt else 'non'}")
-    print(f"Hotwords               : {hotwords}")
+    print(f"Hotwords entités       : {entity_hotwords}")
+    print(f"Hotwords complets      : {full_hotwords}")
     print(f"Modèle configuré LSA   : {(env.get('LOCAL_WHISPER_MODEL') or 'base').strip() or 'base'}")
     print("\nVariantes:")
     for variant in variants:
         source = f" (dérivée de {variant.derived_from})" if variant.derived_from else ""
         print(
             f"  - {variant.name}: model={variant.model_name}, prompt={variant.use_prompt}, "
-            f"hotwords={variant.use_hotwords}, repair={variant.apply_repair}{source}"
+            f"hotwords={variant.hotwords_mode}, rep_penalty={variant.repetition_penalty:.2f}, "
+            f"no_repeat_ngram={variant.no_repeat_ngram_size}, repair={variant.apply_repair}{source}"
         )
     print("\nLes 36 WAV restent inchangés. Le benchmark peut télécharger les modèles "
-          "'tiny', 'base' ou 'small' absents du cache Faster-Whisper.\n")
+          "'base' ou 'small' absents du cache Faster-Whisper.\n")
 
     results: list[dict] = []
     model_load_seconds: dict[str, float] = {}
@@ -1357,11 +1405,15 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
                     # Benchmark-only safety cap. Normal commands are far below
                     # this size; it only bounds pathological decoder loops.
                     "max_new_tokens": variant.max_new_tokens,
+                    "repetition_penalty": variant.repetition_penalty,
+                    "no_repeat_ngram_size": variant.no_repeat_ngram_size,
                 }
                 if variant.use_prompt and stt_prompt:
                     kwargs["initial_prompt"] = stt_prompt
-                if variant.use_hotwords:
-                    kwargs["hotwords"] = hotwords
+                if variant.hotwords_mode == "entities":
+                    kwargs["hotwords"] = entity_hotwords
+                elif variant.hotwords_mode == "full":
+                    kwargs["hotwords"] = full_hotwords
 
                 try:
                     started = time.perf_counter()
