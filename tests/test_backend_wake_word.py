@@ -5,6 +5,7 @@ import types
 import numpy as np
 
 from voice_assistant.agent import (
+    _append_capped_audio_frames,
     BackendWakeWordDetector,
     VoiceAssistant,
     classify_cloud_api_error,
@@ -28,6 +29,31 @@ def install_fake_openwakeword(monkeypatch, scores):
     model_module.Model = FakeModel
     monkeypatch.setitem(sys.modules, "openwakeword", package)
     monkeypatch.setitem(sys.modules, "openwakeword.model", model_module)
+
+
+def test_short_pre_vad_speech_candidate_is_preserved_in_preroll():
+    pre_roll = [b"silence"]
+    short_first_word = [b"cou", b"pe"]
+    _append_capped_audio_frames(pre_roll, [*short_first_word, b"micro-pause"], 6)
+
+    confirmed_target = [b"clau", b"de"]
+    utterance = pre_roll + confirmed_target
+
+    assert utterance == [
+        b"silence",
+        b"cou",
+        b"pe",
+        b"micro-pause",
+        b"clau",
+        b"de",
+    ]
+
+
+def test_preroll_preservation_stays_capped_to_recent_audio():
+    pre_roll = [b"old-1", b"old-2"]
+    _append_capped_audio_frames(pre_roll, [b"cou", b"pe", b"pause"], 4)
+
+    assert pre_roll == [b"old-2", b"cou", b"pe", b"pause"]
 
 
 def test_backend_wake_word_detector_buffers_80ms_frames(monkeypatch):
