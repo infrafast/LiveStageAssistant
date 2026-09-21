@@ -132,6 +132,7 @@ class BenchmarkVariant:
     use_hotwords: bool
     apply_repair: bool = False
     derived_from: Optional[str] = None
+    max_new_tokens: int = 48
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -952,6 +953,9 @@ def benchmark_variants(env: dict[str, str]) -> list[BenchmarkVariant]:
     # causing every "base_*" variant to run with "small" when the Raspberry
     # profile selected small.
     return [
+        BenchmarkVariant("tiny_plain", "tiny", False, False),
+        BenchmarkVariant("tiny_prompt", "tiny", True, False),
+        BenchmarkVariant("tiny_hotwords", "tiny", False, True),
         BenchmarkVariant("tiny_current", "tiny", True, True),
         BenchmarkVariant("base_plain", "base", False, False),
         BenchmarkVariant("base_prompt", "base", True, False),
@@ -969,6 +973,38 @@ def percentile95(values: list[float]) -> float:
     ordered = sorted(values)
     index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1))
     return ordered[index]
+
+
+def looks_runaway_transcription(reference: str, transcription: str) -> bool:
+    """Detect obviously pathological decoder loops without judging normal wording."""
+    ref_tokens = normalize_text(reference).split()
+    hyp_tokens = normalize_text(transcription).split()
+    if not hyp_tokens:
+        return False
+
+    # Stage commands in this corpus are short. More than 3x the reference length
+    # (with a generous floor) is already incompatible with a plausible command.
+    if len(hyp_tokens) > max(24, len(ref_tokens) * 3):
+        return True
+
+    if len(hyp_tokens) >= 10:
+        counts: dict[str, int] = {}
+        for token in hyp_tokens:
+            counts[token] = counts.get(token, 0) + 1
+        most_common = max(counts.values(), default=0)
+        if most_common >= 6 and most_common / len(hyp_tokens) >= 0.35:
+            return True
+
+        # Repeated 2/3-token chunks catch loops that alternate several words.
+        for width in (2, 3):
+            grams: dict[tuple[str, ...], int] = {}
+            for index in range(0, len(hyp_tokens) - width + 1):
+                gram = tuple(hyp_tokens[index:index + width])
+                grams[gram] = grams.get(gram, 0) + 1
+            if max(grams.values(), default=0) >= 4:
+                return True
+
+    return False
 
 
 def score_transcription(
@@ -1014,6 +1050,7 @@ def score_transcription(
         "audio_seconds": duration,
         "rtf": round(latency_seconds / duration, 4) if duration > 0 else None,
         "audio_outlier": is_audio_outlier(row),
+        "runaway": looks_runaway_transcription(reference, transcription),
         "repairs": "; ".join(repairs or []),
         "error": "",
     }
@@ -1111,7 +1148,7 @@ def write_benchmark_reports(
     fields = [
         "variant", "model", "prompt", "hotwords", "repair", "phrase_id", "take", "file",
         "reference", "transcription", "exact", "wer", "cer", "entity_recall",
-        "latency_seconds", "audio_seconds", "rtf", "audio_outlier", "repairs", "error",
+        "latency_seconds", "audio_seconds", "rtf", "audio_outlier", "runaway", "repairs", "error",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
@@ -1128,6 +1165,9 @@ def write_benchmark_reports(
         f"- Échantillons atypiques conservés: **{len(outliers)}**"
         + (f" ({', '.join(outliers)})" if outliers else ""),
         "- Mesures: exact normalisé, WER, CER, rappel des entités, latence et RTF.",
+        "- Garde benchmark: max_new_tokens=48 pour empêcher une boucle de décodage de monopoliser un test; "
+        "cela ne modifie pas le runtime LSA.",
+        "- Une variante est interrompue après 3 transcriptions manifestement en boucle.",
         "- Le benchmark est autonome: aucun agent LSA ni MCP n'est lancé.",
         "",
         "## Résumé — tous les échantillons",
@@ -1221,6 +1261,8 @@ def write_benchmark_reports(
         "affiché séparément au lancement.",
         "- Les hotwords MCP dynamiques du runtime ne sont pas interrogés.",
         "- La réparation déterministe est évaluée séparément et ne modifie jamais les WAV.",
+        "- Les variantes tiny sont séparées en plain/prompt/hotwords/current afin d'identifier "
+        "si une instabilité vient du modèle, du prompt, des hotwords ou de leur combinaison.",
         "- Canary/Zipformer/whisper.cpp ne sont pas installés automatiquement: le script ne modifie pas "
         "les dépendances du Raspberry pendant une mesure.",
         "",
@@ -1301,6 +1343,7 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
 
         for variant in [v for v in direct_variants if v.model_name == model_name]:
             print(f"\n[{variant.name}]")
+            runaway_count = 0
             for index, row in enumerate(rows, start=1):
                 wav_path = output_dir / str(row["file"])
                 kwargs = {
@@ -1311,6 +1354,9 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
                     "condition_on_previous_text": False,
                     "without_timestamps": True,
                     "vad_filter": False,
+                    # Benchmark-only safety cap. Normal commands are far below
+                    # this size; it only bounds pathological decoder loops.
+                    "max_new_tokens": variant.max_new_tokens,
                 }
                 if variant.use_prompt and stt_prompt:
                     kwargs["initial_prompt"] = stt_prompt
@@ -1325,11 +1371,26 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
                     result = score_transcription(variant, row, transcription, latency)
                     results.append(result)
                     raw_cache[(variant.name, str(row["file"]))] = result
-                    marker = "✓" if result["exact"] else "·"
+                    if result["runaway"]:
+                        runaway_count += 1
+                    marker = "⚠ LOOP" if result["runaway"] else ("✓" if result["exact"] else "·")
                     print(
                         f"  {index:02d}/{len(rows)} {marker} {row['file']} "
                         f"{latency:.2f}s WER={result['wer'] * 100:.1f}% -> {transcription!r}"
                     )
+
+                    if runaway_count >= 3:
+                        message = (
+                            "variante interrompue automatiquement après 3 "
+                            "transcriptions manifestement en boucle"
+                        )
+                        variant_errors[variant.name] = message
+                        print(f"  STOP {variant.name}: {message}")
+                        for remaining_row in rows[index:]:
+                            skipped = error_result(variant, remaining_row, message)
+                            results.append(skipped)
+                            raw_cache[(variant.name, str(remaining_row["file"]))] = skipped
+                        break
                 except Exception as exc:
                     result = error_result(variant, row, exc)
                     results.append(result)
