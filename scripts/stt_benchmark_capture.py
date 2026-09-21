@@ -97,7 +97,10 @@ HOTWORD_CORE = [
 ENTITY_ALIASES = {
     "guitar-clode": ["guitar-clode", "guitar clode"],
     "guitar-loran": ["guitar-loran", "guitar loran"],
-    "guitar-anto": ["guitar-anto", "guitar anto", "guitare de anto", "guitare anto"],
+    "guitar-anto": [
+        "guitar-anto", "guitar anto", "guitare de anto", "guitar de anto",
+        "guitare anto",
+    ],
     "basse-mike": ["basse-mike", "basse mike"],
     "claude": ["claude"],
     "batterie": ["batterie"],
@@ -856,14 +859,27 @@ def deterministic_entity_repair(text: str, threshold: float = 0.82) -> tuple[str
     normalized = normalize_text(text)
     repairs: list[str] = []
 
-    # If a known alias already exists, preserve it exactly.
-    protected = {
-        canonical
-        for canonical, aliases in NORMALIZED_ENTITY_ALIASES.items()
-        if any(re.search(rf"\b{re.escape(alias)}\b", normalized) for alias in aliases)
-    }
-
     tokens = normalized.split()
+
+    # Protect the exact token spans of already-recognized aliases. The previous
+    # implementation only protected the canonical candidate itself, which still
+    # allowed "clode" inside the valid entity "guitar-clode" to be rewritten as
+    # the distinct entity "Claude".
+    protected_spans: list[tuple[int, int]] = []
+    for aliases in NORMALIZED_ENTITY_ALIASES.values():
+        for alias in aliases:
+            alias_tokens = alias.split()
+            width = len(alias_tokens)
+            if not width:
+                continue
+            for start in range(0, len(tokens) - width + 1):
+                if tokens[start:start + width] == alias_tokens:
+                    protected_spans.append((start, start + width))
+
+    def overlaps_protected(start: int, end: int) -> bool:
+        return any(start < protected_end and end > protected_start
+                   for protected_start, protected_end in protected_spans)
+
     i = 0
     while i < len(tokens):
         best = None
@@ -871,11 +887,11 @@ def deterministic_entity_repair(text: str, threshold: float = 0.82) -> tuple[str
         max_window = min(4, len(tokens) - i)
 
         for width in range(1, max_window + 1):
+            if overlaps_protected(i, i + width):
+                continue
             candidate = " ".join(tokens[i:i + width])
             scored = []
             for canonical, aliases in NORMALIZED_ENTITY_ALIASES.items():
-                if canonical in protected:
-                    continue
                 score = max(similarity(candidate, alias) for alias in aliases)
                 scored.append((score, canonical, width, candidate))
             scored.sort(reverse=True)
@@ -931,13 +947,17 @@ def hotwords_string() -> str:
 
 
 def benchmark_variants(env: dict[str, str]) -> list[BenchmarkVariant]:
-    configured_model = (env.get("LOCAL_WHISPER_MODEL") or "base").strip() or "base"
+    # Model names in variant labels are intentional and must never inherit the
+    # profile's LOCAL_WHISPER_MODEL. The first benchmark accidentally did so,
+    # causing every "base_*" variant to run with "small" when the Raspberry
+    # profile selected small.
     return [
-        BenchmarkVariant("base_plain", configured_model, False, False),
-        BenchmarkVariant("base_prompt", configured_model, True, False),
-        BenchmarkVariant("base_hotwords", configured_model, False, True),
-        BenchmarkVariant("base_current", configured_model, True, True),
-        BenchmarkVariant("base_current_repair", configured_model, True, True, True, "base_current"),
+        BenchmarkVariant("tiny_current", "tiny", True, True),
+        BenchmarkVariant("base_plain", "base", False, False),
+        BenchmarkVariant("base_prompt", "base", True, False),
+        BenchmarkVariant("base_hotwords", "base", False, True),
+        BenchmarkVariant("base_current", "base", True, True),
+        BenchmarkVariant("base_current_repair", "base", True, True, True, "base_current"),
         BenchmarkVariant("small_current", "small", True, True),
         BenchmarkVariant("small_current_repair", "small", True, True, True, "small_current"),
     ]
@@ -1195,9 +1215,11 @@ def write_benchmark_reports(
         "## Limites",
         "",
         "- Le succès du parseur MCP n'est pas mesuré ici: ce benchmark isole volontairement le STT.",
-        "- `base_current` reproduit les réglages Faster-Whisper du runtime "
-        "(int8 CPU, beam=1, prompt + hotwords) avec le vocabulaire de benchmark; "
-        "les hotwords MCP dynamiques du runtime ne sont pas interrogés.",
+        "- `base_current` signifie modèle Faster-Whisper base + réglages runtime "
+        "(int8 CPU, beam=1, prompt + hotwords); `small_current` applique les mêmes "
+        "réglages au modèle small. Le modèle réellement configuré dans le profil est "
+        "affiché séparément au lancement.",
+        "- Les hotwords MCP dynamiques du runtime ne sont pas interrogés.",
         "- La réparation déterministe est évaluée séparément et ne modifie jamais les WAV.",
         "- Canary/Zipformer/whisper.cpp ne sont pas installés automatiquement: le script ne modifie pas "
         "les dépendances du Raspberry pendant une mesure.",
@@ -1231,6 +1253,7 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
     print(f"Langue                 : {language}")
     print(f"Prompt STT             : {'oui' if stt_prompt else 'non'}")
     print(f"Hotwords               : {hotwords}")
+    print(f"Modèle configuré LSA   : {(env.get('LOCAL_WHISPER_MODEL') or 'base').strip() or 'base'}")
     print("\nVariantes:")
     for variant in variants:
         source = f" (dérivée de {variant.derived_from})" if variant.derived_from else ""
@@ -1238,8 +1261,8 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
             f"  - {variant.name}: model={variant.model_name}, prompt={variant.use_prompt}, "
             f"hotwords={variant.use_hotwords}, repair={variant.apply_repair}{source}"
         )
-    print("\nLes 36 WAV restent inchangés. Le benchmark peut télécharger le modèle 'small' "
-          "s'il n'est pas déjà présent dans le cache Faster-Whisper.\n")
+    print("\nLes 36 WAV restent inchangés. Le benchmark peut télécharger les modèles "
+          "'tiny', 'base' ou 'small' absents du cache Faster-Whisper.\n")
 
     results: list[dict] = []
     model_load_seconds: dict[str, float] = {}
