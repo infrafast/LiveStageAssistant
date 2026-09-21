@@ -7,9 +7,9 @@ Purpose
 Create a reproducible speech corpus without importing or modifying LSA.
 
 The script:
-- reads ONLY the selected env file (default: .env.offline);
-- reuses BACKEND_AUDIO_INPUT_DEVICE for capture;
-- reuses BACKEND_AUDIO_OUTPUT_DEVICE for recording preview;
+- reads ONLY the selected env file (default: raspi_service_pack_stdio/.env.offline);
+- reuses BACKEND_AUDIO_INPUT_DEVICE for capture, including PipeWire sources;
+- reuses BACKEND_AUDIO_OUTPUT_DEVICE for recording preview, including PipeWire sinks;
 - uses the corresponding system default device when either variable is empty;
 - records 3 takes per sentence by default;
 - writes mono PCM WAV files;
@@ -26,7 +26,7 @@ Change the number of takes:
     .venv/bin/python scripts/stt_benchmark_capture.py --takes 3
 
 Use another env profile without changing LSA:
-    .venv/bin/python scripts/stt_benchmark_capture.py --env-file .env.offline
+    .venv/bin/python scripts/stt_benchmark_capture.py --env-file raspi_service_pack_stdio/.env.offline
 """
 
 from __future__ import annotations
@@ -37,8 +37,11 @@ import hashlib
 import json
 import math
 import shlex
+import shutil
+import subprocess
 import sys
 import threading
+import time
 import wave
 from array import array
 from dataclasses import dataclass
@@ -85,16 +88,18 @@ PHRASES = [
 
 @dataclass
 class AudioConfig:
-    requested_device_index: Optional[int]
-    actual_device_index: int
+    requested_device: Optional[str]
+    pyaudio_device_index: Optional[int]
+    pipewire_target: Optional[str]
     device_name: str
     sample_rate: int
 
 
 @dataclass
 class PlaybackConfig:
-    requested_device_index: Optional[int]
-    actual_device_index: int
+    requested_device: Optional[str]
+    pyaudio_device_index: Optional[int]
+    pipewire_target: Optional[str]
     device_name: str
 
 
@@ -140,18 +145,25 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def configured_device_index(env: dict[str, str], key: str) -> Optional[int]:
+def configured_device_selector(env: dict[str, str], key: str) -> Optional[str]:
     raw = env.get(key, "").strip()
-    if not raw:
-        return None
+    return raw or None
 
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise ValueError(
-            f"{key} doit être vide ou contenir un index PyAudio entier; "
-            f"valeur trouvée: {raw!r}"
-        ) from exc
+
+def parse_pipewire_selector(selected: Optional[str], kind: str) -> Optional[str]:
+    prefix = f"pipewire:{kind}:"
+    value = str(selected or "").strip()
+    if value.startswith(prefix):
+        target = value[len(prefix):].strip()
+        return target or None
+    return None
+
+
+def pipewire_record_command() -> Optional[str]:
+    for command in ("pw-cat", "pw-record"):
+        if shutil.which(command):
+            return command
+    return None
 
 
 def list_audio_devices(pa: pyaudio.PyAudio) -> None:
@@ -189,32 +201,91 @@ def list_audio_devices(pa: pyaudio.PyAudio) -> None:
             f"{marker}"
         )
 
+    print("\nNœuds PipeWire disponibles:")
+    if shutil.which("pw-dump") is None:
+        print("  pw-dump indisponible")
+        print()
+        return
+
+    try:
+        process = subprocess.run(
+            ["pw-dump"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+            timeout=2.0,
+        )
+        objects = json.loads(process.stdout) if process.returncode == 0 else []
+    except Exception as exc:
+        print(f"  impossible de lire PipeWire: {exc}")
+        print()
+        return
+
+    found = False
+    for item in objects if isinstance(objects, list) else []:
+        if not isinstance(item, dict):
+            continue
+        info = item.get("info") if isinstance(item.get("info"), dict) else {}
+        props = info.get("props") if isinstance(info.get("props"), dict) else {}
+        media_class = str(props.get("media.class") or "").strip()
+        if media_class not in {"Audio/Source", "Audio/Sink"}:
+            continue
+        node_name = str(props.get("node.name") or "").strip()
+        if not node_name:
+            continue
+        description = str(
+            props.get("node.description")
+            or props.get("node.nick")
+            or props.get("device.description")
+            or node_name
+        ).strip()
+        kind = "source" if media_class == "Audio/Source" else "sink"
+        print(f"  pipewire:{kind}:{node_name} | {description}")
+        found = True
+
+    if not found:
+        print("  aucun nœud Audio/Source ou Audio/Sink trouvé")
     print()
 
 
 def resolve_audio_config(
     pa: pyaudio.PyAudio,
-    requested_index: Optional[int],
+    requested_device: Optional[str],
     preferred_rate: int,
 ) -> AudioConfig:
-    if requested_index is None:
+    pipewire_target = parse_pipewire_selector(requested_device, "source")
+    if pipewire_target:
+        command = pipewire_record_command()
+        if not command:
+            raise RuntimeError(
+                "BACKEND_AUDIO_INPUT_DEVICE désigne une source PipeWire mais "
+                "pw-cat/pw-record est indisponible."
+            )
+        return AudioConfig(
+            requested_device=requested_device,
+            pyaudio_device_index=None,
+            pipewire_target=pipewire_target,
+            device_name=f"PipeWire source: {pipewire_target}",
+            sample_rate=preferred_rate,
+        )
+
+    if requested_device is None:
         try:
             info = pa.get_default_input_device_info()
         except Exception as exc:
             raise RuntimeError(
-                "Aucun périphérique d'entrée système par défaut n'est disponible. "
-                "Utilise --list-devices puis renseigne BACKEND_AUDIO_INPUT_DEVICE "
-                "dans .env.offline si nécessaire."
+                "Aucun périphérique d'entrée système par défaut n'est disponible."
             ) from exc
         actual_index = int(info["index"])
     else:
-        actual_index = requested_index
         try:
+            actual_index = int(requested_device.split(":", 1)[0])
             info = pa.get_device_info_by_index(actual_index)
         except Exception as exc:
             raise RuntimeError(
-                f"Le périphérique PyAudio #{actual_index} indiqué dans "
-                "BACKEND_AUDIO_INPUT_DEVICE est introuvable."
+                "BACKEND_AUDIO_INPUT_DEVICE doit être un index PyAudio valide "
+                "ou un sélecteur pipewire:source:..."
             ) from exc
 
     if int(info.get("maxInputChannels", 0)) < 1:
@@ -223,10 +294,7 @@ def resolve_audio_config(
             "ne possède aucun canal d'entrée."
         )
 
-    # 16 kHz is ideal for a portable ASR benchmark corpus. If the device
-    # refuses it, keep recording possible by falling back to its native rate.
     sample_rate = preferred_rate
-
     try:
         pa.is_format_supported(
             sample_rate,
@@ -238,8 +306,9 @@ def resolve_audio_config(
         sample_rate = int(round(float(info.get("defaultSampleRate", preferred_rate))))
 
     return AudioConfig(
-        requested_device_index=requested_index,
-        actual_device_index=actual_index,
+        requested_device=requested_device,
+        pyaudio_device_index=actual_index,
+        pipewire_target=None,
         device_name=str(info.get("name", "?")),
         sample_rate=sample_rate,
     )
@@ -247,26 +316,38 @@ def resolve_audio_config(
 
 def resolve_playback_config(
     pa: pyaudio.PyAudio,
-    requested_index: Optional[int],
+    requested_device: Optional[str],
 ) -> PlaybackConfig:
-    if requested_index is None:
+    pipewire_target = parse_pipewire_selector(requested_device, "sink")
+    if pipewire_target:
+        if shutil.which("pw-play") is None:
+            raise RuntimeError(
+                "BACKEND_AUDIO_OUTPUT_DEVICE désigne une sortie PipeWire mais "
+                "pw-play est indisponible."
+            )
+        return PlaybackConfig(
+            requested_device=requested_device,
+            pyaudio_device_index=None,
+            pipewire_target=pipewire_target,
+            device_name=f"PipeWire sink: {pipewire_target}",
+        )
+
+    if requested_device is None:
         try:
             info = pa.get_default_output_device_info()
         except Exception as exc:
             raise RuntimeError(
-                "Aucun périphérique de sortie système par défaut n'est disponible. "
-                "Utilise --list-devices puis renseigne BACKEND_AUDIO_OUTPUT_DEVICE "
-                "dans .env.offline si nécessaire."
+                "Aucun périphérique de sortie système par défaut n'est disponible."
             ) from exc
         actual_index = int(info["index"])
     else:
-        actual_index = requested_index
         try:
+            actual_index = int(requested_device.split(":", 1)[0])
             info = pa.get_device_info_by_index(actual_index)
         except Exception as exc:
             raise RuntimeError(
-                f"Le périphérique PyAudio #{actual_index} indiqué dans "
-                "BACKEND_AUDIO_OUTPUT_DEVICE est introuvable."
+                "BACKEND_AUDIO_OUTPUT_DEVICE doit être un index PyAudio valide "
+                "ou un sélecteur pipewire:sink:..."
             ) from exc
 
     if int(info.get("maxOutputChannels", 0)) < 1:
@@ -276,8 +357,9 @@ def resolve_playback_config(
         )
 
     return PlaybackConfig(
-        requested_device_index=requested_index,
-        actual_device_index=actual_index,
+        requested_device=requested_device,
+        pyaudio_device_index=actual_index,
+        pipewire_target=None,
         device_name=str(info.get("name", "?")),
     )
 
@@ -287,18 +369,34 @@ def play_wav(
     path: Path,
     playback: PlaybackConfig,
 ) -> None:
+    if playback.pipewire_target:
+        print(f"▶ PREVIEW sur {playback.device_name}")
+        process = subprocess.run(
+            ["pw-play", "--target", playback.pipewire_target, str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if process.returncode != 0:
+            detail = (process.stderr or "").strip()
+            raise RuntimeError(
+                f"pw-play a échoué ({process.returncode}): {detail or 'erreur inconnue'}"
+            )
+        return
+
     with wave.open(str(path), "rb") as wav:
         stream = pa.open(
             format=pa.get_format_from_width(wav.getsampwidth()),
             channels=wav.getnchannels(),
             rate=wav.getframerate(),
             output=True,
-            output_device_index=playback.actual_device_index,
+            output_device_index=playback.pyaudio_device_index,
             frames_per_buffer=CHUNK_FRAMES,
         )
         try:
             print(
-                f"▶ PREVIEW sur [{playback.actual_device_index}] "
+                f"▶ PREVIEW sur [{playback.pyaudio_device_index}] "
                 f"{playback.device_name}"
             )
             while True:
@@ -311,6 +409,85 @@ def play_wav(
                 stream.stop_stream()
             finally:
                 stream.close()
+
+
+class PipeWireRecorderStream:
+    def __init__(self, target: str, sample_rate: int):
+        commands = [command for command in ("pw-cat", "pw-record") if shutil.which(command)]
+        if not commands:
+            raise RuntimeError("pw-cat ou pw-record est requis pour l'entrée PipeWire")
+
+        base_args = [
+            "--raw",
+            "--target",
+            target,
+            "--format",
+            "s16",
+            "--rate",
+            str(sample_rate),
+            "--channels",
+            str(CHANNELS),
+            "-",
+        ]
+        self.process = None
+        self.bytes_per_frame = CHANNELS * SAMPLE_WIDTH_BYTES
+
+        for command in commands:
+            args = (
+                [command, "--record", *base_args]
+                if Path(command).name == "pw-cat"
+                else [command, *base_args]
+            )
+            process = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
+            time.sleep(0.05)
+            if process.poll() is None:
+                self.process = process
+                break
+            try:
+                process.kill()
+                process.wait(timeout=1.0)
+            except Exception:
+                pass
+
+        if self.process is None:
+            raise RuntimeError(f"Capture PipeWire impossible pour '{target}'")
+
+    def read(self, chunk: int, exception_on_overflow: bool = False) -> bytes:
+        del exception_on_overflow
+        if not self.process.stdout:
+            raise RuntimeError("La capture PipeWire n'a pas de flux stdout")
+        expected = max(1, int(chunk)) * self.bytes_per_frame
+        parts: list[bytes] = []
+        remaining = expected
+        while remaining > 0:
+            data = self.process.stdout.read(remaining)
+            if not data:
+                raise RuntimeError("La capture PipeWire s'est arrêtée")
+            parts.append(data)
+            remaining -= len(data)
+        return b"".join(parts)
+
+    def stop_stream(self) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=1.0)
+        if self.process and self.process.stdout:
+            try:
+                self.process.stdout.close()
+            except Exception:
+                pass
 
 
 class Recorder:
@@ -328,14 +505,20 @@ class Recorder:
         self.error = None
         self._stop.clear()
 
-        self._stream = self.pa.open(
-            format=FORMAT,
-            channels=CHANNELS,
-            rate=self.config.sample_rate,
-            input=True,
-            input_device_index=self.config.actual_device_index,
-            frames_per_buffer=CHUNK_FRAMES,
-        )
+        if self.config.pipewire_target:
+            self._stream = PipeWireRecorderStream(
+                self.config.pipewire_target,
+                self.config.sample_rate,
+            )
+        else:
+            self._stream = self.pa.open(
+                format=FORMAT,
+                channels=CHANNELS,
+                rate=self.config.sample_rate,
+                input=True,
+                input_device_index=self.config.pyaudio_device_index,
+                frames_per_buffer=CHUNK_FRAMES,
+            )
 
         def capture() -> None:
             try:
@@ -447,15 +630,13 @@ def write_manifests(
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "purpose": "LiveStageAssistant standalone STT benchmark corpus",
         "env_file_read_only": str(env_path),
-        "backend_audio_input_device": (
-            "" if audio.requested_device_index is None else str(audio.requested_device_index)
-        ),
-        "actual_input_device_index": audio.actual_device_index,
+        "backend_audio_input_device": audio.requested_device or "",
+        "actual_input_device_index": audio.pyaudio_device_index,
+        "input_pipewire_target": audio.pipewire_target,
         "input_device_name": audio.device_name,
-        "backend_audio_output_device": (
-            "" if playback.requested_device_index is None else str(playback.requested_device_index)
-        ),
-        "actual_output_device_index": playback.actual_device_index,
+        "backend_audio_output_device": playback.requested_device or "",
+        "actual_output_device_index": playback.pyaudio_device_index,
+        "output_pipewire_target": playback.pipewire_target,
         "output_device_name": playback.device_name,
         "sample_rate_hz": audio.sample_rate,
         "channels": CHANNELS,
@@ -516,8 +697,11 @@ def main() -> int:
 
     parser.add_argument(
         "--env-file",
-        default=".env.offline",
-        help="Profil lu uniquement pour le périphérique micro (défaut: .env.offline).",
+        default="raspi_service_pack_stdio/.env.offline",
+        help=(
+            "Profil Raspberry lu uniquement pour les périphériques audio "
+            "(défaut: raspi_service_pack_stdio/.env.offline)."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -559,8 +743,8 @@ def main() -> int:
 
         env_path = Path(args.env_file)
         env = parse_env_file(env_path)
-        requested_device = configured_device_index(env, "BACKEND_AUDIO_INPUT_DEVICE")
-        requested_output_device = configured_device_index(env, "BACKEND_AUDIO_OUTPUT_DEVICE")
+        requested_device = configured_device_selector(env, "BACKEND_AUDIO_INPUT_DEVICE")
+        requested_output_device = configured_device_selector(env, "BACKEND_AUDIO_OUTPUT_DEVICE")
         audio = resolve_audio_config(pa, requested_device, args.sample_rate)
         playback = resolve_playback_config(pa, requested_output_device)
 
@@ -579,7 +763,7 @@ def main() -> int:
                 else str(requested_device)
             )
         )
-        print(f"Entrée réelle          : [{audio.actual_device_index}] {audio.device_name}")
+        print(f"Entrée réelle          : {audio.device_name}")
         print(
             "BACKEND_AUDIO_OUTPUT_DEVICE: "
             + (
@@ -588,10 +772,7 @@ def main() -> int:
                 else str(requested_output_device)
             )
         )
-        print(
-            f"Sortie preview         : [{playback.actual_device_index}] "
-            f"{playback.device_name}"
-        )
+        print(f"Sortie preview         : {playback.device_name}")
         print(f"Format WAV             : mono PCM 16 bits, {audio.sample_rate} Hz")
         print(f"Phrases               : {len(PHRASES)}")
         print(f"Prises / phrase       : {args.takes}")
