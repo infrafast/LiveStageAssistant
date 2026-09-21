@@ -8,6 +8,7 @@ command-gateway orchestrator.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,16 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
     async def refresh_session_llm_summary(self, *, force: bool = False) -> bool:
         """Local mode never invokes a model to summarize conversation state."""
         return False
+
+    def _is_standalone_voice_cancel_phrase(self, text: str) -> bool:
+        """Reserve only a standalone cancel token for shell-level speech interruption.
+
+        Longer deterministic commands such as "annule la dernière automation"
+        must reach the MCP gateways instead of being swallowed by the voice shell.
+        """
+        normalized = text.strip().lower()
+        normalized = re.sub(r"[^\wÀ-ÿ'-]+", " ", normalized).strip()
+        return bool(normalized) and normalized in self.voice_cancel_words
 
     async def initialize_mcp(self):
         """Open gateway-capable MCP sessions without constructing MCPAgent."""
@@ -105,7 +116,7 @@ class DeterministicLocalVoiceAssistant(agent.VoiceAssistant):
         normalized = text.strip().casefold()
         if normalized in {"exit", "quit", "goodbye"}:
             return "Au revoir."
-        if self.is_voice_cancel_phrase(text):
+        if self._is_standalone_voice_cancel_phrase(text):
             self.stop_tts()
             return "D'accord, j'arrête."
         if normalized == "clear":

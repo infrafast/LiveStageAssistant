@@ -497,3 +497,25 @@ async def test_local_engine_hard_guard_never_builds_llm():
     with pytest.raises(RuntimeError, match="must never construct an LLM"):
         assistant._build_llm()
     assert await assistant.refresh_session_llm_summary() is False
+
+def test_local_engine_only_intercepts_standalone_voice_cancel_tokens():
+    from voice_assistant.local_engine import DeterministicLocalVoiceAssistant
+
+    assistant = object.__new__(DeterministicLocalVoiceAssistant)
+    assistant.voice_cancel_words = (
+        "stop",
+        "annule",
+        "annuler",
+        "arrete",
+        "arrête",
+        "cancel",
+    )
+
+    assert assistant._is_standalone_voice_cancel_phrase("annule")
+    assert assistant._is_standalone_voice_cancel_phrase("stop !")
+    assert assistant._is_standalone_voice_cancel_phrase("arrête.")
+
+    assert not assistant._is_standalone_voice_cancel_phrase("annule la dernière automation")
+    assert not assistant._is_standalone_voice_cancel_phrase("annule l'automation auto-3")
+    assert not assistant._is_standalone_voice_cancel_phrase("arrête la rampe auto-2")
+

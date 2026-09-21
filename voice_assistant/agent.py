@@ -2502,10 +2502,10 @@ class VoiceAssistant:
             print(f"Backend openWakeWord unavailable; backend wake word disabled: {e}", flush=True)
 
     def _backend_streaming_wake_active(self) -> bool:
-        return bool(self.wake_words) and self.backend_wake_word_detector is not None
+        return bool(getattr(self, "wake_words", [])) and getattr(self, "backend_wake_word_detector", None) is not None
 
     def _backend_wake_word_state(self) -> str:
-        if not self.wake_words:
+        if not getattr(self, "wake_words", []):
             return "disabled"
         return "active" if self._backend_streaming_wake_active() else "unavailable"
 
