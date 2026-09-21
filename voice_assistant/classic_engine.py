@@ -178,7 +178,7 @@ def build_assistant(
         elevenlabs_api_key=None if force_local_speech else _secret(values, "ELEVENLABS_API_KEY"),
         model=resolved_model,
         stt_provider="local-whisper" if local_speech else str(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
-        local_whisper_model=str(values.get("LOCAL_WHISPER_MODEL") or "base").strip(),
+        local_whisper_model=str(values.get("LOCAL_WHISPER_MODEL") or "small").strip(),
         stt_language=str(values.get("STT_LANGUAGE") or "fr").strip(),
         stt_prompt=stt_prompt,
         stt_timeout_seconds=max(1.0, _float(values, "STT_TIMEOUT_SECONDS", agent.DEFAULT_STT_TIMEOUT_SECONDS)),
