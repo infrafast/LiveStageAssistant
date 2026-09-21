@@ -30,6 +30,7 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
             tts_output="silent",
             stt_input="backend",
             stt_language="fr",
+            local_whisper_model="base",
             connectivity_mode=connectivity,
             wake_word="",
             stt_prompt="",
