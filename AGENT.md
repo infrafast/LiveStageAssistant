@@ -65,6 +65,21 @@ Do not create a separate document to track milestone work.
 - Keep installation guidance script-first: `scripts/install.sh` for Linux/macOS/Raspberry/WSL/Git Bash, `scripts/install.ps1` for native Windows PowerShell, Raspberry service-pack instructions only for service setup, and Docker instructions through the image build.
 - Mention in the final response whether documentation/roadmap milestones were updated or explicitly verified as current.
 
+## Domain capability ownership for Local deterministic commands
+
+LiveStageAssistant is the **domain-neutral host** for Local deterministic execution. It must not become a second parser for mixer, lighting or other MCP-specific commands.
+
+When the user asks to add a new mixer command/capability:
+
+1. identify the owning MCP server (for mixer semantics, normally `XMSeries-MCP`);
+2. implement/extend the typed MCP capability and the deterministic Local intent in that MCP repository according to its symmetry rules;
+3. reuse the MCP's existing deterministic parser, resolver, capability checks and execution primitives;
+4. change LiveStageAssistant only if the generic gateway protocol/orchestration/context transport genuinely needs a domain-neutral extension.
+
+Do **not** add XMSeries action words, target families, bus/channel matching rules, dB/routing semantics, command-specific regexes or OSC behavior to LSA merely to make a Local phrase work. LSA may transport neutral context such as recognized speaker identity, but the MCP owns how that context maps to domain objects such as a personal bus or input channel.
+
+A new domain capability is not correctly implemented by teaching LSA to rewrite a phrase into a domain command. The owning MCP must understand the command through its existing `lsa-command-gateway/v1` implementation. Cloud/Local capability symmetry is enforced by the owning MCP's coding rules.
+
 ## Important Local Profiles
 
 - `.env.online` is the cloud profile and should stay coherent with `CONNECTIVITY_MODE=online`.
