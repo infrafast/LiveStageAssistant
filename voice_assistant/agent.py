@@ -1258,6 +1258,16 @@ def pcm_to_vad_16k_mono(audio_data: bytes, *, source_rate: int, channels: int) -
     return clipped.tobytes()
 
 
+def _append_capped_audio_frames(buffer: list[bytes], frames: list[bytes], max_frames: int) -> None:
+    """Append audio frames in order while retaining only the newest pre-roll window."""
+    if max_frames <= 0 or not frames:
+        return
+    buffer.extend(frames)
+    overflow = len(buffer) - max_frames
+    if overflow > 0:
+        del buffer[:overflow]
+
+
 def backend_audio_service_state(
     input_status: str,
     input_detail: str,
@@ -3756,9 +3766,7 @@ class VoiceAssistant:
                 streaming_pre_wake_frame = wake_detector_active and not wake_detected
                 if wake_detector_active and not wake_detected:
                     if not has_speech:
-                        pre_roll.append(data)
-                        if len(pre_roll) > pad_frames:
-                            pre_roll = pre_roll[-pad_frames:]
+                        _append_capped_audio_frames(pre_roll, [data], pad_frames)
                     try:
                         detection = self.backend_wake_word_detector.process_pcm16_16k(vad_data)
                     except Exception as e:
@@ -3846,12 +3854,19 @@ class VoiceAssistant:
                         pre_roll = []
                         speech_candidate = []
                 else:
+                    if not streaming_pre_wake_frame:
+                        # A short first word can fall below min_speech_ms and be
+                        # followed by a natural micro-pause. Preserve those candidate
+                        # frames in pre-roll instead of discarding them so that, if
+                        # following speech confirms the utterance, Whisper still gets
+                        # the complete command from its first syllable.
+                        _append_capped_audio_frames(
+                            pre_roll,
+                            [*speech_candidate, data],
+                            pad_frames,
+                        )
                     speech_candidate = []
                     speech_candidate_ms = 0.0
-                    if not streaming_pre_wake_frame:
-                        pre_roll.append(data)
-                        if len(pre_roll) > pad_frames:
-                            pre_roll = pre_roll[-pad_frames:]
 
                 if (
                     wake_detector_active
