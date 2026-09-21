@@ -8,8 +8,9 @@ Create a reproducible speech corpus without importing or modifying LSA.
 
 The script:
 - reads ONLY the selected env file (default: .env.offline);
-- reuses BACKEND_AUDIO_INPUT_DEVICE;
-- uses the system default input device when that variable is empty;
+- reuses BACKEND_AUDIO_INPUT_DEVICE for capture;
+- reuses BACKEND_AUDIO_OUTPUT_DEVICE for recording preview;
+- uses the corresponding system default device when either variable is empty;
 - records 3 takes per sentence by default;
 - writes mono PCM WAV files;
 - writes manifest.json and manifest.csv with reference text and audio metadata;
@@ -90,12 +91,20 @@ class AudioConfig:
     sample_rate: int
 
 
+@dataclass
+class PlaybackConfig:
+    requested_device_index: Optional[int]
+    actual_device_index: int
+    device_name: str
+
+
 def parse_env_file(path: Path) -> dict[str, str]:
     """
     Parse the dotenv file as text.
 
     Important: the file is NOT sourced/executed, so no shell command from it
-    can run. We only need BACKEND_AUDIO_INPUT_DEVICE.
+    can run. We only read BACKEND_AUDIO_INPUT_DEVICE and
+    BACKEND_AUDIO_OUTPUT_DEVICE.
     """
     values: dict[str, str] = {}
 
@@ -131,8 +140,8 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def configured_device_index(env: dict[str, str]) -> Optional[int]:
-    raw = env.get("BACKEND_AUDIO_INPUT_DEVICE", "").strip()
+def configured_device_index(env: dict[str, str], key: str) -> Optional[int]:
+    raw = env.get(key, "").strip()
     if not raw:
         return None
 
@@ -140,30 +149,42 @@ def configured_device_index(env: dict[str, str]) -> Optional[int]:
         return int(raw)
     except ValueError as exc:
         raise ValueError(
-            "BACKEND_AUDIO_INPUT_DEVICE doit être vide ou contenir "
-            f"un index PyAudio entier; valeur trouvée: {raw!r}"
+            f"{key} doit être vide ou contenir un index PyAudio entier; "
+            f"valeur trouvée: {raw!r}"
         ) from exc
 
 
-def list_input_devices(pa: pyaudio.PyAudio) -> None:
-    print("\nPériphériques d'entrée PyAudio disponibles:\n")
+def list_audio_devices(pa: pyaudio.PyAudio) -> None:
+    print("\nPériphériques audio PyAudio disponibles:\n")
 
-    default_index: Optional[int] = None
+    default_input: Optional[int] = None
+    default_output: Optional[int] = None
     try:
-        default_index = int(pa.get_default_input_device_info()["index"])
+        default_input = int(pa.get_default_input_device_info()["index"])
+    except Exception:
+        pass
+    try:
+        default_output = int(pa.get_default_output_device_info()["index"])
     except Exception:
         pass
 
     for index in range(pa.get_device_count()):
         info = pa.get_device_info_by_index(index)
         inputs = int(info.get("maxInputChannels", 0))
-        if inputs <= 0:
+        outputs = int(info.get("maxOutputChannels", 0))
+        if inputs <= 0 and outputs <= 0:
             continue
 
-        marker = "  <= défaut système" if index == default_index else ""
+        markers = []
+        if index == default_input:
+            markers.append("entrée défaut")
+        if index == default_output:
+            markers.append("sortie défaut")
+        marker = f"  <= {', '.join(markers)}" if markers else ""
+
         print(
             f"  [{index}] {info.get('name', '?')} | "
-            f"entrées={inputs} | "
+            f"entrées={inputs} | sorties={outputs} | "
             f"rate défaut={int(float(info.get('defaultSampleRate', 0)))} Hz"
             f"{marker}"
         )
@@ -222,6 +243,74 @@ def resolve_audio_config(
         device_name=str(info.get("name", "?")),
         sample_rate=sample_rate,
     )
+
+
+def resolve_playback_config(
+    pa: pyaudio.PyAudio,
+    requested_index: Optional[int],
+) -> PlaybackConfig:
+    if requested_index is None:
+        try:
+            info = pa.get_default_output_device_info()
+        except Exception as exc:
+            raise RuntimeError(
+                "Aucun périphérique de sortie système par défaut n'est disponible. "
+                "Utilise --list-devices puis renseigne BACKEND_AUDIO_OUTPUT_DEVICE "
+                "dans .env.offline si nécessaire."
+            ) from exc
+        actual_index = int(info["index"])
+    else:
+        actual_index = requested_index
+        try:
+            info = pa.get_device_info_by_index(actual_index)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Le périphérique PyAudio #{actual_index} indiqué dans "
+                "BACKEND_AUDIO_OUTPUT_DEVICE est introuvable."
+            ) from exc
+
+    if int(info.get("maxOutputChannels", 0)) < 1:
+        raise RuntimeError(
+            f"Le périphérique #{actual_index} ({info.get('name', '?')}) "
+            "ne possède aucun canal de sortie."
+        )
+
+    return PlaybackConfig(
+        requested_device_index=requested_index,
+        actual_device_index=actual_index,
+        device_name=str(info.get("name", "?")),
+    )
+
+
+def play_wav(
+    pa: pyaudio.PyAudio,
+    path: Path,
+    playback: PlaybackConfig,
+) -> None:
+    with wave.open(str(path), "rb") as wav:
+        stream = pa.open(
+            format=pa.get_format_from_width(wav.getsampwidth()),
+            channels=wav.getnchannels(),
+            rate=wav.getframerate(),
+            output=True,
+            output_device_index=playback.actual_device_index,
+            frames_per_buffer=CHUNK_FRAMES,
+        )
+        try:
+            print(
+                f"▶ PREVIEW sur [{playback.actual_device_index}] "
+                f"{playback.device_name}"
+            )
+            while True:
+                data = wav.readframes(CHUNK_FRAMES)
+                if not data:
+                    break
+                stream.write(data)
+        finally:
+            try:
+                stream.stop_stream()
+            finally:
+                stream.close()
 
 
 class Recorder:
@@ -351,6 +440,7 @@ def write_manifests(
     rows: list[dict],
     env_path: Path,
     audio: AudioConfig,
+    playback: PlaybackConfig,
     takes: int,
 ) -> None:
     metadata = {
@@ -360,8 +450,13 @@ def write_manifests(
         "backend_audio_input_device": (
             "" if audio.requested_device_index is None else str(audio.requested_device_index)
         ),
-        "actual_device_index": audio.actual_device_index,
-        "device_name": audio.device_name,
+        "actual_input_device_index": audio.actual_device_index,
+        "input_device_name": audio.device_name,
+        "backend_audio_output_device": (
+            "" if playback.requested_device_index is None else str(playback.requested_device_index)
+        ),
+        "actual_output_device_index": playback.actual_device_index,
+        "output_device_name": playback.device_name,
         "sample_rate_hz": audio.sample_rate,
         "channels": CHANNELS,
         "sample_width_bits": SAMPLE_WIDTH_BYTES * 8,
@@ -447,7 +542,7 @@ def main() -> int:
     parser.add_argument(
         "--list-devices",
         action="store_true",
-        help="Affiche les périphériques d'entrée PyAudio puis quitte.",
+        help="Affiche les périphériques d'entrée/sortie PyAudio puis quitte.",
     )
 
     args = parser.parse_args()
@@ -459,13 +554,15 @@ def main() -> int:
 
     try:
         if args.list_devices:
-            list_input_devices(pa)
+            list_audio_devices(pa)
             return 0
 
         env_path = Path(args.env_file)
         env = parse_env_file(env_path)
-        requested_device = configured_device_index(env)
+        requested_device = configured_device_index(env, "BACKEND_AUDIO_INPUT_DEVICE")
+        requested_output_device = configured_device_index(env, "BACKEND_AUDIO_OUTPUT_DEVICE")
         audio = resolve_audio_config(pa, requested_device, args.sample_rate)
+        playback = resolve_playback_config(pa, requested_output_device)
 
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -482,8 +579,20 @@ def main() -> int:
                 else str(requested_device)
             )
         )
-        print(f"Périphérique réel     : [{audio.actual_device_index}] {audio.device_name}")
-        print(f"Format WAV            : mono PCM 16 bits, {audio.sample_rate} Hz")
+        print(f"Entrée réelle          : [{audio.actual_device_index}] {audio.device_name}")
+        print(
+            "BACKEND_AUDIO_OUTPUT_DEVICE: "
+            + (
+                "<vide = périphérique système par défaut>"
+                if requested_output_device is None
+                else str(requested_output_device)
+            )
+        )
+        print(
+            f"Sortie preview         : [{playback.actual_device_index}] "
+            f"{playback.device_name}"
+        )
+        print(f"Format WAV             : mono PCM 16 bits, {audio.sample_rate} Hz")
         print(f"Phrases               : {len(PHRASES)}")
         print(f"Prises / phrase       : {args.takes}")
         print(f"WAV attendus          : {total_expected}")
@@ -497,7 +606,8 @@ def main() -> int:
 
         print("\nCommandes:")
         print("  Entrée = démarrer / arrêter l'enregistrement")
-        print("  r      = refaire la prise après écoute/contrôle personnel")
+        print("  p/play = écouter le dernier enregistrement sur la sortie configurée")
+        print("  r      = refaire la prise")
         print("  s      = sauter la prise")
         print("  q      = terminer proprement")
         print("\nNe prononce pas 'momo' sauf si tu veux explicitement le tester:")
@@ -520,7 +630,7 @@ def main() -> int:
                     cmd = input("Entrée=enregistrer, s=sauter, q=quitter : ").strip().lower()
 
                     if cmd == "q":
-                        write_manifests(output_dir, rows, env_path, audio, args.takes)
+                        write_manifests(output_dir, rows, env_path, audio, playback, args.takes)
                         print("\nCapture interrompue proprement.")
                         print(f"Manifest: {output_dir / 'manifest.json'}")
                         return 0
@@ -553,15 +663,31 @@ def main() -> int:
                     )
                     print_level_advice(metrics)
 
-                    decision = input(
-                        "Entrée=valider, r=refaire, q=quitter : "
-                    ).strip().lower()
+                    while True:
+                        decision = input(
+                            "Entrée=valider, p/play=écouter, r=refaire, q=quitter : "
+                        ).strip().lower()
+
+                        if decision in {"p", "play"}:
+                            try:
+                                play_wav(pa, wav_path, playback)
+                            except Exception as exc:
+                                print(f"Erreur preview audio: {exc}")
+                            continue
+
+                        if decision == "r":
+                            try:
+                                wav_path.unlink()
+                            except FileNotFoundError:
+                                pass
+                            break
+
+                        if decision in {"", "q"}:
+                            break
+
+                        print("Commande inconnue.")
 
                     if decision == "r":
-                        try:
-                            wav_path.unlink()
-                        except FileNotFoundError:
-                            pass
                         continue
 
                     row = {
@@ -577,7 +703,7 @@ def main() -> int:
                     }
                     rows.append(row)
 
-                    write_manifests(output_dir, rows, env_path, audio, args.takes)
+                    write_manifests(output_dir, rows, env_path, audio, playback, args.takes)
 
                     if decision == "q":
                         print("\nCapture interrompue proprement.")
@@ -586,7 +712,7 @@ def main() -> int:
 
                     break
 
-        write_manifests(output_dir, rows, env_path, audio, args.takes)
+        write_manifests(output_dir, rows, env_path, audio, playback, args.takes)
 
         print("\n=== CORPUS TERMINÉ ===")
         print(f"Enregistrements validés : {len(rows)}/{total_expected}")
