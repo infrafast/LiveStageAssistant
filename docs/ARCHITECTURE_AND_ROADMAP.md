@@ -841,6 +841,19 @@ Architecture rules:
 - the existing per-MCP permission/approval policy must still gate writes after analysis and before execution;
 - no automatic retry may replay an ambiguous or timed-out write.
 
+### OR4 capability-extension rule
+
+The deterministic Local architecture is now an **extension model, not a parser-construction project**. For domain commands, LiveStageAssistant transports text and neutral context to the owning MCP gateway; it does not interpret mixer/lighting semantics.
+
+For XMSeries capabilities specifically, the owning repository must extend its established native lexical-slot parser and preserve typed-MCP/Local semantic symmetry. A new capability should flow through:
+
+`typed MCP contract + deterministic intent`
+→ MCP resolver/capability planning
+→ shared business/adapter primitive
+→ protocol-aware OSC/automation execution.
+
+LSA must not add command-specific rewrites, mixer target families, owner-name resolution, routing semantics or OSC behavior to compensate for a missing MCP parser case. Speaker recognition remains LSA-owned only as neutral identity/context transport; mapping that identity to a bus, channel or Main LR remains XMSeries-MCP-owned.
+
 #### OR4A - Local Ollama feasibility spike — [x] CLOSED, NOT SELECTED
 
 - [x] direct Ollama tool calling, compact prompts, routed tool subsets, 3B/1B/1.5B candidates and OpenAI-compatible Ollama API shape were benchmarked on Pi5;
@@ -938,9 +951,11 @@ Create and keep a real deterministic Local engine, independent from the Cloud Cl
 - [x] startup READY reports deterministic gateway availability and explicitly reports degraded/no-command capability when none is compatible;
 - [x] runtime identity reports `engine=local`, `provider=local`, `model=deterministic`.
 
-#### OR4B4 - XMSeries advanced deterministic parity
+#### OR4B4 - XMSeries advanced deterministic parity — PARSER V1 CLOSED / LIVE ACCEPTANCE CONTINUES
 
-Basic XMSeries read/write acceptance is complete, so advanced parity is now unlocked. XMSeries-MCP PR #12 merged as `968c94f69d4bd007191fff1762101707a94c70b5` with Node 20.20/22 PR CI green. The implementation remains entirely MCP-side and reuses existing resolver, OSC and automation code; LSA still only sees `lsa-command-gateway/v1`.
+The XMSeries deterministic parser architecture is closed as V1 on 21 September 2026. The final unified parser consolidation, generic target-list/multi-destination resolution and explicit family qualifiers are merged on XMSeries-MCP `main`, ending at commit `2fa4d16888741766e0b7eda9b26c5ca0f4f313e0` with Node 20.20/22 CI green. New mixer commands must extend that existing parser/capability architecture; they must not create a new parser path in LSA or XMSeries gateway code.
+
+Basic XMSeries read/write acceptance is complete. Remaining `[~]` items below track live rack coverage of advanced semantics, not parser completeness. The implementation remains entirely MCP-side and reuses existing resolver, OSC and automation code; LSA still only sees `lsa-command-gateway/v1`.
 
 - [~] source -> destination sends and structured ownership phrases: channel -> bus absolute/relative commands implemented; live rack acceptance still pending;
 - [~] dB and percent, absolute and relative semantics: implemented for single targets and channel -> bus; live rack acceptance still pending;
@@ -949,7 +964,7 @@ Basic XMSeries read/write acceptance is complete, so advanced parity is now unlo
 - [~] fades/ramps and delayed actions, with all timing owned by XMSeries-MCP automation: fade-in/out, progressive absolute/relative ramps, explicit from/to ranges and delayed level changes implemented. Live rack validation now confirms `baisse progressivement batterie à -30 dB en 2 secondes` executed as a real progressive fade to -30 dB and `mets batterie à -27 dB dans 2 secondes` executed as a real delayed level change after the requested 2-second wait. Source-to-bus ramps remain pending;
 - [x] cancellation/status for automation jobs: XMSeries-MCP PR #13 merged as `43aa59c79b8424993d20339610c40309cdd2117f` with Node 20.20/22 CI green; live Pi acceptance confirmed that a long fade can be listed while running and cancelled through the opaque gateway plan. A 21 September Local-shell regression that treated any utterance containing `annule`/`arrête` as a speech interruption is fixed by reserving shell cancellation for standalone cancel tokens only; longer commands such as `annule la dernière automation` continue to the deterministic gateways. Cloud Classic/Realtime behavior is unchanged;
 - [ ] expand multilingual/STT corpus only from observed commands; avoid unconstrained fuzzy NLP;
-- [ ] maintain a domain corpus as the regression source of truth and review PROMPT changes against the same semantic cases to limit cloud/local drift.
+- [x] maintain a domain corpus as the regression source of truth and review PROMPT changes against the same semantic cases to limit cloud/local drift; XMSeries now runs parser, architecture, capability-symmetry, protocol-safety, command-corpus and functional-recipe checks in its CI.
 
 Temporal semantics are deterministic in XMSeries-MCP: `en N secondes` means ramp duration; `dans N secondes` means delay before action. Fade-in/out with no explicit target defaults to Main LR/façade.
 
