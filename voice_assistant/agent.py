@@ -2012,7 +2012,7 @@ class VoiceAssistant:
         elevenlabs_api_key: str | None = None,
         model: str = "gpt-4o-mini",
         stt_provider: str = "openai-whisper",
-        local_whisper_model: str = "base",
+        local_whisper_model: str = "small",
         stt_language: str | None = None,
         stt_prompt: str | None = None,
         stt_timeout_seconds: float = DEFAULT_STT_TIMEOUT_SECONDS,
@@ -4919,7 +4919,7 @@ class VoiceAssistant:
         return None
 
     def _load_local_whisper_model(self):
-        """Lazy-load faster-whisper so online-only users do not pay the import cost."""
+        """Load faster-whisper once and keep the warm model for the session."""
         if self.local_whisper_model:
             return self.local_whisper_model
 
@@ -4930,6 +4930,7 @@ class VoiceAssistant:
             return None
 
         cpu_threads = max(1, min(4, os.cpu_count() or 1))
+        load_started_at = time.monotonic()
         print(f"Loading local Whisper model: {self.local_whisper_model_name} (int8, cpu_threads={cpu_threads})")
         self.local_whisper_model = WhisperModel(
             self.local_whisper_model_name,
@@ -4937,6 +4938,12 @@ class VoiceAssistant:
             compute_type="int8",
             cpu_threads=cpu_threads,
             num_workers=1,
+        )
+        load_ms = (time.monotonic() - load_started_at) * 1000.0
+        print(
+            f"Local Whisper model ready: {self.local_whisper_model_name} in {load_ms:.0f} ms "
+            f"(int8, cpu_threads={cpu_threads}, workers=1).",
+            flush=True,
         )
         return self.local_whisper_model
 
@@ -5121,7 +5128,11 @@ class VoiceAssistant:
                 self.semantic_audio.transition(SemanticAudioState.IDLE)
 
     def _local_whisper_hotwords(self) -> str:
-        """Return compact domain hints for short deterministic stage commands."""
+        """Return cached compact hints for short deterministic stage commands."""
+        cached = getattr(self, "_local_whisper_hotwords_cache", None)
+        if cached is not None:
+            return cached
+
         core = [
             "mets", "monte", "baisse", "mute", "unmute", "coupe", "rallume",
             "niveau", "volume", "fader", "bus", "retour", "façade", "main",
@@ -5138,22 +5149,30 @@ class VoiceAssistant:
             if value and key not in seen:
                 seen.add(key)
                 combined.append(value)
-        return ", ".join(combined)
+        cached = ", ".join(combined)
+        self._local_whisper_hotwords_cache = cached
+        return cached
 
     def audio_to_text_local_whisper(self, audio_data: bytes) -> str | None:
-        """Convert audio to text using faster-whisper locally."""
+        """Convert native 16 kHz mono PCM directly with faster-whisper."""
         model = self._load_local_whisper_model()
-        if not model:
+        if not model or not audio_data:
             return None
 
-        wav_path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
-                wav_path = wav_file.name
-                self._write_wav(audio_data, wav_file)
+            # Backend capture is already mono signed PCM16 at 16 kHz. Feeding the
+            # normalized waveform directly avoids a temporary WAV write plus a
+            # second PyAV decode/resample pass for every command.
+            usable_bytes = len(audio_data) - (len(audio_data) % 2)
+            if usable_bytes <= 0:
+                return None
+            waveform = np.frombuffer(audio_data[:usable_bytes], dtype="<i2").astype(np.float32)
+            waveform *= 1.0 / 32768.0
+            audio_seconds = waveform.size / float(self.rate)
 
+            decode_started_at = time.monotonic()
             segments, _info = model.transcribe(
-                wav_path,
+                waveform,
                 language=self.stt_language,
                 initial_prompt=self.stt_prompt,
                 hotwords=self._local_whisper_hotwords(),
@@ -5163,20 +5182,21 @@ class VoiceAssistant:
                 condition_on_previous_text=False,
                 without_timestamps=True,
                 vad_filter=False,
+                max_new_tokens=48,
             )
             text = "".join(segment.text for segment in segments).strip()
+            decode_ms = (time.monotonic() - decode_started_at) * 1000.0
+            rtf = (decode_ms / 1000.0) / audio_seconds if audio_seconds > 0 else 0.0
+            print(
+                f"Local Whisper decode: {decode_ms:.0f} ms for {audio_seconds:.2f}s audio "
+                f"(RTF={rtf:.2f}, model={self.local_whisper_model_name}, max_tokens=48).",
+                flush=True,
+            )
             return self.normalize_stt_command_text(text) if text else None
 
         except Exception as e:
             print(f"Error transcribing audio locally: {e}")
             return None
-
-        finally:
-            if wav_path and os.path.exists(wav_path):
-                try:
-                    os.unlink(wav_path)
-                except OSError:
-                    pass
 
     async def text_to_speech(self, text: str) -> bool:
         """Speak through the configured backend, with Piper as the universal local fallback."""
