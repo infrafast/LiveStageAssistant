@@ -829,6 +829,8 @@ Operational interpretation:
 - retain `base` only as a possible speed fallback if `small` cannot meet acceptable stage latency after runtime optimization;
 - benchmark-only family-aware fuzzy resolution was not promoted to production; current fail-closed write safety remains authoritative.
 
+**Local STT latency pass (2026-09-21) — [~] implemented, Pi validation pending:** the production Local path keeps the already-existing warm Faster-Whisper model lifetime and `small`/int8/4-thread/`beam_size=1` baseline. Per-command temporary WAV creation and PyAV re-decode were removed: native backend PCM16/16 kHz is converted directly to an in-memory float32 waveform for Faster-Whisper. Short deterministic decoding is bounded with `max_new_tokens=48` to prevent runaway generations, stable hotwords are cached after first construction, and runtime logs now expose model-load time plus decode time/audio duration/RTF. The Raspberry Local profile reduces end-of-speech VAD silence from 650 ms to 500 ms; the cloud profile keeps its existing endpoint setting. `small` is now the Local default/fallback, while an explicit `base` selection remains supported. Live Pi acceptance must verify command completeness with natural pauses and compare observed STT latency before marking this pass complete.
+
 Target local path:
 
 ```text
