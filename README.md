@@ -204,12 +204,15 @@ CONNECTIVITY_MODE=offline
 VOICE_ENGINE=local
 STT_PROVIDER=local-whisper
 STT_INPUT=backend
+LOCAL_WHISPER_MODEL=small
 CLOUD_TTS_PROVIDER=none
 PIPER_VOICE=fr_FR-siwis-medium
 PIPER_DATA_DIR=data/piper
 WEB_TTS_PROVIDER=none
 MCP_CONFIG=mcp_servers.json
 ```
+
+`small` is the recommended Local Whisper quality default on the Raspberry Pi profile. `base` remains selectable when lower CPU latency is more important than transcription quality.
 
 Offline profiles use `VOICE_ENGINE=local`: local Whisper handles STT, the deterministic parser delegates domain semantics to MCP command gateways, and Piper handles local TTS. Local mode is also selectable while online; cloud engines require connectivity.
 
