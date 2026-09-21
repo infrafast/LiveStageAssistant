@@ -74,8 +74,28 @@ class ClassicEngineRuntimeEntryTests(unittest.TestCase):
         self.assertNotIn("llm_provider", assistant.kwargs)
         self.assertEqual(assistant.kwargs["model"], "deterministic")
         self.assertEqual(assistant.kwargs["stt_provider"], "local-whisper")
+        self.assertEqual(assistant.kwargs["local_whisper_model"], "small")
         self.assertEqual(assistant.kwargs["tts_provider"], "piper")
         self.assertEqual(assistant.kwargs["backend_tts_volume"], 1.25)
+
+    def test_explicit_base_local_whisper_override_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "CONNECTIVITY_MODE=online\n"
+                "LOCAL_WHISPER_MODEL=base\n"
+                "STT_LANGUAGE=fr\n",
+                encoding="utf-8",
+            )
+            assistant = classic_engine.build_assistant(
+                env_file,
+                assistant_class_override=DummyAssistant,
+                model_override="deterministic",
+                force_local_speech=True,
+            )
+
+        self.assertEqual(assistant.kwargs["local_whisper_model"], "base")
+
 
     def test_speaker_profile_slug_is_local_and_stable(self):
         profiles = classic_engine._speaker_profiles(
