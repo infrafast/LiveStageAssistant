@@ -811,6 +811,24 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 
 **Local/Cloud GUI cleanup (2026-09-19):** the retired local-LLM/Ollama implementation, dependency, installer path, profile keys and benchmark tests have been removed. The Web GUI now models execution explicitly as Local deterministic or Cloud; selecting Cloud then chooses Classic, OpenAI Realtime or Gemini Live. This advances the GUI consolidation milestone without changing remaining validation gates.
 
+**Local STT selection and tuning decision (2026-09-21):** a temporary Pi5 benchmark corpus (12 French mixer commands x 3 takes) compared Faster-Whisper `tiny`, `base` and `small`, prompt/hotword strategies, realistic XR16 name registries and an offline XMSeries parser/resolver replay. The benchmark tooling and generated audio/reports were intentionally temporary and are removed after recording these conclusions.
+
+| Observation | Representative result | Decision |
+| --- | --- | --- |
+| `small` quality vs `base` | broad run: `base_prompt` ~25% exact / 24.24% WER / 66.67% entity recall / ~3.0 s; `small_current` 55.56% exact / 10.61% WER / 80.95% entity recall / ~9.3 s | use `small` as the quality baseline for Local STT; optimize latency before considering a downgrade to `base` |
+| entity-only hotwords | `small_prompt` 15.91% WER / 95.24% entity recall; adding entity hotwords worsened WER to 19.70% and entity recall to 92.86% | do not feed a broad dynamic mixer-name list through Whisper hotwords |
+| mixer registry inside `initial_prompt` | compact prompt with 20 real XR16 names dropped `small` exactness to 13.89% / WER 28.79%; 60 names dropped to 5.56% / WER 34.85% | keep STT prompt focused on language/command acoustics; domain name resolution belongs after STT |
+| post-STT family-scoped resolution experiment | with `small_prompt_current`, strict replay gave 44.44% fully correct commands; benchmark-only family-aware fuzzy reached 47.22% with 0 wrong accepted on the 20-name XR16 registry; the 60-name stress registry also produced 0 wrong accepted but less gain | preserve MCP-owned family scoping and fail-closed ambiguity safety; do not relax production fuzzy-write safety solely from this corpus |
+
+Operational interpretation:
+
+- stop further micro-benchmarking unless a concrete regression or architectural choice requires it;
+- keep the current STT language/command prompt rather than replacing it with a large runtime mixer-name registry;
+- do not duplicate mixer vocabulary or fuzzy-name logic in LSA; XMSeries-MCP remains authoritative for target families and resolution;
+- prioritize end-to-end Local latency work around `small`: VAD/end-of-speech latency, model lifetime/warm reuse and Faster-Whisper CPU/runtime overhead;
+- retain `base` only as a possible speed fallback if `small` cannot meet acceptable stage latency after runtime optimization;
+- benchmark-only family-aware fuzzy resolution was not promoted to production; current fail-closed write safety remains authoritative.
+
 Target local path:
 
 ```text
