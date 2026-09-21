@@ -92,6 +92,47 @@ HOTWORD_CORE = [
     "guitar-clode", "guitar-loran", "guitar-anto", "basse-mike", "Claude", "batterie",
 ]
 
+
+# Real XR16 names supplied from the user's current mixer snapshot.
+# The screenshot shows exactly these 16 input-channel names. Two additional
+# labels to the right are visually truncated in the UI, so they are deliberately
+# not guessed here.
+XR16_CHANNEL_NAMES = [
+    "vocal-clode",
+    "vocal-anto",
+    "cowbell",
+    "guitar-clode",
+    "guitar-loran",
+    "basse-mike",
+    "guitar-anto",
+    "flute",
+    "CLIC",
+    "strings",
+    "noname",
+    "reserved",
+    "batterie",
+    "retour-tom",
+    "inconnu",
+    "Assistant",
+]
+
+XR16_BUS_NAMES = ["anto", "laurent", "mike", "claude"]
+
+# Additional realistic stage/mixer names used only to stress-test a conservative
+# 60-name registry. They are distractors: none is substituted for a real XR16
+# name and none changes the reference corpus.
+REGISTRY_DISTRACTORS = [
+    "vocal-laurent", "vocal-mike", "vocal-lead", "vocal-guest",
+    "guitar-mike", "guitar-laurent", "guitar-acoustic", "guitar-clean",
+    "bass-di", "bass-amp", "kick", "snare", "hihat", "tom-1",
+    "tom-2", "floor-tom", "overhead-l", "overhead-r", "percussion",
+    "conga", "cajon", "piano", "keys", "synth", "sax", "trumpet",
+    "trombone", "playback-l", "playback-r", "laptop", "phone", "talkback",
+    "monitor-a", "monitor-b", "sidefill", "wedge", "fx-reverb", "fx-delay",
+    "fx-chorus", "fx-flanger",
+]
+
+
 # Canonical entities and aliases used only for benchmark scoring/repair.
 # This is intentionally small and domain-constrained; it is not a free-form NLP rewrite.
 ENTITY_ALIASES = {
@@ -128,13 +169,17 @@ class PlaybackConfig:
 class BenchmarkVariant:
     name: str
     model_name: str
-    use_prompt: bool
+    prompt_mode: str = "current"  # current | xr16 | xr16_60 | none
     hotwords_mode: str = "none"  # none | entities | full
     apply_repair: bool = False
     derived_from: Optional[str] = None
     max_new_tokens: int = 48
     repetition_penalty: float = 1.0
     no_repeat_ngram_size: int = 0
+
+    @property
+    def use_prompt(self) -> bool:
+        return self.prompt_mode != "none"
 
     @property
     def use_hotwords(self) -> bool:
@@ -971,39 +1016,64 @@ def entity_hotwords_string() -> str:
     return _dedupe_hotwords(entity_words)
 
 
+def build_compact_registry_prompt(names: list[str]) -> str:
+    channels = ", ".join(XR16_CHANNEL_NAMES)
+    buses = ", ".join(XR16_BUS_NAMES)
+    extras = [name for name in names if name not in XR16_CHANNEL_NAMES and name not in XR16_BUS_NAMES]
+    lines = [
+        "Commandes audio de scène en français.",
+        "Actions : mets, monte, baisse, mute, démute, coupe, rallume.",
+        "Destinations : bus, retour, façade, main.",
+        "Unités : dB, secondes.",
+        f"Canaux : {channels}.",
+        f"Bus : {buses}.",
+    ]
+    if extras:
+        lines.append("Autres noms possibles : " + ", ".join(extras) + ".")
+    return "\n".join(lines)
+
+
+def xr16_registry_names() -> list[str]:
+    return list(XR16_CHANNEL_NAMES) + list(XR16_BUS_NAMES)
+
+
+def xr16_registry_60_names() -> list[str]:
+    names = xr16_registry_names() + list(REGISTRY_DISTRACTORS)
+    if len(names) != 60:
+        raise RuntimeError(f"Registry conservateur attendu à 60 noms, obtenu: {len(names)}")
+    return names
+
+
 def benchmark_variants(env: dict[str, str]) -> list[BenchmarkVariant]:
     del env  # Variant models are explicit and independent from LOCAL_WHISPER_MODEL.
 
-    # Targeted experiment after the broad benchmark:
-    # - prompt is the stable contextual baseline;
-    # - entity-only hotwords test the expected "Mixer Name Registry" behavior;
-    # - guarded variants add conservative anti-repeat decoding;
-    # - *_current retains the previous full-hotword behavior as a control.
+    # Targeted registry-size experiment:
+    # - *_prompt_current: existing verbose STT prompt, kept as control;
+    # - *_prompt_xr16: compact prompt with the real 16 channels + 4 buses;
+    # - *_prompt_xr16_60: same real registry plus realistic distractors to 60 names;
+    # - *_guarded: same 60-name prompt with conservative anti-repeat decoding.
     return [
-        BenchmarkVariant("base_prompt", "base", True, "none"),
-        BenchmarkVariant("base_prompt_entities", "base", True, "entities"),
+        BenchmarkVariant("base_prompt_current", "base", "current"),
+        BenchmarkVariant("base_prompt_xr16", "base", "xr16"),
+        BenchmarkVariant("base_prompt_xr16_60", "base", "xr16_60"),
         BenchmarkVariant(
-            "base_prompt_entities_guarded",
+            "base_prompt_xr16_60_guarded",
             "base",
-            True,
-            "entities",
+            "xr16_60",
             repetition_penalty=1.10,
             no_repeat_ngram_size=3,
         ),
-        BenchmarkVariant("base_current", "base", True, "full"),
-        BenchmarkVariant("small_prompt", "small", True, "none"),
-        BenchmarkVariant("small_prompt_entities", "small", True, "entities"),
+        BenchmarkVariant("small_prompt_current", "small", "current"),
+        BenchmarkVariant("small_prompt_xr16", "small", "xr16"),
+        BenchmarkVariant("small_prompt_xr16_60", "small", "xr16_60"),
         BenchmarkVariant(
-            "small_prompt_entities_guarded",
+            "small_prompt_xr16_60_guarded",
             "small",
-            True,
-            "entities",
+            "xr16_60",
             repetition_penalty=1.10,
             no_repeat_ngram_size=3,
         ),
-        BenchmarkVariant("small_current", "small", True, "full"),
     ]
-
 
 def percentile95(values: list[float]) -> float:
     if not values:
@@ -1065,6 +1135,7 @@ def score_transcription(
         "variant": variant.name,
         "model": variant.model_name,
         "prompt": variant.use_prompt,
+        "prompt_mode": variant.prompt_mode,
         "hotwords": variant.use_hotwords,
         "hotwords_mode": variant.hotwords_mode,
         "repetition_penalty": variant.repetition_penalty,
@@ -1187,7 +1258,7 @@ def write_benchmark_reports(
     json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     fields = [
-        "variant", "model", "prompt", "hotwords", "hotwords_mode",
+        "variant", "model", "prompt", "prompt_mode", "hotwords", "hotwords_mode",
         "repetition_penalty", "no_repeat_ngram_size", "repair",
         "phrase_id", "take", "file", "reference", "transcription",
         "exact", "wer", "cer", "entity_recall",
@@ -1210,9 +1281,10 @@ def write_benchmark_reports(
         "- Mesures: exact normalisé, WER, CER, rappel des entités, latence et RTF.",
         "- Garde benchmark: max_new_tokens=48 pour empêcher une boucle de décodage de monopoliser un test; "
         "cela ne modifie pas le runtime LSA.",
-        "- Test ciblé: prompt seul vs prompt + hotwords d'entités uniquement, puis même combinaison "
-        "avec repetition_penalty=1.10 et no_repeat_ngram_size=3.",
-        "- Les variantes *_current conservent la liste complète de hotwords précédente comme contrôle.",
+        "- Test ciblé: prompt STT actuel vs prompt compact avec le registry XR16 réel "
+        "(16 canaux + 4 bus), puis le même registry étendu à 60 noms réalistes.",
+        "- Les variantes *_guarded ajoutent repetition_penalty=1.10 et "
+        "no_repeat_ngram_size=3 au prompt compact 60 noms.",
         "- Une variante est interrompue après 3 transcriptions manifestement en boucle."
         "- Le benchmark est autonome: aucun agent LSA ni MCP n'est lancé.",
         "",
@@ -1301,12 +1373,12 @@ def write_benchmark_reports(
         "## Limites",
         "",
         "- Le succès du parseur MCP n'est pas mesuré ici: ce benchmark isole volontairement le STT.",
-        "- `base_current` et `small_current` gardent le comportement historique "
-        "prompt + liste complète de hotwords comme contrôles.",
-        "- Les variantes `*_prompt_entities` simulent le comportement attendu d'un "
-        "Mixer Name Registry: seuls les noms de cibles/destinations rares sont injectés.",
-        "- Les hotwords MCP dynamiques du runtime ne sont pas interrogés; le benchmark "
-        "utilise les entités connues de ce corpus.",
+        "- Les variantes `*_prompt_current` gardent le STT_PROMPT actuel comme contrôle.",
+        "- Les variantes `*_prompt_xr16` utilisent un prompt compact construit avec les "
+        "16 vrais noms de canaux et les 4 vrais noms de bus fournis pour ce XR16.",
+        "- Les variantes `*_prompt_xr16_60` ajoutent 40 distracteurs réalistes afin de "
+        "tester un registry conservateur de 60 noms.",
+        "- Les libellés tronqués sur la capture d'écran ne sont pas devinés.",
         "- La réparation déterministe est évaluée séparément et ne modifie jamais les WAV.",
         "- Canary/Zipformer/whisper.cpp ne sont pas installés automatiquement: le script ne modifie pas "
         "les dépendances du Raspberry pendant une mesure.",
@@ -1327,6 +1399,14 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
     manifest, rows = load_manifest(output_dir)
     repo_root = Path.cwd()
     stt_prompt = resolve_text_setting(env.get("STT_PROMPT", ""), repo_root)
+    compact_xr16_prompt = build_compact_registry_prompt(xr16_registry_names())
+    compact_xr16_60_prompt = build_compact_registry_prompt(xr16_registry_60_names())
+    prompt_by_mode = {
+        "current": stt_prompt,
+        "xr16": compact_xr16_prompt,
+        "xr16_60": compact_xr16_60_prompt,
+        "none": "",
+    }
     language = (env.get("STT_LANGUAGE") or "fr").strip() or "fr"
     full_hotwords = full_hotwords_string()
     entity_hotwords = entity_hotwords_string()
@@ -1339,15 +1419,17 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
     outliers = [row.get("file") for row in rows if is_audio_outlier(row)]
     print(f"Outliers conservés     : {len(outliers)}" + (f" ({', '.join(outliers)})" if outliers else ""))
     print(f"Langue                 : {language}")
-    print(f"Prompt STT             : {'oui' if stt_prompt else 'non'}")
-    print(f"Hotwords entités       : {entity_hotwords}")
-    print(f"Hotwords complets      : {full_hotwords}")
+    print(f"Prompt STT actuel      : {'oui' if stt_prompt else 'non'}")
+    print(f"Registry XR16 réel     : {len(xr16_registry_names())} noms")
+    print(f"Registry conservateur  : {len(xr16_registry_60_names())} noms")
+    print("Canaux XR16            : " + ", ".join(XR16_CHANNEL_NAMES))
+    print("Bus XR16               : " + ", ".join(XR16_BUS_NAMES))
     print(f"Modèle configuré LSA   : {(env.get('LOCAL_WHISPER_MODEL') or 'base').strip() or 'base'}")
     print("\nVariantes:")
     for variant in variants:
         source = f" (dérivée de {variant.derived_from})" if variant.derived_from else ""
         print(
-            f"  - {variant.name}: model={variant.model_name}, prompt={variant.use_prompt}, "
+            f"  - {variant.name}: model={variant.model_name}, prompt={variant.prompt_mode}, "
             f"hotwords={variant.hotwords_mode}, rep_penalty={variant.repetition_penalty:.2f}, "
             f"no_repeat_ngram={variant.no_repeat_ngram_size}, repair={variant.apply_repair}{source}"
         )
@@ -1408,8 +1490,9 @@ def run_benchmark(args: argparse.Namespace, env_path: Path, env: dict[str, str])
                     "repetition_penalty": variant.repetition_penalty,
                     "no_repeat_ngram_size": variant.no_repeat_ngram_size,
                 }
-                if variant.use_prompt and stt_prompt:
-                    kwargs["initial_prompt"] = stt_prompt
+                selected_prompt = prompt_by_mode.get(variant.prompt_mode, "")
+                if variant.use_prompt and selected_prompt:
+                    kwargs["initial_prompt"] = selected_prompt
                 if variant.hotwords_mode == "entities":
                     kwargs["hotwords"] = entity_hotwords
                 elif variant.hotwords_mode == "full":
