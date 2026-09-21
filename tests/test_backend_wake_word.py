@@ -206,6 +206,7 @@ def test_startup_ready_message_reports_tool_count_and_failed_servers():
     )
 
     assistant.wake_words = ["momo"]
+    assistant.backend_wake_word_detector = object()
     assert assistant._startup_ready_message(["mixer"], {}) == (
         "Assistant vocal prêt à exécuter des commandes, aucun MCP connecté. "
         "Wake word actif, prononcez momo pour me réveiller."
