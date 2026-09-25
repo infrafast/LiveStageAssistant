@@ -116,13 +116,42 @@ class RealtimeTurnRecoveryTests(unittest.TestCase):
             )
 
             self.assertEqual(engine.cancel_count, 1)
-            self.assertEqual(engine.discard_count, 1)
+            self.assertEqual(engine.discard_count, 0)
             self.assertIn("resp-1", interrupted)
             self.assertTrue(queue.empty())
             self.assertEqual(tracker.phase, RealtimeTurnPhase.IDLE)
             self.assertFalse(tracker.has_pending_work())
             self.assertEqual(semantic.state, SemanticAudioState.LISTENING)
             self.assertEqual(busy_values, [False])
+
+        asyncio.run(scenario())
+
+    def test_wait_response_timeout_clears_uncommitted_input(self) -> None:
+        async def scenario() -> None:
+            engine = _FakeEngine()
+            tracker = RealtimeTurnTracker()
+            tracker.speech_started()
+            tracker.speech_stopped()
+            semantic = SemanticAudioController(
+                SemanticAudioConfig(),
+                play_once=lambda _cue: None,
+                start_loop=lambda _cue: None,
+                stop_loop=lambda: None,
+            )
+
+            await recover_turn_timeout(
+                engine=engine,
+                turn_tracker=tracker,
+                interrupted=set(),
+                queue=asyncio.Queue(),
+                semantic=semantic,
+                callbacks=None,
+                timeout_seconds=5.0,
+            )
+
+            self.assertEqual(engine.cancel_count, 1)
+            self.assertEqual(engine.discard_count, 1)
+            self.assertEqual(tracker.phase, RealtimeTurnPhase.IDLE)
 
         asyncio.run(scenario())
 
