@@ -824,9 +824,14 @@ def benchmark_whisper_cpp(
     process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
     try:
         deadline = time.monotonic() + 120
-        while not health(port):
+        while True:
             if process.poll() is not None:
                 raise RuntimeError(f"whisper-server arrêté; voir {log_path}")
+            try:
+                if health(port):
+                    break
+            except Exception:
+                pass
             if time.monotonic() > deadline:
                 raise TimeoutError(f"whisper-server non prêt; voir {log_path}")
             time.sleep(0.2)
