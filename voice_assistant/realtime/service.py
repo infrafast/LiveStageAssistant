@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from dataclasses import dataclass
+from enum import Enum
 import json
 import os
 from pathlib import Path
@@ -83,12 +84,24 @@ class RealtimeRuntimeCallbacks:
         return bool(self.pop_cancel_requested or self.pop_injected_command)
 
 
+class RealtimeTurnPhase(str, Enum):
+    """Explicit lifecycle phase for one provider realtime turn."""
+
+    IDLE = "idle"
+    CAPTURING = "capturing"
+    WAIT_RESPONSE = "wait_response"
+    RESPONDING = "responding"
+    TOOL_RUNNING = "tool_running"
+    WAIT_FOLLOWUP = "wait_followup"
+
+
 class RealtimeTurnTracker:
     """Track one realtime turn so recovery never has to guess action state."""
 
     def __init__(self, *, action_grace_seconds: float = DEFAULT_REALTIME_ACTION_GRACE_SECONDS) -> None:
         self.action_grace_seconds = max(0.0, float(action_grace_seconds))
         self.current_response_id = ""
+        self.phase = RealtimeTurnPhase.IDLE
         self.last_activity = time.monotonic()
         self.awaiting_response = False
         self.tool_in_flight = False
@@ -98,23 +111,30 @@ class RealtimeTurnTracker:
         self.last_activity = time.monotonic()
 
     def start_text_turn(self) -> None:
+        self.phase = RealtimeTurnPhase.WAIT_RESPONSE
         self.awaiting_response = True
         self.touch()
 
     def speech_started(self) -> None:
-        self.awaiting_response = True
+        self.phase = RealtimeTurnPhase.CAPTURING
+        self.awaiting_response = False
+        self.speech_stopped_at = None
         self.touch()
 
     def speech_stopped(self) -> None:
+        self.phase = RealtimeTurnPhase.WAIT_RESPONSE
+        self.awaiting_response = True
         self.speech_stopped_at = time.monotonic()
         self.touch()
 
     def response_started_event(self, response_id: str) -> None:
+        self.phase = RealtimeTurnPhase.RESPONDING
         self.current_response_id = response_id
         self.awaiting_response = True
         self.touch()
 
     def tool_started(self) -> None:
+        self.phase = RealtimeTurnPhase.TOOL_RUNNING
         self.tool_in_flight = True
         self.awaiting_response = True
         self.touch()
@@ -122,19 +142,27 @@ class RealtimeTurnTracker:
     def tool_finished(self, *, expect_followup: bool = True) -> None:
         self.tool_in_flight = False
         self.awaiting_response = bool(expect_followup)
+        self.phase = RealtimeTurnPhase.WAIT_FOLLOWUP if expect_followup else RealtimeTurnPhase.IDLE
         self.touch()
 
     def tool_followup_requested(self) -> None:
+        self.phase = RealtimeTurnPhase.WAIT_FOLLOWUP
         self.awaiting_response = True
         self.touch()
 
     def response_done(self, response_id: str) -> None:
         if self.current_response_id == response_id:
             self.current_response_id = ""
-        self.awaiting_response = False
+        if self.tool_in_flight:
+            self.phase = RealtimeTurnPhase.TOOL_RUNNING
+            self.awaiting_response = True
+        else:
+            self.phase = RealtimeTurnPhase.IDLE
+            self.awaiting_response = False
         self.touch()
 
     def reset_after_cancel_or_failure(self) -> None:
+        self.phase = RealtimeTurnPhase.IDLE
         self.current_response_id = ""
         self.awaiting_response = False
         self.tool_in_flight = False
@@ -143,7 +171,8 @@ class RealtimeTurnTracker:
 
     def has_pending_work(self) -> bool:
         return bool(
-            self.current_response_id
+            self.phase != RealtimeTurnPhase.IDLE
+            or self.current_response_id
             or self.awaiting_response
             or self.tool_in_flight
         )
@@ -152,7 +181,7 @@ class RealtimeTurnTracker:
         return max(0.0, time.monotonic() - self.last_activity)
 
     def pending_summary(self) -> str:
-        parts: list[str] = []
+        parts: list[str] = [f"phase={self.phase.value}"]
         if self.current_response_id:
             parts.append(f"response={self.current_response_id}")
         if self.awaiting_response:
@@ -306,7 +335,7 @@ def _format_user_transcript_error(data: dict[str, Any]) -> str:
     return str(error or data or "unknown transcription error").strip()
 
 
-async def handle_turn_watchdog_timeout(
+async def recover_turn_timeout(
     *,
     engine,
     turn_tracker: RealtimeTurnTracker,
@@ -314,29 +343,33 @@ async def handle_turn_watchdog_timeout(
     queue: asyncio.Queue,
     semantic: SemanticAudioController,
     callbacks: RealtimeRuntimeCallbacks | None,
-    stop_event: asyncio.Event,
-    provider_failure: asyncio.Event,
     timeout_seconds: float,
 ) -> None:
+    """Recover one stalled turn without destroying a healthy provider session."""
     response_id = turn_tracker.current_response_id
     if response_id:
         interrupted.add(response_id)
     clear_queue(queue)
     print(
-        "Realtime turn watchdog timeout after "
-        f"{timeout_seconds:.1f}s; pending={turn_tracker.pending_summary()}; reconnecting session",
+        "Realtime turn timeout after "
+        f"{timeout_seconds:.1f}s; pending={turn_tracker.pending_summary()}; "
+        "cancelling current turn without reconnecting session",
         flush=True,
     )
     try:
         await engine.cancel_response()
     except Exception as exc:
-        print(f"Realtime watchdog cancellation warning: {exc}", flush=True)
+        print(f"Realtime turn cancellation warning: {exc}", flush=True)
+    discard_input = getattr(engine, "discard_input_audio", None)
+    if callable(discard_input):
+        try:
+            await discard_input()
+        except Exception as exc:
+            print(f"Realtime input-buffer reset warning: {exc}", flush=True)
     turn_tracker.reset_after_cancel_or_failure()
     transition_semantic(semantic, SemanticAudioState.IDLE, callbacks)
     transition_semantic(semantic, SemanticAudioState.LISTENING, callbacks)
     await _set_busy(callbacks, False)
-    provider_failure.set()
-    stop_event.set()
 
 
 async def settle_completed_response(
@@ -899,18 +932,16 @@ async def event_loop(
                     and not _active_task_exists(tool_tasks)
                     and turn_tracker.age_seconds() >= turn_timeout
                 ):
-                    await handle_turn_watchdog_timeout(
+                    await recover_turn_timeout(
                         engine=engine,
                         turn_tracker=turn_tracker,
                         interrupted=interrupted,
                         queue=queue,
                         semantic=semantic,
                         callbacks=runtime_callbacks,
-                        stop_event=stop_event,
-                        provider_failure=provider_failure,
                         timeout_seconds=turn_timeout,
                     )
-                    return
+                    continue
 
                 inactivity_timeout = _float_env(
                     "REALTIME_INACTIVITY_TIMEOUT_SECONDS",
@@ -970,10 +1001,14 @@ async def event_loop(
                             continue
             elif event.type == "user_transcript_error":
                 print(f"Realtime user transcription error: {_format_user_transcript_error(event.data)}", flush=True)
-                if turn_tracker.speech_stopped_at is not None:
-                    turn_tracker.start_text_turn()
-                    await _set_busy(runtime_callbacks, True)
-                    transition_semantic(semantic, SemanticAudioState.PROCESSING, runtime_callbacks)
+                # Input transcription is observational metadata, not a reason to
+                # fabricate an awaiting-response state. A provider response may
+                # still arrive independently; otherwise return to listening.
+                if not turn_tracker.current_response_id and not turn_tracker.tool_in_flight:
+                    turn_tracker.reset_after_cancel_or_failure()
+                    await _set_busy(runtime_callbacks, False)
+                    transition_semantic(semantic, SemanticAudioState.IDLE, runtime_callbacks)
+                    transition_semantic(semantic, SemanticAudioState.LISTENING, runtime_callbacks)
             elif event.type == "response_started":
                 response = event.data.get("response") or {}
                 turn_tracker.response_started_event(str(response.get("id") or ""))
