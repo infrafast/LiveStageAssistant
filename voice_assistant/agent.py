@@ -460,11 +460,13 @@ CURRENT_STATE_QUERY_MARKERS = (
     "à combien",
 )
 DEFAULT_STT_PROMPT = (
-    "Commandes courtes en français pour du mixage live. "
-    "Mots fréquents: mets, met, règle, baisse, monte, coupe, mute, active, réactive, "
-    "bus, retour, façade, dB, moins trois dB, Voc-Claude, snare, kick, Laurent. "
-    "Ne colle pas le verbe 'mets' au nom qui suit: écris 'mets Claude', 'mets Voc-Claude', 'mets snare'. "
-    "Garde les noms de pistes courts et précis."
+    "Commandes courtes en français pour le contrôle audio de scène. "
+    "Transcrire fidèlement ce qui est prononcé, notamment les nombres, signes et unités. "
+    "Ne rien ajouter, compléter ni reformuler."
+)
+LOCAL_WHISPER_GENERIC_HOTWORDS = (
+    "mets, monte, baisse, mute, démute, coupe, rallume, active, réactive, "
+    "niveau, volume, statut, mixeur, retour, façade, main, progressivement, dB"
 )
 FUSED_SET_COMMAND_RE = re.compile(r"^\s*(mets|met|me)([a-zà-ÿ][a-zà-ÿ0-9_-]{3,})(\b|$)", re.IGNORECASE)
 STT_SILENCE_HALLUCINATION_PHRASES = (
@@ -2022,7 +2024,7 @@ class VoiceAssistant:
         elevenlabs_api_key: str | None = None,
         model: str = "gpt-4o-mini",
         stt_provider: str = "openai-whisper",
-        local_whisper_model: str = "small",
+        local_whisper_model: str = "base",
         stt_language: str | None = None,
         stt_prompt: str | None = None,
         stt_timeout_seconds: float = DEFAULT_STT_TIMEOUT_SECONDS,
@@ -2414,7 +2416,6 @@ class VoiceAssistant:
         self.mcp_failed_servers: dict[str, str] = {}
         self.session_context_store = session_context_store
         self.session_context_size = max(0, int(session_context_size or 0))
-        self.stt_prompt = self._with_mcp_routing_stt_keywords(base_stt_prompt)
         self.mcp_client = None
         self.agent = None
         self.mcp_initialization_error: str | None = None
@@ -3058,22 +3059,6 @@ class VoiceAssistant:
                     keywords.append(normalized)
                     seen.add(dedupe_key)
         return keywords
-
-    def _with_mcp_routing_stt_keywords(self, base_prompt: str) -> str:
-        prompt = (base_prompt or DEFAULT_STT_PROMPT).strip()
-        keywords = self._mcp_routing_keywords()
-        if not keywords:
-            return prompt
-
-        limited_keywords = keywords[:80]
-        keyword_text = ", ".join(limited_keywords)
-        routing_prompt = f"Mots métier MCP possibles: {keyword_text}."
-        if routing_prompt.lower() in prompt.lower():
-            return prompt
-
-        enriched = f"{prompt} {routing_prompt}".strip()
-        print(f"STT prompt enriched with {len(limited_keywords)} MCP routing keyword(s).")
-        return enriched
 
     def _refresh_mcp_tool_routing_cache(self) -> None:
         self.mcp_tool_routes = self._build_mcp_tool_routes(self.mcp_config)
@@ -5143,30 +5128,8 @@ class VoiceAssistant:
                 self.semantic_audio.transition(SemanticAudioState.IDLE)
 
     def _local_whisper_hotwords(self) -> str:
-        """Return cached compact hints for short deterministic stage commands."""
-        cached = getattr(self, "_local_whisper_hotwords_cache", None)
-        if cached is not None:
-            return cached
-
-        core = [
-            "mets", "monte", "baisse", "mute", "unmute", "coupe", "rallume",
-            "niveau", "volume", "fader", "bus", "retour", "façade", "main",
-            "moins", "plus", "dB", "décibel", "décibels",
-            "zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf",
-            "dix", "onze", "douze", "treize", "quatorze", "quinze", "seize",
-            "vingt", "trente", "quarante", "cinquante", "soixante", "quatre-vingt",
-        ]
-        combined: list[str] = []
-        seen: set[str] = set()
-        for item in [*core, *self._mcp_routing_keywords()[:80]]:
-            value = str(item or "").strip()
-            key = value.casefold()
-            if value and key not in seen:
-                seen.add(key)
-                combined.append(value)
-        cached = ", ".join(combined)
-        self._local_whisper_hotwords_cache = cached
-        return cached
+        """Return fixed generic speech hints; MCP/device names never bias Local STT."""
+        return LOCAL_WHISPER_GENERIC_HOTWORDS
 
     def audio_to_text_local_whisper(self, audio_data: bytes) -> str | None:
         """Convert native 16 kHz mono PCM directly with faster-whisper."""
