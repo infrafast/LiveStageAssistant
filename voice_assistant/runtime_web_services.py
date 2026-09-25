@@ -725,12 +725,12 @@ class RuntimeWebServices:
         voice_engine: str,
         realtime_model: str,
         realtime_voice: str,
-        realtime_capture_timeout_seconds: float,
-        realtime_wait_response_timeout_seconds: float,
-        realtime_response_timeout_seconds: float,
-        realtime_followup_timeout_seconds: float,
         cloud_tts_output_gain: float,
         local_tts_output_gain: float,
+        realtime_capture_timeout_seconds: float = 15.0,
+        realtime_wait_response_timeout_seconds: float = 8.0,
+        realtime_response_timeout_seconds: float = 30.0,
+        realtime_followup_timeout_seconds: float = 12.0,
     ) -> dict[str, Any]:
         """Persist the unified GUI configuration into the active runtime profile."""
         values = self._values()
