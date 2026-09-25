@@ -1719,7 +1719,6 @@ class WebMonitor:
                         realtime_wait_response_timeout_seconds = float(payload.get("realtime_wait_response_timeout_seconds") or 8.0)
                         realtime_response_timeout_seconds = float(payload.get("realtime_response_timeout_seconds") or 30.0)
                         realtime_followup_timeout_seconds = float(payload.get("realtime_followup_timeout_seconds") or 12.0)
-                        local_tts_output_gain = float(payload.get("local_tts_output_gain") if payload.get("local_tts_output_gain") is not None else 1.0)
                         cloud_tts_output_gain = float(payload.get("cloud_tts_output_gain") if payload.get("cloud_tts_output_gain") is not None else 1.0)
                         local_tts_output_gain = float(payload.get("local_tts_output_gain") if payload.get("local_tts_output_gain") is not None else 1.0)
                     except (TypeError, ValueError):
