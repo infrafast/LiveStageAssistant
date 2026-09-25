@@ -24,7 +24,7 @@ def _bare_assistant(model: FakeWhisperModel):
     assistant.rate = 16000
     assistant.stt_language = "fr"
     assistant.stt_prompt = "Commandes audio en français."
-    assistant.local_whisper_model_name = "small"
+    assistant.local_whisper_model_name = "base"
     assistant._load_local_whisper_model = lambda: model
     assistant._local_whisper_hotwords = lambda: "mets, monte, baisse"
     assistant.normalize_stt_command_text = lambda text: text.strip()
@@ -49,6 +49,7 @@ def test_local_whisper_uses_native_pcm_without_temp_wav():
         atol=1e-7,
     )
     assert model.kwargs["language"] == "fr"
+    assert model.kwargs["initial_prompt"] == "Commandes audio en français."
     assert model.kwargs["beam_size"] == 1
     assert model.kwargs["best_of"] == 1
     assert model.kwargs["temperature"] == 0.0
@@ -58,21 +59,19 @@ def test_local_whisper_uses_native_pcm_without_temp_wav():
     assert model.kwargs["max_new_tokens"] == 48
 
 
-def test_local_whisper_hotwords_are_cached_after_first_build():
+def test_local_whisper_hotwords_are_fixed_generic_and_ignore_mcp_routing():
     assistant = object.__new__(agent.VoiceAssistant)
-    calls = 0
 
     def routing_keywords():
-        nonlocal calls
-        calls += 1
-        return ["mixer", "qlc"]
+        raise AssertionError("MCP routing vocabulary must not reach Local Whisper")
 
     assistant._mcp_routing_keywords = routing_keywords
 
-    first = agent.VoiceAssistant._local_whisper_hotwords(assistant)
-    second = agent.VoiceAssistant._local_whisper_hotwords(assistant)
+    hotwords = agent.VoiceAssistant._local_whisper_hotwords(assistant)
 
-    assert first == second
-    assert calls == 1
-    assert "mets" in first
-    assert "mixer" in first
+    assert "mets" in hotwords
+    assert "statut" in hotwords
+    assert "dB" in hotwords
+    assert "qlc" not in hotwords.casefold()
+    assert "guitar-anto" not in hotwords.casefold()
+    assert "laurent" not in hotwords.casefold()
