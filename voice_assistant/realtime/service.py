@@ -210,7 +210,11 @@ def is_benign_provider_error(event_data: dict[str, Any]) -> bool:
         return False
     code = str(error.get("code") or "").strip()
     message = str(error.get("message") or "").strip().lower()
-    return code == "response_cancel_not_active" or "cancellation failed: no active response found" in message
+    return (
+        code in {"response_cancel_not_active", "conversation_already_has_active_response"}
+        or "cancellation failed: no active response found" in message
+        or "conversation already has an active response" in message
+    )
 
 
 def _callbacks(callbacks: RealtimeRuntimeCallbacks | None) -> RealtimeRuntimeCallbacks:
@@ -1016,6 +1020,24 @@ async def event_loop(
                         await _set_busy(runtime_callbacks, False)
                         transition_semantic(semantic, SemanticAudioState.IDLE, runtime_callbacks)
                         transition_semantic(semantic, SemanticAudioState.LISTENING, runtime_callbacks)
+                        continue
+                    if (
+                        runtime_callbacks.defer_provider_response_until_user_transcript
+                        and (
+                            turn_tracker.current_response_id
+                            or turn_tracker.phase
+                            in {
+                                RealtimeTurnPhase.RESPONDING,
+                                RealtimeTurnPhase.TOOL_RUNNING,
+                                RealtimeTurnPhase.WAIT_FOLLOWUP,
+                            }
+                        )
+                    ):
+                        print(
+                            "Realtime overlapping user transcript ignored while previous turn is active: "
+                            f"{text}",
+                            flush=True,
+                        )
                         continue
                     print(f"Utilisateur: {text}", flush=True)
                     await _append_dialogue(runtime_callbacks, "user", text)
