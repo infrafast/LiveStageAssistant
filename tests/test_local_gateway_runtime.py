@@ -449,6 +449,61 @@ async def test_continuation_is_pinned_to_requesting_server():
 
 
 @pytest.mark.asyncio
+async def test_rejected_or_stale_continuation_falls_back_to_fresh_routing():
+    qlc = FakeSession(
+        analyze=lambda args: (
+            {
+                "protocol": GATEWAY_PROTOCOL,
+                "recognized": True,
+                "status": "clarification",
+                "effect": "none",
+                "continuationToken": "cont",
+                "responseText": "Quel bouton ?",
+            }
+            if "continuationToken" not in args
+            else {
+                "protocol": GATEWAY_PROTOCOL,
+                "recognized": False,
+                "status": "unrecognized",
+                "effect": "none",
+                "responseText": "Cette clarification QLC+ n'est plus valide.",
+            }
+        ),
+    )
+    mixer = FakeSession(
+        analyze=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "recognized": True,
+            "status": "ready",
+            "effect": "write",
+            "planToken": "mix-plan",
+        },
+        execute=lambda args: {
+            "protocol": GATEWAY_PROTOCOL,
+            "ok": True,
+            "responseText": "Mixer done",
+        },
+    )
+    orchestrator = DeterministicGatewayOrchestrator(
+        config(
+            ("qlc", stdio_entry(routing="qlc")),
+            ("mixer", stdio_entry(routing="monte,batterie")),
+        ),
+        client=FakeClient({"qlc": qlc, "mixer": mixer}),
+    )
+    await orchestrator.start()
+
+    assert await orchestrator.handle("qlc blanc") == "Quel bouton ?"
+    assert await orchestrator.handle("monte batterie de 3 dB") == "Mixer done"
+
+    assert any(
+        name == ANALYZE_TOOL and args.get("continuationToken") == "cont"
+        for name, args in qlc.calls
+    )
+    assert [name for name, _args in mixer.calls] == [ANALYZE_TOOL, EXECUTE_TOOL]
+
+
+@pytest.mark.asyncio
 async def test_write_approval_requires_explicit_yes_and_no_cancels():
     def make_session():
         return FakeSession(
