@@ -16,8 +16,6 @@ import sherpa_onnx
 SAMPLE_RATE = 16000
 
 
-ENGINE = "sherpa-onnx-zipformer-fr-int8"
-
 
 def format_eta(seconds: float) -> str:
     seconds = max(0, int(round(seconds)))
@@ -64,19 +62,43 @@ def model_files(model_dir: Path) -> dict[str, Path]:
     return files
 
 
-def create_recognizer(model_dir: Path, threads: int):
+def create_recognizer(
+    model_dir: Path,
+    threads: int,
+    decoding_method: str,
+    hotwords_file: Path | None,
+    hotwords_score: float,
+    bpe_vocab: Path | None,
+    max_active_paths: int,
+):
     files = model_files(model_dir)
-    return sherpa_onnx.OnlineRecognizer.from_transducer(
-        tokens=str(files["tokens"]),
-        encoder=str(files["encoder"]),
-        decoder=str(files["decoder"]),
-        joiner=str(files["joiner"]),
-        num_threads=threads,
-        provider="cpu",
-        sample_rate=SAMPLE_RATE,
-        feature_dim=80,
-        decoding_method="greedy_search",
-    )
+    kwargs = {
+        "tokens": str(files["tokens"]),
+        "encoder": str(files["encoder"]),
+        "decoder": str(files["decoder"]),
+        "joiner": str(files["joiner"]),
+        "num_threads": threads,
+        "provider": "cpu",
+        "sample_rate": SAMPLE_RATE,
+        "feature_dim": 80,
+        "decoding_method": decoding_method,
+        "max_active_paths": max_active_paths,
+    }
+    if hotwords_file is not None:
+        if decoding_method != "modified_beam_search":
+            raise ValueError("Sherpa hotwords require modified_beam_search")
+        if bpe_vocab is None or not bpe_vocab.exists():
+            raise FileNotFoundError(
+                "French BPE vocabulary required for Sherpa hotwords: "
+                f"{bpe_vocab}"
+            )
+        kwargs.update({
+            "hotwords_file": str(hotwords_file),
+            "hotwords_score": hotwords_score,
+            "modeling_unit": "bpe",
+            "bpe_vocab": str(bpe_vocab),
+        })
+    return sherpa_onnx.OnlineRecognizer.from_transducer(**kwargs)
 
 
 def transcribe(recognizer, path: Path) -> str:
@@ -98,16 +120,44 @@ def main() -> int:
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--engine-name", default="sherpa-onnx-zipformer-fr-int8")
+    parser.add_argument(
+        "--decoding-method",
+        choices=["greedy_search", "modified_beam_search"],
+        default="greedy_search",
+    )
+    parser.add_argument("--max-active-paths", type=int, default=4)
+    parser.add_argument("--hotwords-file")
+    parser.add_argument("--hotwords-score", type=float, default=1.5)
+    parser.add_argument("--bpe-vocab")
     args = parser.parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     rows = list(manifest.get("recordings") or [])
     corpus_dir = Path(args.corpus_dir)
     model_dir = Path(args.model_dir)
+    hotwords_file = Path(args.hotwords_file) if args.hotwords_file else None
+    bpe_vocab = Path(args.bpe_vocab) if args.bpe_vocab else None
+    if hotwords_file is not None and not hotwords_file.exists():
+        raise FileNotFoundError(hotwords_file)
 
-    print("Chargement du modèle sherpa-onnx Zipformer FR...", flush=True)
+    print(
+        "Chargement du modèle sherpa-onnx Zipformer FR "
+        f"({args.decoding_method}"
+        + (f", hotwords score={args.hotwords_score}" if hotwords_file else "")
+        + ")...",
+        flush=True,
+    )
     started = time.perf_counter()
-    recognizer = create_recognizer(model_dir, args.threads)
+    recognizer = create_recognizer(
+        model_dir,
+        args.threads,
+        args.decoding_method,
+        hotwords_file,
+        args.hotwords_score,
+        bpe_vocab,
+        args.max_active_paths,
+    )
     load_ms = (time.perf_counter() - started) * 1000.0
     print(f"Modèle chargé en {load_ms:.0f} ms.", flush=True)
 
@@ -121,8 +171,9 @@ def main() -> int:
     total = len(rows)
     for index, row in enumerate(rows, 1):
         path = corpus_dir / str(row["file"])
-        print(f'[{ENGINE}] [{index:02d}/{total:02d}] À décoder : "{row["reference"]}"', flush=True)
-        print(f'{" " * (len(ENGINE) + 5)}fichier    : {row["file"]}', flush=True)
+        engine = args.engine_name
+        print(f'[{engine}] [{index:02d}/{total:02d}] À décoder : "{row["reference"]}"', flush=True)
+        print(f'{" " * (len(engine) + 5)}fichier    : {row["file"]}', flush=True)
         started = time.perf_counter()
         try:
             text = transcribe(recognizer, path)
@@ -133,14 +184,14 @@ def main() -> int:
         decode_ms = round((time.perf_counter() - started) * 1000.0, 2)
         duration = float(row.get("duration_seconds") or 0.0)
         rtf = round((decode_ms / 1000.0) / duration, 4) if duration else None
-        print(f'{" " * (len(ENGINE) + 5)}décodé     : "{text or "<vide>"}"', flush=True)
+        print(f'{" " * (len(engine) + 5)}décodé     : "{text or "<vide>"}"', flush=True)
         if error:
-            print(f'{" " * (len(ENGINE) + 5)}ERREUR     : {error}', flush=True)
+            print(f'{" " * (len(engine) + 5)}ERREUR     : {error}', flush=True)
         decode_times.append(decode_ms)
         remaining = max(0, total - index)
         eta = (sum(decode_times) / len(decode_times) / 1000.0) * remaining
         print(
-            f'{" " * (len(ENGINE) + 5)}temps      : {decode_ms} ms | '
+            f'{" " * (len(engine) + 5)}temps      : {decode_ms} ms | '
             f'RTF={rtf} | ETA ≈ {format_eta(eta)}',
             flush=True,
         )
@@ -155,6 +206,12 @@ def main() -> int:
         "sherpa_version": getattr(sherpa_onnx, "__version__", "unknown"),
         "load_ms": round(load_ms, 2),
         "threads": args.threads,
+        "engine": args.engine_name,
+        "decoding_method": args.decoding_method,
+        "max_active_paths": args.max_active_paths,
+        "hotwords_file": str(hotwords_file) if hotwords_file else "",
+        "hotwords_score": args.hotwords_score if hotwords_file else None,
+        "bpe_vocab": str(bpe_vocab) if bpe_vocab else "",
         "results": results,
     }
     Path(args.output).write_text(
