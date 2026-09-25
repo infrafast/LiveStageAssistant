@@ -665,6 +665,17 @@ def env_float_from_mapping(values: dict, name: str, default: float) -> float:
         return default
 
 
+def normalize_tts_speed(provider: str, speed: float | None) -> float:
+    """Clamp TTS speed to the selected provider's supported range."""
+    value = float(speed if speed is not None else 1.0)
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider == "elevenlabs":
+        return max(0.7, min(1.2, value))
+    if normalized_provider == "openai":
+        return max(0.6, min(1.8, value))
+    return value
+
+
 def elevenlabs_playback_available() -> bool:
     """Return whether generated MP3 audio can be played or decoded locally."""
     return ffmpeg_decode_available()
@@ -1846,7 +1857,7 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
                 model_id="eleven_multilingual_v2",
                 output_format="mp3_44100_128",
                 optimize_streaming_latency="2",
-                voice_settings=VoiceSettings(speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0)),
+                voice_settings=VoiceSettings(speed=normalize_tts_speed("elevenlabs", env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0))),
             )
             play_auto_mp3(audio if isinstance(audio, bytes) else b"".join(audio))
             return
@@ -5628,7 +5639,7 @@ class VoiceAssistant:
             voice=voice,
             input=cleaned_text,
             response_format="mp3",
-            speed=max(0.6, min(1.8, float(speed or 1.0))),
+            speed=normalize_tts_speed("openai", speed),
         )
         return response.read()
 
@@ -5651,7 +5662,7 @@ class VoiceAssistant:
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
             optimize_streaming_latency="2",
-            voice_settings=VoiceSettings(speed=max(0.6, min(1.8, float(speed or 1.0)))),
+            voice_settings=VoiceSettings(speed=normalize_tts_speed("elevenlabs", speed)),
         )
 
     def web_text_to_speech_openai(
