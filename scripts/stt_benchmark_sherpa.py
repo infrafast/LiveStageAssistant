@@ -16,6 +16,20 @@ import sherpa_onnx
 SAMPLE_RATE = 16000
 
 
+ENGINE = "sherpa-onnx-zipformer-fr-int8"
+
+
+def format_eta(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{sec:02d}s"
+    if minutes:
+        return f"{minutes}m{sec:02d}s"
+    return f"{sec}s"
+
+
 def read_wav(path: Path) -> tuple[np.ndarray, int]:
     with wave.open(str(path), "rb") as wav:
         channels = wav.getnchannels()
@@ -91,16 +105,24 @@ def main() -> int:
     corpus_dir = Path(args.corpus_dir)
     model_dir = Path(args.model_dir)
 
+    print("Chargement du modèle sherpa-onnx Zipformer FR...", flush=True)
     started = time.perf_counter()
     recognizer = create_recognizer(model_dir, args.threads)
     load_ms = (time.perf_counter() - started) * 1000.0
+    print(f"Modèle chargé en {load_ms:.0f} ms.", flush=True)
 
     if rows:
+        print(f'Warm-up (non compté) : {rows[0]["file"]}', flush=True)
         transcribe(recognizer, corpus_dir / str(rows[0]["file"]))
+        print("Warm-up terminé.", flush=True)
 
     results = []
-    for row in rows:
+    decode_times: list[float] = []
+    total = len(rows)
+    for index, row in enumerate(rows, 1):
         path = corpus_dir / str(row["file"])
+        print(f'[{ENGINE}] [{index:02d}/{total:02d}] À décoder : "{row["reference"]}"', flush=True)
+        print(f'{" " * (len(ENGINE) + 5)}fichier    : {row["file"]}', flush=True)
         started = time.perf_counter()
         try:
             text = transcribe(recognizer, path)
@@ -108,10 +130,24 @@ def main() -> int:
         except Exception as exc:
             text = ""
             error = f"{type(exc).__name__}: {exc}"
+        decode_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        duration = float(row.get("duration_seconds") or 0.0)
+        rtf = round((decode_ms / 1000.0) / duration, 4) if duration else None
+        print(f'{" " * (len(ENGINE) + 5)}décodé     : "{text or "<vide>"}"', flush=True)
+        if error:
+            print(f'{" " * (len(ENGINE) + 5)}ERREUR     : {error}', flush=True)
+        decode_times.append(decode_ms)
+        remaining = max(0, total - index)
+        eta = (sum(decode_times) / len(decode_times) / 1000.0) * remaining
+        print(
+            f'{" " * (len(ENGINE) + 5)}temps      : {decode_ms} ms | '
+            f'RTF={rtf} | ETA ≈ {format_eta(eta)}',
+            flush=True,
+        )
         results.append({
             "file": str(row["file"]),
             "transcription": text,
-            "decode_ms": round((time.perf_counter() - started) * 1000.0, 2),
+            "decode_ms": decode_ms,
             "error": error,
         })
 
