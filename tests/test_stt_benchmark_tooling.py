@@ -94,3 +94,9 @@ def test_sherpa_setup_fetches_benchmark_only_bpe_vocab():
     content = SETUP.read_text(encoding="utf-8")
     assert "unigram_500.vocab" in content
     assert "icefall-asr-commonvoice-fr-pruned-transducer-stateless7-streaming-2023-04-02" in content
+
+
+def test_targeted_engine_runs_preserve_full_baseline_aliases():
+    content = SCRIPT.read_text(encoding="utf-8")
+    assert "publish_latest=requested_engines is None" in content
+    assert "Run ciblé: les alias benchmark_results.* du corpus complet" in content
