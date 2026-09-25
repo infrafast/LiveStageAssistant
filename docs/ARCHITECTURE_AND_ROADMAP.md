@@ -862,6 +862,7 @@ Architecture rules:
 - when no route matches, gateway **analysis** may run concurrently because it must be side-effect-free; execution is single-plan and sequential;
 - zero recognized gateways -> deterministic local "command not recognized" behavior; there is no conversational LLM fallback in Offline/Local mode;
 - more than one gateway claiming the same unrouted utterance -> execute nothing and ask for clarification;
+- a pending gateway clarification is opportunistic, not exclusive: if the owning gateway rejects or no longer recognizes the follow-up, LSA immediately re-analyzes the same utterance as a fresh command through normal routing so a stale QLC/mixer clarification cannot swallow a new command;
 - cloud Classic/OpenAI Realtime/Gemini Live continue using the current prompts and low-level MCP tools; the local gateway must not become visible to those model tool inventories;
 - local gateway capability is enabled only for MCP processes/endpoints dedicated to the Local engine. STDIO children receive a local-only environment overlay; persistent HTTP deployments need a gateway-enabled local instance/endpoint and must not silently alter a shared cloud-facing MCP tool inventory;
 - deterministic analysis may read live state/resolvers/inventory but must never mutate external state;
