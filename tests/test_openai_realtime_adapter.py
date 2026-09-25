@@ -263,6 +263,12 @@ class OpenAIRealtimeNativeMCPFollowupTests(unittest.IsolatedAsyncioTestCase):
             [{"type": "response.create", "response": {"instructions": "Answer once."}}],
         )
 
+    async def test_create_response_is_suppressed_while_response_active(self):
+        engine = self.make_engine()
+        engine._response_active = True
+        await engine.create_response(instructions="Answer once.")
+        self.assertEqual(engine._ws.sent, [])
+
     async def test_completed_mcp_call_after_response_done_requests_one_followup(self):
         engine = self.make_engine()
         engine._response_active = False
