@@ -76,6 +76,7 @@ class RealtimeWakeRuntime:
         self.interrupt_enabled = bool(interrupt_enabled)
         self.semantic: SemanticAudioController | None = None
         self.speaking = False
+        self.turn_active = False
         print(
             format_openwakeword_waiting(
                 config.wake_word,
@@ -98,7 +99,15 @@ class RealtimeWakeRuntime:
         self.semantic = semantic
 
         if state == SemanticAudioState.LISTENING and self.gate.waiting:
+            self.turn_active = False
             return bool(semantic.transition(SemanticAudioState.WAIT_WAKE))
+
+        if state in {
+            SemanticAudioState.PROCESSING,
+            SemanticAudioState.RESULT_READY,
+            SemanticAudioState.SPEAKING,
+        }:
+            self.turn_active = True
 
         if state == SemanticAudioState.SPEAKING:
             self.speaking = True
@@ -107,6 +116,7 @@ class RealtimeWakeRuntime:
 
         if state == SemanticAudioState.IDLE:
             self.speaking = False
+            self.turn_active = False
             result = bool(semantic.transition(state))
             self.gate.rearm()
             return result
@@ -117,7 +127,7 @@ class RealtimeWakeRuntime:
         if not self.gate.waiting:
             return False
 
-        if self.speaking and not self.interrupt_enabled:
+        if self.turn_active and not self.interrupt_enabled:
             return True
 
         detected = self.gate.feed(realtime_pcm)
@@ -151,9 +161,16 @@ class RealtimeWakeRuntime:
     def should_ignore_provider_speech_started(self, semantic_state: SemanticAudioState | None) -> bool:
         return (
             self.gate.enabled
-            and self.speaking
             and not self.interrupt_enabled
-            and semantic_state == SemanticAudioState.SPEAKING
+            and (
+                self.turn_active
+                or semantic_state
+                in {
+                    SemanticAudioState.PROCESSING,
+                    SemanticAudioState.RESULT_READY,
+                    SemanticAudioState.SPEAKING,
+                }
+            )
         )
 
     def is_wake_only_transcript(self, text: str) -> bool:
