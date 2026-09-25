@@ -320,7 +320,14 @@ class DeterministicGatewayOrchestrator:
                 continuation_token=pending.token,
                 context=context,
             )
-            return await self._resolve_single_claim(pending.server, payload)
+            if (
+                payload.get("recognized") is True
+                and str(payload.get("status") or "") in {"ready", "clarification"}
+            ):
+                return await self._resolve_single_claim(pending.server, payload)
+            # A stale/rejected clarification must not consume a brand-new full
+            # command. Fall through and analyze this same utterance normally
+            # across the routed gateway set.
 
         candidates = self._routed_servers(text)
         if not candidates:
