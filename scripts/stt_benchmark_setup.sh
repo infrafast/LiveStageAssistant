@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BENCH_ROOT="$ROOT/.stt-benchmark"
 WHISPER_DIR="$BENCH_ROOT/whisper.cpp"
 SHERPA_VENV="$BENCH_ROOT/sherpa-venv"
+TOOLS_VENV="$BENCH_ROOT/build-tools-venv"
 MODE="menu"
 if [ "$#" -ge 1 ]; then
   MODE="$1"
@@ -17,10 +18,43 @@ need() {
   }
 }
 
+bootstrap_python() {
+  if [ -x "$ROOT/.venv/bin/python" ]; then
+    echo "$ROOT/.venv/bin/python"
+    return
+  fi
+  command -v python3 >/dev/null 2>&1 || {
+    echo "Missing prerequisite: python3" >&2
+    exit 2
+  }
+  command -v python3
+}
+
+setup_build_tools() {
+  mkdir -p "$BENCH_ROOT"
+  BOOTSTRAP_PYTHON="$(bootstrap_python)"
+
+  if [ ! -x "$TOOLS_VENV/bin/python" ]; then
+    echo "Creating isolated benchmark build-tools virtualenv..."
+    "$BOOTSTRAP_PYTHON" -m venv "$TOOLS_VENV"
+  fi
+
+  if [ ! -x "$TOOLS_VENV/bin/cmake" ] || [ ! -x "$TOOLS_VENV/bin/ninja" ]; then
+    echo "Installing CMake + Ninja only inside .stt-benchmark..."
+    "$TOOLS_VENV/bin/python" -m pip install --upgrade pip
+    "$TOOLS_VENV/bin/python" -m pip install --upgrade cmake ninja
+  fi
+}
+
 setup_whisper() {
   need git
-  need cmake
   need bash
+  need cc
+  need c++
+
+  setup_build_tools
+  CMAKE="$TOOLS_VENV/bin/cmake"
+  NINJA="$TOOLS_VENV/bin/ninja"
 
   mkdir -p "$BENCH_ROOT"
 
@@ -33,14 +67,15 @@ setup_whisper() {
   fi
 
   echo "Building whisper.cpp for the local CPU..."
-  cmake -S "$WHISPER_DIR" -B "$WHISPER_DIR/build" \
+  "$CMAKE" -S "$WHISPER_DIR" -B "$WHISPER_DIR/build" -G Ninja \
+    -DCMAKE_MAKE_PROGRAM="$NINJA" \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_NATIVE=ON \
     -DWHISPER_BUILD_EXAMPLES=ON \
     -DWHISPER_BUILD_SERVER=ON \
     -DWHISPER_BUILD_TESTS=OFF
 
-  cmake --build "$WHISPER_DIR/build" --parallel 4 \
+  "$CMAKE" --build "$WHISPER_DIR/build" --parallel 4 \
     --target whisper-server whisper-cli whisper-quantize
 
   cd "$WHISPER_DIR"
@@ -81,13 +116,13 @@ download() {
 }
 
 setup_sherpa() {
-  need python3
   need tar
   mkdir -p "$BENCH_ROOT/models"
+  BOOTSTRAP_PYTHON="$(bootstrap_python)"
 
   if [ ! -x "$SHERPA_VENV/bin/python" ]; then
     echo "Creating isolated sherpa virtualenv..."
-    python3 -m venv "$SHERPA_VENV"
+    "$BOOTSTRAP_PYTHON" -m venv "$SHERPA_VENV"
   fi
 
   echo "Installing sherpa-onnx only inside benchmark virtualenv..."
@@ -115,8 +150,7 @@ show_menu() {
   cat <<'EOF'
 
 LSA STT benchmark setup
-This setup is isolated under .stt-benchmark and never modifies the production .venv.
-
+This setup is isolated under .stt-benchmark and never modifies the production .venv.\nCMake and Ninja are installed locally in .stt-benchmark/build-tools-venv when needed.\n
 1) Prepare whisper.cpp only
 2) Prepare sherpa-onnx French streaming only
 3) Prepare both
