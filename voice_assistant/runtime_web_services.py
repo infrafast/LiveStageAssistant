@@ -868,16 +868,17 @@ class RuntimeWebServices:
             "CLOUD_TTS_PROVIDER": cloud_tts_provider,
             "TTS_PROVIDER": tts_provider,
             "WEB_TTS_PROVIDER": web_tts_provider,
-            "REALTIME_CAPTURE_TIMEOUT_SECONDS": f"{realtime_capture_timeout_seconds:.1f}",
-            "REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS": f"{realtime_wait_response_timeout_seconds:.1f}",
-            "REALTIME_RESPONSE_TIMEOUT_SECONDS": f"{realtime_response_timeout_seconds:.1f}",
-            "REALTIME_FOLLOWUP_TIMEOUT_SECONDS": f"{realtime_followup_timeout_seconds:.1f}",
         }
         if requested_engine != "local":
             updates["ASSISTANT_SYSTEM_PROMPT"] = system_prompt
             updates["MCP_AGENT_MAX_STEPS"] = str(max(5, min(60, int(mcp_agent_max_steps))))
             updates["MCP_TOOL_ROUTING_ENABLED"] = "true" if mcp_tool_routing_enabled else "false"
             updates["OPENAI_MODEL"] = model
+        if requested_engine in {"openai-realtime", "gemini-live"}:
+            updates["REALTIME_CAPTURE_TIMEOUT_SECONDS"] = f"{realtime_capture_timeout_seconds:.1f}"
+            updates["REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS"] = f"{realtime_wait_response_timeout_seconds:.1f}"
+            updates["REALTIME_RESPONSE_TIMEOUT_SECONDS"] = f"{realtime_response_timeout_seconds:.1f}"
+            updates["REALTIME_FOLLOWUP_TIMEOUT_SECONDS"] = f"{realtime_followup_timeout_seconds:.1f}"
         if requested_engine == "openai-realtime":
             updates["OPENAI_REALTIME_MODEL"] = realtime_model
             updates["OPENAI_REALTIME_VOICE"] = realtime_voice
