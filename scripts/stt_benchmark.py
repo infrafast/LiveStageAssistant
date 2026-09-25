@@ -568,6 +568,8 @@ def engine_paths() -> dict[str, Path]:
         "whisper_small": BENCH_ROOT / "whisper.cpp/models/ggml-small-q5_0.bin",
         "sherpa_python": BENCH_ROOT / "sherpa-venv/bin/python",
         "sherpa_model": BENCH_ROOT / "models/sherpa-onnx-streaming-zipformer-fr-2023-04-14",
+        "sherpa_bpe_vocab": BENCH_ROOT / "models/sherpa-onnx-streaming-zipformer-fr-2023-04-14/unigram_500.vocab",
+        "sherpa_hotwords": PROJECT_ROOT / "scripts/stt_benchmark_sherpa_hotwords.fr.txt",
     }
 
 
@@ -600,7 +602,23 @@ def engine_status() -> dict[str, dict[str, Any]]:
         },
         "sherpa-onnx-zipformer-fr-int8": {
             "available": paths["sherpa_python"].exists() and sherpa_model_ready(paths["sherpa_model"]),
-            "detail": str(paths["sherpa_model"]),
+            "detail": str(paths["sherpa_model"]) + " | greedy_search",
+        },
+        "sherpa-onnx-zipformer-fr-int8-beam": {
+            "available": paths["sherpa_python"].exists() and sherpa_model_ready(paths["sherpa_model"]),
+            "detail": str(paths["sherpa_model"]) + " | modified_beam_search, no hotwords",
+        },
+        "sherpa-onnx-zipformer-fr-int8-hotwords": {
+            "available": (
+                paths["sherpa_python"].exists()
+                and sherpa_model_ready(paths["sherpa_model"])
+                and paths["sherpa_bpe_vocab"].exists()
+                and paths["sherpa_hotwords"].exists()
+            ),
+            "detail": (
+                str(paths["sherpa_model"])
+                + " | modified_beam_search + static structural hotwords"
+            ),
         },
     }
 
@@ -928,10 +946,18 @@ def benchmark_whisper_cpp(
         log.close()
 
 
-def benchmark_sherpa(rows: list[dict[str, Any]], corpus_dir: Path, results_dir: Path):
+def benchmark_sherpa(
+    rows: list[dict[str, Any]],
+    corpus_dir: Path,
+    results_dir: Path,
+    engine: str,
+    decoding_method: str = "greedy_search",
+    use_hotwords: bool = False,
+):
     paths = engine_paths()
-    raw_output = results_dir / "sherpa_raw_results.json"
-    log_path = results_dir / "sherpa.log"
+    safe_name = engine.replace("/", "_")
+    raw_output = results_dir / f"{safe_name}_raw_results.json"
+    log_path = results_dir / f"{safe_name}.log"
     cmd = [
         str(paths["sherpa_python"]),
         str(PROJECT_ROOT / "scripts/stt_benchmark_sherpa.py"),
@@ -940,7 +966,19 @@ def benchmark_sherpa(rows: list[dict[str, Any]], corpus_dir: Path, results_dir: 
         "--model-dir", str(paths["sherpa_model"]),
         "--output", str(raw_output),
         "--threads", "4",
+        "--engine-name", engine,
+        "--decoding-method", decoding_method,
+        "--max-active-paths", "4",
     ]
+    hotwords_text = ""
+    if use_hotwords:
+        hotwords_text = paths["sherpa_hotwords"].read_text(encoding="utf-8").strip()
+        cmd += [
+            "--hotwords-file", str(paths["sherpa_hotwords"]),
+            "--hotwords-score", "1.5",
+            "--bpe-vocab", str(paths["sherpa_bpe_vocab"]),
+        ]
+
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             cmd,
@@ -964,22 +1002,26 @@ def benchmark_sherpa(rows: list[dict[str, Any]], corpus_dir: Path, results_dir: 
         item = by_file.get(row["file"], {})
         output.append(result_row(
             row,
-            "sherpa-onnx-zipformer-fr-int8",
+            engine,
             str(item.get("transcription") or ""),
             float(item.get("decode_ms") or 0),
             item.get("error") or ("missing result" if not item else None),
         ))
     return output, {
-        "engine": "sherpa-onnx-zipformer-fr-int8",
+        "engine": engine,
         "runtime": f"sherpa-onnx {raw.get('sherpa_version', 'unknown')}",
         "model": "sherpa-onnx-streaming-zipformer-fr-2023-04-14",
-        "compute": "CPU, int8 encoder, threads=4, greedy_search, online transducer",
+        "compute": (
+            "CPU, int8 encoder, threads=4, "
+            f"{decoding_method}, max_active_paths=4, online transducer"
+        ),
         "load_ms": raw.get("load_ms"),
         "warmup": "first WAV discarded",
         "prompt": "",
-        "hotwords": "",
+        "hotwords": hotwords_text,
+        "hotwords_score": 1.5 if use_hotwords else None,
+        "bpe_vocab": str(paths["sherpa_bpe_vocab"]) if use_hotwords else "",
     }
-
 
 def percentile(values: list[float], fraction: float) -> float:
     if not values:
@@ -1122,13 +1164,32 @@ def run_xmseries_scorer(results_json: Path, results_dir: Path) -> None:
         print("⚠ Le scorer XMSeries a échoué; le résultat STT brut reste valide.")
 
 
-def run_benchmark(env_file: Path, corpus_dir: Path) -> None:
+def run_benchmark(
+    env_file: Path,
+    corpus_dir: Path,
+    requested_engines: list[str] | None = None,
+) -> None:
     if not verify_corpus(env_file, corpus_dir, replay=False):
         print("Corpus incomplet: utilise le menu 1.")
         return
     rows = list(load_manifest(corpus_dir)["recordings"])
     status = print_engine_status()
-    selected = choose_engines(status)
+    if requested_engines:
+        unknown = [name for name in requested_engines if name not in status]
+        unavailable = [
+            name for name in requested_engines
+            if name in status and not status[name]["available"]
+        ]
+        if unknown:
+            raise ValueError("Moteur benchmark inconnu: " + ", ".join(unknown))
+        if unavailable:
+            raise RuntimeError(
+                "Moteur benchmark indisponible: " + ", ".join(unavailable)
+                + ". Relance scripts/stt_benchmark_setup.sh sherpa si nécessaire."
+            )
+        selected = list(dict.fromkeys(requested_engines))
+    else:
+        selected = choose_engines(status)
     if not selected:
         print("Aucun moteur sélectionné.")
         return
@@ -1155,7 +1216,17 @@ def run_benchmark(env_file: Path, corpus_dir: Path) -> None:
                     rows, corpus_dir, prompt, paths["whisper_small"], engine, results_dir
                 )
             elif engine == "sherpa-onnx-zipformer-fr-int8":
-                current, meta = benchmark_sherpa(rows, corpus_dir, results_dir)
+                current, meta = benchmark_sherpa(
+                    rows, corpus_dir, results_dir, engine, "greedy_search", False
+                )
+            elif engine == "sherpa-onnx-zipformer-fr-int8-beam":
+                current, meta = benchmark_sherpa(
+                    rows, corpus_dir, results_dir, engine, "modified_beam_search", False
+                )
+            elif engine == "sherpa-onnx-zipformer-fr-int8-hotwords":
+                current, meta = benchmark_sherpa(
+                    rows, corpus_dir, results_dir, engine, "modified_beam_search", True
+                )
             else:
                 continue
             all_rows += current
@@ -1214,6 +1285,10 @@ def main() -> int:
     parser.add_argument("--verify", action="store_true")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument(
+        "--engines",
+        help="comma-separated benchmark engine names; meaningful with --run",
+    )
     args = parser.parse_args()
     if args.takes < 1:
         parser.error("--takes doit être >= 1")
@@ -1230,7 +1305,12 @@ def main() -> int:
             print_engine_status()
             return 0
         if args.run:
-            run_benchmark(env_file, corpus_dir)
+            requested = (
+                [name.strip() for name in args.engines.split(",") if name.strip()]
+                if args.engines
+                else None
+            )
+            run_benchmark(env_file, corpus_dir, requested)
             return 0
         return menu(env_file, corpus_dir, args.takes)
     except KeyboardInterrupt:
