@@ -220,6 +220,11 @@
     const cloudEngineField = document.querySelector("#cloud-engine-field");
     const realtimeModel = document.querySelector("#realtime-model");
     const realtimeModelField = document.querySelector("#realtime-model-field");
+    const realtimeTimeoutFields = Array.from(document.querySelectorAll(".realtime-timeout-field"));
+    const realtimeCaptureTimeout = document.querySelector("#realtime-capture-timeout");
+    const realtimeWaitResponseTimeout = document.querySelector("#realtime-wait-response-timeout");
+    const realtimeResponseTimeout = document.querySelector("#realtime-response-timeout");
+    const realtimeFollowupTimeout = document.querySelector("#realtime-followup-timeout");
     const realtimeVoice = document.querySelector("#realtime-voice");
     const realtimeVoiceField = document.querySelector("#realtime-voice-field");
     const realtimeVoicePlay = document.querySelector("#realtime-voice-play");
@@ -3178,6 +3183,10 @@
         cloud_engine: cloudEngine?.value || "classic",
         realtime_model: String(realtimeModel?.value || "").trim(),
         realtime_voice: String(realtimeVoice?.value || "").trim(),
+        realtime_capture_timeout_seconds: Number(realtimeCaptureTimeout?.value || 15),
+        realtime_wait_response_timeout_seconds: Number(realtimeWaitResponseTimeout?.value || 8),
+        realtime_response_timeout_seconds: Number(realtimeResponseTimeout?.value || 30),
+        realtime_followup_timeout_seconds: Number(realtimeFollowupTimeout?.value || 12),
         speech_output_gain: Number(speechOutputGain?.value || 1),
         model: llmModel.value || "",
         session_context_size: Number(sessionContextSize.value || 0),
@@ -3349,6 +3358,7 @@
       cloudEngine.disabled = local || offline;
       realtimeModelField.classList.toggle("hidden", !realtime);
       realtimeVoiceField.classList.toggle("hidden", !realtime);
+      for (const field of realtimeTimeoutFields) field.classList.toggle("hidden", !realtime);
       syncRealtimeDropdownOptions();
       if (realtimeBrowserField) realtimeBrowserField.classList.toggle("hidden", !browserRealtime);
       if (!browserRealtime && realtimeBrowserPeer) stopBrowserRealtime();
@@ -5308,6 +5318,10 @@
         voiceEngine.value = selectedEngine === "local" ? "local" : "cloud";
         cloudEngine.value = data.selected_cloud_engine || (selectedEngine === "local" ? "classic" : selectedEngine);
         syncRealtimeDropdownOptions();
+        if (realtimeCaptureTimeout) realtimeCaptureTimeout.value = String(data.selected_realtime_capture_timeout_seconds ?? 15);
+        if (realtimeWaitResponseTimeout) realtimeWaitResponseTimeout.value = String(data.selected_realtime_wait_response_timeout_seconds ?? 8);
+        if (realtimeResponseTimeout) realtimeResponseTimeout.value = String(data.selected_realtime_response_timeout_seconds ?? 30);
+        if (realtimeFollowupTimeout) realtimeFollowupTimeout.value = String(data.selected_realtime_followup_timeout_seconds ?? 12);
         currentCloudGain = Number(data.selected_cloud_tts_output_gain ?? 1);
         currentLocalGain = Number(data.selected_local_tts_output_gain ?? 1);
         speechOutputGain.value = String(selectedVoiceEngine() === "local" ? currentLocalGain : currentCloudGain);
@@ -6251,6 +6265,10 @@
       const voiceEngineValue = selectedVoiceEngine();
       const realtimeModelValue = String(realtimeModel.value || "").trim() || "gpt-realtime-2.1";
       const realtimeVoiceValue = String(realtimeVoice.value || "").trim() || "marin";
+      const realtimeCaptureTimeoutValue = Number(realtimeCaptureTimeout?.value || 15);
+      const realtimeWaitResponseTimeoutValue = Number(realtimeWaitResponseTimeout?.value || 8);
+      const realtimeResponseTimeoutValue = Number(realtimeResponseTimeout?.value || 30);
+      const realtimeFollowupTimeoutValue = Number(realtimeFollowupTimeout?.value || 12);
       const speechGainValue = Number(speechOutputGain.value || 1);
       const cloudGainValue = voiceEngineValue === "local" ? currentCloudGain : speechGainValue;
       const localGainValue = voiceEngineValue === "local" ? speechGainValue : currentLocalGain;
@@ -6313,6 +6331,10 @@
             voice_engine: voiceEngineValue,
             realtime_model: realtimeModelValue,
             realtime_voice: realtimeVoiceValue,
+            realtime_capture_timeout_seconds: realtimeCaptureTimeoutValue,
+            realtime_wait_response_timeout_seconds: realtimeWaitResponseTimeoutValue,
+            realtime_response_timeout_seconds: realtimeResponseTimeoutValue,
+            realtime_followup_timeout_seconds: realtimeFollowupTimeoutValue,
             cloud_tts_output_gain: cloudGainValue,
             local_tts_output_gain: localGainValue
           })
@@ -6375,4 +6397,5 @@
     if (elevenlabsVoicePlay) elevenlabsVoicePlay.addEventListener("click", () => testSelectedTtsVoice("elevenlabs", elevenlabsVoicePlay));
     if (openaiTtsVoicePlay) openaiTtsVoicePlay.addEventListener("click", () => testSelectedTtsVoice("openai", openaiTtsVoicePlay));
     if (realtimeVoicePlay) realtimeVoicePlay.addEventListener("click", () => testSelectedTtsVoice("realtime", realtimeVoicePlay));
+    for (const control of [realtimeCaptureTimeout, realtimeWaitResponseTimeout, realtimeResponseTimeout, realtimeFollowupTimeout].filter(Boolean)) control.addEventListener("input", syncConfigActionState);
     loadBrowserAudioDevices(false);
