@@ -1715,10 +1715,15 @@ class WebMonitor:
                     realtime_model = str(payload.get("realtime_model") or "").strip()
                     realtime_voice = str(payload.get("realtime_voice") or "").strip()
                     try:
+                        realtime_capture_timeout_seconds = float(payload.get("realtime_capture_timeout_seconds") or 15.0)
+                        realtime_wait_response_timeout_seconds = float(payload.get("realtime_wait_response_timeout_seconds") or 8.0)
+                        realtime_response_timeout_seconds = float(payload.get("realtime_response_timeout_seconds") or 30.0)
+                        realtime_followup_timeout_seconds = float(payload.get("realtime_followup_timeout_seconds") or 12.0)
+                        local_tts_output_gain = float(payload.get("local_tts_output_gain") if payload.get("local_tts_output_gain") is not None else 1.0)
                         cloud_tts_output_gain = float(payload.get("cloud_tts_output_gain") if payload.get("cloud_tts_output_gain") is not None else 1.0)
                         local_tts_output_gain = float(payload.get("local_tts_output_gain") if payload.get("local_tts_output_gain") is not None else 1.0)
                     except (TypeError, ValueError):
-                        self.send_error(400, "Speech output gains must be numbers")
+                        self.send_error(400, "Realtime timeout and speech output gain settings must be numbers")
                         return
                     if not isinstance(speaker_profiles, list):
                         self.send_error(400, "speaker_profiles must be a list")
@@ -1777,6 +1782,10 @@ class WebMonitor:
                             voice_engine,
                             realtime_model,
                             realtime_voice,
+                            realtime_capture_timeout_seconds,
+                            realtime_wait_response_timeout_seconds,
+                            realtime_response_timeout_seconds,
+                            realtime_followup_timeout_seconds,
                             cloud_tts_output_gain,
                             local_tts_output_gain,
                         )
