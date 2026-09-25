@@ -88,6 +88,21 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
             realtime_followup_timeout_seconds=followup_timeout,
         )
 
+    def test_realtime_soft_deadline_controls_exist_in_common_gui(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        html = (root / "assets" / "web" / "index.html").read_text(encoding="utf-8")
+        js = (root / "assets" / "web" / "app.js").read_text(encoding="utf-8")
+        for control_id in (
+            "realtime-capture-timeout",
+            "realtime-wait-response-timeout",
+            "realtime-response-timeout",
+            "realtime-followup-timeout",
+        ):
+            self.assertIn(f'id="{control_id}"', html)
+        self.assertIn('realtimeTimeoutFields', js)
+        self.assertIn('realtime_capture_timeout_seconds', js)
+        self.assertIn('realtime_followup_timeout_seconds', js)
+
     def test_runtime_service_tiles_are_provider_and_mcp_neutral(self) -> None:
         tiles = _runtime_service_tiles({
             "engine": "openai-realtime", "provider": "openai", "model": "gpt-realtime-2.1", "voice": "marin", "ready": True,
