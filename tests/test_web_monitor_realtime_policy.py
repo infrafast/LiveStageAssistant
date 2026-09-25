@@ -25,12 +25,14 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
         wait_response_timeout: float = 8.0,
         response_timeout: float = 30.0,
         followup_timeout: float = 12.0,
+        cloud_tts_provider: str = "none",
+        tts_speed: float = 1.0,
     ) -> dict:
         model = "gpt-4.1-mini"
         selected_voice_engine = voice_engine or ("local" if connectivity == "offline" else "classic")
         return services.save_llm_config(
             model=model,
-            cloud_tts_provider="none",
+            cloud_tts_provider=cloud_tts_provider,
             tts_output="silent",
             stt_input="backend",
             stt_language="fr",
@@ -54,7 +56,7 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
             startup_loader_sound_file="",
             command_ack_sound_file="",
             openai_tts_voice="alloy",
-            openai_tts_speed=1.0,
+            openai_tts_speed=tts_speed,
             web_tts_volume=1.0,
             backend_tts_volume=1.0,
             backend_audio_output_pan=0.0,
@@ -87,6 +89,30 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
             realtime_response_timeout_seconds=response_timeout,
             realtime_followup_timeout_seconds=followup_timeout,
         )
+
+    def test_tts_speed_is_capped_for_elevenlabs_and_gui_is_provider_aware(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env.online"
+            env_path.write_text("CONNECTIVITY_MODE=online\nVOICE_ENGINE=classic\n", encoding="utf-8")
+            services = RuntimeWebServices(
+                monitor=WebMonitor(),
+                active_profile=lambda: env_path,
+                automatic_profiles=True,
+            )
+            with patch.dict(os.environ, {"ASSISTANT_AUTO_ENV_DIR": temp_dir}):
+                self._save_runtime_config(
+                    services,
+                    voice_engine="classic",
+                    cloud_tts_provider="elevenlabs",
+                    tts_speed=1.4,
+                )
+            saved = env_path.read_text(encoding="utf-8")
+            self.assertIn("WEB_TTS_SPEED=1.20", saved)
+
+        root = Path(__file__).resolve().parents[1]
+        js = (root / "assets" / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('provider === "elevenlabs"', js)
+        self.assertIn('openaiTtsSpeed.max = elevenLabs ? "1.2" : "1.8"', js)
 
     def test_realtime_soft_deadline_controls_exist_in_common_gui(self) -> None:
         root = Path(__file__).resolve().parents[1]
