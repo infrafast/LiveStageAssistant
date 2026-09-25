@@ -21,6 +21,10 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
         cloud_gain: float = 1.0,
         local_gain: float = 1.0,
         connectivity: str = "online",
+        capture_timeout: float = 15.0,
+        wait_response_timeout: float = 8.0,
+        response_timeout: float = 30.0,
+        followup_timeout: float = 12.0,
     ) -> dict:
         model = "gpt-4.1-mini"
         selected_voice_engine = voice_engine or ("local" if connectivity == "offline" else "classic")
@@ -78,6 +82,10 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
             realtime_voice="marin",
             cloud_tts_output_gain=cloud_gain,
             local_tts_output_gain=local_gain,
+            realtime_capture_timeout_seconds=capture_timeout,
+            realtime_wait_response_timeout_seconds=wait_response_timeout,
+            realtime_response_timeout_seconds=response_timeout,
+            realtime_followup_timeout_seconds=followup_timeout,
         )
 
     def test_runtime_service_tiles_are_provider_and_mcp_neutral(self) -> None:
@@ -129,6 +137,30 @@ class WebMonitorRealtimePolicyRouteTests(unittest.TestCase):
             self.assertIn("VOICE_ENGINE=openai-realtime", saved)
             self.assertEqual(result["profile"], str(env_path))
             self.assertTrue(result["restart_required"])
+
+    def test_realtime_phase_timeouts_are_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env.online"
+            env_path.write_text("CONNECTIVITY_MODE=online\nVOICE_ENGINE=openai-realtime\n", encoding="utf-8")
+            services = RuntimeWebServices(
+                monitor=WebMonitor(),
+                active_profile=lambda: env_path,
+                automatic_profiles=True,
+            )
+            with patch.dict(os.environ, {"ASSISTANT_AUTO_ENV_DIR": temp_dir}):
+                self._save_runtime_config(
+                    services,
+                    voice_engine="openai-realtime",
+                    capture_timeout=14,
+                    wait_response_timeout=6,
+                    response_timeout=27,
+                    followup_timeout=10,
+                )
+            saved = env_path.read_text(encoding="utf-8")
+            self.assertIn("REALTIME_CAPTURE_TIMEOUT_SECONDS=14.0", saved)
+            self.assertIn("REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS=6.0", saved)
+            self.assertIn("REALTIME_RESPONSE_TIMEOUT_SECONDS=27.0", saved)
+            self.assertIn("REALTIME_FOLLOWUP_TIMEOUT_SECONDS=10.0", saved)
 
     def test_voice_output_gains_are_persisted_to_online_and_offline_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
