@@ -662,6 +662,45 @@ def word_distance(reference: str, hypothesis: str) -> tuple[int, int]:
     return previous[-1], len(ref)
 
 
+def format_eta(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{sec:02d}s"
+    if minutes:
+        return f"{minutes}m{sec:02d}s"
+    return f"{sec}s"
+
+
+def print_decode_start(engine: str, index: int, total: int, row: dict[str, Any]) -> None:
+    print(f'[{engine}] [{index:02d}/{total:02d}] À décoder : "{row["reference"]}"', flush=True)
+    print(f'{" " * (len(engine) + 5)}fichier    : {row["file"]}', flush=True)
+
+
+def print_decode_done(
+    engine: str,
+    index: int,
+    total: int,
+    row: dict[str, Any],
+    result: dict[str, Any],
+    completed_decode_ms: list[float],
+) -> None:
+    decoded = result.get("transcription") or "<vide>"
+    print(f'{" " * (len(engine) + 5)}décodé     : "{decoded}"', flush=True)
+    if result.get("error"):
+        print(f'{" " * (len(engine) + 5)}ERREUR     : {result["error"]}', flush=True)
+    completed_decode_ms.append(float(result.get("decode_ms") or 0.0))
+    remaining = max(0, total - index)
+    avg_seconds = (sum(completed_decode_ms) / len(completed_decode_ms)) / 1000.0
+    eta = avg_seconds * remaining
+    print(
+        f'{" " * (len(engine) + 5)}temps      : {result.get("decode_ms")} ms | '
+        f'RTF={result.get("rtf")} | ETA ≈ {format_eta(eta)}',
+        flush=True,
+    )
+
+
 def result_row(source: dict[str, Any], engine: str, text: str, decode_ms: float, error: str | None) -> dict[str, Any]:
     duration = float(source.get("duration_seconds") or 0.0)
     edits, words = word_distance(str(source["reference"]), text)
@@ -685,9 +724,12 @@ def result_row(source: dict[str, Any], engine: str, text: str, decode_ms: float,
 
 def benchmark_faster(rows: list[dict[str, Any]], corpus_dir: Path, prompt: str):
     from faster_whisper import WhisperModel
+    engine = "faster-whisper-base"
+    print("Chargement du modèle Faster-Whisper base...", flush=True)
     started = time.perf_counter()
     model = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=4, num_workers=1)
     load_ms = (time.perf_counter() - started) * 1000
+    print(f"Modèle chargé en {load_ms:.0f} ms.", flush=True)
 
     def decode(path: Path) -> str:
         segments, _ = model.transcribe(
@@ -706,10 +748,15 @@ def benchmark_faster(rows: list[dict[str, Any]], corpus_dir: Path, prompt: str):
         return "".join(segment.text for segment in segments).strip()
 
     if rows:
+        print(f'Warm-up (non compté) : {rows[0]["file"]}', flush=True)
         decode(corpus_dir / str(rows[0]["file"]))
+        print("Warm-up terminé.", flush=True)
 
     output = []
-    for row in rows:
+    decode_times: list[float] = []
+    total = len(rows)
+    for index, row in enumerate(rows, 1):
+        print_decode_start(engine, index, total, row)
         started = time.perf_counter()
         try:
             text = decode(corpus_dir / str(row["file"]))
@@ -717,7 +764,9 @@ def benchmark_faster(rows: list[dict[str, Any]], corpus_dir: Path, prompt: str):
         except Exception as exc:
             text = ""
             error = f"{type(exc).__name__}: {exc}"
-        output.append(result_row(row, "faster-whisper-base", text, (time.perf_counter() - started) * 1000, error))
+        current = result_row(row, engine, text, (time.perf_counter() - started) * 1000, error)
+        output.append(current)
+        print_decode_done(engine, index, total, row, current, decode_times)
     return output, {
         "engine": "faster-whisper-base",
         "runtime": "faster-whisper",
@@ -837,11 +886,17 @@ def benchmark_whisper_cpp(
             time.sleep(0.2)
         load_ms = (time.perf_counter() - started) * 1000
 
+        print(f"Serveur {engine} prêt en {load_ms:.0f} ms.", flush=True)
         if rows:
+            print(f'Warm-up (non compté) : {rows[0]["file"]}', flush=True)
             whisper_infer(port, corpus_dir / str(rows[0]["file"]), prompt)
+            print("Warm-up terminé.", flush=True)
 
         output = []
-        for row in rows:
+        decode_times: list[float] = []
+        total = len(rows)
+        for index, row in enumerate(rows, 1):
+            print_decode_start(engine, index, total, row)
             started_one = time.perf_counter()
             try:
                 text = whisper_infer(port, corpus_dir / str(row["file"]), prompt)
@@ -849,7 +904,9 @@ def benchmark_whisper_cpp(
             except Exception as exc:
                 text = ""
                 error = f"{type(exc).__name__}: {exc}"
-            output.append(result_row(row, engine, text, (time.perf_counter() - started_one) * 1000, error))
+            current = result_row(row, engine, text, (time.perf_counter() - started_one) * 1000, error)
+            output.append(current)
+            print_decode_done(engine, index, total, row, current, decode_times)
         return output, {
             "engine": engine,
             "runtime": "whisper.cpp persistent local server",
@@ -875,23 +932,30 @@ def benchmark_sherpa(rows: list[dict[str, Any]], corpus_dir: Path, results_dir: 
     paths = engine_paths()
     raw_output = results_dir / "sherpa_raw_results.json"
     log_path = results_dir / "sherpa.log"
-    process = subprocess.run(
-        [
-            str(paths["sherpa_python"]),
-            str(PROJECT_ROOT / "scripts/stt_benchmark_sherpa.py"),
-            "--manifest", str(corpus_dir / "manifest.json"),
-            "--corpus-dir", str(corpus_dir),
-            "--model-dir", str(paths["sherpa_model"]),
-            "--output", str(raw_output),
-            "--threads", "4",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
-    )
-    log_path.write_text(process.stdout, encoding="utf-8")
-    if process.returncode != 0:
+    cmd = [
+        str(paths["sherpa_python"]),
+        str(PROJECT_ROOT / "scripts/stt_benchmark_sherpa.py"),
+        "--manifest", str(corpus_dir / "manifest.json"),
+        "--corpus-dir", str(corpus_dir),
+        "--model-dir", str(paths["sherpa_model"]),
+        "--output", str(raw_output),
+        "--threads", "4",
+    ]
+    with log_path.open("w", encoding="utf-8") as log:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            log.write(line)
+            log.flush()
+        returncode = process.wait()
+    if returncode != 0:
         raise RuntimeError(f"sherpa a échoué; voir {log_path}")
     raw = json.loads(raw_output.read_text(encoding="utf-8"))
     by_file = {item["file"]: item for item in raw["results"]}
