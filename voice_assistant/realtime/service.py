@@ -49,7 +49,11 @@ _RECENT_BRIDGE_CALL_IDS: set[str] = set()
 DEFAULT_REALTIME_INACTIVITY_TIMEOUT_SECONDS = 0.0
 DEFAULT_REALTIME_ACTION_GRACE_SECONDS = 2.5
 DEFAULT_REALTIME_TURN_SETTLE_SECONDS = 0.35
-DEFAULT_REALTIME_TURN_TIMEOUT_SECONDS = 20.0
+DEFAULT_REALTIME_TURN_TIMEOUT_SECONDS = 20.0  # legacy fallback
+DEFAULT_REALTIME_CAPTURE_TIMEOUT_SECONDS = 15.0
+DEFAULT_REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS = 8.0
+DEFAULT_REALTIME_RESPONSE_TIMEOUT_SECONDS = 30.0
+DEFAULT_REALTIME_FOLLOWUP_TIMEOUT_SECONDS = 12.0
 DEFAULT_REALTIME_EVENT_POLL_SECONDS = 0.5
 
 
@@ -324,6 +328,35 @@ def _event_wait_timeout(turn_tracker: RealtimeTurnTracker, tool_tasks: set[async
         poll_seconds = max(0.05, _float_env("REALTIME_EVENT_POLL_SECONDS", DEFAULT_REALTIME_EVENT_POLL_SECONDS))
         return min(poll_seconds, inactivity_timeout) if inactivity_timeout > 0 else poll_seconds
     return inactivity_timeout if inactivity_timeout > 0 else None
+
+
+def _phase_timeout_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw not in (None, ""):
+        return max(0.0, _float_env(name, default))
+    legacy = os.getenv("REALTIME_TURN_TIMEOUT_SECONDS")
+    if legacy not in (None, ""):
+        return max(0.0, _float_env("REALTIME_TURN_TIMEOUT_SECONDS", DEFAULT_REALTIME_TURN_TIMEOUT_SECONDS))
+    return max(0.0, default)
+
+
+def _turn_phase_timeout_seconds(turn_tracker: RealtimeTurnTracker) -> float:
+    return {
+        RealtimeTurnPhase.CAPTURING: _phase_timeout_env(
+            "REALTIME_CAPTURE_TIMEOUT_SECONDS", DEFAULT_REALTIME_CAPTURE_TIMEOUT_SECONDS
+        ),
+        RealtimeTurnPhase.WAIT_RESPONSE: _phase_timeout_env(
+            "REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS", DEFAULT_REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS
+        ),
+        RealtimeTurnPhase.RESPONDING: _phase_timeout_env(
+            "REALTIME_RESPONSE_TIMEOUT_SECONDS", DEFAULT_REALTIME_RESPONSE_TIMEOUT_SECONDS
+        ),
+        RealtimeTurnPhase.WAIT_FOLLOWUP: _phase_timeout_env(
+            "REALTIME_FOLLOWUP_TIMEOUT_SECONDS", DEFAULT_REALTIME_FOLLOWUP_TIMEOUT_SECONDS
+        ),
+        RealtimeTurnPhase.TOOL_RUNNING: 0.0,
+        RealtimeTurnPhase.IDLE: 0.0,
+    }[turn_tracker.phase]
 
 
 def _format_user_transcript_error(data: dict[str, Any]) -> str:
@@ -922,15 +955,12 @@ async def event_loop(
                     timeout=_event_wait_timeout(turn_tracker, tool_tasks),
                 )
             except asyncio.TimeoutError:
-                turn_timeout = max(
-                    0.0,
-                    _float_env("REALTIME_TURN_TIMEOUT_SECONDS", DEFAULT_REALTIME_TURN_TIMEOUT_SECONDS),
-                )
+                phase_timeout = _turn_phase_timeout_seconds(turn_tracker)
                 if (
-                    turn_timeout > 0
+                    phase_timeout > 0
                     and turn_tracker.has_pending_work()
                     and not _active_task_exists(tool_tasks)
-                    and turn_tracker.age_seconds() >= turn_timeout
+                    and turn_tracker.age_seconds() >= phase_timeout
                 ):
                     await recover_turn_timeout(
                         engine=engine,
@@ -939,7 +969,7 @@ async def event_loop(
                         queue=queue,
                         semantic=semantic,
                         callbacks=runtime_callbacks,
-                        timeout_seconds=turn_timeout,
+                        timeout_seconds=phase_timeout,
                     )
                     continue
 
