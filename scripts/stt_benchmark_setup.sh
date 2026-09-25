@@ -150,7 +150,9 @@ show_menu() {
   cat <<'EOF'
 
 LSA STT benchmark setup
-This setup is isolated under .stt-benchmark and never modifies the production .venv.\nCMake and Ninja are installed locally in .stt-benchmark/build-tools-venv when needed.\n
+This setup is isolated under .stt-benchmark and never modifies the production .venv.
+CMake and Ninja are installed locally in .stt-benchmark/build-tools-venv when needed.
+
 1) Prepare whisper.cpp only
 2) Prepare sherpa-onnx French streaming only
 3) Prepare both
