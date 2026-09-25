@@ -194,6 +194,9 @@ class OpenAIRealtimeEngine(RealtimeEngine):
 
     async def create_response(self, *, instructions: str | None = None) -> None:
         self._require_connection()
+        if self._response_active:
+            print("OpenAI Realtime response.create skipped: response already active", flush=True)
+            return
         await self._send(self._response_create_payload(instructions=instructions))
 
     def _response_create_payload(self, *, instructions: str | None = None) -> dict[str, Any]:
