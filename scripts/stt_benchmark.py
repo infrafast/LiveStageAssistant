@@ -1056,7 +1056,13 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def write_results(corpus_dir: Path, results_dir: Path, rows: list[dict[str, Any]], metadata: list[dict[str, Any]]) -> Path:
+def write_results(
+    corpus_dir: Path,
+    results_dir: Path,
+    rows: list[dict[str, Any]],
+    metadata: list[dict[str, Any]],
+    publish_latest: bool = True,
+) -> Path:
     summaries = []
     for engine in sorted({row["engine"] for row in rows}):
         summary = summarize([row for row in rows if row["engine"] == engine])
@@ -1118,9 +1124,16 @@ def write_results(corpus_dir: Path, results_dir: Path, rows: list[dict[str, Any]
         )
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    shutil.copy2(json_path, corpus_dir / "benchmark_results.json")
-    shutil.copy2(csv_path, corpus_dir / "benchmark_results.csv")
-    shutil.copy2(report_path, corpus_dir / "benchmark_report.md")
+    if publish_latest:
+        shutil.copy2(json_path, corpus_dir / "benchmark_results.json")
+        shutil.copy2(csv_path, corpus_dir / "benchmark_results.csv")
+        shutil.copy2(report_path, corpus_dir / "benchmark_report.md")
+    else:
+        print(
+            "Run ciblé: les alias benchmark_results.* du corpus complet "
+            "restent inchangés.",
+            flush=True,
+        )
     return json_path
 
 
@@ -1243,7 +1256,13 @@ def run_benchmark(
     if not all_rows:
         print("Aucun résultat.")
         return
-    results_json = write_results(corpus_dir, results_dir, all_rows, metadata)
+    results_json = write_results(
+        corpus_dir,
+        results_dir,
+        all_rows,
+        metadata,
+        publish_latest=requested_engines is None,
+    )
     print(f"\nJSON   : {results_json}")
     print(f"Rapport: {results_dir / 'benchmark_report.md'}")
     run_xmseries_scorer(results_json, results_dir)
