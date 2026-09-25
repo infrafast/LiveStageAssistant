@@ -69,3 +69,28 @@ def test_benchmark_exposes_live_per_sample_progress():
     assert "À décoder" in sherpa
     assert "décodé" in sherpa
     assert "ETA ≈" in sherpa
+
+
+def test_sherpa_targeted_variants_are_explicit_and_static():
+    module = load_module()
+    status = module.engine_status()
+    assert "sherpa-onnx-zipformer-fr-int8-beam" in status
+    assert "sherpa-onnx-zipformer-fr-int8-hotwords" in status
+
+    hotwords_path = ROOT / "scripts/stt_benchmark_sherpa_hotwords.fr.txt"
+    hotwords = hotwords_path.read_text(encoding="utf-8")
+    for expected in ("METS", "MONTE", "BAISSE", "MUTE", "DÉMUTE", "D B", "Q L C"):
+        assert expected in hotwords
+
+    # The experiment biases only stable command structure, never live registry labels.
+    for dynamic_name in (
+        "GUITAR-ANTO", "GUITAR-LORAN", "GUITAR-CLODE", "BASSE-MIKE",
+        "ANTO", "LAURENT", "MIKE", "CLAUDE", "BATTERIE",
+    ):
+        assert dynamic_name not in {line.strip() for line in hotwords.splitlines()}
+
+
+def test_sherpa_setup_fetches_benchmark_only_bpe_vocab():
+    content = SETUP.read_text(encoding="utf-8")
+    assert "unigram_500.vocab" in content
+    assert "icefall-asr-commonvoice-fr-pruned-transducer-stateless7-streaming-2023-04-02" in content
