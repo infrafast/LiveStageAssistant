@@ -3754,6 +3754,23 @@
       openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
     }
 
+    function clampTtsSpeed(provider, value) {
+      const numeric = Number(value || 1);
+      if (provider === "elevenlabs") return Math.max(0.7, Math.min(1.2, numeric));
+      return Math.max(0.6, Math.min(1.8, numeric));
+    }
+
+    function syncTtsSpeedRange() {
+      const engine = selectedVoiceEngine();
+      const provider = engine === "classic" ? (cloudTtsProvider.value || "none") : "";
+      const elevenLabs = provider === "elevenlabs";
+      openaiTtsSpeed.min = elevenLabs ? "0.7" : "0.6";
+      openaiTtsSpeed.max = elevenLabs ? "1.2" : "1.8";
+      const clamped = clampTtsSpeed(provider, openaiTtsSpeed.value);
+      if (Number(openaiTtsSpeed.value) !== clamped) openaiTtsSpeed.value = String(clamped);
+      syncOpenAiSpeedLabel();
+    }
+
     function syncTtsVolumeLabels() {
       webTtsVolumeLabel.textContent = `${Math.round(Number(webTtsVolume.value || 1) * 100)}%`;
       backendTtsVolumeLabel.textContent = `${Math.round(Number(backendTtsVolume.value || 1) * 100)}%`;
@@ -4757,7 +4774,7 @@
       const provider = config.provider || "none";
       if (!["openai", "elevenlabs", "openai-realtime", "gemini-live"].includes(provider) || !config.voice) return;
       const voice = config.voice;
-      const speed = Number(openaiTtsSpeed.value || 1);
+      const speed = clampTtsSpeed(provider, openaiTtsSpeed.value);
       const volume = Number(webTtsVolume.value || 1);
       const backendVolume = ["openai-realtime", "gemini-live"].includes(provider)
         ? Number(speechOutputGain?.value || 1)
@@ -5010,6 +5027,7 @@
     }
 
     function syncTtsProviderControls() {
+      syncTtsSpeedRange();
       const connectivityMode = selectedConnectivityMode();
       const offline = connectivityMode === "offline";
       const engine = selectedVoiceEngine();
