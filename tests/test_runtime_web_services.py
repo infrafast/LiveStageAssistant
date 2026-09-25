@@ -204,6 +204,10 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertIn("LOCAL_WHISPER_MODEL=small", saved)
         self.assertNotIn("OLLAMA_", saved)
         self.assertNotIn("OFFLINE_MODEL=", saved)
+        self.assertNotIn("REALTIME_CAPTURE_TIMEOUT_SECONDS=", saved)
+        self.assertNotIn("REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS=", saved)
+        self.assertNotIn("REALTIME_RESPONSE_TIMEOUT_SECONDS=", saved)
+        self.assertNotIn("REALTIME_FOLLOWUP_TIMEOUT_SECONDS=", saved)
 
     def test_backend_micro_test_uses_selected_device_and_gain(self):
         expected = {"ok": True, "device": "USB mic"}
