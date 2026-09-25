@@ -751,9 +751,15 @@ Realtime turn completion is intentionally conservative: `response.done` alone do
 
 The common realtime loop treats input transcription as observational metadata rather than a lifecycle barrier. A `user_transcript_error` is logged and does not fabricate an `awaiting_response` state; if no provider response/tool is active, the turn returns to IDLE/LISTENING immediately. Native MCP follow-up events are observed as diagnostics only; bridge tool result delivery marks that a provider response is expected, so there is no separate stale follow-up flag that can keep the assistant busy forever after an assistant response is complete. With local realtime wake enabled, provider `speech_started` events that arrive while assistant speech is protected by the wake gate are ignored instead of being treated as user barge-in.
 
-Realtime recovery is intentionally split by scope:
+Realtime recovery is intentionally split by scope. Provider lifecycle conflicts such as OpenAI `conversation_already_has_active_response` are treated as recoverable turn-local conditions: they must never raise `provider_failure`, stop MCP children or reconnect a healthy session. The OpenAI adapter also suppresses duplicate `response.create` calls while a response is already active.
 
 ```text
+turn timeout / active-response lifecycle conflict
+  -> cancel or suppress duplicate response as appropriate
+  -> clear stale turn state/output when needed
+  -> keep microphone capture available during PROCESSING
+  -> keep the same provider session
+
 turn timeout
   -> cancel current response
   -> clear queued output
