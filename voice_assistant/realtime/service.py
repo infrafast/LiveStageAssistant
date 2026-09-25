@@ -379,6 +379,7 @@ async def recover_turn_timeout(
     timeout_seconds: float,
 ) -> None:
     """Recover one stalled turn without destroying a healthy provider session."""
+    timed_out_phase = turn_tracker.phase
     response_id = turn_tracker.current_response_id
     if response_id:
         interrupted.add(response_id)
@@ -393,12 +394,13 @@ async def recover_turn_timeout(
         await engine.cancel_response()
     except Exception as exc:
         print(f"Realtime turn cancellation warning: {exc}", flush=True)
-    discard_input = getattr(engine, "discard_input_audio", None)
-    if callable(discard_input):
-        try:
-            await discard_input()
-        except Exception as exc:
-            print(f"Realtime input-buffer reset warning: {exc}", flush=True)
+    if timed_out_phase in {RealtimeTurnPhase.CAPTURING, RealtimeTurnPhase.WAIT_RESPONSE}:
+        discard_input = getattr(engine, "discard_input_audio", None)
+        if callable(discard_input):
+            try:
+                await discard_input()
+            except Exception as exc:
+                print(f"Realtime input-buffer reset warning: {exc}", flush=True)
     turn_tracker.reset_after_cancel_or_failure()
     transition_semantic(semantic, SemanticAudioState.IDLE, callbacks)
     transition_semantic(semantic, SemanticAudioState.LISTENING, callbacks)
