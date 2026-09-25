@@ -56,3 +56,16 @@ def test_benchmark_setup_does_not_require_system_cmake():
     assert 'build-tools-venv' in content
     assert 'pip install --upgrade cmake ninja' in content
     assert '-G Ninja' in content
+
+
+def test_benchmark_exposes_live_per_sample_progress():
+    content = SCRIPT.read_text(encoding="utf-8")
+    assert "À décoder" in content
+    assert "décodé" in content
+    assert "ETA ≈" in content
+    assert "Warm-up (non compté)" in content
+
+    sherpa = (ROOT / "scripts/stt_benchmark_sherpa.py").read_text(encoding="utf-8")
+    assert "À décoder" in sherpa
+    assert "décodé" in sherpa
+    assert "ETA ≈" in sherpa
