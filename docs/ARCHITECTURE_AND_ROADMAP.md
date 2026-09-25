@@ -590,7 +590,7 @@ Exit: Classic, Realtime and Local expose the same user-understandable semantic s
 - [~] cancellation around MCP calls; speech cancellation does not cancel/replay already-dispatched MCP tasks;
 - [~] duplicate-call prevention across reconnects; bounded call-id memory suppresses duplicate bridge dispatch within the child lifecycle;
 - [~] provider/session timeout handling; startup/tool timeouts and reconnect budget implemented;
-- [~] realtime turn watchdog implemented through `REALTIME_TURN_TIMEOUT_SECONDS`; when a turn has pending provider work but no active MCP task for too long, the child cancels/reset its local state and reconnects the realtime session without replaying old actions;
+- [~] realtime turn lifecycle now uses explicit phases (`idle/capturing/wait_response/responding/tool_running/wait_followup`) and phase-specific soft deadlines. A turn timeout cancels only the current response, clears stale provider input/output buffers when supported, resets local turn state and returns to listening **without reconnecting the provider session**. Reconnect/fallback is reserved for actual transport/provider failures. Pi sequence validation remains pending;
 - [~] deterministic cleanup; reconnect attempts reuse the existing deterministic session cleanup path;
 - [~] provider-failure fallback to Classic/local implemented at supervisor level but not prioritized for further work or validation yet;
 - [~] no ambiguous action state after interruption/reconnect/fallback; realtime turn tracking now records active response, tool-in-flight, cancellation/failure reset and grace-period state. Hardware reconnect/interruption recette pending.
@@ -749,9 +749,28 @@ The Linux/Raspberry install script provisions only the supported runtime stack: 
 
 Realtime turn completion is intentionally conservative: `response.done` alone does not make the assistant available again while bridge tool execution, provider follow-up generation or result delivery is still pending. The runtime waits for `REALTIME_TURN_SETTLE_SECONDS` before returning to IDLE/LISTENING so late tool events from the provider do not race against the web `busy` state or semantic audio state. Benign provider races such as `response_cancel_not_active` are logged as warnings and do not trigger realtime fallback/reconnect.
 
-The common realtime loop also handles provider transcription failures as first-class turn events. `user_transcript_error` is logged, the UI/semantic state moves to processing if the provider has already ended speech, and the same `REALTIME_TURN_TIMEOUT_SECONDS` watchdog recovers the session if no model response follows. Native MCP follow-up events are observed as diagnostics only; bridge tool result delivery only marks that a provider response is expected, so there is no separate stale follow-up flag that can keep the assistant busy forever after an assistant response is complete. With local realtime wake enabled, provider `speech_started` events that arrive while assistant speech is protected by the wake gate are ignored instead of being treated as user barge-in.
+The common realtime loop treats input transcription as observational metadata rather than a lifecycle barrier. A `user_transcript_error` is logged and does not fabricate an `awaiting_response` state; if no provider response/tool is active, the turn returns to IDLE/LISTENING immediately. Native MCP follow-up events are observed as diagnostics only; bridge tool result delivery marks that a provider response is expected, so there is no separate stale follow-up flag that can keep the assistant busy forever after an assistant response is complete. With local realtime wake enabled, provider `speech_started` events that arrive while assistant speech is protected by the wake gate are ignored instead of being treated as user barge-in.
 
-When local realtime wake-word gating is enabled, provider VAD remains responsible for delimiting speech but provider auto-response is disabled. LSA creates the provider response only after receiving a useful user transcript. A transcript that contains only the wake word rearms listening without appending chat messages, starting the thinking cue or asking the model to respond. A continuous utterance such as "momo baisse le volume" remains valid because the full post-wake audio is still sent to the provider and the deferred response is created after transcription.
+Realtime recovery is intentionally split by scope:
+
+```text
+turn timeout
+  -> cancel current response
+  -> clear queued output
+  -> clear provider input buffer when supported
+  -> reset RealtimeTurnTracker phase
+  -> IDLE/LISTENING
+  -> keep the same provider session
+
+connection_error / connection_closed / fatal provider error
+  -> provider_failure
+  -> stop child session
+  -> supervisor reconnect/fallback policy
+```
+
+Phase deadlines are configured independently: `REALTIME_CAPTURE_TIMEOUT_SECONDS`, `REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS`, `REALTIME_RESPONSE_TIMEOUT_SECONDS` and `REALTIME_FOLLOWUP_TIMEOUT_SECONDS`. `REALTIME_TURN_TIMEOUT_SECONDS` remains a read-only compatibility fallback for older user profiles but is no longer written by repository profiles or the Web GUI. MCP execution keeps its own timeout and is never automatically replayed after an ambiguous timeout.
+
+When local realtime wake-word gating is enabled, wake detection remains physically separated from the cloud stream: openWakeWord consumes the permanent backend capture locally and audio is not forwarded to the realtime provider until the wake gate authorizes it. Provider VAD remains responsible for delimiting the post-wake command. Provider auto-response stays disabled in this wake-enabled path so a wake-only utterance cannot accidentally produce a model response; LSA creates the provider response after a useful transcript. A transcript that contains only the wake word rearms listening without appending chat messages, starting the thinking cue or asking the model to respond. A continuous utterance such as "momo baisse le volume" remains valid through the retained pre-roll. A fully local command-VAD + manual `input_audio_buffer.commit` design remains a possible later optimization, but is deliberately not introduced in this recovery change because it would duplicate turn-boundary detection and increase cross-provider regression risk.
 
 ---
 
@@ -1204,7 +1223,7 @@ common WebMonitor services
 4. **RV2F / CFG-9 — semantic audio feedback validation:** run audible Classic/Realtime/Local checks for READY, LISTENING/WAIT_WAKE, WAKE_DETECTED, PROCESSING, RESULT_READY, SPEAKING and IDLE before marking RV2F complete.
 5. **RV2F / RV3 — wake compatibility validation:** verify wake ON/OFF behavior in a noisy room: entering `WAIT_WAKE` plays one ready-to-listen cue, ambient speech does not trigger thinking/repeated listening cues, `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event and Classic post-TTS suppression/re-arm remains intact.
 6. **CFG-9 / RV8 — output-gain validation:** verify Cloud/Local speech gains audibly across Classic cloud TTS, Local/Piper and Realtime while keeping feedback-cue/sample-preview volumes semantically separate from speech gain.
-7. **RV3 / RV4 — realtime lifecycle validation:** validate inactivity timeout, action-grace deferral, interruption and reconnect/fallback recovery without replaying stale actions.
+7. **RV3 / RV4 — realtime lifecycle validation:** validate phase-specific soft turn recovery (capture/wait-response/response/follow-up), transcription-error recovery, interruption, and that only real transport/provider failures reconnect/fallback; verify no stale action is replayed.
 8. **RV7 — optional browser Realtime wake gate decision:** keep current direct WebRTC behavior documented, then later decide whether to disable browser Realtime when `WAKE_WORD` is set or implement deterministic browser-side wake detection.
 9. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the common WebMonitor and functional UX/audio milestones are stable.
 10. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI, without duplicating engine configuration screens or Web servers.
