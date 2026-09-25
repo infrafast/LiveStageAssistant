@@ -9,6 +9,7 @@ from voice_assistant.realtime.service import (
     RealtimeTurnPhase,
     RealtimeTurnTracker,
     _turn_phase_timeout_seconds,
+    is_benign_provider_error,
     recover_turn_timeout,
 )
 from voice_assistant.semantic_audio import (
@@ -31,6 +32,18 @@ class _FakeEngine:
 
 
 class RealtimeTurnRecoveryTests(unittest.TestCase):
+    def test_active_response_conflict_is_benign_lifecycle_error(self) -> None:
+        self.assertTrue(
+            is_benign_provider_error(
+                {
+                    "error": {
+                        "code": "conversation_already_has_active_response",
+                        "message": "Conversation already has an active response in progress.",
+                    }
+                }
+            )
+        )
+
     def test_tracker_uses_explicit_turn_phases(self) -> None:
         tracker = RealtimeTurnTracker()
 
