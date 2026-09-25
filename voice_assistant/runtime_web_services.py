@@ -663,6 +663,10 @@ class RuntimeWebServices:
             "selected_gemini_live_voice": str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip(),
             "selected_realtime_model": (str(values.get("GEMINI_LIVE_MODEL") or "gemini-3.1-flash-live-preview").strip() if voice_engine == "gemini-live" else str(values.get("OPENAI_REALTIME_MODEL") or "gpt-realtime-2.1").strip()),
             "selected_realtime_voice": (str(values.get("GEMINI_LIVE_VOICE") or "Kore").strip() if voice_engine == "gemini-live" else str(values.get("OPENAI_REALTIME_VOICE") or "marin").strip()),
+            "selected_realtime_capture_timeout_seconds": self._float(values, "REALTIME_CAPTURE_TIMEOUT_SECONDS", 15.0),
+            "selected_realtime_wait_response_timeout_seconds": self._float(values, "REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS", 8.0),
+            "selected_realtime_response_timeout_seconds": self._float(values, "REALTIME_RESPONSE_TIMEOUT_SECONDS", 30.0),
+            "selected_realtime_followup_timeout_seconds": self._float(values, "REALTIME_FOLLOWUP_TIMEOUT_SECONDS", 12.0),
             "selected_cloud_tts_output_gain": self._float(values, "CLOUD_TTS_OUTPUT_GAIN", 1.0),
             "selected_local_tts_output_gain": self._float(values, "LOCAL_TTS_OUTPUT_GAIN", 1.0),
             "message": f"Common runtime options loaded from active profile: {self.active_profile()}",
@@ -721,6 +725,10 @@ class RuntimeWebServices:
         voice_engine: str,
         realtime_model: str,
         realtime_voice: str,
+        realtime_capture_timeout_seconds: float,
+        realtime_wait_response_timeout_seconds: float,
+        realtime_response_timeout_seconds: float,
+        realtime_followup_timeout_seconds: float,
         cloud_tts_output_gain: float,
         local_tts_output_gain: float,
     ) -> dict[str, Any]:
@@ -790,6 +798,11 @@ class RuntimeWebServices:
 
         cloud_tts_output_gain = max(0.0, min(2.0, float(cloud_tts_output_gain)))
         local_tts_output_gain = max(0.0, min(2.0, float(local_tts_output_gain)))
+        realtime_capture_timeout_seconds = max(1.0, min(120.0, float(realtime_capture_timeout_seconds)))
+        realtime_wait_response_timeout_seconds = max(1.0, min(120.0, float(realtime_wait_response_timeout_seconds)))
+        realtime_response_timeout_seconds = max(1.0, min(180.0, float(realtime_response_timeout_seconds)))
+        realtime_followup_timeout_seconds = max(1.0, min(120.0, float(realtime_followup_timeout_seconds)))
+
         if requested_engine in {"openai-realtime", "gemini-live"}:
             default_model = "gemini-3.1-flash-live-preview" if requested_engine == "gemini-live" else "gpt-realtime-2.1"
             default_voice = "Kore" if requested_engine == "gemini-live" else "marin"
@@ -855,6 +868,10 @@ class RuntimeWebServices:
             "CLOUD_TTS_PROVIDER": cloud_tts_provider,
             "TTS_PROVIDER": tts_provider,
             "WEB_TTS_PROVIDER": web_tts_provider,
+            "REALTIME_CAPTURE_TIMEOUT_SECONDS": f"{realtime_capture_timeout_seconds:.1f}",
+            "REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS": f"{realtime_wait_response_timeout_seconds:.1f}",
+            "REALTIME_RESPONSE_TIMEOUT_SECONDS": f"{realtime_response_timeout_seconds:.1f}",
+            "REALTIME_FOLLOWUP_TIMEOUT_SECONDS": f"{realtime_followup_timeout_seconds:.1f}",
         }
         if requested_engine != "local":
             updates["ASSISTANT_SYSTEM_PROMPT"] = system_prompt
