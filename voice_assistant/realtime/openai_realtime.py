@@ -205,6 +205,12 @@ class OpenAIRealtimeEngine(RealtimeEngine):
             "response": {"instructions": instruction_text},
         }
 
+    async def discard_input_audio(self) -> None:
+        """Clear uncommitted provider-side audio without restarting the session."""
+        if self._ws is None:
+            return
+        await self._send({"type": "input_audio_buffer.clear"})
+
     async def next_event(self) -> RealtimeEvent:
         return await self._events.get()
 
