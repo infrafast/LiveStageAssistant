@@ -143,6 +143,17 @@ setup_sherpa() {
     tar -xjf "$ARCHIVE" -C "$BENCH_ROOT/models"
   fi
 
+  # The historical French inference archive contains tokens + ONNX files but
+  # not the SentencePiece vocabulary needed by sherpa's contextual hotword
+  # encoder. Fetch only the matching 500-piece vocabulary from the original
+  # training model; it remains benchmark-only inside .stt-benchmark.
+  BPE_VOCAB="$MODEL_DIR/unigram_500.vocab"
+  BPE_VOCAB_URL="https://huggingface.co/shaojieli/icefall-asr-commonvoice-fr-pruned-transducer-stateless7-streaming-2023-04-02/resolve/main/data/lang_bpe_500/unigram_500.vocab?download=true"
+  if [ ! -f "$BPE_VOCAB" ]; then
+    echo "Downloading French SentencePiece vocabulary for Sherpa hotword benchmark..."
+    download "$BPE_VOCAB_URL" "$BPE_VOCAB"
+  fi
+
   echo "sherpa-onnx ready."
 }
 
