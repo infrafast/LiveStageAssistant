@@ -125,6 +125,10 @@ class RealtimeEngine(ABC):
     async def commit_audio(self) -> None:
         """Commit buffered input audio when provider-side turn detection is disabled."""
 
+    async def discard_input_audio(self) -> None:
+        """Discard provider-side buffered input audio when supported."""
+        return None
+
     @abstractmethod
     async def next_event(self) -> RealtimeEvent:
         """Wait for the next provider-neutral realtime event."""
