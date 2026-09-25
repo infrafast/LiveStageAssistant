@@ -1781,12 +1781,12 @@ class WebMonitor:
                             voice_engine,
                             realtime_model,
                             realtime_voice,
+                            cloud_tts_output_gain,
+                            local_tts_output_gain,
                             realtime_capture_timeout_seconds,
                             realtime_wait_response_timeout_seconds,
                             realtime_response_timeout_seconds,
                             realtime_followup_timeout_seconds,
-                            cloud_tts_output_gain,
-                            local_tts_output_gain,
                         )
                     except ValueError as e:
                         self.send_error(400, str(e))
