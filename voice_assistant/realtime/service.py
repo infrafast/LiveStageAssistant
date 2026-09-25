@@ -1020,8 +1020,11 @@ async def event_loop(
                     print(f"Utilisateur: {text}", flush=True)
                     await _append_dialogue(runtime_callbacks, "user", text)
                     await _set_busy(runtime_callbacks, True)
-                    turn_tracker.start_text_turn()
                     if runtime_callbacks.defer_provider_response_until_user_transcript:
+                        # Wake-gated mode deliberately waits for a useful transcript
+                        # before allowing response.create, so the transcript is the
+                        # lifecycle boundary only in this explicit mode.
+                        turn_tracker.start_text_turn()
                         try:
                             await _create_response(engine)
                         except Exception as exc:
@@ -1033,14 +1036,17 @@ async def event_loop(
                             continue
             elif event.type == "user_transcript_error":
                 print(f"Realtime user transcription error: {_format_user_transcript_error(event.data)}", flush=True)
-                # Input transcription is observational metadata, not a reason to
-                # fabricate an awaiting-response state. A provider response may
-                # still arrive independently; otherwise return to listening.
-                if not turn_tracker.current_response_id and not turn_tracker.tool_in_flight:
-                    turn_tracker.reset_after_cancel_or_failure()
-                    await _set_busy(runtime_callbacks, False)
-                    transition_semantic(semantic, SemanticAudioState.IDLE, runtime_callbacks)
-                    transition_semantic(semantic, SemanticAudioState.LISTENING, runtime_callbacks)
+                if runtime_callbacks.defer_provider_response_until_user_transcript:
+                    # In wake-gated deferred-response mode no response will be
+                    # created without a useful transcript, so abandon only this turn.
+                    if not turn_tracker.current_response_id and not turn_tracker.tool_in_flight:
+                        turn_tracker.reset_after_cancel_or_failure()
+                        await _set_busy(runtime_callbacks, False)
+                        transition_semantic(semantic, SemanticAudioState.IDLE, runtime_callbacks)
+                        transition_semantic(semantic, SemanticAudioState.LISTENING, runtime_callbacks)
+                # With provider auto-response enabled, transcription is metadata:
+                # leave WAIT_RESPONSE/RESPONDING untouched because response.created
+                # may legally precede or follow transcription completion/failure.
             elif event.type == "response_started":
                 response = event.data.get("response") or {}
                 turn_tracker.response_started_event(str(response.get("id") or ""))
