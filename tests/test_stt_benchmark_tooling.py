@@ -48,3 +48,11 @@ def test_benchmark_setup_shell_has_valid_syntax():
     if bash is None:
         return
     subprocess.run([bash, "-n", str(SETUP)], check=True)
+
+
+def test_benchmark_setup_does_not_require_system_cmake():
+    content = SETUP.read_text(encoding="utf-8")
+    assert 'need cmake' not in content
+    assert 'build-tools-venv' in content
+    assert 'pip install --upgrade cmake ninja' in content
+    assert '-G Ninja' in content
