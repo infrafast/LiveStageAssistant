@@ -843,7 +843,11 @@ class RuntimeWebServices:
             "COMMAND_ACK_SOUND_FILE": str(command_ack_sound_file or "").strip(),
             "COMMAND_ACK_SOUND_ENABLED": "true" if str(command_ack_sound_file or "").strip() else "false",
             "WEB_TTS_VOICE": str(openai_tts_voice or "alloy").strip(),
-            "WEB_TTS_SPEED": f"{max(0.6, min(1.8, float(openai_tts_speed))):.2f}",
+            "WEB_TTS_SPEED": (
+                f"{max(0.7, min(1.2, float(openai_tts_speed))):.2f}"
+                if cloud_tts_provider == "elevenlabs"
+                else f"{max(0.6, min(1.8, float(openai_tts_speed))):.2f}"
+            ),
             "WEB_TTS_VOLUME": f"{max(0.0, min(1.0, float(web_tts_volume))):.2f}",
             "BACKEND_TTS_VOLUME": f"{max(0.0, min(2.0, float(backend_tts_volume))):.2f}",
             "BACKEND_AUDIO_OUTPUT_PAN": f"{max(-1.0, min(1.0, float(backend_audio_output_pan))):.2f}",
