@@ -820,16 +820,24 @@ Connectivity is a common-runtime concern. The historical Classic watcher remains
 | mixer registry inside `initial_prompt` | compact prompt with 20 real XR16 names dropped `small` exactness to 13.89% / WER 28.79%; 60 names dropped to 5.56% / WER 34.85% | keep STT prompt focused on language/command acoustics; domain name resolution belongs after STT |
 | post-STT family-scoped resolution experiment | with `small_prompt_current`, strict replay gave 44.44% fully correct commands; benchmark-only family-aware fuzzy reached 47.22% with 0 wrong accepted on the 20-name XR16 registry; the 60-name stress registry also produced 0 wrong accepted but less gain | preserve MCP-owned family scoping and fail-closed ambiguity safety; do not relax production fuzzy-write safety solely from this corpus |
 
-Operational interpretation:
+Operational interpretation after the offline corpus:
 
 - stop further micro-benchmarking unless a concrete regression or architectural choice requires it;
-- keep the current STT language/command prompt rather than replacing it with a large runtime mixer-name registry;
+- never inject a large runtime mixer-name registry into Whisper prompting/hotwords; target identity remains a post-STT MCP responsibility;
 - do not duplicate mixer vocabulary or fuzzy-name logic in LSA; XMSeries-MCP remains authoritative for target families and resolution;
-- prioritize end-to-end Local latency work around `small`: VAD/end-of-speech latency, model lifetime/warm reuse and Faster-Whisper CPU/runtime overhead;
-- retain `base` only as a possible speed fallback if `small` cannot meet acceptable stage latency after runtime optimization;
-- benchmark-only family-aware fuzzy resolution was not promoted to production; current fail-closed write safety remains authoritative.
+- benchmark-only family-aware fuzzy resolution was not promoted to production; current fail-closed write safety remains authoritative;
+- model selection from the synthetic/offline corpus is historical evidence only and must be overridden by end-to-end live recipe evidence when they disagree.
 
-**Local STT latency pass (2026-09-21) — [~] implemented, Pi validation pending:** the production Local path keeps the already-existing warm Faster-Whisper model lifetime and `small`/int8/4-thread/`beam_size=1` baseline. Per-command temporary WAV creation and PyAV re-decode were removed: native backend PCM16/16 kHz is converted directly to an in-memory float32 waveform for Faster-Whisper. Short deterministic decoding is bounded with `max_new_tokens=48` to prevent runaway generations, stable hotwords are cached after first construction, and runtime logs now expose model-load time plus decode time/audio duration/RTF. The Raspberry Local profile reduces end-of-speech VAD silence from 650 ms to 500 ms; the cloud profile keeps its existing endpoint setting. `small` is now the Local default/fallback, while an explicit `base` selection remains supported. Live Pi acceptance must verify command completeness with natural pauses and compare observed STT latency before marking this pass complete.
+**Local STT latency pass (2026-09-21) — [x] implementation retained, `small` live baseline rejected:** the Local path keeps a warm Faster-Whisper model, int8 CPU inference, four CPU threads and `beam_size=1`. Per-command temporary WAV creation and PyAV re-decode remain removed: native backend PCM16/16 kHz is converted directly to an in-memory float32 waveform. Short deterministic decoding remains bounded with `max_new_tokens=48`, runtime logs expose model-load time plus decode time/audio duration/RTF, the Raspberry profile keeps the 500 ms end-of-speech setting, and short pre-VAD speech fragments are preserved in pre-roll instead of being discarded.
+
+**Live voice recipe decision (2026-09-21) — `base` validation gate:** the end-to-end Raspberry recipe showed that `small` was not usable for the live-control target despite its better offline-corpus transcription scores. Typical Local STT decode times were roughly 10–14 s and wake-to-STT-result was commonly around 13–18 s, with longer commands exceeding 20 s. The dominant functional failures were STT substitutions/omissions such as status words, short action words and target names; when the transcript was correct, deterministic mixer reads/writes, routing, multi-destination commands, ramps, sequences and fail-closed unknown-target handling generally behaved correctly. The live session also exposed prompt leakage and MCP-routing vocabulary contamination in Whisper output. Therefore the next production candidate intentionally simplifies STT rather than adding parser aliases:
+
+- `base` becomes the Raspberry Local default and current live baseline; `small` remains selectable only for comparison;
+- the STT prompt is reduced to a short neutral fidelity instruction with no examples, device names, channel names or concrete numeric values;
+- MCP routing keywords remain available to MCP orchestration but are no longer appended to Whisper `initial_prompt` and are no longer included in Whisper hotwords;
+- Local Whisper hotwords are a small fixed generic command vocabulary only, with no dynamic MCP/device names and no enumerated numeric vocabulary;
+- the validated PCM-direct, warm-model, VAD/pre-roll and post-STT safety/parser improvements are retained unchanged;
+- after one full live recipe on this `base` configuration, either keep/tune Faster-Whisper if reliability and latency are credible, or open a focused `whisper.cpp` backend benchmark if they are not.
 
 Target local path:
 
