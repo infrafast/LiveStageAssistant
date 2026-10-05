@@ -25,10 +25,10 @@ install_system_packages() {
                 printf '%s\n' "Installing Linux audio/system packages with apt-get."
                 if [ "$(id -u 2>/dev/null || printf 1)" = "0" ]; then
                     apt-get update
-                    apt-get install -y curl portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
+                    apt-get install -y curl ca-certificates portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
                 elif command -v sudo >/dev/null 2>&1; then
                     sudo apt-get update
-                    sudo apt-get install -y curl portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
+                    sudo apt-get install -y curl ca-certificates portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
                 else
                     printf '%s\n' "Warning: sudo is not available; install audio packages manually if backend audio is needed." >&2
                 fi
@@ -47,62 +47,6 @@ install_system_packages() {
             fi
             ;;
     esac
-}
-
-install_ollama() {
-    if [ "${LSA_SKIP_OLLAMA:-}" = "1" ]; then
-        printf '%s\n' "Skipping Ollama setup because LSA_SKIP_OLLAMA=1."
-        return
-    fi
-
-    ollama_model="${LSA_OLLAMA_MODEL:-qwen3:8b}"
-    case "$system" in
-        Linux)
-            if ! command -v ollama >/dev/null 2>&1; then
-                if command -v curl >/dev/null 2>&1; then
-                    printf '%s\n' "Installing Ollama for local/offline mode."
-                    curl -fsSL https://ollama.com/install.sh | sh
-                else
-                    printf '%s\n' "Warning: curl is not available; install Ollama manually for offline mode." >&2
-                    return
-                fi
-            fi
-            ;;
-        Darwin)
-            if ! command -v ollama >/dev/null 2>&1; then
-                if command -v brew >/dev/null 2>&1; then
-                    printf '%s\n' "Installing Ollama with Homebrew for local/offline mode."
-                    brew install ollama
-                else
-                    printf '%s\n' "Warning: Homebrew not found; install Ollama manually for offline mode." >&2
-                    return
-                fi
-            fi
-            ;;
-        *)
-            if ! command -v ollama >/dev/null 2>&1; then
-                printf '%s\n' "Warning: Ollama was not found; install it manually for offline mode." >&2
-                return
-            fi
-            ;;
-    esac
-
-    if ! command -v ollama >/dev/null 2>&1; then
-        printf '%s\n' "Warning: Ollama is still unavailable; skipping model pull." >&2
-        return
-    fi
-
-    if ! ollama list >/dev/null 2>&1; then
-        printf '%s\n' "Ollama is installed but not running. Start it with 'ollama serve', then pull ${ollama_model} for offline mode."
-        return
-    fi
-
-    if ollama show "$ollama_model" >/dev/null 2>&1; then
-        printf '%s\n' "Ollama model ${ollama_model} is already available."
-    else
-        printf '%s\n' "Pulling Ollama model ${ollama_model} for local/offline mode."
-        ollama pull "$ollama_model"
-    fi
 }
 
 create_venv() {
@@ -134,15 +78,12 @@ install_wakeword_dependencies() {
         uv pip install "openwakeword>=0.6,<1" --no-deps
         uv run python - <<'PY'
 from pathlib import Path
-
 from openwakeword import utils as oww_utils
 
 download_models = getattr(oww_utils, "download_models", None)
 if not callable(download_models):
     raise SystemExit("openWakeWord resource download failed: openwakeword.utils.download_models is unavailable")
-
 download_models()
-
 for metadata_file in Path("data").rglob("._*.onnx"):
     print(f"Ignoring macOS metadata file: {metadata_file}")
 PY
@@ -151,18 +92,69 @@ PY
     fi
 }
 
+install_piper_voice() {
+    if [ "${LSA_SKIP_PIPER:-}" = "1" ]; then
+        printf '%s\n' "Skipping Piper setup because LSA_SKIP_PIPER=1."
+        return
+    fi
+
+    piper_voice="${LSA_PIPER_VOICE:-fr_FR-siwis-medium}"
+    piper_data_dir="${LSA_PIPER_DATA_DIR:-$repo_dir/data/piper}"
+    mkdir -p "$piper_data_dir"
+
+    printf '%s\n' "Installing/verifying Piper local TTS."
+    uv pip install "piper-tts>=1.4,<2"
+
+    if [ -f "$piper_data_dir/$piper_voice.onnx" ] && [ -f "$piper_data_dir/$piper_voice.onnx.json" ]; then
+        printf '%s\n' "Piper voice ${piper_voice} is already available."
+    else
+        printf '%s\n' "Downloading default French Piper voice ${piper_voice}."
+        uv run python -m piper.download_voices --data-dir "$piper_data_dir" "$piper_voice"
+    fi
+}
+
+verify_realtime_and_piper() {
+    piper_voice="${LSA_PIPER_VOICE:-fr_FR-siwis-medium}"
+    piper_data_dir="${LSA_PIPER_DATA_DIR:-$repo_dir/data/piper}"
+    PIPER_VERIFY_MODEL="$piper_data_dir/$piper_voice.onnx" uv run python - <<'PY'
+import io
+import os
+import wave
+from importlib import metadata
+from pathlib import Path
+
+import voice_assistant.realtime
+from piper import PiperVoice
+
+model = Path(os.environ["PIPER_VERIFY_MODEL"])
+config = model.with_suffix(model.suffix + ".json")
+if not model.is_file() or not config.is_file():
+    raise SystemExit(f"Piper voice verification failed: missing {model} or {config}")
+voice = PiperVoice.load(model, config_path=config)
+rendered = io.BytesIO()
+with wave.open(rendered, "wb") as wav_file:
+    voice.synthesize_wav("Test de synthèse vocale locale.", wav_file)
+if len(rendered.getvalue()) <= 44:
+    raise SystemExit("Piper voice verification failed: synthesis produced no audio")
+print(f"Realtime voice package OK: {voice_assistant.realtime.__name__}")
+print(f"Piper dependency OK: piper-tts {metadata.version('piper-tts')}")
+print(f"Piper French voice OK: {model.name}, {voice.config.sample_rate} Hz, synthesis OK")
+PY
+}
+
 machine="$(uname -m 2>/dev/null || printf unknown)"
 system="$(uname -s 2>/dev/null || printf unknown)"
 
 install_system_packages
-install_ollama
 
 if [ ! -d ".venv" ]; then
     create_venv
 fi
 
+# Editable install includes the Classic runtime and voice_assistant.realtime package.
 uv pip install -e .
 uv pip install "mcp-use>=1.7.0,<2.0.0" "mcp>=1.24.0,<2.0.0"
+install_piper_voice
 install_wakeword_dependencies
 
 printf '%s\n' "Installing speaker recognition dependencies for ${system}/${machine}."
@@ -176,14 +168,11 @@ case "$system" in
         ;;
 esac
 uv pip install resemblyzer --no-deps
-# Resemblyzer declares the legacy backport package "typing", which is not
-# compatible with modern Python and is not needed at runtime.
 uv pip uninstall typing >/dev/null 2>&1 || true
 
 uv run python - <<'PY'
 import os
 from importlib import metadata
-
 from mcp.shared.context import RequestContext
 from mcp_use import MCPAgent, MCPClient
 from resemblyzer import VoiceEncoder, preprocess_wav
@@ -197,7 +186,6 @@ print(f"Speaker recognition dependencies OK: resemblyzer {metadata.version('rese
 try:
     import importlib.resources as resources
     from pathlib import Path
-
     from openwakeword import utils as oww_utils
     from openwakeword.model import Model
 
@@ -207,9 +195,7 @@ try:
 
     models_dir = resources.files("openwakeword") / "resources" / "models"
     required_resources = ("melspectrogram.onnx", "embedding_model.onnx")
-    missing_resources = [
-        name for name in required_resources if not (models_dir / name).is_file()
-    ]
+    missing_resources = [name for name in required_resources if not (models_dir / name).is_file()]
     if missing_resources:
         raise SystemExit(
             "Wake-word dependency check failed: missing openWakeWord ONNX resource(s): "
@@ -219,8 +205,7 @@ try:
         print("Wake-word dependency warning: optional openWakeWord silero_vad.onnx resource is missing")
 
     local_models = [
-        path
-        for path in sorted(Path("data").rglob("*.onnx"))
+        path for path in sorted(Path("data").rglob("*.onnx"))
         if path.is_file() and not path.name.startswith("._")
     ]
     model_kwargs = {"inference_framework": "onnx"}
@@ -237,6 +222,8 @@ except metadata.PackageNotFoundError:
     else:
         raise SystemExit("Wake-word dependency check failed: openwakeword is not installed")
 PY
+
+verify_realtime_and_piper
 
 if uv pip freeze | grep -Ei '^(nvidia|cuda|triton)' >/dev/null; then
     printf '%s\n' "Warning: GPU/CUDA packages are present in the environment:"

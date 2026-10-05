@@ -27,9 +27,13 @@ The service restarts automatically after crashes with `Restart=always` and `Rest
 
 The installer copies `.env.online` and `.env.offline` to `/etc/livestageassistant/` and makes that directory writable by `pi`. The service sets `ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant`, so `auto` loads `.env.online` when internet is reachable and `.env.offline` when it is not. Both profiles point `MCP_CONFIG` to `raspi_service_pack_stdio/mcp_servers_raspi.json`, so the stdio MCP servers keep using repo-relative paths to the sibling MCP folders. The web Config -> MCP Servers routing editor writes to the active `MCP_CONFIG`; keep that JSON writable by `pi` if you move it outside the repo.
 
+The bundled XR16 mixer entry explicitly sets `OSC_CHANNEL_COUNT=16`, `OSC_BUS_COUNT=4`, `OSC_FX_COUNT=4` and `OSC_DCA_COUNT=4`. Keep those limits aligned with the actual mixer model: deterministic name resolution scans only the configured ranges, and oversized XR counts can otherwise cause reads against unsupported indexes.
+
+When the active profile is offline, `VOICE_ENGINE=local` selects the deterministic Local engine. It uses local Whisper, Piper and local/STDIO MCP command gateways; no local LLM service is started or required.
+
 ## Prerequisites
 
-Run the repository install script before installing the service. It tries to install the system packages used by backend audio capture/playback and cloud TTS MP3 playback:
+Run the repository install script before installing the service. It installs the system packages used by backend audio capture/playback and cloud TTS MP3 playback, the Python dependencies, openWakeWord ONNX resources, realtime transport support, and Piper local TTS with a default French voice:
 
 ```bash
 cd /home/pi/LiveStageAssistant
@@ -40,10 +44,23 @@ If system package installation was skipped or failed, install them manually:
 
 ```bash
 sudo apt update
-sudo apt install portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
+sudo apt install curl ca-certificates portaudio19-dev alsa-utils ffmpeg pipewire-bin espeak espeak-ng libespeak1 libespeak-ng1
 ```
 
 `alsa-utils` provides tools such as `aplay` for ALSA device checks, `pipewire-bin` provides `pw-cat`/`pw-record` for targeted PipeWire backend input, and `ffmpeg` is required for backend OpenAI/ElevenLabs MP3 TTS playback. It is also used to decode browser WebM/Opus audio before optional Resemblyzer speaker recognition. Without `ffmpeg`, backend cloud TTS playback is skipped and browser-side speaker recognition may return `unknown`.
+
+The installer intentionally does not install or manage a local LLM. Existing user-owned Ollama installations are left untouched.
+
+On Linux/Raspberry, Piper is installed with `piper-tts` and the default French voice files are downloaded to:
+
+```text
+data/piper_voices/fr_FR-siwis-medium.onnx
+data/piper_voices/fr_FR-siwis-medium.onnx.json
+```
+
+Set `LSA_SKIP_PIPER=1` to skip Piper, `LSA_PIPER_VOICE=<voice-name>` to choose another voice file name, or `LSA_PIPER_VOICE_DIR=<dir>` to store voices elsewhere.
+
+Realtime voice dependencies currently install the lightweight WebSocket transport used by the experimental realtime path. Set `LSA_SKIP_REALTIME=1` to skip that optional setup.
 
 Backend input gain, TTS volume, backend microphone monitoring volume, and pan are software controls. `BACKEND_AUDIO_INPUT_GAIN=1.00` leaves captured microphone PCM unchanged; values from `0.50` to `2.00` are applied before VAD, STT, diagnostics, and speaker-profile capture. In the web Config -> Audio In/Out section, `BACKEND_AUDIO_OUTPUT_PAN=0.00` keeps backend audio centered; `-1.00` sends it left and `1.00` sends it right. `BACKEND_AUDIO_MONITOR_MODE=off` keeps the current behavior, `passthrough` forwards backend microphone chunks to backend output while capture is running, and `rejected` replays only wake-word-rejected phrases. `BACKEND_AUDIO_MONITOR_VOLUME=1.00` controls that microphone monitoring path separately from TTS gain.
 

@@ -1,3 +1,24 @@
+    const lsaBasePath = (() => {
+      const configured = String(window.LSA_BASE_PATH || "").replace(/\/+$/, "");
+      if (configured) return configured;
+      let path = window.location.pathname || "/";
+      path = path.replace(/\/index\.html$/, "");
+      if (path !== "/" && path.endsWith("/")) path = path.slice(0, -1);
+      return path === "/" ? "" : path;
+    })();
+    function lsaUrl(path) {
+      const value = String(path || "");
+      if (!value) return lsaBasePath || "/";
+      if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(value)) return value;
+      return `${lsaBasePath}${value.startsWith("/") ? value : `/${value}`}`;
+    }
+    function apiUrl(path) {
+      return lsaUrl(path);
+    }
+    function assetUrl(path) {
+      return lsaUrl(path);
+    }
+
     const i18nPayload = window.LSA_I18N_PAYLOAD || { locale: "fr", messages: {}, available_locales: [] };
     const i18nMessages = i18nPayload.messages || {};
     function tr(key, fallback = "") {
@@ -24,11 +45,9 @@
     }
 
     const stateEl = document.querySelector("#state");
-    const configEl = document.querySelector("#config");
     const logsEl = document.querySelector("#logs");
     const sttPromptEl = document.querySelector("#stt-prompt");
     const assistantSystemPromptEl = document.querySelector("#assistant-system-prompt");
-    const promptEl = document.querySelector("#prompt");
     const metaEl = document.querySelector("#meta");
     const messagesEl = document.querySelector("#messages");
     const chatPanel = document.querySelector("#chat-panel");
@@ -63,7 +82,6 @@
     const sessionSummaryPopover = document.querySelector("#session-summary-popover");
     const tabs = Array.from(document.querySelectorAll(".tab"));
     const panels = Array.from(document.querySelectorAll(".tab-panel"));
-	    const llmProvider = document.querySelector("#llm-provider");
 	    const llmModel = document.querySelector("#llm-model");
 	    const sessionContextSize = document.querySelector("#session-context-size");
     const sessionContextSizeLabel = document.querySelector("#session-context-size-label");
@@ -87,14 +105,14 @@
     const ttsSpeedField = document.querySelector("#tts-speed-field");
     const openaiTtsSpeed = document.querySelector("#openai-tts-speed");
     const openaiTtsSpeedLabel = document.querySelector("#openai-tts-speed-label");
+    const openaiTtsVoicePlay = document.querySelector("#openai-tts-voice-play");
+    const elevenlabsVoicePlay = document.querySelector("#elevenlabs-voice-play");
     const webTtsVolumeField = document.querySelector("#web-tts-volume-field");
     const webTtsVolume = document.querySelector("#web-tts-volume");
     const webTtsVolumeLabel = document.querySelector("#web-tts-volume-label");
     const backendTtsVolumeField = document.querySelector("#backend-tts-volume-field");
     const backendTtsVolume = document.querySelector("#backend-tts-volume");
     const backendTtsVolumeLabel = document.querySelector("#backend-tts-volume-label");
-    const ttsTestField = document.querySelector("#tts-test-field");
-    const ttsTest = document.querySelector("#tts-test");
     const vadSpeechThreshold = document.querySelector("#vad-speech-threshold");
     const vadSpeechThresholdLabel = document.querySelector("#vad-speech-threshold-label");
     const vadNegativeThreshold = document.querySelector("#vad-negative-threshold");
@@ -174,9 +192,14 @@
     const backendAudioOutputPan = document.querySelector("#backend-audio-output-pan");
     const backendAudioOutputPanLabel = document.querySelector("#backend-audio-output-pan-label");
     const sttLanguage = document.querySelector("#stt-language");
+    const localWhisperModelField = document.querySelector("#local-whisper-model-field");
+    const localWhisperModel = document.querySelector("#local-whisper-model");
     const thinkingSoundField = document.querySelector("#thinking-sound-field");
     const thinkingSound = document.querySelector("#thinking-sound");
     const thinkingSoundPlay = document.querySelector("#thinking-sound-play");
+    const readySoundField = document.querySelector("#ready-sound-field");
+    const readySound = document.querySelector("#ready-sound");
+    const readySoundPlay = document.querySelector("#ready-sound-play");
     const listeningSoundField = document.querySelector("#listening-sound-field");
     const listeningSound = document.querySelector("#listening-sound");
     const listeningSoundPlay = document.querySelector("#listening-sound-play");
@@ -191,6 +214,36 @@
     const commandAckSoundPlay = document.querySelector("#command-ack-sound-play");
     const llmSave = document.querySelector("#llm-save");
     const llmMessage = document.querySelector("#llm-message");
+    const panelConfig = document.querySelector("#panel-config");
+    const voiceEngine = document.querySelector("#voice-engine");
+    const cloudEngine = document.querySelector("#cloud-engine");
+    const cloudEngineField = document.querySelector("#cloud-engine-field");
+    const realtimeModel = document.querySelector("#realtime-model");
+    const realtimeModelField = document.querySelector("#realtime-model-field");
+    const realtimeTimeoutFields = Array.from(document.querySelectorAll(".realtime-timeout-field"));
+    const realtimeCaptureTimeout = document.querySelector("#realtime-capture-timeout");
+    const realtimeWaitResponseTimeout = document.querySelector("#realtime-wait-response-timeout");
+    const realtimeResponseTimeout = document.querySelector("#realtime-response-timeout");
+    const realtimeFollowupTimeout = document.querySelector("#realtime-followup-timeout");
+    const realtimeVoice = document.querySelector("#realtime-voice");
+    const realtimeVoiceField = document.querySelector("#realtime-voice-field");
+    const realtimeVoicePlay = document.querySelector("#realtime-voice-play");
+    const realtimeBrowserField = document.querySelector("#realtime-browser-field");
+    const realtimeBrowserToggle = document.querySelector("#realtime-browser-toggle");
+    const realtimeBrowserStatus = document.querySelector("#realtime-browser-status");
+    const speechOutputGain = document.querySelector("#speech-output-gain");
+    const speechOutputGainField = document.querySelector("#speech-output-gain-field");
+    const speechOutputGainLabel = document.querySelector("#speech-output-gain-label");
+    const speechOutputGainHint = document.querySelector("#speech-output-gain-hint");
+    const classicSttPromptField = document.querySelector("#classic-stt-prompt-field");
+    const classicInterruptField = document.querySelector("#classic-interrupt-field");
+    const classicVadDetails = document.querySelector("#classic-vad-details");
+    const classicVadOnlyControls = Array.from(document.querySelectorAll(".classic-vad-only"));
+    const llmModelField = document.querySelector("#llm-model-field");
+    const cloudAgentControls = Array.from(document.querySelectorAll(".cloud-agent-control"));
+    const cloudPromptSection = document.querySelector("#cloud-prompt-section");
+    const sttInputField = document.querySelector("#stt-input-field");
+    const mcpDetails = document.querySelector("#mcp-servers-details");
     const ttsTestPhrase = "Bonjour je suis l'assistant vocal live stage assistant, comment puis-je vous aider";
     const speakerEmbeddingPreparationMessage = window.LSA_SPEAKER_EMBEDDING_PREPARATION_MESSAGE || "";
     const composerTextUploadMaxBytes = 64 * 1024;
@@ -229,6 +282,15 @@
     let envProfileSwitchingEnabled = false;
     let connectivityLocked = false;
     let configBaseline = "";
+    let restartRequired = false;
+    let runtimeRestarting = false;
+    let currentCloudGain = 1;
+    let currentLocalGain = 1;
+    let currentClassicCloudSpeech = true;
+    let realtimeBrowserPeer = null;
+    let realtimeBrowserStream = null;
+    let realtimeBrowserAudio = null;
+    let lastSnapshot = null;
     let speakerRecognitionUnavailableReason = "";
     let speakerRecognitionEnvEnabled = false;
     let speakerRecognitionRuntimeEnabled = false;
@@ -237,8 +299,11 @@
     let profileLoadingActive = false;
     let vncConnectTimer = null;
     let vncUrlDirty = false;
+    let vncUrlSavePending = false;
     let currentVncFrameUrl = "";
     let currentSnapshotEnvFile = "";
+    let mcpCrudDirty = false;
+    let mcpCrudSavePending = false;
     let metaErrorUntil = 0;
     let lastServerMessages = [];
     let pendingCommandMessages = [];
@@ -302,6 +367,8 @@
     let backendAudioDiagnostic = null;
     let cloudApiLoaded = false;
     let cloudApiLoading = false;
+    let lastCloudApiStatus = null;
+    let lastLlmOptions = null;
     let mcpServersSignature = "";
     let lastMcpServers = [];
     let currentWebTtsSource = null;
@@ -446,6 +513,7 @@
     }
 
     function renderCloudApiStatus(data) {
+      lastCloudApiStatus = data;
       const openai = data.openai || {};
       const elevenlabs = data.elevenlabs || {};
       const openaiLines = Array.isArray(openai.lines) ? openai.lines.slice() : [];
@@ -459,19 +527,28 @@
         );
         elevenLines.unshift(`Caractères utilisés: ${formatNumber(elevenlabs.characters.used)}`);
       }
-      cloudApiGrid.innerHTML = [
-        cloudApiCard("OpenAI", { ...openai, lines: openaiLines }),
-        cloudApiCard("ElevenLabs", { ...elevenlabs, lines: elevenLines })
-      ].join("");
+      const engine = selectedVoiceEngine();
+      const offline = selectedConnectivityMode() === "offline";
+      const cards = [];
+      if (!offline && ["classic", "openai-realtime"].includes(engine)) {
+        cards.push(cloudApiCard("OpenAI", { ...openai, lines: openaiLines }));
+      }
+      if (!offline && engine === "classic") {
+        cards.push(cloudApiCard("ElevenLabs", { ...elevenlabs, lines: elevenLines }));
+      }
+      cloudApiGrid.innerHTML = cards.length
+        ? cards.join("")
+        : `<div class="cloud-api-line">${escapeHtml(tr("no_cloud_api_for_engine", "No cloud API key status applies to the selected engine."))}</div>`;
     }
 
     async function loadCloudApiStatus(force = false) {
+      if (!cloudApiGrid || !cloudApiRefresh) return;
       if (cloudApiLoading || (!force && cloudApiLoaded)) return;
       cloudApiLoading = true;
       cloudApiRefresh.disabled = true;
       cloudApiGrid.innerHTML = '<div class="cloud-api-line">Chargement...</div>';
       try {
-        const response = await fetch("/api/cloud-api-status", { cache: "no-store" });
+        const response = await fetch(apiUrl("/api/cloud-api-status"), { cache: "no-store" });
         const text = await response.text();
         if (!response.ok) throw new Error(text);
         renderCloudApiStatus(JSON.parse(text));
@@ -507,7 +584,7 @@
 
     function mcpServerAdminUrl(server, route) {
       if (route === "direct") return server.admin_url || "";
-      return server.proxy_admin_url || server.admin_url || "";
+      return server.proxy_admin_url ? apiUrl(server.proxy_admin_url) : (server.admin_url || "");
     }
 
     function mcpServerRouteDetail(route) {
@@ -521,6 +598,8 @@
       const items = Array.isArray(servers) ? servers : [];
       lastMcpServers = items;
       const route = selectedMcpAdminRoute();
+      const policies = mcpPolicyMap(lastSnapshot);
+      const runtimeMcp = Array.isArray(lastSnapshot?.runtime_status?.mcp) ? lastSnapshot.runtime_status.mcp : [];
       const signature = JSON.stringify(items.map((item) => [
         item.name || "",
         item.type || "",
@@ -530,7 +609,9 @@
         Boolean(item.auth_required),
         item.routing || "",
         JSON.stringify(item.env_options || {}),
-        item.detail || ""
+        item.detail || "",
+        JSON.stringify(policies[item.name || ""] || {}),
+        JSON.stringify(runtimeMcp.find((runtime) => String(runtime?.name || "") === String(item.name || "")) || {})
       ])) + "|" + route;
       if (signature === mcpServersSignature) return;
       mcpServersSignature = signature;
@@ -545,17 +626,22 @@
       }
 
       for (const server of items) {
-        const card = document.createElement("div");
+        const serverName = server.name || "MCP server";
+        const policy = policies[serverName] || {};
+        const runtime = runtimeMcpStatus(lastSnapshot, serverName);
+        const effectiveTransport = runtime?.effective_transport || policy.transport || server.type || "MCP";
+        const card = document.createElement("details");
         card.className = "mcp-server-card";
+        card.dataset.serverName = serverName;
 
-        const head = document.createElement("div");
+        const head = document.createElement("summary");
         head.className = "mcp-server-head";
 
         const title = document.createElement("div");
         title.className = "mcp-server-title";
         const name = document.createElement("div");
         name.className = "mcp-server-name";
-        name.textContent = server.name || "MCP server";
+        name.textContent = serverName;
         const url = document.createElement("div");
         url.className = "mcp-server-url";
         url.textContent = server.admin_url || server.detail || "No browser admin URL";
@@ -563,33 +649,99 @@
 
         const actions = document.createElement("div");
         actions.className = "mcp-server-actions";
-        const badge = document.createElement("span");
-        badge.className = "inline-badge";
-        badge.textContent = server.auth_required ? "Auth" : (server.type || "MCP");
-        actions.append(badge);
+        const transportBadge = document.createElement("span");
+        transportBadge.className = "inline-badge mcp-transport-badge";
+        transportBadge.textContent = displayMcpTransport(effectiveTransport);
+        transportBadge.title = runtime?.detail || server.detail || "";
+        const enabledToggle = document.createElement("input");
+        enabledToggle.type = "checkbox";
+        enabledToggle.className = "mcp-enable-toggle";
+        enabledToggle.checked = policy.enabled !== false;
+        enabledToggle.title = tr("mcp_enable_disable", "Enable / disable MCP");
+        enabledToggle.addEventListener("click", (event) => event.stopPropagation());
+        enabledToggle.addEventListener("change", async (event) => {
+          event.stopPropagation();
+          const nextEnabled = enabledToggle.checked;
+          enabledToggle.disabled = true;
+          mcpCrudSavePending = true;
+          try {
+            const data = await saveMcpDefinition("update", { existing_name: serverName, server: {
+              name: serverName,
+              enabled: nextEnabled,
+              command: policy.command || "",
+              args: JSON.stringify(policy.args || []),
+              local_url: policy.localUrl || "",
+              realtime_transport: policy.transport === "native" ? "https" : (policy.transport || "auto"),
+              https_url: policy.httpsUrl || "",
+              permission_mode: policy.permission || "open"
+            }});
+            mcpCrudDirty = false;
+            setRestartRequired(data.restart_required, "MCP saved · restart required.");
+            mcpServersSignature = "";
+          } catch (error) {
+            enabledToggle.checked = !nextEnabled;
+            llmMessage.textContent = `Save failed: ${error.message || error}`;
+          } finally {
+            enabledToggle.disabled = false;
+            mcpCrudSavePending = false;
+          }
+        });
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "mcp-icon-action danger";
+        deleteButton.title = tr("delete_mcp", "Delete MCP");
+        deleteButton.setAttribute("aria-label", trf("delete_mcp_named", "Delete {name}", { name: serverName }));
+        deleteButton.innerHTML = "&#128465;";
+        deleteButton.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!window.confirm(`Delete MCP "${serverName}"?`)) return;
+          deleteButton.disabled = true;
+          mcpCrudSavePending = true;
+          try {
+            const data = await saveMcpDefinition("delete", { server: serverName });
+            mcpCrudDirty = false;
+            setRestartRequired(data.restart_required, "MCP deleted · restart required.");
+            mcpServersSignature = "";
+            await refresh();
+          } catch (error) {
+            llmMessage.textContent = `Delete failed: ${error.message || error}`;
+          } finally {
+            deleteButton.disabled = false;
+            mcpCrudSavePending = false;
+          }
+        });
+        actions.append(deleteButton, enabledToggle, transportBadge);
         const selectedUrl = mcpServerAdminUrl(server, route);
-        if (selectedUrl) {
-          const open = document.createElement("a");
-          open.className = "mcp-server-open";
-          open.href = selectedUrl;
-          open.target = "_blank";
-          open.rel = "noreferrer";
-          open.textContent = route === "direct" ? "Open direct" : "Open via proxy";
-          actions.append(open);
-        }
-        const alternateUrl = route === "direct" ? server.proxy_admin_url : server.admin_url;
-        if (alternateUrl && alternateUrl !== selectedUrl) {
-          const alternate = document.createElement("a");
-          alternate.className = "mcp-server-open";
-          alternate.href = alternateUrl;
-          alternate.target = "_blank";
-          alternate.rel = "noreferrer";
-          alternate.textContent = route === "direct" ? "Proxy" : "Direct";
-          actions.append(alternate);
-        }
+        const alternateUrl = route === "direct" ? (server.proxy_admin_url ? apiUrl(server.proxy_admin_url) : "") : server.admin_url;
 
         head.append(title, actions);
         card.append(head);
+        const body = document.createElement("div");
+        body.className = "mcp-server-body";
+        if (selectedUrl || (alternateUrl && alternateUrl !== selectedUrl)) {
+          const linkRow = document.createElement("div");
+          linkRow.className = "mcp-server-link-row";
+          if (selectedUrl) {
+            const open = document.createElement("a");
+            open.className = "mcp-server-open";
+            open.href = selectedUrl;
+            open.target = "_blank";
+            open.rel = "noreferrer";
+            open.textContent = route === "direct" ? tr("open_direct", "Open direct") : tr("open_via_proxy", "Open via proxy");
+            linkRow.append(open);
+          }
+          if (alternateUrl && alternateUrl !== selectedUrl) {
+            const alternate = document.createElement("a");
+            alternate.className = "mcp-server-open";
+            alternate.href = alternateUrl;
+            alternate.target = "_blank";
+            alternate.rel = "noreferrer";
+            alternate.textContent = route === "direct" ? tr("proxy", "Proxy") : tr("direct", "Direct");
+            linkRow.append(alternate);
+          }
+          body.append(linkRow);
+        }
 
         const routingBox = document.createElement("div");
         routingBox.className = "mcp-routing-box";
@@ -610,10 +762,11 @@
         routingInput.spellcheck = false;
         routingInput.disabled = routingDisabled;
         routingInput.title = routingDisabled ? routingDisabledReason : "assistantOptions.routing";
+        routingInput.addEventListener("input", () => { mcpCrudDirty = true; });
         const routingSave = document.createElement("button");
         routingSave.className = "mcp-routing-save";
         routingSave.type = "button";
-        routingSave.textContent = "Save";
+        routingSave.textContent = tr("update", "Update");
         routingSave.disabled = routingDisabled;
         routingSave.title = routingDisabled ? routingDisabledReason : "Save routing words";
         const routingMessage = document.createElement("div");
@@ -624,7 +777,7 @@
         routingSave.addEventListener("click", () => saveMcpRouting(routingMessage));
         routingRow.append(routingInput, routingSave);
         routingBox.append(routingLabel, routingRow, routingMessage);
-        card.append(routingBox);
+        body.append(routingBox);
 
         const hasEnvOptions = server.env_options && Object.keys(server.env_options).length > 0;
         const isStdioServer = !server.admin_url && String(server.type || "stdio") === "stdio";
@@ -643,10 +796,11 @@
           optionsInput.placeholder = '{\\n  "XMS_SPEAKER_MAP": {\\n    "laurent": { "bus": "Laurent", "channel": "Talk Laurent" }\\n  }\\n}';
           optionsInput.spellcheck = false;
           optionsInput.title = "JSON object saved into mcpServers.<server>.env. Nested objects are stored as compact JSON strings.";
+          optionsInput.addEventListener("input", () => { mcpCrudDirty = true; });
           const optionsSave = document.createElement("button");
-          optionsSave.className = "mcp-routing-save";
+          optionsSave.className = "mcp-options-update";
           optionsSave.type = "button";
-          optionsSave.textContent = "Save";
+          optionsSave.textContent = tr("update", "Update");
           optionsSave.title = "Save MCP server env options";
           const optionsMessage = document.createElement("div");
           optionsMessage.className = "mcp-routing-message";
@@ -654,7 +808,7 @@
           optionsSave.addEventListener("click", () => saveMcpServerOptions(optionsMessage));
           optionsRow.append(optionsInput, optionsSave);
           optionsBox.append(optionsLabel, optionsRow, optionsMessage);
-          card.append(optionsBox);
+          body.append(optionsBox);
         }
 
         if (server.embeddable && selectedUrl) {
@@ -679,14 +833,15 @@
           });
 
           placeholder.append(note, load);
-          card.append(placeholder);
+          body.append(placeholder);
         } else {
           const empty = document.createElement("div");
           empty.className = "mcp-server-empty";
           empty.textContent = server.detail || "This MCP server does not expose a browser page.";
-          card.append(empty);
+          body.append(empty);
         }
 
+        card.append(body);
         mcpServerGrid.append(card);
       }
     }
@@ -702,19 +857,23 @@
         if (name) routing[name] = input.value || "";
       }
       if (messageEl) messageEl.textContent = tr("saving", "Saving...");
+      mcpCrudSavePending = true;
       try {
-        const response = await fetch("/api/mcp-routing", {
+        const response = await fetch(apiUrl("/api/mcp-routing"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ routing })
         });
         const data = await fetchJsonOrThrow(response);
+        mcpCrudDirty = false;
         if (messageEl) messageEl.textContent = data.message || "Routing saved.";
-        setEnvironmentLoading(true);
+        setRestartRequired(data.restart_required, "Routing saved · restart required.");
         mcpServersSignature = "";
         await refresh();
       } catch (error) {
         if (messageEl) messageEl.textContent = trf("save_failed", "Save failed: {error}", { error });
+      } finally {
+        mcpCrudSavePending = false;
       }
     }
 
@@ -735,20 +894,24 @@
         }
       }
       if (messageEl) messageEl.textContent = tr("saving", "Saving...");
+      mcpCrudSavePending = true;
       try {
-        const response = await fetch("/api/mcp-server-options", {
+        const response = await fetch(apiUrl("/api/mcp-server-options"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ options })
         });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
+        mcpCrudDirty = false;
         if (messageEl) messageEl.textContent = data.message || "MCP server options saved.";
-        setEnvironmentLoading(true);
+        setRestartRequired(data.restart_required, "MCP options saved · restart required.");
         mcpServersSignature = "";
         await refresh();
       } catch (error) {
         if (messageEl) messageEl.textContent = trf("save_failed", "Save failed: {error}", { error });
+      } finally {
+        mcpCrudSavePending = false;
       }
     }
 
@@ -808,19 +971,26 @@
       params.set("viewOnly", vncViewOnly.checked ? "1" : "0");
       const password = parsed.searchParams.get("password") || "ronron";
       if (password) params.set("password", password);
-      return `/vnc.html?${params.toString()}`;
+      return lsaUrl(`/vnc.html?${params.toString()}`);
     }
 
     async function saveRemoteScreenUrl() {
       const nextUrl = vncUrl.value.trim();
-      const response = await fetch("/api/remote-screen-config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vnc_url: nextUrl, view_only: Boolean(vncViewOnly.checked) })
-      });
-      if (!response.ok) throw new Error(await response.text());
-      vncUrlDirty = false;
-      return response.json();
+      vncUrlSavePending = true;
+      try {
+        const response = await fetch(apiUrl("/api/remote-screen-config"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ vnc_url: nextUrl, view_only: Boolean(vncViewOnly.checked) })
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        vncUrl.value = data.vnc_url || nextUrl;
+        vncUrlDirty = false;
+        return data;
+      } finally {
+        vncUrlSavePending = false;
+      }
     }
 
     function disconnectVnc(status = "hors ligne") {
@@ -877,9 +1047,9 @@
 
     function ledClass(status) {
       const value = String(status || "unknown").toLowerCase();
-      if (["online", "initialized", "ready", "ok", "configured"].includes(value)) return "ok";
+      if (["online", "initialized", "ready", "ok", "healthy", "configured"].includes(value)) return "ok";
       if (["initializing", "reload", "unknown", "warning"].includes(value)) return "warn";
-      if (["offline", "error", "failed"].includes(value)) return "bad";
+      if (["offline", "error", "failed", "unavailable"].includes(value)) return "bad";
       return "idle";
     }
 
@@ -1192,7 +1362,20 @@
       syncComposerSpeakerControl();
     }
 
+    function isOpenAiRealtimeSelected() {
+      return selectedConnectivityMode() !== "offline" && selectedVoiceEngine() === "openai-realtime";
+    }
+
     function browserSttDisabledReason(kind = "conversation") {
+      if (isOpenAiRealtimeSelected()) {
+        if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+          return tr("conversation_disabled_https", "Conversation mode requires HTTPS or localhost for browser Realtime.");
+        }
+        if (browserAudioCapabilities.input === false) {
+          return tr("conversation_disabled_browser_audio", "Mode conversation indisponible : le navigateur ne peut pas accéder au micro.");
+        }
+        return "";
+      }
       if (webAudio.stt_enabled) return "";
       const sttInput = String(webAudio.stt_input || "").toLowerCase();
       const isVoiceInput = kind === "voice";
@@ -1224,15 +1407,17 @@
     }
 
     function updateConversationButton() {
-      webConversation.classList.toggle("active", conversationEnabled);
+      const realtimeActive = Boolean(realtimeBrowserPeer);
+      webConversation.classList.toggle("active", conversationEnabled || realtimeActive);
       const disabledReason = browserSttDisabledReason("conversation");
-      webConversation.title = disabledReason || (conversationEnabled ? "Stop conversation mode" : "Conversation mode");
-      webConversation.setAttribute("aria-label", conversationEnabled ? "Stop conversation mode" : "Conversation mode");
-      webConversation.disabled = !webAudio.stt_enabled;
-      webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled;
+      const running = conversationEnabled || realtimeActive;
+      webConversation.title = disabledReason || (running ? "Stop conversation mode" : "Conversation mode");
+      webConversation.setAttribute("aria-label", running ? "Stop conversation mode" : "Conversation mode");
+      webConversation.disabled = Boolean(disabledReason) && !running;
+      webMic.disabled = (composerLocked && !interruptConversationEnabled && !isRecording) || !webAudio.stt_enabled || conversationEnabled || realtimeActive;
       webMic.title = browserSttDisabledReason("voice") || (isRecording ? "Stop recording" : "Voice input");
       webMic.setAttribute("aria-label", webMic.title);
-      composerAttach.disabled = composerLocked || isRecording || conversationEnabled;
+      composerAttach.disabled = composerLocked || isRecording || conversationEnabled || realtimeActive;
     }
 
     function clearRecordingTimer() {
@@ -1256,9 +1441,9 @@
 
     async function loadOrtModule() {
       if (!ortModulePromise) {
-        ortModulePromise = import(webAudio.vad_ort_url || "/assets/web/static/vendor/onnxruntime-web/ort.wasm.min.mjs").then((module) => {
+        ortModulePromise = import(assetUrl(webAudio.vad_ort_url || "/assets/web/static/vendor/onnxruntime-web/ort.wasm.min.mjs")).then((module) => {
           const ort = module.default || module;
-          ort.env.wasm.wasmPaths = webAudio.vad_ort_wasm_path || "/assets/web/static/vendor/onnxruntime-web/";
+          ort.env.wasm.wasmPaths = assetUrl(webAudio.vad_ort_wasm_path || "/assets/web/static/vendor/onnxruntime-web/");
           ort.env.wasm.numThreads = 2;
           return ort;
         });
@@ -1269,7 +1454,7 @@
     async function loadSileroSession() {
       if (!sileroSessionPromise) {
         sileroSessionPromise = loadOrtModule().then((ort) =>
-          ort.InferenceSession.create(webAudio.vad_model_url || "/assets/web/static/vendor/silero-vad/silero_vad_v6.onnx", {
+          ort.InferenceSession.create(assetUrl(webAudio.vad_model_url || "/assets/web/static/vendor/silero-vad/silero_vad_v6.onnx"), {
             executionProviders: ["wasm"]
           })
         );
@@ -1762,7 +1947,7 @@
       updateCountdown();
       state.countdownTimer = window.setInterval(updateCountdown, 250);
       try {
-        const response = await fetch("/api/backend-audio-diagnostic", {
+        const response = await fetch(apiUrl("/api/backend-audio-diagnostic"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1941,7 +2126,7 @@
       if (nowMs - lastBrowserCommandAckAt < 900) return;
       lastBrowserCommandAckAt = nowMs;
       try {
-        const audio = new Audio(commandAckSoundUrl);
+        const audio = new Audio(assetUrl(commandAckSoundUrl));
         audio.preload = "auto";
         audio.volume = Math.max(0, Math.min(1, Number(webAudio.tts_volume ?? 1)));
         await applyBrowserAudioOutput(audio);
@@ -2133,7 +2318,7 @@
       if (cancelRequestInFlight) return;
       cancelRequestInFlight = true;
       try {
-        const response = await fetch("/api/cancel-command", {
+        const response = await fetch(apiUrl("/api/cancel-command"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
@@ -2257,7 +2442,7 @@
       renderMessages(lastServerMessages, true);
       try {
         const speakerPayload = speakerPayloadForSubmit(options);
-        const response = await fetch("/api/inject-command", {
+        const response = await fetch(apiUrl("/api/inject-command"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2376,7 +2561,7 @@
       }
       try {
         const audioBase64 = await blobToBase64(blob);
-        const response = await fetch("/api/web-transcribe", {
+        const response = await fetch(apiUrl("/api/web-transcribe"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -2678,7 +2863,7 @@
         if (options.model) payload.model = options.model;
         if (options.voice) payload.voice = options.voice;
         if (options.speed) payload.speed = options.speed;
-        const response = await fetch("/api/web-tts", {
+        const response = await fetch(apiUrl("/api/web-tts"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -2726,8 +2911,8 @@
     async function startThinkingAudio() {
       if (!webAudio.tts_enabled || webAudio.tts_output !== "browser" || !thinkingAudioUrl || thinkingAudioPlaying) return;
       try {
-        if (!thinkingAudio || thinkingAudio.src !== new URL(thinkingAudioUrl, window.location.href).href) {
-          thinkingAudio = new Audio(thinkingAudioUrl);
+        if (!thinkingAudio || thinkingAudio.src !== new URL(assetUrl(thinkingAudioUrl), window.location.href).href) {
+          thinkingAudio = new Audio(assetUrl(thinkingAudioUrl));
           thinkingAudio.loop = true;
         }
         thinkingAudio.volume = Math.max(0, Math.min(1, Number(webAudio.tts_volume ?? 1)));
@@ -2775,7 +2960,7 @@
         sample.audio.currentTime = 0;
       }
       if (sample.output === "backend") {
-        const stopBackendSample = () => fetch("/api/backend-audio-sample", {
+        const stopBackendSample = () => fetch(apiUrl("/api/backend-audio-sample"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ action: "stop", filename: sample.filename })
@@ -2802,6 +2987,12 @@
       thinkingSoundPlay.title = thinkingSoundField.title;
 
       const listeningBackendUnavailable = !backendAudioCapabilities.output;
+      readySound.disabled = listeningBackendUnavailable;
+      readySoundPlay.disabled = !readySound.value || listeningBackendUnavailable;
+      readySoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "READY_SOUND_FILE";
+      readySound.title = readySoundField.title;
+      readySoundPlay.title = readySoundField.title;
+
       listeningSound.disabled = listeningBackendUnavailable;
       listeningSoundPlay.disabled = !listeningSound.value || listeningBackendUnavailable;
       listeningSoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "LISTENING_SOUND_FILE";
@@ -2813,6 +3004,7 @@
       wakeDetectedSoundField.title = listeningBackendUnavailable ? backendUnavailableReason : "WAKE_DETECTED_SOUND_FILE";
       wakeDetectedSound.title = wakeDetectedSoundField.title;
       wakeDetectedSoundPlay.title = wakeDetectedSoundField.title;
+      wakeDetectedSoundField.classList.toggle("hidden", !wakeWord.value.trim());
 
       const loaderBackendEnabled = output === "backend";
       startupLoaderSound.disabled = !loaderBackendEnabled;
@@ -2845,7 +3037,7 @@
       try {
         if (output === "browser") {
           await unlockWebTtsAudio();
-          const audio = new Audio(`/assets/${filename}`);
+          const audio = new Audio(assetUrl(`/assets/${filename}`));
           if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
           sample.audio = audio;
           audio.loop = true;
@@ -2854,7 +3046,7 @@
           if (currentAudioSample !== sample || requestId !== audioSampleRequestId) return;
           await audio.play();
         } else {
-          sample.backendStart = fetch("/api/backend-audio-sample", {
+          sample.backendStart = fetch(apiUrl("/api/backend-audio-sample"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2885,7 +3077,7 @@
       injectStop.disabled = true;
       injectCommand.placeholder = "Cancelling...";
       try {
-        const response = await fetch("/api/cancel-command", {
+        const response = await fetch(apiUrl("/api/cancel-command"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
@@ -2930,11 +3122,72 @@
       return opt;
     }
 
+    function populateOptionsWithCurrent(select, items, selectedValue, emptyLabel) {
+      if (!select) return;
+      const selected = String(selectedValue || "");
+      const options = Array.isArray(items) ? items : [];
+      select.replaceChildren();
+      if (options.length === 0) {
+        select.appendChild(option(emptyLabel || tr("no_option_available", "No option available"), selected, !selected, true));
+      } else {
+        for (const item of options) {
+          select.appendChild(option(item.label || item.id, item.id, false, item.id === selected));
+        }
+        if (selected && !options.some((item) => item.id === selected)) {
+          select.appendChild(option(`${selected} (${tr("current", "current")})`, selected, false, true));
+        }
+      }
+      if (selected && select.value !== selected) select.value = selected;
+    }
+
+    function selectedVoiceEngine() {
+      if (selectedConnectivityMode() === "offline" || voiceEngine?.value === "local") return "local";
+      return cloudEngine?.value || "classic";
+    }
+
+    function syncRealtimeDropdownOptions() {
+      if (!lastLlmOptions || !realtimeModel || !realtimeVoice) return;
+      const engine = selectedVoiceEngine();
+      const modelOptions = engine === "gemini-live"
+        ? (lastLlmOptions.gemini_live_models || lastLlmOptions.realtime_models || [])
+        : (lastLlmOptions.openai_realtime_models || lastLlmOptions.realtime_models || []);
+      const voiceOptions = engine === "gemini-live"
+        ? (lastLlmOptions.gemini_live_voices || lastLlmOptions.realtime_voices || [])
+        : (lastLlmOptions.openai_realtime_voices || lastLlmOptions.realtime_voices || []);
+      const selectedModel = engine === "gemini-live"
+        ? (lastLlmOptions.selected_gemini_live_model || lastLlmOptions.selected_realtime_model || "gemini-3.1-flash-live-preview")
+        : (lastLlmOptions.selected_openai_realtime_model || lastLlmOptions.selected_realtime_model || "gpt-realtime-2.1");
+      const selectedVoice = engine === "gemini-live"
+        ? (lastLlmOptions.selected_gemini_live_voice || lastLlmOptions.selected_realtime_voice || "Kore")
+        : (lastLlmOptions.selected_openai_realtime_voice || lastLlmOptions.selected_realtime_voice || "marin");
+      populateOptionsWithCurrent(
+        realtimeModel,
+        modelOptions,
+        selectedModel,
+        tr("no_realtime_model_available", "No realtime model available")
+      );
+      populateOptionsWithCurrent(
+        realtimeVoice,
+        voiceOptions,
+        selectedVoice,
+        tr("no_realtime_voice_available", "No realtime voice available")
+      );
+    }
+
     function configSignature() {
       return JSON.stringify({
         env_profile: activeEnvProfile,
         connectivity_mode: selectedConnectivityMode(),
-        provider: llmProvider.value || "",
+        execution_mode: voiceEngine?.value || "cloud",
+        voice_engine: selectedVoiceEngine(),
+        cloud_engine: cloudEngine?.value || "classic",
+        realtime_model: String(realtimeModel?.value || "").trim(),
+        realtime_voice: String(realtimeVoice?.value || "").trim(),
+        realtime_capture_timeout_seconds: Number(realtimeCaptureTimeout?.value || 15),
+        realtime_wait_response_timeout_seconds: Number(realtimeWaitResponseTimeout?.value || 8),
+        realtime_response_timeout_seconds: Number(realtimeResponseTimeout?.value || 30),
+        realtime_followup_timeout_seconds: Number(realtimeFollowupTimeout?.value || 12),
+        speech_output_gain: Number(speechOutputGain?.value || 1),
         model: llmModel.value || "",
         session_context_size: Number(sessionContextSize.value || 0),
         mcp_agent_max_steps: Number(mcpAgentMaxSteps.value || 20),
@@ -2954,6 +3207,7 @@
         backend_audio_monitor_volume: Number(backendAudioMonitorVolume.value || 1),
         voice_id: elevenlabsVoice.value || "",
         thinking_sound_file: thinkingSound.value || "",
+        ready_sound_file: readySound.value || "",
         listening_sound_file: listeningSound.value || "",
         wake_detected_sound_file: wakeDetectedSound.value || "",
         startup_loader_sound_file: startupLoaderSound.value || "",
@@ -2995,12 +3249,430 @@
       return Boolean(configBaseline) && configSignature() !== configBaseline;
     }
 
+    function syncSpeechOutputGainLabel() {
+      if (!speechOutputGain) return;
+      const local = selectedVoiceEngine() === "local";
+      const locality = local ? "Local" : "Cloud";
+      speechOutputGainLabel.textContent = `${locality} · ${Number(speechOutputGain.value || 1).toFixed(2)}×`;
+      speechOutputGainHint.textContent = local
+        ? "Gain applied to deterministic Local speech output."
+        : "Gain applied to cloud-generated speech, including Realtime.";
+    }
+
+
+    async function stopBrowserRealtime() {
+      if (realtimeBrowserPeer) {
+        try { realtimeBrowserPeer.close(); } catch (_) {}
+      }
+      realtimeBrowserPeer = null;
+      if (realtimeBrowserStream) {
+        for (const track of realtimeBrowserStream.getTracks()) track.stop();
+      }
+      realtimeBrowserStream = null;
+      if (realtimeBrowserAudio) {
+        realtimeBrowserAudio.pause();
+        realtimeBrowserAudio.srcObject = null;
+        realtimeBrowserAudio.remove();
+      }
+      realtimeBrowserAudio = null;
+      if (realtimeBrowserToggle) realtimeBrowserToggle.textContent = "Start browser realtime";
+      if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = "Stopped.";
+      updateConversationButton();
+    }
+
+    async function startBrowserRealtime() {
+      if (realtimeBrowserPeer) { await stopBrowserRealtime(); return; }
+      if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+        throw new Error("Browser microphone/WebRTC requires HTTPS or localhost.");
+      }
+      webConversation.disabled = true;
+      metaEl.textContent = tr("realtime_connecting", "Realtime conversation connecting...");
+      if (realtimeBrowserToggle) realtimeBrowserToggle.disabled = true;
+      if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = "Creating short-lived Realtime session…";
+      try {
+        const secretResponse = await fetch(apiUrl("/api/realtime-browser-secret"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        const secretData = await fetchJsonOrThrow(secretResponse);
+        const ephemeral = secretData?.client_secret?.value || "";
+        if (!ephemeral) throw new Error("No browser client secret returned.");
+
+        const pc = new RTCPeerConnection();
+        realtimeBrowserPeer = pc;
+        const audio = document.createElement("audio");
+        audio.autoplay = true;
+        audio.hidden = true;
+        document.body.appendChild(audio);
+        realtimeBrowserAudio = audio;
+        pc.ontrack = (event) => { audio.srcObject = event.streams[0]; };
+        pc.onconnectionstatechange = () => {
+          metaEl.textContent = `Realtime WebRTC: ${pc.connectionState}`;
+          if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = `WebRTC: ${pc.connectionState}`;
+          if (["failed", "closed"].includes(pc.connectionState)) stopBrowserRealtime();
+        };
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        realtimeBrowserStream = stream;
+        for (const track of stream.getTracks()) pc.addTrack(track, stream);
+        pc.createDataChannel("oai-events");
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        const answerResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${ephemeral}`,
+            "Content-Type": "application/sdp"
+          },
+          body: offer.sdp
+        });
+        if (!answerResponse.ok) throw new Error(await answerResponse.text());
+        await pc.setRemoteDescription({ type: "answer", sdp: await answerResponse.text() });
+        if (realtimeBrowserToggle) realtimeBrowserToggle.textContent = "Stop browser realtime";
+        if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = "WebRTC connected; server API key remains on the Pi.";
+        metaEl.textContent = tr("realtime_connected", "Realtime conversation active.");
+      } catch (error) {
+        await stopBrowserRealtime();
+        const message = `WebRTC failed: ${error.message || error}`;
+        if (realtimeBrowserStatus) realtimeBrowserStatus.textContent = message;
+        metaEl.textContent = message;
+        throw error;
+      } finally {
+        if (realtimeBrowserToggle) realtimeBrowserToggle.disabled = false;
+        updateConversationButton();
+      }
+    }
+
+    function syncVoiceEngineControls() {
+      if (!voiceEngine || !cloudEngine) return;
+      const offline = selectedConnectivityMode() === "offline";
+      if (offline) voiceEngine.value = "local";
+      const engine = selectedVoiceEngine();
+      const local = engine === "local";
+      const realtime = !local && ["openai-realtime", "gemini-live"].includes(engine);
+      const classic = !local && engine === "classic";
+      const browserRealtime = !local && engine === "openai-realtime";
+      voiceEngine.disabled = offline;
+      for (const item of voiceEngine.options) item.disabled = offline ? item.value !== "local" : false;
+      cloudEngineField.classList.toggle("hidden", local);
+      cloudEngine.disabled = local || offline;
+      realtimeModelField.classList.toggle("hidden", !realtime);
+      realtimeVoiceField.classList.toggle("hidden", !realtime);
+      for (const field of realtimeTimeoutFields) field.classList.toggle("hidden", !realtime);
+      syncRealtimeDropdownOptions();
+      if (realtimeBrowserField) realtimeBrowserField.classList.toggle("hidden", !browserRealtime);
+      if (!browserRealtime && realtimeBrowserPeer) stopBrowserRealtime();
+      llmModelField.classList.toggle("hidden", !classic);
+      for (const element of cloudAgentControls) element.classList.toggle("hidden", local);
+      if (cloudPromptSection) cloudPromptSection.classList.toggle("hidden", local);
+      classicSttPromptField.classList.toggle("hidden", realtime);
+      if (localWhisperModelField) localWhisperModelField.classList.toggle("hidden", !local);
+      classicInterruptField.classList.toggle("hidden", realtime);
+      sttInputField.classList.toggle("hidden", realtime);
+      classicVadDetails.classList.remove("hidden");
+      for (const element of classicVadOnlyControls) element.classList.toggle("hidden", realtime);
+      for (const element of cloudAudioControls) element.classList.toggle("hidden", !classic);
+      for (const field of [elevenlabsVoiceField, openaiTtsVoiceField]) field.classList.toggle("hidden", !classic);
+      webTtsVolumeField.classList.add("hidden");
+      backendTtsVolumeField.classList.add("hidden");
+      currentClassicCloudSpeech = classic && ["openai", "elevenlabs"].includes(String(cloudTtsProvider.value || "").toLowerCase());
+      speechOutputGainField.classList.toggle("hidden", !(local || realtime || currentClassicCloudSpeech));
+      if (cloudApiDetails) cloudApiDetails.classList.toggle("hidden", local || offline);
+      if (lastCloudApiStatus) renderCloudApiStatus(lastCloudApiStatus);
+      syncSpeechOutputGainLabel();
+    }
+
+    function syncConfigActionState() {
+      if (runtimeRestarting) {
+        llmSave.textContent = "Restarting…";
+        llmSave.disabled = true;
+        return;
+      }
+      const dirty = hasUnsavedConfigChanges();
+      llmSave.disabled = false;
+      if (dirty && restartRequired) llmSave.textContent = "Save + Restart";
+      else if (!dirty && restartRequired) llmSave.textContent = "Restart";
+      else llmSave.textContent = "Save";
+    }
+
+    function setRestartRequired(value, message = "") {
+      restartRequired = restartRequired || Boolean(value);
+      if (restartRequired && message) llmMessage.textContent = message;
+      syncConfigActionState();
+    }
+
+    async function requestRuntimeRestart() {
+      if (runtimeRestarting) return;
+      runtimeRestarting = true;
+      llmMessage.textContent = "Restarting…";
+      syncConfigActionState();
+      try {
+        const response = await fetch(apiUrl("/api/runtime-restart"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        await fetchJsonOrThrow(response);
+      } catch (error) {
+        runtimeRestarting = false;
+        llmMessage.textContent = `Restart failed: ${error.message || error}`;
+        syncConfigActionState();
+      }
+    }
+
+    function findMcpConfigServers(value, depth = 0, seen = new Set()) {
+      if (!value || typeof value !== "object" || depth > 6 || seen.has(value)) return null;
+      seen.add(value);
+      if (value.mcpServers && typeof value.mcpServers === "object" && !Array.isArray(value.mcpServers)) return value.mcpServers;
+      for (const child of Object.values(value)) {
+        const found = findMcpConfigServers(child, depth + 1, seen);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function mcpPolicyMap(snapshot) {
+      const result = {};
+      for (const item of snapshot?.mcp_registry || []) {
+        const name = String(item?.name || "").trim();
+        if (!name) continue;
+        result[name] = {
+          enabled: item.enabled !== false,
+          transport: String(item.transport || item.realtime_transport || "auto").toLowerCase().replace("https", "native"),
+          permission: String(item.permission_mode || "open").toLowerCase() === "approval" ? "approval" : "open",
+          httpsUrl: String(item.https_url || ""),
+          command: String(item.command || ""),
+          args: Array.isArray(item.args) ? item.args.map(String) : [],
+          localUrl: String(item.local_url || ""),
+          authConfigured: Boolean(item.auth_configured)
+        };
+      }
+      return result;
+    }
+
+    function runtimeMcpStatus(snapshot, name) {
+      const items = snapshot?.runtime_status?.mcp;
+      return Array.isArray(items) ? items.find((item) => String(item?.name || "") === name) || null : null;
+    }
+
+    function displayMcpTransport(value) {
+      const normalized = String(value || "").toLowerCase();
+      return normalized === "native" ? "HTTPS" : normalized.toUpperCase();
+    }
+
+    function makeCfgField(label, control, hint = "") {
+      const field = document.createElement("label");
+      field.className = "field";
+      const text = document.createElement("span");
+      text.textContent = label;
+      field.append(text, control);
+      if (hint) {
+        const help = document.createElement("div");
+        help.className = "field-hint";
+        help.textContent = hint;
+        help.title = hint;
+        field.append(help);
+      }
+      return field;
+    }
+
+    function makeMcpPolicyControls(policy) {
+      const transport = document.createElement("select");
+      transport.append(
+        option("Auto", "auto", false, policy.transport === "auto"),
+        option("HTTPS", "native", false, policy.transport === "native"),
+        option("STDIO", "stdio", false, policy.transport === "stdio")
+      );
+      const permission = document.createElement("select");
+      permission.append(
+        option("Open", "open", false, policy.permission === "open"),
+        option("Require approval", "approval", false, policy.permission === "approval")
+      );
+      const https = document.createElement("input");
+      https.type = "url";
+      https.placeholder = "https://…/mcp";
+      https.value = policy.httpsUrl || "";
+      const httpsField = makeCfgField(
+        "Provider HTTPS URL",
+        https,
+        tr(
+          "mcp_provider_https_url_hint",
+          "Public/provider HTTPS endpoint used when the saved MCP transport is HTTPS."
+        )
+      );
+      const sync = () => {
+        httpsField.classList.toggle("hidden", transport.value === "stdio");
+        const approval = [...permission.options].find((item) => item.value === "approval");
+        if (approval) approval.disabled = transport.value === "stdio";
+        if (transport.value === "stdio" && permission.value === "approval") permission.value = "open";
+      };
+      transport.addEventListener("change", sync);
+      sync();
+      return { transport, permission, https, httpsField };
+    }
+
+    async function saveMcpDefinition(action, body) {
+      const response = await fetch(apiUrl("/api/mcp-server"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...body })
+      });
+      return fetchJsonOrThrow(response);
+    }
+
+    function ensureAddMcpControl() {
+      const toolbar = mcpDetails?.querySelector(".mcp-server-toolbar");
+      if (!toolbar || document.querySelector("#cfg-add-mcp")) return;
+      const add = document.createElement("button");
+      add.id = "cfg-add-mcp";
+      add.type = "button";
+      add.className = "small-button";
+      add.textContent = "+ Add MCP";
+      const form = document.createElement("div");
+      form.className = "hidden";
+      form.style.cssText = "display:grid;gap:8px;margin-top:10px;padding:10px;border:1px solid var(--border,#d7dde5);border-radius:8px";
+      const name = document.createElement("input"); name.placeholder = "name";
+      const command = document.createElement("input"); command.placeholder = "STDIO command (optional)";
+      const args = document.createElement("input"); args.placeholder = '["arg1","arg2"]';
+      const localUrl = document.createElement("input"); localUrl.placeholder = "Local MCP URL http://… (optional)";
+      const enabled = document.createElement("input"); enabled.type = "checkbox"; enabled.checked = true;
+      const controls = makeMcpPolicyControls({ transport: "auto", permission: "open", httpsUrl: "" });
+      const create = document.createElement("button"); create.type = "button"; create.className = "small-button"; create.textContent = "Create MCP";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "small-button"; cancel.textContent = "Cancel";
+      const message = document.createElement("span"); message.className = "detail";
+      form.append(
+        makeCfgField("Name", name),
+        makeCfgField("Enabled", enabled),
+        makeCfgField("STDIO command", command),
+        makeCfgField("STDIO args (JSON)", args),
+        makeCfgField("Local MCP URL", localUrl, tr(
+          "mcp_local_url_hint",
+          "Local URL reachable by LiveStageAssistant for proxy/admin access to this MCP server."
+        )),
+        makeCfgField("Transport", controls.transport),
+        controls.httpsField,
+        makeCfgField("Permission", controls.permission),
+        create,
+        cancel,
+        message
+      );
+      toolbar.append(add, form);
+      add.addEventListener("click", () => form.classList.remove("hidden"));
+      cancel.addEventListener("click", () => form.classList.add("hidden"));
+      create.addEventListener("click", async () => {
+        create.disabled = true;
+        message.textContent = "Creating…";
+        try {
+          const data = await saveMcpDefinition("create", { server: {
+            name: name.value.trim(), enabled: enabled.checked, command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
+            realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
+            https_url: controls.https.value.trim(), permission_mode: controls.permission.value
+          }});
+          setRestartRequired(data.restart_required, "MCP created · restart required.");
+          form.classList.add("hidden");
+          mcpServersSignature = "";
+          await refresh();
+        } catch (error) {
+          message.textContent = `Create failed: ${error.message || error}`;
+        } finally { create.disabled = false; }
+      });
+    }
+
+    function renderMcpCrud(snapshot) {
+      ensureAddMcpControl();
+      for (const old of document.querySelectorAll(".cfg-mcp-editor")) old.remove();
+      const policies = mcpPolicyMap(snapshot);
+      for (const card of document.querySelectorAll(".mcp-server-card")) {
+        const name = card.querySelector(".mcp-server-name")?.textContent?.trim() || "";
+        const policy = policies[name];
+        if (!name || !policy) continue;
+        const section = document.createElement("div");
+        section.className = "cfg-mcp-editor";
+        section.style.cssText = "margin-top:10px;padding-top:10px;border-top:1px solid var(--border,#d7dde5);display:grid;gap:8px";
+        const runtime = runtimeMcpStatus(snapshot, name);
+        if (runtime) {
+          const status = document.createElement("div");
+          status.className = "detail";
+          const configured = displayMcpTransport(runtime.configured_transport || policy.transport);
+          const effective = displayMcpTransport(runtime.effective_transport || "");
+          status.textContent = policy.enabled === false ? `Disabled · Configured ${configured}` : effective ? `Configured ${configured} · Effective ${effective}${runtime.healthy === true ? " · healthy" : runtime.healthy === false ? " · unavailable" : ""}` : `Configured ${configured}`;
+          section.append(status);
+        }
+        const enabled = card.querySelector(".mcp-enable-toggle") || document.createElement("input");
+        enabled.checked = policy.enabled !== false;
+        const command = document.createElement("input"); command.value = policy.command; command.placeholder = "STDIO command";
+        const args = document.createElement("input"); args.value = JSON.stringify(policy.args); args.placeholder = '["arg1"]';
+        const localUrl = document.createElement("input"); localUrl.value = policy.localUrl; localUrl.placeholder = "Local MCP URL";
+        const controls = makeMcpPolicyControls(policy);
+        const markMcpCrudDirty = () => { mcpCrudDirty = true; };
+        for (const control of [command, args, localUrl, controls.transport, controls.permission, controls.https]) {
+          control.addEventListener("input", markMcpCrudDirty);
+          control.addEventListener("change", markMcpCrudDirty);
+        }
+        const auth = document.createElement("div"); auth.className = "detail"; auth.textContent = `HTTPS auth: ${policy.authConfigured ? "Configured" : "Missing / not required"}`;
+        const test = document.createElement("button"); test.type = "button"; test.className = "small-button"; test.textContent = tr("test_transport", "Tester transport");
+        test.title = tr("test_transport_title", "Tests every configured MCP route: STDIO, Local MCP URL, and Provider HTTPS URL.");
+        const save = document.createElement("button"); save.type = "button"; save.className = "small-button primary-save"; save.textContent = tr("save_mcp", "Save MCP");
+        const message = document.createElement("span"); message.className = "detail";
+        save.addEventListener("click", async () => {
+          save.disabled = true; message.textContent = "Saving…"; mcpCrudSavePending = true;
+          try {
+            const data = await saveMcpDefinition("update", { existing_name: name, server: {
+              name, enabled: enabled.checked, command: command.value.trim(), args: args.value.trim() || "[]", local_url: localUrl.value.trim(),
+              realtime_transport: controls.transport.value === "native" ? "https" : controls.transport.value,
+              https_url: controls.https.value.trim(), permission_mode: controls.permission.value
+            }});
+            mcpCrudDirty = false;
+            setRestartRequired(data.restart_required, "MCP saved · restart required.");
+            message.textContent = "Saved · restart required.";
+          } catch (error) { message.textContent = `Save failed: ${error.message || error}`; }
+          finally { save.disabled = false; mcpCrudSavePending = false; }
+        });
+        test.addEventListener("click", async () => {
+          test.disabled = true; message.textContent = "Testing…";
+          try {
+            const response = await fetch(apiUrl("/api/mcp-test"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ server: name }) });
+            const data = await fetchJsonOrThrow(response);
+            const routes = Array.isArray(data.routes) ? data.routes : [];
+            const status = data.status === "partial" ? "Partial" : data.healthy ? "Healthy" : "Unavailable";
+            const details = routes.length
+              ? routes.map((route) => `${route.label || displayMcpTransport(route.transport)}: ${route.healthy ? "OK" : "Fail"} (${route.detail || ""})`).join(" · ")
+              : (data.detail || "");
+            message.textContent = `${status} · ${details}`;
+          } catch (error) { message.textContent = `Test failed: ${error.message || error}`; }
+          finally { test.disabled = false; }
+        });
+        section.append(
+          makeCfgField("STDIO command", command),
+          makeCfgField("STDIO args (JSON)", args),
+          makeCfgField("Local MCP URL", localUrl, tr(
+            "mcp_local_url_hint",
+            "Local URL reachable by LiveStageAssistant for proxy/admin access to this MCP server."
+          )),
+          makeCfgField("Transport", controls.transport),
+          controls.httpsField,
+          makeCfgField("Permission", controls.permission),
+          auth,
+          test,
+          save,
+          message
+        );
+        card.append(section);
+      }
+    }
+
+    function shouldDeferMcpCrudRefresh() {
+      if (mcpCrudDirty || mcpCrudSavePending) return true;
+      const active = document.activeElement;
+      return Boolean(active && active.closest && active.closest("#mcp-server-grid"));
+    }
+
     async function loadEnvProfiles() {
       if (envProfilesLoading) return false;
       envProfilesLoading = true;
       let profileChanged = false;
       try {
-        const response = await fetch("/api/env-profiles", { cache: "no-store" });
+        const response = await fetch(apiUrl("/api/env-profiles"), { cache: "no-store" });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         const current = data.current || "";
@@ -3052,7 +3724,7 @@
       disconnectVnc("reconnexion VNC...");
       llmMessage.textContent = `Switching to ${nextEnvProfile}...`;
       try {
-        const response = await fetch("/api/env-profile", {
+        const response = await fetch(apiUrl("/api/env-profile"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ env_file: nextEnvProfile })
@@ -3074,12 +3746,29 @@
         connectVnc({ force: true });
       } finally {
         envProfile.disabled = !envProfileSwitchingEnabled || envProfile.options.length <= 1;
-        llmSave.disabled = !llmProvider.value;
+        llmSave.disabled = false;
       }
     }
 
     function syncOpenAiSpeedLabel() {
       openaiTtsSpeedLabel.textContent = `${Number(openaiTtsSpeed.value || 1).toFixed(2)}x`;
+    }
+
+    function clampTtsSpeed(provider, value) {
+      const numeric = Number(value || 1);
+      if (provider === "elevenlabs") return Math.max(0.7, Math.min(1.2, numeric));
+      return Math.max(0.6, Math.min(1.8, numeric));
+    }
+
+    function syncTtsSpeedRange() {
+      const engine = selectedVoiceEngine();
+      const provider = engine === "classic" ? (cloudTtsProvider.value || "none") : "";
+      const elevenLabs = provider === "elevenlabs";
+      openaiTtsSpeed.min = elevenLabs ? "0.7" : "0.6";
+      openaiTtsSpeed.max = elevenLabs ? "1.2" : "1.8";
+      const clamped = clampTtsSpeed(provider, openaiTtsSpeed.value);
+      if (Number(openaiTtsSpeed.value) !== clamped) openaiTtsSpeed.value = String(clamped);
+      syncOpenAiSpeedLabel();
     }
 
     function syncTtsVolumeLabels() {
@@ -3422,7 +4111,7 @@
       button.disabled = true;
       button.classList.add("playing");
       try {
-        const response = await fetch("/api/speaker-profile-sample", {
+        const response = await fetch(apiUrl("/api/speaker-profile-sample"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -3493,7 +4182,7 @@
       if (deleteButton) deleteButton.disabled = true;
       if (status) status.textContent = tr("speaker_profile_deleting", "suppression...");
       try {
-        const response = await fetch("/api/speaker-profile-delete", {
+        const response = await fetch(apiUrl("/api/speaker-profile-delete"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ profile_index: profileIndex })
@@ -3719,7 +4408,7 @@
       }
       if (state.source === "backend" && state.recording) {
         state.discard = true;
-        fetch("/api/backend-speaker-capture/stop", { method: "POST" }).catch(() => {});
+        fetch(apiUrl("/api/backend-speaker-capture/stop"), { method: "POST" }).catch(() => {});
       }
       if (speakerCapture.stream) {
         for (const track of speakerCapture.stream.getTracks()) track.stop();
@@ -3736,7 +4425,7 @@
       speakerCapture.dialog.stop.disabled = true;
       setSpeakerCaptureStatus(tr("speaker_capture_processing", "Preparing preview..."), "processing");
       if (speakerCapture.source === "backend") {
-        fetch("/api/backend-speaker-capture/stop", { method: "POST" }).catch(() => {});
+        fetch(apiUrl("/api/backend-speaker-capture/stop"), { method: "POST" }).catch(() => {});
       } else if (speakerCapture.recorder && speakerCapture.recorder.state !== "inactive") {
         speakerCapture.recorder.stop();
       }
@@ -3824,7 +4513,7 @@
 
     async function beginBackendSpeakerSampleCapture(state) {
       startSpeakerCaptureTimers(state);
-      const response = await fetch("/api/backend-speaker-capture", {
+      const response = await fetch(apiUrl("/api/backend-speaker-capture"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3934,7 +4623,7 @@
       }
       try {
         const dataUrl = await readFileAsDataUrl(blob);
-        const response = await fetch("/api/speaker-profile-upload", {
+        const response = await fetch(apiUrl("/api/speaker-profile-upload"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -4056,26 +4745,52 @@
       llmMessage.textContent = tr("stt_example_applied", "STT example applied. Save to persist.");
     }
 
-    async function testSelectedTtsVoice() {
+    function selectedVoiceTestConfig(kind) {
+      const engine = selectedVoiceEngine();
+      if (kind === "realtime" || ["openai-realtime", "gemini-live"].includes(engine)) {
+        if (engine === "openai-realtime") {
+          return { provider: "openai-realtime", model: realtimeModel.value || "", voice: realtimeVoice.value || "" };
+        }
+        if (engine === "gemini-live") {
+          return { provider: "gemini-live", model: realtimeModel.value || "", voice: realtimeVoice.value || "" };
+        }
+      }
+      if (kind === "elevenlabs") {
+        return { provider: "elevenlabs", model: "", voice: elevenlabsVoice.value || "" };
+      }
+      if (kind === "openai") {
+        return { provider: "openai", model: "gpt-4o-mini-tts", voice: openaiTtsVoice.value || "" };
+      }
       const provider = cloudTtsProvider.value || "none";
-      if (!["openai", "elevenlabs"].includes(provider)) return;
-      const voice = provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value;
-      const speed = Number(openaiTtsSpeed.value || 1);
+      return {
+        provider,
+        model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+        voice: provider === "elevenlabs" ? elevenlabsVoice.value : openaiTtsVoice.value
+      };
+    }
+
+    async function testSelectedTtsVoice(kind, button) {
+      const config = selectedVoiceTestConfig(kind);
+      const provider = config.provider || "none";
+      if (!["openai", "elevenlabs", "openai-realtime", "gemini-live"].includes(provider) || !config.voice) return;
+      const voice = config.voice;
+      const speed = clampTtsSpeed(provider, openaiTtsSpeed.value);
       const volume = Number(webTtsVolume.value || 1);
-      const backendVolume = Number(backendTtsVolume.value || 1);
+      const backendVolume = ["openai-realtime", "gemini-live"].includes(provider)
+        ? Number(speechOutputGain?.value || 1)
+        : Number(backendTtsVolume.value || 1);
       const backendPan = Number(backendAudioOutputPan.value || 0);
-      const output = selectedTtsOutput();
-      ttsTest.disabled = true;
+      const output = ["openai-realtime", "gemini-live"].includes(provider) ? "backend" : selectedTtsOutput();
+      if (button) button.disabled = true;
       llmMessage.textContent = tr("testing_voice", "Testing voice...");
       try {
         if (output === "backend") {
-          const response = await fetch("/api/backend-tts-test", {
+          const response = await fetch(apiUrl("/api/backend-tts-test"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               text: ttsTestPhrase,
-              provider,
-              model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+                model: config.model || "",
               voice,
               speed,
               volume: backendVolume,
@@ -4097,7 +4812,7 @@
           await playWebTts(ttsTestPhrase, {
             force: true,
             provider,
-            model: provider === "openai" ? "gpt-4o-mini-tts" : "",
+            model: config.model || "",
             voice,
             speed,
             volume
@@ -4311,41 +5026,53 @@
       syncBackendWakeWordControls();
     }
 
-	    function syncTtsProviderControls() {
+    function syncTtsProviderControls() {
+      syncTtsSpeedRange();
       const connectivityMode = selectedConnectivityMode();
       const offline = connectivityMode === "offline";
-	      const provider = cloudTtsProvider.value || "none";
-	      const output = selectedTtsOutput();
-	      const forceSilent = !offline && provider === "none";
-      for (const element of cloudAudioControls) element.classList.toggle("hidden", offline);
-      offlineAudioSummary.classList.toggle("hidden", !offline);
-	      for (const input of ttsOutputInputs) {
+      const engine = selectedVoiceEngine();
+      const local = engine === "local";
+      const classic = !local && engine === "classic";
+      const realtimeEngine = !local && ["openai-realtime", "gemini-live"].includes(engine);
+      const provider = cloudTtsProvider.value || "none";
+      const output = selectedTtsOutput();
+      const forceSilent = classic && provider === "none";
+      const classicVoicePreviewUnavailable = output === "silent" || (output === "backend" && !backendAudioCapabilities.output);
+      const realtimeVoicePreviewUnavailable = !backendAudioCapabilities.output;
+      for (const element of cloudAudioControls) element.classList.toggle("hidden", !classic);
+      offlineAudioSummary.classList.toggle("hidden", !local);
+      for (const input of ttsOutputInputs) {
         const enabled = ttsOutputAvailable(input.value)
           && (!forceSilent || input.value === "silent")
-          && (!offline || input.value === "backend" || input.value === "silent");
+          && (!offline || input.value === "backend" || input.value === "silent")
+          && (classic || local);
         setSegmentOptionEnabled(input, enabled, ttsOutputUnavailableReason(input.value));
-	        input.checked = offline
-          ? input.value === (ttsOutputAvailable("backend") ? "backend" : "silent")
-          : (forceSilent ? input.value === "silent" : input.value === firstAvailableTtsOutput(output));
-	      }
-	      elevenlabsVoiceField.classList.toggle("hidden", offline || provider !== "elevenlabs");
-	      openaiTtsVoiceField.classList.toggle("hidden", offline || provider !== "openai");
-	      ttsSpeedField.classList.toggle("hidden", offline || provider === "none");
-	      ttsTestField.classList.toggle("hidden", offline || provider === "none");
-	      elevenlabsVoice.disabled = offline || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
-	      openaiTtsVoice.disabled = offline || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
-	      openaiTtsSpeed.disabled = offline || provider === "none";
-      webTtsVolume.disabled = offline || provider === "none" || selectedTtsOutput() !== "browser";
-      backendTtsVolume.disabled = selectedTtsOutput() !== "backend";
+        if (local) {
+          input.checked = input.value === (ttsOutputAvailable("backend") ? "backend" : "silent");
+        } else if (classic) {
+          input.checked = forceSilent ? input.value === "silent" : input.value === firstAvailableTtsOutput(output);
+        }
+      }
+      elevenlabsVoiceField.classList.toggle("hidden", !classic || provider !== "elevenlabs");
+      openaiTtsVoiceField.classList.toggle("hidden", !classic || provider !== "openai");
+      ttsSpeedField.classList.toggle("hidden", !((classic && provider !== "none") || realtimeEngine));
+      elevenlabsVoice.disabled = !classic || provider !== "elevenlabs" || elevenlabsVoice.options.length === 0 || !elevenlabsVoice.value;
+      openaiTtsVoice.disabled = !classic || provider !== "openai" || openaiTtsVoice.options.length === 0 || !openaiTtsVoice.value;
+      realtimeVoice.disabled = !realtimeEngine || realtimeVoice.options.length === 0 || !realtimeVoice.value;
+      openaiTtsSpeed.disabled = !((classic && provider !== "none") || realtimeEngine);
+      webTtsVolume.disabled = !classic || provider === "none" || selectedTtsOutput() !== "browser";
+      backendTtsVolume.disabled = !classic && !local ? true : selectedTtsOutput() !== "backend";
       backendAudioOutputPan.disabled = backendAudioOutputPanField.classList.contains("hidden") || !backendAudioCapabilities.output;
       webTtsVolumeField.title = webTtsVolume.disabled ? "WEB_TTS_VOLUME - actif seulement avec TTS Output Browser" : "WEB_TTS_VOLUME";
       backendTtsVolumeField.title = backendTtsVolume.disabled ? "BACKEND_TTS_VOLUME - actif seulement avec TTS Output Backend" : "BACKEND_TTS_VOLUME";
       backendAudioOutputPanField.title = backendAudioOutputPan.disabled ? "BACKEND_AUDIO_OUTPUT_PAN - actif avec TTS Output Backend ou le monitoring backend actif" : "BACKEND_AUDIO_OUTPUT_PAN";
-      ttsTest.disabled = offline || provider === "none" || (provider === "openai" && !openaiTtsVoice.value) || (provider === "elevenlabs" && !elevenlabsVoice.value);
+      if (elevenlabsVoicePlay) elevenlabsVoicePlay.disabled = elevenlabsVoice.disabled || classicVoicePreviewUnavailable;
+      if (openaiTtsVoicePlay) openaiTtsVoicePlay.disabled = openaiTtsVoice.disabled || classicVoicePreviewUnavailable;
+      if (realtimeVoicePlay) realtimeVoicePlay.disabled = realtimeVoice.disabled || realtimeVoicePreviewUnavailable;
       syncAudioSampleControls();
       syncSpeakerProfileSampleControls();
       syncAudioDeviceVisibility();
-	    }
+    }
 
     function selectedConnectivityMode() {
       const checked = connectivityModeInputs.find((input) => input.checked);
@@ -4386,9 +5113,7 @@
 
     function syncConnectivityControls() {
       if (selectedConnectivityMode() === "offline") {
-        if ([...llmProvider.options].some((option) => option.value === "ollama")) {
-          llmProvider.value = "ollama";
-        }
+        voiceEngine.value = "local";
         if ([...cloudTtsProvider.options].some((option) => option.value === "none")) {
           cloudTtsProvider.value = "none";
         }
@@ -4468,7 +5193,7 @@
       if (!cleanedTitle) return;
       setSessionLoading(true, tr("renaming_session", "Renaming session"));
       try {
-        const response = await fetch("/api/session-context/rename", {
+        const response = await fetch(apiUrl("/api/session-context/rename"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId, title: cleanedTitle })
@@ -4487,7 +5212,7 @@
       if (!confirmed) return;
       setSessionLoading(true, "Deleting session");
       try {
-        const response = await fetch("/api/session-context/delete", {
+        const response = await fetch(apiUrl("/api/session-context/delete"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId })
@@ -4510,7 +5235,7 @@
       if (!confirmed) return;
       setSessionLoading(true, "Clearing conversation");
       try {
-        const response = await fetch("/api/session-context/clear", {
+        const response = await fetch(apiUrl("/api/session-context/clear"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId })
@@ -4529,7 +5254,7 @@
     async function saveSessionContext(sessionId, currentTitle) {
       setSessionLoading(true, "Saving context");
       try {
-        const response = await fetch("/api/session-context/save", {
+        const response = await fetch(apiUrl("/api/session-context/save"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId })
@@ -4555,11 +5280,10 @@
       }
     }
 
-	    async function loadLlmOptions(provider, preferredModel, connectivityOverride = "") {
+	    async function loadLlmOptions(preferredModel = "", connectivityOverride = "") {
       if (llmOptionsLoading) return false;
       const shouldMarkClean = !connectivityOverride;
       llmOptionsLoading = true;
-	      llmProvider.disabled = true;
 	      llmModel.disabled = true;
       for (const input of connectivityModeInputs) input.disabled = true;
 	        sessionContextSize.disabled = true;
@@ -4568,6 +5292,7 @@
       wakeWord.disabled = true;
       sttPromptEl.disabled = true;
       sttLanguage.disabled = true;
+      if (localWhisperModel) localWhisperModel.disabled = true;
       assistantSystemPromptEl.disabled = true;
       cloudTtsProvider.disabled = true;
       for (const input of ttsOutputInputs) input.disabled = true;
@@ -4582,7 +5307,9 @@
       backendAudioOutputPan.disabled = true;
       commandAckSound.disabled = true;
       commandAckSoundPlay.disabled = true;
-      ttsTest.disabled = true;
+      if (elevenlabsVoicePlay) elevenlabsVoicePlay.disabled = true;
+      if (openaiTtsVoicePlay) openaiTtsVoicePlay.disabled = true;
+      if (realtimeVoicePlay) realtimeVoicePlay.disabled = true;
       for (const control of vadControls) control.disabled = true;
       for (const control of backendWakeWordControls) control.disabled = true;
       for (const button of vadPresetButtons) button.disabled = true;
@@ -4599,31 +5326,41 @@
         llmSave.disabled = true;
       llmMessage.textContent = tr("loading_llm_options", "Loading LLM options...");
       try {
-        const suffix = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-        const response = await fetch(`/api/llm-options${suffix}`, { cache: "no-store" });
+        const response = await fetch(apiUrl("/api/llm-options"), { cache: "no-store" });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
+        lastLlmOptions = data;
 
-	        const selectedProvider = data.provider || provider || "";
         setSelectedConnectivityMode(connectivityOverride || data.selected_connectivity_mode || "online");
-	        llmProvider.replaceChildren();
-        for (const item of data.providers || []) {
-          const label = item.available === false && item.reason
-            ? `${item.label || item.id} (${item.reason})`
-            : (item.label || item.id);
-          llmProvider.appendChild(option(label, item.id, item.available === false, item.id === selectedProvider));
-        }
-        if (selectedProvider && llmProvider.value !== selectedProvider) {
-          llmProvider.value = selectedProvider;
-        }
+        const selectedEngine = data.selected_voice_engine || (selectedConnectivityMode() === "offline" ? "local" : "classic");
+        voiceEngine.value = selectedEngine === "local" ? "local" : "cloud";
+        cloudEngine.value = data.selected_cloud_engine || (selectedEngine === "local" ? "classic" : selectedEngine);
+        syncRealtimeDropdownOptions();
+        if (realtimeCaptureTimeout) realtimeCaptureTimeout.value = String(data.selected_realtime_capture_timeout_seconds ?? 15);
+        if (realtimeWaitResponseTimeout) realtimeWaitResponseTimeout.value = String(data.selected_realtime_wait_response_timeout_seconds ?? 8);
+        if (realtimeResponseTimeout) realtimeResponseTimeout.value = String(data.selected_realtime_response_timeout_seconds ?? 30);
+        if (realtimeFollowupTimeout) realtimeFollowupTimeout.value = String(data.selected_realtime_followup_timeout_seconds ?? 12);
+        currentCloudGain = Number(data.selected_cloud_tts_output_gain ?? 1);
+        currentLocalGain = Number(data.selected_local_tts_output_gain ?? 1);
+        speechOutputGain.value = String(selectedVoiceEngine() === "local" ? currentLocalGain : currentCloudGain);
         setSessionContextSize(data.selected_session_context_size || 0);
         setMcpAgentMaxSteps(data.selected_mcp_agent_max_steps || 20);
         setSelectedMcpToolRoutingEnabled(Boolean(data.selected_mcp_tool_routing_enabled));
         setSelectedInterruptConversationEnabled(Boolean(data.selected_interrupt_conversation_enabled));
         interruptConversationEnabled = selectedInterruptConversationEnabled();
         wakeWord.value = data.selected_wake_word || "";
-        sttPromptEl.value = data.selected_stt_prompt || "";
-        assistantSystemPromptEl.value = data.selected_system_prompt || "";
+        populateOptionsWithCurrent(
+          sttPromptEl,
+          data.prompt_files || [],
+          data.selected_stt_prompt || "",
+          tr("no_prompt_file_available", "No prompt file available")
+        );
+        populateOptionsWithCurrent(
+          assistantSystemPromptEl,
+          data.prompt_files || [],
+          data.selected_system_prompt || "",
+          tr("no_prompt_file_available", "No prompt file available")
+        );
 
         cloudTtsProvider.replaceChildren();
         const selectedCloudTtsProvider = data.selected_cloud_tts_provider || "";
@@ -4643,6 +5380,16 @@
         }
         if (selectedSttLanguage && sttLanguage.value !== selectedSttLanguage) {
           sttLanguage.value = selectedSttLanguage;
+        }
+        if (localWhisperModel) {
+          localWhisperModel.replaceChildren();
+          const selectedLocalWhisperModel = data.selected_local_whisper_model || "base";
+          for (const item of data.local_whisper_models || [{ id: "base", label: "Base" }, { id: "small", label: "Small" }]) {
+            localWhisperModel.appendChild(option(item.label || item.id, item.id, false, item.id === selectedLocalWhisperModel));
+          }
+          if (selectedLocalWhisperModel && localWhisperModel.value !== selectedLocalWhisperModel) {
+            localWhisperModel.value = selectedLocalWhisperModel;
+          }
         }
 
         llmModel.replaceChildren();
@@ -4749,6 +5496,16 @@
           }
         }
 
+        readySound.replaceChildren();
+        const selectedReadySound = data.selected_ready_sound_file || "";
+        readySound.appendChild(option(tr("ready_sound_disabled", "No ready sound"), "", false, !selectedReadySound));
+        for (const sound of sounds) {
+          readySound.appendChild(option(sound.label || sound.id, sound.id, false, sound.id === selectedReadySound));
+        }
+        if (selectedReadySound && !sounds.some((sound) => sound.id === selectedReadySound)) {
+          readySound.appendChild(option(`${selectedReadySound} (${tr("current", "current")})`, selectedReadySound, false, true));
+        }
+
         listeningSound.replaceChildren();
         const selectedListeningSound = data.selected_listening_sound_file || "";
         listeningSound.appendChild(option(
@@ -4850,14 +5607,15 @@
         }
         syncAudioSampleControls();
 
+        syncVoiceEngineControls();
         llmMessage.textContent = data.message || "";
         if (shouldMarkClean) {
           markConfigClean();
+          syncConfigActionState();
         }
       } catch (error) {
         llmMessage.textContent = `LLM options unavailable: ${error}`;
       } finally {
-	        llmProvider.disabled = false;
 	        llmModel.disabled = llmModel.options.length === 0 || !llmModel.value;
         for (const input of connectivityModeInputs) input.disabled = connectivityLocked;
 	        sessionContextSize.disabled = false;
@@ -4866,6 +5624,7 @@
         wakeWord.disabled = false;
         sttPromptEl.disabled = false;
         sttLanguage.disabled = sttLanguage.options.length === 0 || !sttLanguage.value;
+        if (localWhisperModel) localWhisperModel.disabled = localWhisperModel.options.length === 0 || !localWhisperModel.value;
         assistantSystemPromptEl.disabled = false;
         cloudTtsProvider.disabled = cloudTtsProvider.options.length === 0 || !cloudTtsProvider.value;
         for (const input of ttsOutputInputs) input.disabled = false;
@@ -4883,12 +5642,13 @@
         browserAudioTest.disabled = !browserAudioCapabilities.input || browserAudioInputField.classList.contains("hidden");
         backendAudioTest.disabled = !backendAudioCapabilities.input || backendAudioInputField.classList.contains("hidden");
         thinkingSound.disabled = thinkingSound.options.length === 0;
+        readySound.disabled = readySound.options.length === 0;
         listeningSound.disabled = listeningSound.options.length === 0;
         wakeDetectedSound.disabled = wakeDetectedSound.options.length === 0;
         commandAckSound.disabled = commandAckSound.options.length === 0;
         syncCommandAckSoundControls();
         syncAudioSampleControls();
-        llmSave.disabled = !llmProvider.value;
+        llmSave.disabled = false;
         llmOptionsLoading = false;
       }
       return true;
@@ -4897,9 +5657,8 @@
     async function syncLlmControls(data) {
       if (llmControlsInitialized) return;
       const env = (data.config && data.config.env) || {};
-      const provider = String(env.LLM_PROVIDER || "openai").toLowerCase();
       const model = String(env.OPENAI_MODEL || "");
-      const loaded = await loadLlmOptions(provider, model);
+      const loaded = await loadLlmOptions(model);
       if (loaded !== false) {
         llmControlsInitialized = true;
       }
@@ -4907,8 +5666,9 @@
 
     async function refresh() {
       try {
-        const response = await fetch("/api/snapshot", { cache: "no-store" });
+        const response = await fetch(apiUrl("/api/snapshot"), { cache: "no-store" });
         const data = await response.json();
+        lastSnapshot = data;
         const snapshotEnv = (data.config && data.config.env) || {};
         if (Object.prototype.hasOwnProperty.call(snapshotEnv, "SPEAKER_RECOGNITION_ENABLED")) {
           speakerRecognitionEnvEnabled = envFlag(snapshotEnv.SPEAKER_RECOGNITION_ENABLED, speakerRecognitionEnvEnabled);
@@ -4921,20 +5681,45 @@
           currentSnapshotEnvFile = snapshotEnvFile;
         }
         const services = data.services || {};
+        const runtimeMcpTiles = Array.isArray(data.runtime_status?.mcp)
+          ? data.runtime_status.mcp.map((item) => {
+            const status = item.enabled === false
+              ? "disabled"
+              : item.healthy === true
+                ? "healthy"
+                : item.healthy === false
+                  ? "unavailable"
+                  : (item.effective_transport || item.configured_transport ? "configured" : "unknown");
+            const transport = item.effective_transport || item.configured_transport || "";
+            const detail = `${transport ? `${displayMcpTransport(transport)} · ` : ""}${item.detail || ""}`.trim();
+            return tile(`MCP ${item.name || ""}`.trim(), status, detail);
+          })
+          : [];
+        const serviceTiles = Object.entries(services)
+          .filter(([name]) => !(runtimeMcpTiles.length && String(name || "").startsWith("MCP ·")))
+          .map(([name, service]) => tile(name, service.status, service.detail));
         const rows = [
           tile("Internet", data.internet, data.mode === "auto" ? "auto profile detection" : "fixed profile"),
           tile("Profile", data.mode, data.env_file || ""),
-          ...Object.entries(services).map(([name, service]) => tile(name, service.status, service.detail))
+          ...serviceTiles,
+          ...runtimeMcpTiles
         ];
         stateEl.innerHTML = rows.join("");
-        configEl.value = data.config_text || "";
-        renderMcpServers(data.mcp_servers || []);
-        syncMcpRoutingEditors();
+        const deferMcpPanelRefresh = shouldDeferMcpCrudRefresh();
+        if (!deferMcpPanelRefresh) {
+          renderMcpServers(data.mcp_servers || []);
+          syncMcpRoutingEditors();
+          window.setTimeout(() => {
+            if (!shouldDeferMcpCrudRefresh()) renderMcpCrud(data);
+          }, 0);
+        } else {
+          lastMcpServers = data.mcp_servers || lastMcpServers;
+        }
         const remoteScreen = data.remote_screen || {};
-        if (!vncUrlDirty && snapshotEnvChanged && currentVncFrameUrl) {
+        if (!vncUrlDirty && !vncUrlSavePending && snapshotEnvChanged && currentVncFrameUrl) {
           disconnectVnc("reconnexion VNC...");
         }
-        if (!vncUrlDirty && remoteScreen.vnc_url) {
+        if (!vncUrlDirty && !vncUrlSavePending && remoteScreen.vnc_url) {
           const remoteScreenUrlChanged = vncUrl.value !== remoteScreen.vnc_url;
           if (remoteScreenUrlChanged) {
             vncUrl.value = remoteScreen.vnc_url;
@@ -4957,6 +5742,14 @@
           Boolean(environmentLoading.active),
           environmentLoading.title || tr("environment_refresh", "rafraichissement de l'environnement")
         );
+        if (runtimeRestarting && !environmentLoading.active && data.runtime_status?.ready) {
+          runtimeRestarting = false;
+          restartRequired = false;
+          llmMessage.textContent = "Restart complete.";
+          llmControlsInitialized = false;
+          configBaseline = configSignature();
+          syncConfigActionState();
+        }
         const envProfileChanged = await loadEnvProfiles();
         if (envProfileChanged) {
           llmControlsInitialized = false;
@@ -4964,7 +5757,6 @@
           cloudApiLoaded = false;
         }
         await syncLlmControls(data);
-        promptEl.value = data.prompt || "";
         renderSessions(data.session_context || {});
         if (!settingsOverlay.classList.contains("open")) {
           setSessionContextSize(data.session_context_size || 0);
@@ -5148,6 +5940,16 @@
 
     webConversation.addEventListener("click", async () => {
       await unlockWebTtsAudio();
+      if (isOpenAiRealtimeSelected()) {
+        if (conversationEnabled) setConversationEnabled(false);
+        try {
+          await startBrowserRealtime();
+        } catch (_) {
+          updateConversationButton();
+        }
+        return;
+      }
+      if (realtimeBrowserPeer) await stopBrowserRealtime();
       setConversationEnabled(!conversationEnabled);
     });
 
@@ -5158,7 +5960,7 @@
     sessionNew.addEventListener("click", async () => {
       setSessionLoading(true, "Creating session");
       try {
-        const response = await fetch("/api/session-context/new", {
+        const response = await fetch(apiUrl("/api/session-context/new"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({})
@@ -5244,7 +6046,7 @@
       closeSessionSummary();
       setSessionLoading(true, "Loading session");
       try {
-        const response = await fetch("/api/session-context/select", {
+        const response = await fetch(apiUrl("/api/session-context/select"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: sessionId })
@@ -5293,14 +6095,10 @@
       tab.addEventListener("click", () => activateTab(tab.id));
     }
 
-	    llmProvider.addEventListener("change", () => {
-	      loadLlmOptions(llmProvider.value, "", selectedConnectivityMode());
-	    });
-
     for (const input of connectivityModeInputs) {
       input.addEventListener("change", () => {
         const mode = selectedConnectivityMode();
-        loadLlmOptions(mode === "offline" ? "ollama" : "openai", "", mode);
+        loadLlmOptions("", mode);
       });
     }
 
@@ -5309,7 +6107,7 @@
       switchEnvProfile(envProfile.value);
     });
 
-	    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
+    cloudTtsProvider.addEventListener("change", syncTtsProviderControls);
     elevenlabsVoice.addEventListener("change", syncTtsProviderControls);
     openaiTtsVoice.addEventListener("change", syncTtsProviderControls);
     for (const input of ttsOutputInputs) {
@@ -5323,6 +6121,7 @@
       stopCurrentAudioSample();
       syncAudioSampleControls();
     });
+    readySound.addEventListener("change", () => { stopCurrentAudioSample(); syncAudioSampleControls(); });
     listeningSound.addEventListener("change", () => {
       stopCurrentAudioSample();
       syncAudioSampleControls();
@@ -5336,6 +6135,7 @@
       syncAudioSampleControls();
     });
     thinkingSoundPlay.addEventListener("click", () => toggleAudioSample(thinkingSound, thinkingSoundPlay));
+    readySoundPlay.addEventListener("click", () => toggleAudioSample(readySound, readySoundPlay, true));
     listeningSoundPlay.addEventListener("click", () => toggleAudioSample(listeningSound, listeningSoundPlay, true));
     wakeDetectedSoundPlay.addEventListener("click", () => toggleAudioSample(
       wakeDetectedSound,
@@ -5398,13 +6198,40 @@
     }
     speakerThreshold.addEventListener("input", syncSpeakerLabels);
     speakerMargin.addEventListener("input", syncSpeakerLabels);
-    cloudApiDetails.addEventListener("toggle", () => {
-      if (cloudApiDetails.open) loadCloudApiStatus();
+    if (cloudApiDetails) loadCloudApiStatus();
+    if (cloudApiRefresh) cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
+    voiceEngine.addEventListener("change", () => {
+      syncVoiceEngineControls();
+      syncTtsProviderControls();
+      speechOutputGain.value = String(selectedVoiceEngine() === "local" ? currentLocalGain : currentCloudGain);
+      syncConfigActionState();
     });
-    cloudApiRefresh.addEventListener("click", () => loadCloudApiStatus(true));
+    cloudEngine.addEventListener("change", () => {
+      syncVoiceEngineControls();
+      syncTtsProviderControls();
+      syncConfigActionState();
+    });
+    realtimeModel.addEventListener("change", syncConfigActionState);
+    realtimeVoice.addEventListener("change", syncConfigActionState);
+    if (localWhisperModel) localWhisperModel.addEventListener("change", syncConfigActionState);
+    if (realtimeBrowserToggle) {
+      realtimeBrowserToggle.addEventListener("click", () => startBrowserRealtime().catch(() => {}));
+    }
+    speechOutputGain.addEventListener("input", () => { syncSpeechOutputGainLabel(); syncConfigActionState(); });
+    cloudTtsProvider.addEventListener("change", syncVoiceEngineControls);
+    panelConfig.addEventListener("input", syncConfigActionState);
+    panelConfig.addEventListener("change", syncConfigActionState);
+    mcpDetails.addEventListener("toggle", () => {
+      if (mcpDetails.open && lastSnapshot && !shouldDeferMcpCrudRefresh()) {
+        window.setTimeout(() => {
+          if (!shouldDeferMcpCrudRefresh()) renderMcpCrud(lastSnapshot);
+        }, 0);
+      }
+    });
 
     llmSave.addEventListener("click", async () => {
-      const provider = llmProvider.value;
+      if (!hasUnsavedConfigChanges() && restartRequired) { await requestRuntimeRestart(); return; }
+      const restartAfterSave = restartRequired;
       const model = llmModel.value;
       const sessionContextSizeValue = Number(sessionContextSize.value || 0);
       const mcpAgentMaxStepsValue = Number(mcpAgentMaxSteps.value || 20);
@@ -5418,6 +6245,7 @@
       const ttsOutputValue = selectedTtsOutput();
       const sttInputValue = selectedSttInput();
       const sttLanguageValue = sttLanguage.value || i18nPayload.locale || "fr";
+      const localWhisperModelValue = localWhisperModel?.value || "base";
       const backendAudioInputDevice = backendAudioInput.value;
       const backendAudioInputGainValue = Number(backendAudioInputGain.value || 1);
       const backendAudioOutputDevice = backendAudioOutput.value;
@@ -5426,6 +6254,7 @@
       const backendAudioMonitorVolumeValue = Number(backendAudioMonitorVolume.value || 1);
       const voiceId = elevenlabsVoice.value;
       const thinkingSoundFile = thinkingSound.value;
+      const readySoundFile = readySound.value;
       const listeningSoundFile = listeningSound.value;
       const wakeDetectedSoundFile = wakeDetectedSound.value;
       const startupLoaderSoundFile = startupLoaderSound.value;
@@ -5451,16 +6280,24 @@
       const speakerThresholdValue = Number(speakerThreshold.value || 0.75);
       const speakerMarginValue = Number(speakerMargin.value || 0.10);
       const speakerProfilesValue = collectSpeakerProfiles();
-      if (!provider) return;
+      const voiceEngineValue = selectedVoiceEngine();
+      const realtimeModelValue = String(realtimeModel.value || "").trim() || "gpt-realtime-2.1";
+      const realtimeVoiceValue = String(realtimeVoice.value || "").trim() || "marin";
+      const realtimeCaptureTimeoutValue = Number(realtimeCaptureTimeout?.value || 15);
+      const realtimeWaitResponseTimeoutValue = Number(realtimeWaitResponseTimeout?.value || 8);
+      const realtimeResponseTimeoutValue = Number(realtimeResponseTimeout?.value || 30);
+      const realtimeFollowupTimeoutValue = Number(realtimeFollowupTimeout?.value || 12);
+      const speechGainValue = Number(speechOutputGain.value || 1);
+      const cloudGainValue = voiceEngineValue === "local" ? currentCloudGain : speechGainValue;
+      const localGainValue = voiceEngineValue === "local" ? speechGainValue : currentLocalGain;
 
       llmSave.disabled = true;
       llmMessage.textContent = tr("saving", "Saving...");
       try {
-        const response = await fetch("/api/llm-config", {
+        const response = await fetch(apiUrl("/api/llm-config"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            provider,
             model,
             session_context_size: sessionContextSizeValue,
             mcp_agent_max_steps: mcpAgentMaxStepsValue,
@@ -5471,6 +6308,7 @@
             tts_output: ttsOutputValue,
             stt_input: sttInputValue,
             stt_language: sttLanguageValue,
+            local_whisper_model: localWhisperModelValue,
             backend_audio_input_device: backendAudioInputDevice,
             backend_audio_input_gain: backendAudioInputGainValue,
             backend_audio_output_device: backendAudioOutputDevice,
@@ -5482,6 +6320,7 @@
             system_prompt: systemPromptValue,
             voice_id: voiceId,
             thinking_sound_file: thinkingSoundFile,
+            ready_sound_file: readySoundFile,
             listening_sound_file: listeningSoundFile,
             wake_detected_sound_file: wakeDetectedSoundFile,
             startup_loader_sound_file: startupLoaderSoundFile,
@@ -5506,26 +6345,36 @@
             speaker_backend: speakerBackendValue,
             speaker_threshold: speakerThresholdValue,
             speaker_margin: speakerMarginValue,
-            speaker_profiles: speakerProfilesValue
+            speaker_profiles: speakerProfilesValue,
+            voice_engine: voiceEngineValue,
+            realtime_model: realtimeModelValue,
+            realtime_voice: realtimeVoiceValue,
+            realtime_capture_timeout_seconds: realtimeCaptureTimeoutValue,
+            realtime_wait_response_timeout_seconds: realtimeWaitResponseTimeoutValue,
+            realtime_response_timeout_seconds: realtimeResponseTimeoutValue,
+            realtime_followup_timeout_seconds: realtimeFollowupTimeoutValue,
+            cloud_tts_output_gain: cloudGainValue,
+            local_tts_output_gain: localGainValue
           })
         });
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         llmMessage.textContent = data.message || tr("saved", "Saved.");
         cloudApiLoaded = false;
-        setEnvironmentLoading(true);
+        currentCloudGain = cloudGainValue;
+        currentLocalGain = localGainValue;
         markConfigClean();
-        llmControlsInitialized = false;
+        restartRequired = restartRequired || Boolean(data.restart_required);
+        syncConfigActionState();
         if ((data.stt_language || sttLanguageValue) !== i18nPayload.locale) {
           window.setTimeout(() => window.location.reload(), 250);
           return;
         }
-        await refresh();
+        if (restartAfterSave) await requestRuntimeRestart();
       } catch (error) {
-        setEnvironmentLoading(false);
         llmMessage.textContent = trf("save_failed", "Save failed: {error}", { error });
       } finally {
-        llmSave.disabled = !llmProvider.value;
+        if (!runtimeRestarting) syncConfigActionState();
       }
     });
 
@@ -5549,6 +6398,7 @@
     wakeWord.addEventListener("input", () => {
       syncBackendAudioMonitorControls();
       syncBackendWakeWordControls();
+      syncAudioSampleControls();
       syncAudioDeviceVisibility();
     });
     for (const control of vadControls) {
@@ -5562,5 +6412,8 @@
     for (const button of vadPresetButtons) {
       button.addEventListener("click", () => applyVadPreset(button.dataset.vadPreset || ""));
     }
-    ttsTest.addEventListener("click", testSelectedTtsVoice);
+    if (elevenlabsVoicePlay) elevenlabsVoicePlay.addEventListener("click", () => testSelectedTtsVoice("elevenlabs", elevenlabsVoicePlay));
+    if (openaiTtsVoicePlay) openaiTtsVoicePlay.addEventListener("click", () => testSelectedTtsVoice("openai", openaiTtsVoicePlay));
+    if (realtimeVoicePlay) realtimeVoicePlay.addEventListener("click", () => testSelectedTtsVoice("realtime", realtimeVoicePlay));
+    for (const control of [realtimeCaptureTimeout, realtimeWaitResponseTimeout, realtimeResponseTimeout, realtimeFollowupTimeout].filter(Boolean)) control.addEventListener("input", syncConfigActionState);
     loadBrowserAudioDevices(false);

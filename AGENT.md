@@ -61,13 +61,29 @@ Do not create a separate document to track milestone work.
 - Review/update `docs/ARCHITECTURE_AND_ROADMAP.md` whenever a change affects architecture, runtime internals, tracked improvements, technical decisions or roadmap status.
 - Update `.env.example` and relevant profile env files when adding, renaming or changing the meaning of config keys.
 - When changing user-facing Web GUI text, update every locale file under `assets/i18n/` in the same pass. Do not translate technical identifiers such as env var names, API keys, model IDs, route paths or log-only diagnostics unless deliberately shown as prose.
+- For every Web GUI or WebMonitor change that adds or modifies an HTTP endpoint call, asset load, iframe URL, script URL, audio URL, CSS URL, worker/module import, redirect target or generated link, preserve dynamic base-path handling. Build URLs only through the existing generic helpers such as `apiUrl()`, `assetUrl()` or `lsaUrl()` on the frontend, or an equivalent request-derived base-path helper on the backend. Never hardcode `/lsa`, `/assets`, `/api`, a LAN host, a Tailscale host, or any assumed mount prefix. The same code must work when served at `/`, behind a LAN reverse proxy, and behind a Tailscale path prefix calculated from the current page URL.
 - Keep installation guidance script-first: `scripts/install.sh` for Linux/macOS/Raspberry/WSL/Git Bash, `scripts/install.ps1` for native Windows PowerShell, Raspberry service-pack instructions only for service setup, and Docker instructions through the image build.
 - Mention in the final response whether documentation/roadmap milestones were updated or explicitly verified as current.
+
+## Domain capability ownership for Local deterministic commands
+
+LiveStageAssistant is the **domain-neutral host** for Local deterministic execution. It must not become a second parser for mixer, lighting or other MCP-specific commands.
+
+When the user asks to add a new mixer command/capability:
+
+1. identify the owning MCP server (for mixer semantics, normally `XMSeries-MCP`);
+2. implement/extend the typed MCP capability and the deterministic Local intent in that MCP repository according to its symmetry rules;
+3. reuse the MCP's existing deterministic parser, resolver, capability checks and execution primitives;
+4. change LiveStageAssistant only if the generic gateway protocol/orchestration/context transport genuinely needs a domain-neutral extension.
+
+Do **not** add XMSeries action words, target families, bus/channel matching rules, dB/routing semantics, command-specific regexes or OSC behavior to LSA merely to make a Local phrase work. LSA may transport neutral context such as recognized speaker identity, but the MCP owns how that context maps to domain objects such as a personal bus or input channel.
+
+A new domain capability is not correctly implemented by teaching LSA to rewrite a phrase into a domain command. The owning MCP must understand the command through its existing `lsa-command-gateway/v1` implementation. Cloud/Local capability symmetry is enforced by the owning MCP's coding rules.
 
 ## Important Local Profiles
 
 - `.env.online` is the cloud profile and should stay coherent with `CONNECTIVITY_MODE=online`.
-- `.env.offline` is the local profile and should stay coherent with `CONNECTIVITY_MODE=offline`, Ollama, local Whisper, local pyttsx3 TTS and offline MCP config.
+- `.env.offline` is the local profile and should stay coherent with `CONNECTIVITY_MODE=offline`, `VOICE_ENGINE=local`, local Whisper, Piper local TTS and offline MCP config. Local means deterministic parser + MCP command gateways, never a local LLM. Piper is the implicit and only local TTS implementation; do not introduce a local TTS provider selector, a legacy local TTS provider token or fallback into offline/OR3 configuration.
 - `.env.infrafasthttp` may be ignored by Git but is an active local profile; check it when the user asks about all env files or local profile behavior.
 
 Before finishing code/config changes, run the relevant lightweight checks, usually:

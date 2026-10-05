@@ -1,0 +1,109 @@
+import unittest
+
+import numpy as np
+
+from voice_assistant.realtime.wake_gate import RealtimeWakeConfig, RealtimeWakeGate
+
+
+class RealtimeWakeGateTests(unittest.TestCase):
+    def test_disabled_gate_is_always_authorized(self):
+        gate = RealtimeWakeGate(RealtimeWakeConfig())
+        self.assertFalse(gate.enabled)
+        self.assertTrue(gate.authorized)
+        self.assertFalse(gate.waiting)
+        self.assertFalse(gate.feed(b"\x00\x00" * 480))
+
+    def test_detects_threshold_and_authorizes_once(self):
+        calls = []
+
+        def predictor(samples):
+            calls.append(len(samples))
+            return {"momo": 0.8}
+
+        gate = RealtimeWakeGate(
+            RealtimeWakeConfig(wake_word="momo", threshold=0.6),
+            predictor=predictor,
+        )
+        pcm24k = np.zeros(1920, dtype=np.int16).tobytes()
+        self.assertTrue(gate.waiting)
+        self.assertTrue(gate.feed(pcm24k))
+        self.assertTrue(gate.authorized)
+        self.assertEqual(calls, [1280])
+        self.assertFalse(gate.feed(pcm24k))
+
+    def test_below_threshold_stays_waiting(self):
+        gate = RealtimeWakeGate(
+            RealtimeWakeConfig(wake_word="momo", threshold=0.6),
+            predictor=lambda _samples: {"momo": 0.2},
+        )
+        pcm24k = np.zeros(1920, dtype=np.int16).tobytes()
+        self.assertFalse(gate.feed(pcm24k))
+        self.assertTrue(gate.waiting)
+
+    def test_rearm_returns_to_wait_wake(self):
+        now = [10.0]
+        gate = RealtimeWakeGate(
+            RealtimeWakeConfig(
+                wake_word="momo",
+                threshold=0.6,
+                cooldown_ms=0,
+                post_tts_suppression_ms=350,
+            ),
+            predictor=lambda _samples: {"momo": 0.9},
+            clock=lambda: now[0],
+        )
+        pcm24k = np.zeros(1920, dtype=np.int16).tobytes()
+        self.assertTrue(gate.feed(pcm24k))
+        self.assertTrue(gate.authorized)
+        gate.rearm()
+        self.assertTrue(gate.waiting)
+        self.assertFalse(gate.feed(pcm24k))
+        now[0] += 0.36
+        self.assertTrue(gate.feed(pcm24k))
+
+    def test_preroll_is_bounded_and_consumed_after_detection(self):
+        gate = RealtimeWakeGate(
+            RealtimeWakeConfig(wake_word="momo", threshold=0.6, pre_roll_ms=100),
+            predictor=lambda _samples: {"momo": 0.9},
+        )
+        # 100 ms at 24 kHz mono PCM16 = 4800 bytes. Feed enough audio to
+        # trigger openWakeWord while verifying the retained payload is bounded.
+        pcm24k = np.arange(2400, dtype=np.int16).tobytes()
+        self.assertTrue(gate.feed(pcm24k))
+        preroll = gate.consume_pre_roll()
+        self.assertLessEqual(len(preroll), 4800)
+        self.assertGreater(len(preroll), 0)
+        self.assertEqual(gate.consume_pre_roll(), b"")
+
+    def test_rearm_clears_old_preroll(self):
+        gate = RealtimeWakeGate(
+            RealtimeWakeConfig(wake_word="momo", threshold=0.6, pre_roll_ms=100, cooldown_ms=0),
+            predictor=lambda _samples: {"momo": 0.9},
+        )
+        pcm24k = np.zeros(1920, dtype=np.int16).tobytes()
+        self.assertTrue(gate.feed(pcm24k))
+        self.assertGreater(len(gate.consume_pre_roll()), 0)
+        gate.rearm(suppress_ms=0)
+        self.assertEqual(gate.consume_pre_roll(), b"")
+
+    def test_env_config_uses_existing_keys(self):
+        config = RealtimeWakeConfig.from_env({
+            "WAKE_WORD": "momo",
+            "BACKEND_WAKE_WORD_MODEL_PATHS": "a.onnx,b.onnx",
+            "BACKEND_WAKE_WORD_MODEL_NAMES": "hey_jarvis",
+            "BACKEND_WAKE_WORD_THRESHOLD": "0.61",
+            "BACKEND_WAKE_WORD_PRE_ROLL_MS": "1750",
+            "BACKEND_WAKE_WORD_COOLDOWN_MS": "1500",
+            "WAKE_WORD_POST_TTS_SUPPRESSION_MS": "400",
+        })
+        self.assertTrue(config.enabled)
+        self.assertEqual(config.model_paths, ("a.onnx", "b.onnx"))
+        self.assertEqual(config.model_names, ("hey_jarvis",))
+        self.assertEqual(config.threshold, 0.61)
+        self.assertEqual(config.pre_roll_ms, 1750)
+        self.assertEqual(config.cooldown_ms, 1500)
+        self.assertEqual(config.post_tts_suppression_ms, 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

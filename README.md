@@ -5,12 +5,13 @@ Live Stage Assistant is a voice-enabled assistant for musicians and stage operat
 ## Main Features
 
 - Voice input with OpenAI Whisper or local Whisper.
-- Voice output through OpenAI, ElevenLabs, local pyttsx3, browser TTS, backend TTS, or silent text mode.
+- Voice output through OpenAI, ElevenLabs, local Piper, browser TTS, backend TTS, or silent text mode.
+- Cloud engines: Classic, OpenAI Realtime, or Gemini Live.
 - Optional wake word.
 - Optional speaker recognition.
 - Browser-based chat/configuration interface.
 - Online mode with cloud AI services.
-- Offline mode with Ollama, local Whisper and local TTS.
+- Deterministic Local mode with local Whisper, Piper TTS and MCP command gateways; no local LLM is required.
 - MCP integration for XMSeries-MCP, QLCPlus-MCP and other compatible servers.
 
 ## Prerequisites
@@ -42,7 +43,15 @@ cd LiveStageAssistant
 .\scripts\install.ps1
 ```
 
-The installer creates the Python environment and installs the required dependencies. It also prepares the optional local/offline components when possible.
+The installer creates the Python environment and installs the supported Cloud engines plus deterministic Local voice/runtime components. Piper is installed automatically and the default French voice `fr_FR-siwis-medium` is downloaded into `data/piper`.
+
+To download or restore the default French Piper voice manually:
+
+```bash
+.venv/bin/python -m piper.download_voices --data-dir data/piper fr_FR-siwis-medium
+```
+
+On Windows PowerShell, use `.venv\Scripts\python.exe` in the same command.
 
 ## API Keys
 
@@ -57,23 +66,20 @@ The selected env profile points to these files. Do not commit real API keys.
 
 ## Running Live Stage Assistant
 
-Default automatic online/offline mode:
+The common runtime is the normal entry point when automatic online/offline switching is required:
 
 ```bash
-.venv/bin/python voice_assistant/agent.py
+.venv/bin/python -m voice_assistant.runtime --env-file auto
 ```
 
-Explicit online mode:
+Explicit online or offline engine profiles can also be started through the common runtime:
 
 ```bash
-.venv/bin/python voice_assistant/agent.py --env-file .env.online
+.venv/bin/python -m voice_assistant.runtime --env-file .env.online
+.venv/bin/python -m voice_assistant.runtime --env-file .env.offline
 ```
 
-Explicit offline mode:
-
-```bash
-.venv/bin/python voice_assistant/agent.py --env-file .env.offline
-```
+The repository-level `.env.offline` uses `mcp_servers.json`. For the bundled XR16 rack profile, that file pins XMSeries-MCP to 16 channels, 4 buses, 4 FX returns and 4 DCA groups so deterministic name resolution does not scan unsupported XR indexes. The Raspberry Pi service profile uses `raspi_service_pack_stdio/mcp_servers_raspi.json`, which carries the same XR16 limits.
 
 On Windows PowerShell, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`.
 
@@ -84,6 +90,11 @@ http://127.0.0.1:8765
 ```
 
 Open that address in a browser to use the chat and configuration interface.
+The same web GUI can also be exposed behind a reverse proxy or Tailscale Funnel
+subpath such as `/lsa` when that public subpath is forwarded to the backend web
+root; its API and asset URLs are resolved relative to the opened page.
+
+At the end of startup, the spoken ready message reports how many MCP tools are actually available. If every configured MCP is reachable it says, for example, `Assistant vocal prêt à exécuter des commandes, 95 outils disponibles !`. If one or more MCP servers cannot be reached, it keeps the web interface usable and names the unavailable servers, or says `aucun MCP connecté` when no MCP tools are available.
 
 ## Raspberry Pi Service
 
@@ -97,6 +108,8 @@ chmod +x install_livestageassistant_service.sh livestageassistant
 ./install_livestageassistant_service.sh
 livestageassistant auto
 ```
+
+The normal installer already installs Realtime support, Piper, and the default French Piper voice before the service pack is installed.
 
 If you use local stdio stage MCP servers, the usual layout is:
 
@@ -152,7 +165,7 @@ If the monitor is exposed on your LAN or NAS, set `WEB_PASSWORD` in the active e
 
 The repository includes Docker profiles for different MCP network layouts. Select the profile that matches your deployment from the web config or through `ASSISTANT_ENV_FILE`. HTTP MCP profiles are appropriate when XMSeries-MCP/QLCPlus-MCP already run as reachable services; STDIO profiles are appropriate when the container starts mounted local MCP server scripts itself.
 
-In bridge networking, an MCP or Ollama service running outside the container must be addressed with a reachable LAN/Tailscale/service address, not `127.0.0.1`.
+In bridge networking, an MCP service running outside the container must be addressed with a reachable LAN/Tailscale/service address, not `127.0.0.1`.
 
 Browser microphone access over a NAS/LAN address may require HTTPS depending on the browser. If backend audio passthrough is unavailable, LSA remains usable through browser audio or text commands.
 
@@ -167,11 +180,11 @@ Important files:
 - `.env.example`: complete configuration example.
 - `mcp_servers*.json`: MCP server definitions.
 
-Common settings include:
+Typical online settings include:
 
 ```env
 CONNECTIVITY_MODE=online
-LLM_PROVIDER=openai
+VOICE_ENGINE=classic
 OPENAI_MODEL=gpt-4.1-mini
 STT_LANGUAGE=fr
 STT_INPUT=both
@@ -183,6 +196,29 @@ WEB_MONITOR_ENABLED=true
 WEB_MONITOR_PORT=8765
 MCP_CONFIG=mcp_servers.json
 ```
+
+Typical deterministic Local settings are:
+
+```env
+CONNECTIVITY_MODE=offline
+VOICE_ENGINE=local
+STT_PROVIDER=local-whisper
+STT_INPUT=backend
+LOCAL_WHISPER_MODEL=base
+CLOUD_TTS_PROVIDER=none
+PIPER_VOICE=fr_FR-siwis-medium
+PIPER_DATA_DIR=data/piper
+WEB_TTS_PROVIDER=none
+MCP_CONFIG=mcp_servers.json
+```
+
+`base` is the current Raspberry Pi Local baseline for live validation. `small` remains selectable for comparison, but its measured Pi latency was too high for the live-control target.
+
+Offline profiles use `VOICE_ENGINE=local`: local Whisper handles STT, the deterministic parser delegates domain semantics to MCP command gateways, and Piper handles local TTS. Local mode is also selectable while online; cloud engines require connectivity.
+
+In the Web GUI, **Mode** is intentionally limited to **Local déterministe** or **Cloud**. When Cloud is selected, **Cloud engine** chooses Classic, OpenAI Realtime or Gemini Live. There is no local generative LLM/provider/model choice: Ollama was retired after the deterministic Local path was validated.
+
+On Linux/Raspberry, `./scripts/install.sh` installs only the supported local voice/runtime extras: openWakeWord ONNX resources, realtime WebSocket transport support, Piper local TTS, and the default French Piper voice `fr_FR-siwis-medium`.
 
 ### Wake Word
 
@@ -247,7 +283,8 @@ Build local stdio MCP servers before starting LSA, and make sure their paths or 
 
 - Check whether TTS Output is set to Browser, Backend or Silent.
 - Verify the selected audio output device.
-- Check API keys and provider quota if using cloud TTS.
+- In offline mode, verify that `data/piper/fr_FR-siwis-medium.onnx` and its `.onnx.json` file exist.
+- Check API keys and provider quota only when using cloud TTS.
 
 ### MCP server unavailable
 
@@ -260,10 +297,10 @@ Build local stdio MCP servers before starting LSA, and make sure their paths or 
 Run explicitly with:
 
 ```bash
-.venv/bin/python voice_assistant/agent.py --env-file .env.offline
+.venv/bin/python -m voice_assistant.runtime --env-file .env.offline
 ```
 
-and verify the offline profile uses Ollama, local Whisper and local TTS.
+and verify the offline profile uses the deterministic Local engine, local Whisper, Piper and local/STDIO MCP servers.
 
 ## Development And Maintenance
 

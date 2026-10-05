@@ -41,20 +41,30 @@ import wave
 import numpy as np
 import openai
 import pyaudio
-import pyttsx3
 from elevenlabs.client import ElevenLabs
 from elevenlabs.types.voice_settings import VoiceSettings
-from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 from mcp_use import MCPAgent, MCPClient
 from pydantic import AnyUrl
 
 try:
-    from .i18n import available_locales, i18n_text, load_locale, normalize_locale
-    from .web_monitor import WebMonitor, build_service_state
+    from .i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text, sanitize_spoken_response
+    from .local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
+    from .web_monitor import WebMonitor
+    from .semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
     from .session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from .stage_timeout import TimedStageRunner
+    from .startup_messages import startup_ready_message
+    from .prompt_contract import log_final_engine_prompt
+    from .prompt_files import (
+        DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH,
+        DEFAULT_STT_PROMPT_PATH,
+        prompt_path_options,
+        prompt_reference_from_values,
+        prompt_text_from_values,
+    )
     from .wake_word import apply_wake_word, parse_wake_words
+    from .wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from .speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
@@ -70,11 +80,17 @@ try:
         validate_wav_bytes,
     )
 except ImportError:
-    from i18n import available_locales, i18n_text, load_locale, normalize_locale
-    from web_monitor import WebMonitor, build_service_state
+    from i18n import available_locales, i18n_text, load_locale, normalize_locale, localized_error_text, sanitize_spoken_response
+    from local_tts import piper_ready, piper_voice_name, render_piper_wav, speak_local_status
+    from web_monitor import WebMonitor
+    from semantic_audio import SemanticAudioConfig, SemanticAudioController, SemanticAudioState, VoiceOutputGains
     from session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
     from stage_timeout import TimedStageRunner
+    from startup_messages import startup_ready_message
+    from prompt_contract import log_final_engine_prompt
+    from prompt_files import DEFAULT_ASSISTANT_SYSTEM_PROMPT_PATH, DEFAULT_STT_PROMPT_PATH, prompt_path_options, prompt_reference_from_values, prompt_text_from_values
     from wake_word import apply_wake_word, parse_wake_words
+    from wake_logging import format_openwakeword_detected, format_openwakeword_waiting
     from speaker_recognition import (
         DEFAULT_SPEAKER_PROFILES_DIR,
         SPEAKER_EMBEDDING_PREPARATION_MESSAGE,
@@ -90,7 +106,6 @@ except ImportError:
         validate_wav_bytes,
     )
 
-TTS_ENGINE = pyttsx3.init()
 TTS_LOCK = threading.Lock()
 TTS_STOP_EVENT = threading.Event()
 TTS_PLAYBACK_PROCESS: subprocess.Popen | None = None
@@ -98,7 +113,6 @@ FORCE_EXIT_REQUESTED = threading.Event()
 DEFAULT_ELEVENLABS_VOICE_ID = "1EmYoP3UnnnwhlJKovEy"  # french male; ZF6FPAbjXT4488VcRRnw = english female
 DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "alloy"
-DEFAULT_OLLAMA_MODEL = "qwen3.5:4b"
 DEFAULT_MCP_AGENT_TIMEOUT_SECONDS = 45.0
 DEFAULT_MCP_AGENT_MAX_STEPS = 20
 DEFAULT_STT_TIMEOUT_SECONDS = 25.0
@@ -206,7 +220,13 @@ class CloudApiUserError(RuntimeError):
         self.kind = kind
 
 
-def classify_cloud_api_error(error: Exception | str, *, provider: str = "cloud", stage: str = "api") -> CloudApiUserError | None:
+def classify_cloud_api_error(
+    error: Exception | str,
+    *,
+    provider: str = "cloud",
+    stage: str = "api",
+    locale: str = "fr",
+) -> CloudApiUserError | None:
     """Return a concise user-facing API error when a provider failure is recognizable."""
     raw = str(error or "").strip()
     lowered = raw.lower()
@@ -227,18 +247,21 @@ def classify_cloud_api_error(error: Exception | str, *, provider: str = "cloud",
         "free tier credits",
     )
     if any(marker in lowered for marker in quota_markers):
+        errors = load_locale(locale).get("errors") or {}
         if provider_label.lower() == "openai":
-            message = "Plus de crédit API OpenAI. Passe en mode local ou ajoute du crédit."
+            message = str(errors.get("cloud_quota_openai") or "Plus de crédit API OpenAI. Passe en mode local ou ajoute du crédit.")
         elif provider_label.lower() == "elevenlabs":
-            message = "Plus de crédit API ElevenLabs pour la voix."
+            message = str(errors.get("cloud_quota_elevenlabs") or "Plus de crédit API ElevenLabs pour la voix.")
         else:
-            message = "Plus de crédit API pour ce service cloud."
+            message = str(errors.get("cloud_quota_generic") or "Plus de crédit API pour ce service cloud.")
         return CloudApiUserError(message, provider=provider_label, stage=stage_label, kind="quota")
 
     auth_markers = ("invalid_api_key", "invalid api key", "unauthorized", "status code: 401", "status_code: 401")
     if any(marker in lowered for marker in auth_markers):
+        errors = load_locale(locale).get("errors") or {}
+        template = str(errors.get("cloud_auth") or "Clé API {provider} invalide ou refusée.")
         return CloudApiUserError(
-            f"Clé API {provider_label} invalide ou refusée.",
+            template.replace("{provider}", provider_label),
             provider=provider_label,
             stage=stage_label,
             kind="auth",
@@ -246,8 +269,10 @@ def classify_cloud_api_error(error: Exception | str, *, provider: str = "cloud",
 
     rate_markers = ("rate_limit_exceeded", "rate limit", "too many requests", "status code: 429", "status_code: 429")
     if any(marker in lowered for marker in rate_markers):
+        errors = load_locale(locale).get("errors") or {}
+        template = str(errors.get("cloud_rate_limit") or "Limite temporaire API {provider} atteinte. Réessaie dans un moment.")
         return CloudApiUserError(
-            f"Limite temporaire API {provider_label} atteinte. Réessaie dans un moment.",
+            template.replace("{provider}", provider_label),
             provider=provider_label,
             stage=stage_label,
             kind="rate_limit",
@@ -302,19 +327,33 @@ MCP_CONFIRMATION_WORDS = {
     "go",
 }
 DEFAULT_ASSISTANT_SYSTEM_PROMPT = (
-    "You are a helpful voice assistant named is Live Stage Assistant with access to various tools. "
-    "Be precise, conservative, and tool-driven in your responses since they will be spoken aloud and have "
-    "to be suitable for text-to-speech and API calls. Don't be verbose but summarize your results. "
+    "You are Live Stage Assistant, a helpful voice assistant with access to MCP tools for live stage devices. "
+    "Be precise, conservative, tool-driven, concise, and suitable for spoken output. "
     "Reply in French by default. Reply in English only when the user's latest request is clearly in English; for terse, mixed, ambiguous, or domain commands such as 'qlc rouge', answer in French. "
     "Use plain text only. Do not use emojis, emoticons, markdown, bullets, symbols, or decorative characters. "
     "For spoken numeric values, write explicit signs as words: use 'moins 17,5 dB' instead of '-17,5 dB' and 'plus 3 dB' instead of '+3 dB'. "
     "Treat user-provided names, labels, routing keywords, and free-text targets as case-insensitive unless a specific MCP tool explicitly documents a case-sensitive identifier. "
-    "Behave like a friendly calm and motivating assistant. Use conversation memory for context, preferences, "
-    "and follow-up references, but not as the source of truth for live external state. When the user asks about "
-    "the current state of anything outside this conversation, treat the answer as time-sensitive. Use the relevant "
-    "MCP read tool before answering. Do not answer current external state from memory, previous tool results, "
-    "or assumptions. If no suitable read tool is available, say that you cannot verify the current state and use "
-    "only tools exposed by the MCP servers."
+    "Use only the MCP tools and capabilities that are actually available. Do not invent tools, OSC paths, widgets, scenes, device names, channel indexes, mappings, or unavailable features. "
+    "Use conversation memory for context, preferences, and follow-up references, but not as the source of truth for live external state. "
+    "When the user asks about current external state, use the relevant MCP read tool before answering; never answer live external state from memory, previous tool results, or assumptions. "
+    "If no suitable read tool is available, say that you cannot verify the current state. "
+    "If a target, name, mapping, or requested capability is missing or ambiguous, ask for clarification instead of guessing. "
+    "For ordinary successful control commands, answer with one short confirmation sentence only, preferably under 12 words. "
+    "For ordinary status/read commands, answer with the requested fact only and omit unrelated details. "
+    "If the current request needs any available tool, produce no spoken or textual assistant content before the tool call. "
+    "Call tools silently. Do not acknowledge, announce intentions, provide filler, fill silence, or narrate selection/reasoning/progress before a tool call. "
+    "Forbidden pre-tool phrases include variants of: ok, d'accord, je regarde, je vérifie, un instant, je m'en occupe, I will check, let me check. "
+    "First call the needed tool or tools silently. After tool results are available, answer exactly once with the concise verified result. "
+    "Minimize tool calls. Do not repeat a successful read or resolution unless the requested current state still cannot be answered safely from the current-turn tool result. "
+    "Prefer the narrowest tool that directly answers the user's request. Do not call a broad health/status/inventory tool before a targeted read when the targeted resolver/read path is already sufficient, unless MCP instructions explicitly require that status check. "
+    "Do not call a broad health/status tool before a targeted write when the write tool itself provides execution confirmation/readback or otherwise reports verified success/failure. Let the targeted operation establish both execution outcome and live connectivity whenever its MCP contract provides that guarantee. "
+    "When a resolver/discovery tool returns one unambiguous canonical target, identifier, index, or address for the current request, trust and reuse that current-turn result directly. Do not make a redundant identity/name confirmation call before the requested read or action unless MCP instructions explicitly require that confirmation. "
+    "Do not narrate tool selection, reasoning, retries, or intermediate steps. "
+    "Never claim an external action succeeded unless the tool result confirms it. "
+    "Do not add assumptions, explanations, offers, or follow-up suggestions after a completed command. Avoid phrases such as: if you want, si tu veux, dis-moi, on peut continuer, je peux aussi. "
+    "Do not greet unless the user greets first. "
+    "When interrupted, abandon the previous spoken response and handle only the new utterance. "
+    "If the user asks you only to stop speaking or be silent, stop without spoken acknowledgement."
 )
 OPENAI_TTS_VOICE_OPTIONS = [
     {"id": "alloy", "label": "Alloy (masculine)"},
@@ -421,11 +460,13 @@ CURRENT_STATE_QUERY_MARKERS = (
     "à combien",
 )
 DEFAULT_STT_PROMPT = (
-    "Commandes courtes en français pour du mixage live. "
-    "Mots fréquents: mets, met, règle, baisse, monte, coupe, mute, active, réactive, "
-    "bus, retour, façade, dB, moins trois dB, Voc-Claude, snare, kick, Laurent. "
-    "Ne colle pas le verbe 'mets' au nom qui suit: écris 'mets Claude', 'mets Voc-Claude', 'mets snare'. "
-    "Garde les noms de pistes courts et précis."
+    "Commandes courtes en français pour le contrôle audio de scène. "
+    "Transcrire fidèlement ce qui est prononcé, notamment les nombres, signes et unités. "
+    "Ne rien ajouter, compléter ni reformuler."
+)
+LOCAL_WHISPER_GENERIC_HOTWORDS = (
+    "mets, monte, baisse, mute, démute, coupe, rallume, active, réactive, "
+    "niveau, volume, statut, mixeur, retour, façade, main, progressivement, dB"
 )
 FUSED_SET_COMMAND_RE = re.compile(r"^\s*(mets|met|me)([a-zà-ÿ][a-zà-ÿ0-9_-]{3,})(\b|$)", re.IGNORECASE)
 STT_SILENCE_HALLUCINATION_PHRASES = (
@@ -624,16 +665,26 @@ def env_float_from_mapping(values: dict, name: str, default: float) -> float:
         return default
 
 
+def normalize_tts_speed(provider: str, speed: float | None) -> float:
+    """Clamp TTS speed to the selected provider's supported range."""
+    value = float(speed if speed is not None else 1.0)
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider == "elevenlabs":
+        return max(0.7, min(1.2, value))
+    if normalized_provider == "openai":
+        return max(0.6, min(1.8, value))
+    return value
+
+
 def elevenlabs_playback_available() -> bool:
     """Return whether generated MP3 audio can be played or decoded locally."""
     return ffmpeg_decode_available()
 
 
-def local_tts_playback_available() -> bool:
-    """Return whether pyttsx3 is likely to have a local audio player."""
-    if sys.platform.startswith("linux"):
-        return shutil.which("aplay") is not None
-    return True
+def piper_tts_playback_available() -> bool:
+    """Return whether the configured Piper model and runtime are available."""
+    return piper_ready()
+
 
 
 def ffmpeg_decode_available() -> bool:
@@ -761,6 +812,18 @@ def format_backend_listening_message(wake_words: list[str], engine: str | None) 
     return f'Listening for "{wake_word_label}" using {engine or "openwakeword"}...'
 
 
+def human_join(items: list[str], conjunction: str = "et") -> str:
+    """Join names for short spoken French status messages."""
+    cleaned = [str(item).strip() for item in items if str(item).strip()]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    if len(cleaned) == 2:
+        return f" {conjunction} ".join(cleaned)
+    return f"{', '.join(cleaned[:-1])} {conjunction} {cleaned[-1]}"
+
+
 def strip_leading_wake_word_if_present(text: str, wake_words: list[str]) -> tuple[str, str]:
     """Remove a leading wake word from an already-authorized command without validating it."""
     if not wake_words:
@@ -809,6 +872,7 @@ class BackendWakeWordDetector:
         self._debug_last_score = 0.0
         self._debug_last_label = ""
         self._debug_last_report_at = 0.0
+        self._debug_waiting_reported = False
 
     def reset(self, *, clear_cooldown: bool = False) -> None:
         """Reset buffered wake-word audio and model state when a capture cycle is abandoned."""
@@ -852,43 +916,28 @@ class BackendWakeWordDetector:
                 self._debug_max_label = label
                 self._debug_max_score = score
             if score < self.threshold:
-                self._debug_report_rejected()
                 continue
             now = time.monotonic()
             if self.cooldown_seconds and now - self.last_detection_at < self.cooldown_seconds:
-                self._debug_report_rejected(reason="cooldown")
                 continue
             self.last_detection_at = now
-            self._debug_report_triggered(label, score)
             return label, score
         return None
 
-    def _debug_report_rejected(self, *, reason: str = "below_threshold") -> None:
-        if not debug_logging_enabled():
+    def report_waiting(self, wake_words: list[str] | tuple[str, ...]) -> None:
+        if self._debug_waiting_reported:
             return
-        now = time.monotonic()
-        if now - self._debug_last_report_at < 2.0:
-            return
-        self._debug_last_report_at = now
-        label = self._debug_max_label or self._debug_last_label or "unknown"
+        self._debug_waiting_reported = True
+        model_label = self._debug_max_label or self._debug_last_label or "configured model"
         print(
-            "openWakeWord "
-            f"{label}: score={self._debug_last_score:.2f} max={self._debug_max_score:.2f} "
-            f"threshold={self.threshold:.2f} rejected ({reason})",
+            format_openwakeword_waiting(
+                wake_words,
+                threshold=self.threshold,
+                model_label=model_label,
+                engine="backend",
+            ),
             flush=True,
         )
-
-    def _debug_report_triggered(self, label: str, score: float) -> None:
-        if not debug_logging_enabled():
-            return
-        print(
-            f"openWakeWord {label}: score={score:.2f} threshold={self.threshold:.2f} triggered",
-            flush=True,
-        )
-        self._debug_max_label = ""
-        self._debug_max_score = 0.0
-        self._debug_last_report_at = time.monotonic()
-
 
 def pipewire_record_command() -> str | None:
     """Return a PipeWire command able to record raw PCM from a targeted source."""
@@ -1222,6 +1271,16 @@ def pcm_to_vad_16k_mono(audio_data: bytes, *, source_rate: int, channels: int) -
     return clipped.tobytes()
 
 
+def _append_capped_audio_frames(buffer: list[bytes], frames: list[bytes], max_frames: int) -> None:
+    """Append audio frames in order while retaining only the newest pre-roll window."""
+    if max_frames <= 0 or not frames:
+        return
+    buffer.extend(frames)
+    overflow = len(buffer) - max_frames
+    if overflow > 0:
+        del buffer[:overflow]
+
+
 def backend_audio_service_state(
     input_status: str,
     input_detail: str,
@@ -1267,7 +1326,15 @@ def tts_output_from_values(values: dict) -> str:
 
 def resolve_tts_config_from_values(values: dict) -> ResolvedTtsConfig:
     """Normalize cloud/backend/browser TTS providers from env-style values."""
-    backend_provider = (values.get("TTS_PROVIDER") or "elevenlabs").strip().lower()
+    if connectivity_mode_from_values(values) == "offline":
+        return ResolvedTtsConfig(
+            cloud_provider="none",
+            backend_provider="piper",
+            web_provider="none",
+            output="backend",
+        )
+
+    backend_provider = (values.get("TTS_PROVIDER") or "none").strip().lower()
     web_provider = (values.get("WEB_TTS_PROVIDER") or "openai").strip().lower()
     cloud_provider = (values.get("CLOUD_TTS_PROVIDER") or "").strip().lower()
 
@@ -1285,7 +1352,7 @@ def resolve_tts_config_from_values(values: dict) -> ResolvedTtsConfig:
     if web_provider in {"openai", "elevenlabs"} or cloud_provider == "none":
         web_provider = cloud_provider
 
-    if backend_provider in {"openai", "elevenlabs", "pyttsx3"}:
+    if backend_provider in {"openai", "elevenlabs"}:
         output = "backend"
     elif web_provider in {"openai", "elevenlabs"}:
         output = "browser"
@@ -1300,17 +1367,13 @@ def resolve_tts_config_from_values(values: dict) -> ResolvedTtsConfig:
     )
 
 
+
 def connectivity_mode_from_values(values: dict, env_file: Path | None = None) -> str:
     """Return whether this profile should use online cloud controls or offline local controls."""
     configured = (values.get("CONNECTIVITY_MODE") or "").strip().lower()
     if configured in {"online", "offline"}:
         return configured
     if env_file == AUTO_ENV_OFFLINE:
-        return "offline"
-    llm_provider = (values.get("LLM_PROVIDER") or "").strip().lower()
-    stt_provider = (values.get("STT_PROVIDER") or "").strip().lower()
-    tts_provider = (values.get("TTS_PROVIDER") or "").strip().lower()
-    if llm_provider == "ollama" or stt_provider == "local-whisper" or tts_provider == "pyttsx3":
         return "offline"
     return "online"
 
@@ -1744,15 +1807,16 @@ def play_wav_file_backend(
 
 
 def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> None:
-    """Speak a network status message with the TTS configured by the detected env file."""
-    values = dotenv_values_func(env_file)
-    tts_provider = (values.get("TTS_PROVIDER") or "elevenlabs").strip().lower()
-    web_tts_provider = (values.get("WEB_TTS_PROVIDER") or "none").strip().lower()
-    cloud_provider = tts_provider
-    if cloud_provider == "none" and web_tts_provider in {"openai", "elevenlabs"}:
-        cloud_provider = web_tts_provider
+    """Speak network status, falling back to Piper whenever cloud TTS is unavailable."""
+    values = dict(dotenv_values_func(env_file))
+    if connectivity_mode_from_values(values, env_file) == "offline":
+        speak_local_status(text, values)
+        return
+
+    tts_config = resolve_tts_config_from_values(values)
+    cloud_provider = tts_config.backend_provider
     voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
-    backend_tts_volume = max(0.0, min(2.0, env_float_from_mapping(values, "BACKEND_TTS_VOLUME", 1.0)))
+    backend_tts_volume = VoiceOutputGains.from_env(values).cloud
     backend_audio_output_pan = normalize_audio_pan(env_float_from_mapping(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
 
     def play_auto_mp3(audio_bytes: bytes) -> None:
@@ -1760,13 +1824,11 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
         try:
             with suppress_native_stderr():
                 temp_audio = pyaudio.PyAudio()
-            output_device_index, _status, _detail = resolve_pyaudio_device_index(
-                temp_audio,
-                values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
-                input_device=False,
+            output_device_index, status, detail = resolve_pyaudio_device_index(
+                temp_audio, values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), input_device=False
             )
-            if _status in {"invalid", "unavailable"}:
-                raise RuntimeError(_detail)
+            if status in {"invalid", "unavailable"}:
+                raise RuntimeError(detail)
             pipewire_target = parse_pipewire_id(values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), kind="sink")
             play_mp3_bytes(
                 audio_bytes,
@@ -1778,128 +1840,49 @@ def speak_auto_network_status(text: str, env_file: Path, dotenv_values_func) -> 
             )
         finally:
             if temp_audio is not None:
-                try:
+                with contextlib.suppress(Exception):
                     temp_audio.terminate()
-                except Exception:
-                    pass
 
-    with TTS_LOCK:
-        if cloud_provider == "none":
-            print(f"Auto network status: {text}")
+    try:
+        if cloud_provider == "elevenlabs":
+            api_key = read_secret_from_env_values(values, "ELEVENLABS_API_KEY")
+            if not api_key:
+                raise RuntimeError("missing ELEVENLABS_API_KEY_FILE")
+            if not elevenlabs_playback_available():
+                raise RuntimeError("local MP3 playback is not available")
+            client = ElevenLabs(api_key=api_key)
+            audio = client.text_to_speech.convert(
+                text=text,
+                voice_id=voice_id,
+                model_id="eleven_multilingual_v2",
+                output_format="mp3_44100_128",
+                optimize_streaming_latency="2",
+                voice_settings=VoiceSettings(speed=normalize_tts_speed("elevenlabs", env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0))),
+            )
+            play_auto_mp3(audio if isinstance(audio, bytes) else b"".join(audio))
             return
 
-        if cloud_provider == "pyttsx3":
-            temp_path = None
-            temp_audio = None
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                    temp_path = temp_file.name
-                TTS_ENGINE.save_to_file(prepare_text_for_tts(text), temp_path)
-                TTS_ENGINE.runAndWait()
-                if not temp_path or not os.path.exists(temp_path) or os.path.getsize(temp_path) <= 0:
-                    raise RuntimeError("pyttsx3 did not render network status audio")
-                with suppress_native_stderr():
-                    temp_audio = pyaudio.PyAudio()
-                output_device_index, output_status, output_detail = resolve_pyaudio_device_index(
-                    temp_audio,
-                    values.get("BACKEND_AUDIO_OUTPUT_DEVICE"),
-                    input_device=False,
-                )
-                if output_status in {"invalid", "unavailable"}:
-                    raise RuntimeError(output_detail)
-                pipewire_target = parse_pipewire_id(values.get("BACKEND_AUDIO_OUTPUT_DEVICE"), kind="sink")
-                try:
-                    play_wav_file_backend(
-                        temp_audio,
-                        temp_path,
-                        output_device_index=output_device_index,
-                        pipewire_target=pipewire_target,
-                        volume=backend_tts_volume,
-                        pan=backend_audio_output_pan,
-                    )
-                except Exception:
-                    pcm_bytes = decode_audio_file_to_pcm_bytes(temp_path)
-                    play_pcm_bytes(
-                        temp_audio,
-                        pcm_bytes,
-                        sample_rate=DEFAULT_BACKEND_MP3_SAMPLE_RATE,
-                        channels=DEFAULT_BACKEND_MP3_CHANNELS,
-                        output_device_index=output_device_index,
-                        pipewire_target=pipewire_target,
-                        volume=backend_tts_volume,
-                        pan=backend_audio_output_pan,
-                    )
-                return
-            except Exception as e:
-                print(f"Auto network status local pyttsx3 TTS failed: {e}")
-                return
-            finally:
-                if temp_audio is not None:
-                    try:
-                        temp_audio.terminate()
-                    except Exception:
-                        pass
-                if temp_path:
-                    with contextlib.suppress(OSError):
-                        os.unlink(temp_path)
-
-        if cloud_provider == "elevenlabs":
-            elevenlabs_api_key = read_secret_from_env_values(values, "ELEVENLABS_API_KEY")
-            if elevenlabs_api_key:
-                try:
-                    if not elevenlabs_playback_available():
-                        raise RuntimeError("local MP3 playback is not available")
-                    client = ElevenLabs(api_key=elevenlabs_api_key)
-                    audio = client.text_to_speech.convert(
-                        text=text,
-                        voice_id=voice_id,
-                        model_id="eleven_multilingual_v2",
-                        output_format="mp3_44100_128",
-                        optimize_streaming_latency="2",
-                        voice_settings=VoiceSettings(
-                            speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0)
-                        ),
-                    )
-                    audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
-                    play_auto_mp3(audio_bytes)
-                    return
-                except Exception as e:
-                    if local_tts_playback_available():
-                        print(f"Auto network status ElevenLabs TTS failed: {e}")
-                    else:
-                        return
-            elif local_tts_playback_available():
-                print("Auto network status ElevenLabs TTS skipped: missing ELEVENLABS_API_KEY_FILE")
-            else:
-                return
-
         if cloud_provider == "openai":
-            openai_api_key = read_secret_from_env_values(values, "OPENAI_API_KEY")
-            if openai_api_key:
-                try:
-                    if not elevenlabs_playback_available():
-                        raise RuntimeError("local MP3 playback is not available")
-                    client = openai.OpenAI(api_key=openai_api_key)
-                    response = client.audio.speech.create(
-                        model=(values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip(),
-                        voice=(values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip(),
-                        input=text.strip(),
-                        response_format="mp3",
-                        speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0),
-                    )
-                    play_auto_mp3(response.read())
-                    return
-                except Exception as e:
-                    if local_tts_playback_available():
-                        print(f"Auto network status OpenAI TTS failed: {e}")
-                    else:
-                        return
-            elif local_tts_playback_available():
-                print("Auto network status OpenAI TTS skipped: missing OPENAI_API_KEY_FILE")
-            else:
-                return
+            api_key = read_secret_from_env_values(values, "OPENAI_API_KEY")
+            if not api_key:
+                raise RuntimeError("missing OPENAI_API_KEY_FILE")
+            if not elevenlabs_playback_available():
+                raise RuntimeError("local MP3 playback is not available")
+            client = openai.OpenAI(api_key=api_key)
+            response = client.audio.speech.create(
+                model=(values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip(),
+                voice=(values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip(),
+                input=text.strip(),
+                response_format="mp3",
+                speed=env_float_from_mapping(values, "WEB_TTS_SPEED", 1.0),
+            )
+            play_auto_mp3(response.read())
+            return
 
-        print("Auto network status local direct TTS skipped to avoid using the system default audio output.")
+        raise RuntimeError(f"cloud TTS backend is {cloud_provider or 'disabled'}")
+    except Exception as exc:
+        print(f"Auto network status cloud TTS unavailable; using Piper: {exc}")
+        speak_local_status(text, values)
 
 
 class AutoNetworkMonitor:
@@ -2051,8 +2034,6 @@ class VoiceAssistant:
         openai_api_key: str | None = None,
         elevenlabs_api_key: str | None = None,
         model: str = "gpt-4o-mini",
-        llm_provider: str = "openai",
-        ollama_base_url: str = "http://localhost:11434",
         stt_provider: str = "openai-whisper",
         local_whisper_model: str = "base",
         stt_language: str | None = None,
@@ -2062,6 +2043,7 @@ class VoiceAssistant:
         web_tts_enabled: bool = False,
         elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
         thinking_sound_file: str = "thinking.wav",
+        ready_sound_file: str = "",
         listening_sound_file: str = "",
         wake_detected_sound_file: str = "",
         startup_loader_sound_enabled: bool = False,
@@ -2123,14 +2105,12 @@ class VoiceAssistant:
             openai_api_key: OpenAI API key for Whisper API and GPT models
             elevenlabs_api_key: Optional ElevenLabs API key for TTS
             model: LLM model name to use (default: gpt-4o-mini)
-            llm_provider: LLM provider (openai or ollama)
-            ollama_base_url: Base URL for local Ollama server
             stt_provider: Speech-to-text provider (openai-whisper or local-whisper)
             local_whisper_model: Local faster-whisper model size or path
             stt_language: Required transcription language/locale code such as fr or en
             stt_prompt: Optional STT context prompt to bias short command transcription
             stt_timeout_seconds: Maximum seconds allowed for one STT operation
-            tts_provider: Text-to-speech provider (elevenlabs, pyttsx3, or none)
+            tts_provider: Text-to-speech provider (elevenlabs, Piper, or none)
             web_tts_enabled: Whether browser TTS is the active speech output
             elevenlabs_voice_id: ElevenLabs voice ID (default: Rachel)
             thinking_sound_file: WAV file to loop while the LLM/MCP agent is processing a command
@@ -2187,14 +2167,11 @@ class VoiceAssistant:
             reload_event: Optional event used by auto mode to interrupt and reload the assistant
             web_monitor: Optional read-only web monitor for runtime state
         """
-        assistant_init_started_at = time.perf_counter()
-
         # Audio configuration
         self.audio_format = pyaudio.paInt16
         self.channels = 1
         self.rate = 16000
         self.chunk = 1024
-        stage_started_at = time.perf_counter()
         self.vad = SileroVadGate(
             vad_model_path,
             threshold=vad_speech_threshold,
@@ -2203,10 +2180,6 @@ class VoiceAssistant:
             min_silence_ms=vad_min_silence_ms,
             speech_pad_ms=vad_speech_pad_ms,
             max_speech_seconds=vad_max_speech_seconds,
-        )
-        print(
-            f"Startup timing: Silero VAD initialized in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
         )
         self.tts_speed = max(0.6, min(1.8, float(tts_speed or 1.0)))
         self.tts_provider = tts_provider.lower()
@@ -2249,6 +2222,7 @@ class VoiceAssistant:
         self.backend_wake_word_detector: BackendWakeWordDetector | None = None
         self.backend_wake_word_unavailable_reason = ""
         self.last_backend_streaming_wake_detected = False
+        self.last_backend_wake_detected_at: float | None = None
         self.backend_wake_word_suppress_until = 0.0
         self.backend_audio_state = (
             BackendAudioState.WAIT_WAKE if self.wake_words else BackendAudioState.CAPTURE_COMMAND
@@ -2269,14 +2243,8 @@ class VoiceAssistant:
         self.last_speaker_result = SpeakerRecognitionResult()
 
         # Initialize audio components
-        stage_started_at = time.perf_counter()
         with suppress_native_stderr():
             self.audio = pyaudio.PyAudio()
-        print(
-            f"Startup timing: PyAudio initialized in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
-        stage_started_at = time.perf_counter()
         (
             self.audio_input_device_index,
             self.audio_input_device_status,
@@ -2305,13 +2273,6 @@ class VoiceAssistant:
             if self.audio_output_device_status == "configured"
             else None
         )
-        print(
-            "Startup timing: backend audio devices resolved "
-            f"in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
-        stage_started_at = time.perf_counter()
-        input_format_status = "skipped"
         if self.audio_input_device_status not in {"invalid", "unavailable"}:
             input_format = (
                 pipewire_backend_input_format()
@@ -2323,20 +2284,13 @@ class VoiceAssistant:
                 )
             )
             if input_format["ok"]:
-                input_format_status = "ready"
                 self.channels = int(input_format["channels"])
                 self.rate = int(input_format["rate"])
                 self.chunk = int(input_format["chunk"])
                 self.audio_input_device_detail = f"{self.audio_input_device_detail}; {input_format['detail']}"
             else:
-                input_format_status = "unavailable"
                 self.audio_input_device_status = "unavailable"
                 self.audio_input_device_detail = f"{self.audio_input_device_detail}; {input_format['detail']}"
-        print(
-            "Startup timing: backend audio input format "
-            f"{input_format_status} in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
         if self.audio_input_device_status == "invalid":
             print(f"Backend audio input invalid: {self.audio_input_device_detail}")
         if self.audio_output_device_status == "invalid":
@@ -2355,8 +2309,6 @@ class VoiceAssistant:
         self.startup_loader_sound_thread: threading.Thread | None = None
         self.start_startup_loader_sound()
 
-        stage_started_at = time.perf_counter()
-        speaker_validation_status = "disabled"
         if self.speaker_recognition_enabled:
             try:
                 self.speaker_recognizer = build_speaker_recognizer(
@@ -2368,18 +2320,11 @@ class VoiceAssistant:
                 )
                 if self.speaker_recognizer:
                     self.speaker_recognizer.validate_runtime()
-                speaker_validation_status = "ready"
             except Exception as e:
                 print(f"Speaker recognition unavailable: {e}")
                 self.speaker_recognition_enabled = False
                 self.speaker_recognizer = None
                 self.speaker_recognition_unavailable_reason = str(e)
-                speaker_validation_status = "unavailable"
-        print(
-            "Startup timing: speaker recognition validation "
-            f"{speaker_validation_status} in {time.perf_counter() - stage_started_at:.3f}s",
-            flush=True,
-        )
 
         # Speech-to-text configuration
         self.openai_api_key = openai_api_key
@@ -2408,10 +2353,10 @@ class VoiceAssistant:
             self.openai_client = openai.OpenAI(
                 api_key=openai_api_key,
             )
+        if self.stt_provider == "local-whisper":
+            self._load_local_whisper_model()
 
         self.model = model
-        self.llm_provider = llm_provider.lower()
-        self.ollama_base_url = ollama_base_url
 
         # ElevenLabs client for text-to-speech
         self.elevenlabs_client = None
@@ -2437,13 +2382,20 @@ class VoiceAssistant:
             else None
         )
         self.listening_sound_warning_shown = False
-        self.wake_detected_sound_file = (wake_detected_sound_file or "").strip()
-        self.wake_detected_sound_path = (
-            self._resolve_asset_path(self.wake_detected_sound_file)
-            if self.wake_detected_sound_file
-            else None
+        self.semantic_audio_warning_keys: set[str] = set()
+        self.semantic_audio = SemanticAudioController(
+            SemanticAudioConfig(
+                ready=(ready_sound_file or "").strip(),
+                listening=(listening_sound_file or "").strip(),
+                wake_detected=(wake_detected_sound_file or "").strip(),
+                thinking=(thinking_sound_file or "").strip(),
+                result_ready=(command_ack_sound_file or "").strip(),
+            ),
+            play_once=self.play_semantic_cue_once_async,
+            start_loop=lambda cue: self.start_thinking_sound(),
+            stop_loop=self.stop_thinking_sound,
+            on_state=lambda state: print(f"LSA semantic state: {state.value}", flush=True),
         )
-        self.wake_detected_sound_warning_shown = False
         self.command_ack_sound_file = (command_ack_sound_file or "").strip()
         self.command_ack_sound_path = (
             self._resolve_asset_path(self.command_ack_sound_file)
@@ -2472,9 +2424,9 @@ class VoiceAssistant:
         self.mcp_tool_routes: list[dict[str, Any]] = []
         self.mcp_all_tools: list[Any] = []
         self.mcp_tools_by_server: dict[str, list[Any]] = {}
+        self.mcp_failed_servers: dict[str, str] = {}
         self.session_context_store = session_context_store
         self.session_context_size = max(0, int(session_context_size or 0))
-        self.stt_prompt = self._with_mcp_routing_stt_keywords(base_stt_prompt)
         self.mcp_client = None
         self.agent = None
         self.mcp_initialization_error: str | None = None
@@ -2502,7 +2454,8 @@ class VoiceAssistant:
                         self.audio_input_device_detail,
                         self.audio_output_device_status,
                         self.audio_output_device_detail,
-                    )
+                    ),
+                    "Wake word": self._backend_wake_word_service_state(),
                 }
             )
         
@@ -2524,10 +2477,6 @@ class VoiceAssistant:
         os.makedirs(self.notes_dir, exist_ok=True)
 
         self._log_configured_mcp_prompt_sources()
-        print(
-            f"Startup timing: VoiceAssistant constructed in {time.perf_counter() - assistant_init_started_at:.3f}s",
-            flush=True,
-        )
 
     def _backend_input_ready(self) -> bool:
         """Return true only when backend STT can use the configured input route."""
@@ -2546,6 +2495,9 @@ class VoiceAssistant:
 
     def _backend_listening_state(self) -> BackendAudioState:
         return BackendAudioState.WAIT_WAKE if self.wake_words else BackendAudioState.CAPTURE_COMMAND
+
+    def _semantic_listening_state(self) -> SemanticAudioState:
+        return SemanticAudioState.WAIT_WAKE if self.wake_words else SemanticAudioState.LISTENING
 
     def _initialize_backend_wake_word_detector(self) -> None:
         """Initialize backend openWakeWord when a wake word is configured."""
@@ -2568,10 +2520,30 @@ class VoiceAssistant:
         except Exception as e:
             self.backend_wake_word_detector = None
             self.backend_wake_word_unavailable_reason = str(e)
+            self._update_wake_word_monitor_status()
             print(f"Backend openWakeWord unavailable; backend wake word disabled: {e}", flush=True)
 
     def _backend_streaming_wake_active(self) -> bool:
-        return bool(self.wake_words) and self.backend_wake_word_detector is not None
+        return bool(getattr(self, "wake_words", [])) and getattr(self, "backend_wake_word_detector", None) is not None
+
+    def _backend_wake_word_state(self) -> str:
+        if not getattr(self, "wake_words", []):
+            return "disabled"
+        return "active" if self._backend_streaming_wake_active() else "unavailable"
+
+    def _backend_wake_word_service_state(self) -> dict[str, str]:
+        state = self._backend_wake_word_state()
+        if state == "disabled":
+            return {"status": "disabled", "detail": "Wake word désactivé"}
+        label = ", ".join(self.wake_words)
+        if state == "active":
+            return {"status": "configured", "detail": f"{label} · openWakeWord opérationnel"}
+        reason = self.backend_wake_word_unavailable_reason or "modèle openWakeWord indisponible"
+        return {"status": "warn", "detail": f"{label} configuré · détection indisponible : {reason}"}
+
+    def _update_wake_word_monitor_status(self) -> None:
+        if self.web_monitor:
+            self.web_monitor.update(services={"Wake word": self._backend_wake_word_service_state()})
 
     def _backend_wake_word_engine_name(self) -> str:
         if self._backend_streaming_wake_active():
@@ -2618,13 +2590,7 @@ class VoiceAssistant:
                 return
             except Exception as e:
                 print(f"Could not play cloud API alert sound '{API_CREDIT_ALERT_SOUND_FILE}': {e}")
-        if local_tts_playback_available():
-            previous_provider = self.tts_provider
-            self.tts_provider = "pyttsx3"
-            try:
-                self.text_to_speech_pyttsx3(message)
-            finally:
-                self.tts_provider = previous_provider
+        self.text_to_speech_piper(message)
 
     def start_thinking_sound(self) -> None:
         """Loop the configured thinking sound until stop_thinking_sound is called."""
@@ -2685,30 +2651,31 @@ class VoiceAssistant:
                 print(f"Could not play listening sound '{self.listening_sound_path}': {e}")
                 self.listening_sound_warning_shown = True
 
-    def play_wake_detected_sound_async(self) -> None:
-        """Play a short backend cue after openWakeWord triggers without pausing capture."""
-        if not self.wake_detected_sound_file:
+    def play_semantic_cue_once_async(self, cue: str) -> None:
+        """Play one configured semantic cue through backend output without blocking capture."""
+        cue = (cue or "").strip()
+        if not cue:
             return
         if not self._backend_output_ready():
             return
-        if not self.wake_detected_sound_path:
-            if not self.wake_detected_sound_warning_shown:
-                print(
-                    f"Wake-detected sound '{self.wake_detected_sound_file}' not found. "
-                    "Set WAKE_DETECTED_SOUND_FILE to a WAV file or place it in assets/."
-                )
-                self.wake_detected_sound_warning_shown = True
+        path = self._resolve_asset_path(cue)
+        if not path:
+            key = f"missing:{cue}"
+            if key not in self.semantic_audio_warning_keys:
+                print(f"Semantic audio cue '{cue}' not found. Set the matching *_SOUND_FILE to a WAV file or place it in assets/.")
+                self.semantic_audio_warning_keys.add(key)
             return
 
         def play_once() -> None:
             try:
-                self.play_wav_file(self.wake_detected_sound_path)
+                self.play_wav_file(path)
             except Exception as e:
-                if not self.wake_detected_sound_warning_shown:
-                    print(f"Could not play wake-detected sound '{self.wake_detected_sound_path}': {e}")
-                    self.wake_detected_sound_warning_shown = True
+                key = f"play:{path}:{type(e).__name__}"
+                if key not in self.semantic_audio_warning_keys:
+                    print(f"Could not play semantic audio cue '{path}': {e}")
+                    self.semantic_audio_warning_keys.add(key)
 
-        threading.Thread(target=play_once, name="backend-wake-detected-sound", daemon=True).start()
+        threading.Thread(target=play_once, name="backend-semantic-cue", daemon=True).start()
 
     def start_startup_loader_sound(self) -> None:
         """Loop the startup loader sound through backend output until startup is ready."""
@@ -2930,11 +2897,7 @@ class VoiceAssistant:
         return filtered_config
 
     def _build_llm(self):
-        """Build the configured LLM."""
-        if self.llm_provider == "ollama":
-            print(f"Using Ollama model: {self.model} ({self.ollama_base_url})")
-            return ChatOllama(model=self.model, base_url=self.ollama_base_url)
-
+        """Build the Cloud Classic OpenAI LLM."""
         print(f"Using OpenAI model: {self.model}")
         return ChatOpenAI(model=self.model, api_key=self.openai_api_key)
 
@@ -3108,22 +3071,6 @@ class VoiceAssistant:
                     seen.add(dedupe_key)
         return keywords
 
-    def _with_mcp_routing_stt_keywords(self, base_prompt: str) -> str:
-        prompt = (base_prompt or DEFAULT_STT_PROMPT).strip()
-        keywords = self._mcp_routing_keywords()
-        if not keywords:
-            return prompt
-
-        limited_keywords = keywords[:80]
-        keyword_text = ", ".join(limited_keywords)
-        routing_prompt = f"Mots métier MCP possibles: {keyword_text}."
-        if routing_prompt.lower() in prompt.lower():
-            return prompt
-
-        enriched = f"{prompt} {routing_prompt}".strip()
-        print(f"STT prompt enriched with {len(limited_keywords)} MCP routing keyword(s).")
-        return enriched
-
     def _refresh_mcp_tool_routing_cache(self) -> None:
         self.mcp_tool_routes = self._build_mcp_tool_routes(self.mcp_config)
         self.mcp_all_tools = list(getattr(self.agent, "_tools", []) or [])
@@ -3165,14 +3112,15 @@ class VoiceAssistant:
     def _command_dedupe_key(self, text: str) -> str:
         return re.sub(r"\s+", " ", (text or "").strip().lower())
 
-    def _should_skip_duplicate_command(self, text: str) -> bool:
+    def _should_skip_duplicate_command(self, text: str, *, suppress: bool = True) -> bool:
         key = self._command_dedupe_key(text)
         if not key:
             return False
 
         now = time.monotonic()
         if (
-            self.last_processed_command_key == key
+            suppress
+            and self.last_processed_command_key == key
             and now - self.last_processed_command_at <= DUPLICATE_COMMAND_SUPPRESS_SECONDS
         ):
             return True
@@ -3542,16 +3490,25 @@ class VoiceAssistant:
             return sorted(str(name) for name in self.mcp_client.sessions.keys())
         return sorted(str(name) for name in (config or {}).get("mcpServers", {}).keys())
 
-    def _startup_ready_message(self, loaded_servers: list[str]) -> str:
-        locale = load_locale(self.stt_language)
-        return i18n_text(locale, "startup.ready", "Assistant vocal prêt à exécuter des commandes.")
+    def _available_mcp_tool_count(self) -> int:
+        return len(self.mcp_all_tools or [])
+
+    def _startup_ready_message(self, loaded_servers: list[str], failed_servers: dict[str, str] | None = None) -> str:
+        return startup_ready_message(
+            stt_language=self.stt_language,
+            tool_count=self._available_mcp_tool_count(),
+            failed_servers=failed_servers,
+            wake_words=getattr(self, "wake_words", []),
+            wake_word_state=self._backend_wake_word_state(),
+        )
 
     async def announce_startup_ready(self, loaded_servers: list[str]) -> None:
         """Announce that the assistant is ready, using the configured speech side."""
-        message = self._startup_ready_message(loaded_servers)
+        message = self._startup_ready_message(loaded_servers, self.mcp_failed_servers)
         print(message)
 
         self.stop_startup_loader_sound()
+        self.semantic_audio.transition(SemanticAudioState.READY)
         if self.web_monitor:
             self.web_monitor.set_environment_loading(False)
         if self.tts_provider != "none":
@@ -3597,9 +3554,11 @@ class VoiceAssistant:
 
         try:
             self.mcp_initialization_error = None
+            self.mcp_failed_servers = {}
             self._validate_unique_mcp_routing_keywords(config)
             runtime_config, failed_servers = await self._filter_connectable_mcp_servers(config)
             if failed_servers:
+                self.mcp_failed_servers = dict(failed_servers)
                 failed_detail = "; ".join(f"{name}: {error}" for name, error in failed_servers.items())
                 if runtime_config is config:
                     self._log_mcp_prompt_warning(
@@ -3636,6 +3595,7 @@ class VoiceAssistant:
 
             # Create LLM
             llm = self._build_llm()
+            log_final_engine_prompt(self.system_prompt, log_prefix="Classic prompt")
 
             # Create agent with memory
             self.agent = MCPAgent(
@@ -3657,6 +3617,11 @@ class VoiceAssistant:
 
         except Exception as e:
             self.mcp_initialization_error = str(e)
+            if not self.mcp_failed_servers:
+                self.mcp_failed_servers = {
+                    str(name): str(e)
+                    for name in (config.get("mcpServers") or {}).keys()
+                }
             print(f"✗ Error initializing MCP: {e}")
             if self.web_monitor:
                 self.web_monitor.update(services={"MCP": {"status": "error", "detail": str(e)}})
@@ -3670,6 +3635,7 @@ class VoiceAssistant:
     ) -> bytes | None:
         """Record audio from microphone."""
         self.last_backend_streaming_wake_detected = False
+        self.last_backend_wake_detected_at = None
         if (
             not self.microphone_available
             or not self._backend_input_ready()
@@ -3685,6 +3651,9 @@ class VoiceAssistant:
             print(f"Backend wake word is configured but unavailable; microphone capture paused: {reason}", flush=True)
             time.sleep(1.0)
             return None
+        if wake_detector_active and self.backend_wake_word_detector:
+            self.backend_wake_word_detector.report_waiting(self.wake_words)
+            self.semantic_audio.transition(SemanticAudioState.WAIT_WAKE)
         if not interrupt_capture:
             self._set_backend_audio_state(self._backend_listening_state(), "record_audio")
         elif not wake_required:
@@ -3696,10 +3665,6 @@ class VoiceAssistant:
 
         stream = None
         monitor_stream = None
-        capture_started_at = time.perf_counter()
-        wake_detected_at: float | None = None
-        command_speech_started_at: float | None = None
-        command_speech_ended_at: float | None = None
         self.backend_audio_capture_lock.acquire()
         try:
             if self.backend_audio_diagnostic_requested.is_set():
@@ -3714,7 +3679,7 @@ class VoiceAssistant:
                 pipewire_target=self.audio_input_pipewire_target,
             )
             if not wake_required and not interrupt_capture:
-                self.play_listening_sound()
+                self.semantic_audio.transition(SemanticAudioState.LISTENING)
             if self.backend_audio_monitor_mode == "passthrough":
                 try:
                     monitor_stream = self._open_backend_audio_monitor_stream()
@@ -3797,14 +3762,13 @@ class VoiceAssistant:
                 streaming_pre_wake_frame = wake_detector_active and not wake_detected
                 if wake_detector_active and not wake_detected:
                     if not has_speech:
-                        pre_roll.append(data)
-                        if len(pre_roll) > pad_frames:
-                            pre_roll = pre_roll[-pad_frames:]
+                        _append_capped_audio_frames(pre_roll, [data], pad_frames)
                     try:
                         detection = self.backend_wake_word_detector.process_pcm16_16k(vad_data)
                     except Exception as e:
                         self.backend_wake_word_detector = None
                         self.backend_wake_word_unavailable_reason = str(e)
+                        self._update_wake_word_monitor_status()
                         self.vad.reset()
                         print(
                             "Backend openWakeWord failed during capture; command rejected until wake detection is restored: "
@@ -3815,8 +3779,8 @@ class VoiceAssistant:
                     if detection:
                         detected_label, detected_score = detection
                         wake_detected = True
-                        wake_detected_at = time.perf_counter()
                         self.last_backend_streaming_wake_detected = True
+                        self.last_backend_wake_detected_at = time.monotonic()
                         self._set_backend_audio_state(
                             BackendAudioState.CAPTURE_COMMAND,
                             f"{'interrupt ' if interrupt_capture else ''}wake {detected_label} {detected_score:.2f}",
@@ -3841,11 +3805,17 @@ class VoiceAssistant:
                         self.vad.reset()
                         streaming_pre_wake_frame = False
                         print(
-                            f"Streaming wake word detected: {detected_label} ({detected_score:.2f})",
+                            format_openwakeword_detected(
+                                self.wake_words or detected_label,
+                                label=detected_label,
+                                score=detected_score,
+                                threshold=self.backend_wake_word_threshold,
+                                engine="backend",
+                            ),
                             flush=True,
                         )
                         if not interrupt_capture:
-                            self.play_wake_detected_sound_async()
+                            self.semantic_audio.transition(SemanticAudioState.WAKE_DETECTED)
                     else:
                         continue
 
@@ -3872,7 +3842,6 @@ class VoiceAssistant:
                     speech_candidate_ms += chunk_ms
                     if speech_candidate_ms >= self.vad.min_speech_ms:
                         has_speech = True
-                        command_speech_started_at = time.perf_counter()
                         frames = wake_audio_frames + pre_roll + speech_candidate
                         recorded_speech_ms = speech_candidate_ms
                         wake_command_armed = False
@@ -3881,12 +3850,19 @@ class VoiceAssistant:
                         pre_roll = []
                         speech_candidate = []
                 else:
+                    if not streaming_pre_wake_frame:
+                        # A short first word can fall below min_speech_ms and be
+                        # followed by a natural micro-pause. Preserve those candidate
+                        # frames in pre-roll instead of discarding them so that, if
+                        # following speech confirms the utterance, Whisper still gets
+                        # the complete command from its first syllable.
+                        _append_capped_audio_frames(
+                            pre_roll,
+                            [*speech_candidate, data],
+                            pad_frames,
+                        )
                     speech_candidate = []
                     speech_candidate_ms = 0.0
-                    if not streaming_pre_wake_frame:
-                        pre_roll.append(data)
-                        if len(pre_roll) > pad_frames:
-                            pre_roll = pre_roll[-pad_frames:]
 
                 if (
                     wake_detector_active
@@ -3923,15 +3899,9 @@ class VoiceAssistant:
                 self._set_backend_audio_state(self._backend_listening_state(), "wake not detected")
                 return None
 
-            command_speech_ended_at = time.perf_counter()
-            self._debug_backend_capture_timing(
-                capture_started_at=capture_started_at,
-                wake_detected_at=wake_detected_at,
-                command_speech_started_at=command_speech_started_at,
-                command_speech_ended_at=command_speech_ended_at,
-                endpoint_silence_ms=silence_ms,
-                wake_required=wake_detector_active,
-            )
+            if self.last_backend_wake_detected_at is not None:
+                capture_ms = (time.monotonic() - self.last_backend_wake_detected_at) * 1000.0
+                print(f"Local voice latency: wake→capture-complete {capture_ms:.0f} ms.", flush=True)
             print("Processing...")
             return b"".join(frames)
 
@@ -3944,29 +3914,6 @@ class VoiceAssistant:
             self._close_audio_stream(monitor_stream)
             self._close_audio_stream(stream)
             self.backend_audio_capture_lock.release()
-
-    def _debug_backend_capture_timing(
-        self,
-        *,
-        capture_started_at: float,
-        wake_detected_at: float | None,
-        command_speech_started_at: float | None,
-        command_speech_ended_at: float,
-        endpoint_silence_ms: float,
-        wake_required: bool,
-    ) -> None:
-        if not debug_logging_enabled():
-            return
-        parts = []
-        if wake_required and wake_detected_at is not None:
-            parts.append(f"wake_detection={(wake_detected_at - capture_started_at) * 1000.0:.0f}ms")
-        if command_speech_started_at is not None:
-            origin = wake_detected_at if wake_detected_at is not None else capture_started_at
-            parts.append(f"command_start={(command_speech_started_at - origin) * 1000.0:.0f}ms")
-            parts.append(f"command_audio={(command_speech_ended_at - command_speech_started_at) * 1000.0:.0f}ms")
-        parts.append(f"endpoint_silence={endpoint_silence_ms:.0f}ms")
-        parts.append(f"total_capture={(command_speech_ended_at - capture_started_at) * 1000.0:.0f}ms")
-        print(f"Backend audio timing: {', '.join(parts)}", flush=True)
 
     def diagnose_backend_audio_input(
         self,
@@ -4527,10 +4474,6 @@ class VoiceAssistant:
     def stop_tts(self) -> None:
         """Stop any local/backend TTS playback that can be interrupted."""
         TTS_STOP_EVENT.set()
-        try:
-            TTS_ENGINE.stop()
-        except Exception:
-            pass
         process = TTS_PLAYBACK_PROCESS
         if process and process.poll() is None:
             try:
@@ -4571,21 +4514,22 @@ class VoiceAssistant:
 
     def audio_to_text_with_timeout(self, audio_data: bytes) -> str | None:
         """Transcribe one utterance without allowing STT to freeze the main loop."""
-        started_at = time.perf_counter()
         print(f"STT started (timeout {self.stt_timeout_seconds:.1f}s).", flush=True)
+        stt_started_at = time.monotonic()
         try:
             text = self._run_timed_stage(
                 "stt",
                 self.stt_timeout_seconds,
                 lambda: self.audio_to_text(audio_data),
             )
+            stt_ms = (time.monotonic() - stt_started_at) * 1000.0
+            print(f"Local voice latency: STT {stt_ms:.0f} ms ({self.local_whisper_model_name}, beam=1).", flush=True)
         except TimeoutError as error:
             print(f"STT timed out: {error}. Returning to listening.", flush=True)
             return None
         except Exception as error:
             print(f"STT failed: {error}. Returning to listening.", flush=True)
             return None
-        print(f"STT finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
         return text
 
     def recognize_speaker_with_timeout(
@@ -4599,7 +4543,6 @@ class VoiceAssistant:
         if not self.speaker_recognition_enabled or not self.speaker_recognizer or not audio_data:
             return self.recognize_speaker(audio_data, already_wav=already_wav, publish_result=publish_result)
 
-        started_at = time.perf_counter()
         print(
             f"Speaker recognition started (timeout {self.speaker_recognition_timeout_seconds:.1f}s).",
             flush=True,
@@ -4640,7 +4583,6 @@ class VoiceAssistant:
                 reason=f"error: {error}",
             )
 
-        print(f"Speaker recognition finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
         return result
 
     def _speaker_recognition_should_run(self, audio_data: bytes | None) -> bool:
@@ -4667,28 +4609,18 @@ class VoiceAssistant:
             return transcribe_operation(), SpeakerRecognitionResult()
 
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="voice-assistant-audio-analysis")
-        timings: dict[str, float] = {"started_at": time.perf_counter()}
         wait_for_workers = True
 
-        def run_timed(label: str, operation):
-            timings[f"{label}_start"] = time.perf_counter()
-            try:
-                return operation()
-            finally:
-                timings[f"{label}_end"] = time.perf_counter()
-
         try:
-            stt_future = executor.submit(lambda: run_timed("stt", transcribe_operation))
-            speaker_future = executor.submit(lambda: run_timed("speaker", speaker_operation))
+            stt_future = executor.submit(transcribe_operation)
+            speaker_future = executor.submit(speaker_operation)
             text = stt_future.result()
             if not text:
                 wait_for_workers = False
                 executor.shutdown(wait=False, cancel_futures=True)
-                self._debug_audio_analysis_timing(timings, include_speaker=False)
                 return text, SpeakerRecognitionResult()
             speaker_result = speaker_future.result()
             self.last_speaker_result = speaker_result
-            self._debug_audio_analysis_timing(timings, include_speaker=True)
             return text, speaker_result
         except Exception:
             wait_for_workers = False
@@ -4696,19 +4628,6 @@ class VoiceAssistant:
             raise
         finally:
             executor.shutdown(wait=wait_for_workers)
-
-    def _debug_audio_analysis_timing(self, timings: dict[str, float], *, include_speaker: bool) -> None:
-        if not debug_logging_enabled():
-            return
-        stt_ms = (timings.get("stt_end", 0.0) - timings.get("stt_start", 0.0)) * 1000.0
-        speaker_ms = (
-            (timings.get("speaker_end", 0.0) - timings.get("speaker_start", 0.0)) * 1000.0
-            if include_speaker
-            else 0.0
-        )
-        total_ms = (time.perf_counter() - timings.get("started_at", time.perf_counter())) * 1000.0
-        speaker_detail = f", speaker={speaker_ms:.0f}ms" if include_speaker else ""
-        print(f"Audio analysis timing: stt={stt_ms:.0f}ms{speaker_detail}, total={total_ms:.0f}ms", flush=True)
 
     def recognize_speaker(
         self,
@@ -5011,7 +4930,7 @@ class VoiceAssistant:
         return None
 
     def _load_local_whisper_model(self):
-        """Lazy-load faster-whisper so online-only users do not pay the import cost."""
+        """Load faster-whisper once and keep the warm model for the session."""
         if self.local_whisper_model:
             return self.local_whisper_model
 
@@ -5021,8 +4940,22 @@ class VoiceAssistant:
             print("Local Whisper requires faster-whisper. Install it with: uv pip install -e .")
             return None
 
-        print(f"Loading local Whisper model: {self.local_whisper_model_name}")
-        self.local_whisper_model = WhisperModel(self.local_whisper_model_name, device="auto", compute_type="int8")
+        cpu_threads = max(1, min(4, os.cpu_count() or 1))
+        load_started_at = time.monotonic()
+        print(f"Loading local Whisper model: {self.local_whisper_model_name} (int8, cpu_threads={cpu_threads})")
+        self.local_whisper_model = WhisperModel(
+            self.local_whisper_model_name,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=cpu_threads,
+            num_workers=1,
+        )
+        load_ms = (time.monotonic() - load_started_at) * 1000.0
+        print(
+            f"Local Whisper model ready: {self.local_whisper_model_name} in {load_ms:.0f} ms "
+            f"(int8, cpu_threads={cpu_threads}, workers=1).",
+            flush=True,
+        )
         return self.local_whisper_model
 
     def audio_to_text(self, audio_data: bytes) -> str | None:
@@ -5070,7 +5003,7 @@ class VoiceAssistant:
             return self.normalize_stt_command_text(text) if text else None
 
         except Exception as e:
-            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt")
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt", locale=self.stt_language or "fr")
             if cloud_error:
                 print(f"OpenAI Whisper failed: {cloud_error.message} ({e})")
                 raise cloud_error from e
@@ -5109,7 +5042,7 @@ class VoiceAssistant:
         try:
             response = self.openai_stt_client.audio.transcriptions.create(**kwargs)
         except Exception as e:
-            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt")
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="stt", locale=self.stt_language or "fr")
             if cloud_error:
                 print(f"Web OpenAI transcription failed: {cloud_error.message} ({e})")
                 raise cloud_error from e
@@ -5124,7 +5057,6 @@ class VoiceAssistant:
         model: str = "whisper-1",
     ) -> str | None:
         """Transcribe browser audio with the same bounded STT guard as backend audio."""
-        started_at = time.perf_counter()
         print(f"Web STT started (timeout {self.stt_timeout_seconds:.1f}s).", flush=True)
         try:
             text = self._run_timed_stage(
@@ -5135,7 +5067,6 @@ class VoiceAssistant:
         except TimeoutError as error:
             print(f"Web STT timed out: {error}.", flush=True)
             raise TimeoutError("Web speech transcription timed out; please try again.") from error
-        print(f"Web STT finished in {time.perf_counter() - started_at:.2f}s.", flush=True)
         return text
 
     def speaker_audio_from_web_bytes(self, audio_data: bytes, mime_type: str) -> bytes | None:
@@ -5164,7 +5095,7 @@ class VoiceAssistant:
         wake_word_gate_active = wake_word_mode == "require" and bool(self.wake_words)
         should_manage_backend_thinking = not self.web_tts_enabled and not wake_word_gate_active
         if should_manage_backend_thinking:
-            self.start_thinking_sound()
+            self.semantic_audio.transition(SemanticAudioState.PROCESSING)
         try:
             speaker_operation = None
             if self._speaker_recognition_should_run(audio_data):
@@ -5205,37 +5136,59 @@ class VoiceAssistant:
             return {"text": text, "accepted": True, "command_text": text, "matched_wake_word": "", **speaker_payload}
         finally:
             if should_manage_backend_thinking:
-                self.stop_thinking_sound()
+                self.semantic_audio.transition(SemanticAudioState.IDLE)
+
+    def _local_whisper_hotwords(self) -> str:
+        """Return fixed generic speech hints; MCP/device names never bias Local STT."""
+        return LOCAL_WHISPER_GENERIC_HOTWORDS
 
     def audio_to_text_local_whisper(self, audio_data: bytes) -> str | None:
-        """Convert audio to text using faster-whisper locally."""
+        """Convert native 16 kHz mono PCM directly with faster-whisper."""
         model = self._load_local_whisper_model()
-        if not model:
+        if not model or not audio_data:
             return None
 
-        wav_path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
-                wav_path = wav_file.name
-                self._write_wav(audio_data, wav_file)
+            # Backend capture is already mono signed PCM16 at 16 kHz. Feeding the
+            # normalized waveform directly avoids a temporary WAV write plus a
+            # second PyAV decode/resample pass for every command.
+            usable_bytes = len(audio_data) - (len(audio_data) % 2)
+            if usable_bytes <= 0:
+                return None
+            waveform = np.frombuffer(audio_data[:usable_bytes], dtype="<i2").astype(np.float32)
+            waveform *= 1.0 / 32768.0
+            audio_seconds = waveform.size / float(self.rate)
 
-            segments, _info = model.transcribe(wav_path, language=self.stt_language, initial_prompt=self.stt_prompt)
+            decode_started_at = time.monotonic()
+            segments, _info = model.transcribe(
+                waveform,
+                language=self.stt_language,
+                initial_prompt=self.stt_prompt,
+                hotwords=self._local_whisper_hotwords(),
+                beam_size=1,
+                best_of=1,
+                temperature=0.0,
+                condition_on_previous_text=False,
+                without_timestamps=True,
+                vad_filter=False,
+                max_new_tokens=48,
+            )
             text = "".join(segment.text for segment in segments).strip()
+            decode_ms = (time.monotonic() - decode_started_at) * 1000.0
+            rtf = (decode_ms / 1000.0) / audio_seconds if audio_seconds > 0 else 0.0
+            print(
+                f"Local Whisper decode: {decode_ms:.0f} ms for {audio_seconds:.2f}s audio "
+                f"(RTF={rtf:.2f}, model={self.local_whisper_model_name}, max_tokens=48).",
+                flush=True,
+            )
             return self.normalize_stt_command_text(text) if text else None
 
         except Exception as e:
             print(f"Error transcribing audio locally: {e}")
             return None
 
-        finally:
-            if wav_path and os.path.exists(wav_path):
-                try:
-                    os.unlink(wav_path)
-                except OSError:
-                    pass
-
     async def text_to_speech(self, text: str) -> bool:
-        """Convert text to speech using the configured provider."""
+        """Speak through the configured backend, with Piper as the universal local fallback."""
         if self.tts_provider == "none":
             self.stop_thinking_sound()
             return False
@@ -5245,155 +5198,111 @@ class VoiceAssistant:
             return False
 
         TTS_STOP_EVENT.clear()
-        if self.tts_provider == "pyttsx3":
-            return self.text_to_speech_pyttsx3(text)
+        if self.tts_provider == "piper":
+            return self.text_to_speech_piper(text)
 
         if self.tts_provider == "openai":
             if not self.openai_client:
-                if local_tts_playback_available():
-                    print("OpenAI TTS selected but OPENAI_API_KEY is missing. Falling back to pyttsx3...")
-                else:
+                print("OpenAI TTS unavailable because OPENAI_API_KEY is missing; using Piper.")
+                return self.text_to_speech_piper(text)
+            try:
+                with TTS_LOCK:
+                    TTS_STOP_EVENT.clear()
+                    audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
+            except Exception as exc:
+                cloud_error = classify_cloud_api_error(exc, provider="OpenAI", stage="tts", locale=self.stt_language or "fr")
+                detail = cloud_error.message if cloud_error else str(exc)
+                print(f"OpenAI TTS generation failed; using Piper: {detail}")
+                return self.text_to_speech_piper(text)
+            try:
+                with TTS_LOCK:
                     self.stop_thinking_sound()
-                    return False
-            else:
-                audio = None
-                try:
-                    with TTS_LOCK:
-                        TTS_STOP_EVENT.clear()
-                        audio = self.generate_openai_tts_audio(text, speed=self.tts_speed)
-                except Exception as e:
-                    cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="tts")
-                    if cloud_error:
-                        print(f"OpenAI TTS generation failed: {cloud_error.message} ({e})")
-                        self.speak_cloud_api_alert(cloud_error.message)
-                        return False
-                    if local_tts_playback_available():
-                        print(f"OpenAI TTS generation failed: {e}")
-                        print("Falling back to local pyttsx3 TTS on the configured backend output...")
-                    else:
-                        self.stop_thinking_sound()
-                        return False
-                if audio is not None:
-                    try:
-                        with TTS_LOCK:
-                            self.stop_thinking_sound()
-                            play_mp3_bytes(
-                                audio,
-                                audio=self.audio,
-                                output_device_index=self.audio_output_device_index,
-                                pipewire_target=self.audio_output_pipewire_target,
-                                volume=self.backend_tts_volume,
-                                pan=self.backend_audio_output_pan,
-                            )
-                        return True
-                    except Exception as e:
-                        if local_tts_playback_available():
-                            print(f"OpenAI TTS playback failed: {e}")
-                        self.stop_thinking_sound()
-                        print("Skipping local pyttsx3 fallback because backend cloud TTS playback failed.")
-                        return False
+                    play_mp3_bytes(
+                        audio,
+                        audio=self.audio,
+                        output_device_index=self.audio_output_device_index,
+                        pipewire_target=self.audio_output_pipewire_target,
+                        volume=self.backend_tts_volume,
+                        pan=self.backend_audio_output_pan,
+                    )
+                return True
+            except Exception as exc:
+                print(f"OpenAI TTS playback failed; using Piper: {exc}")
+                return self.text_to_speech_piper(text)
 
-        elif self.tts_provider == "elevenlabs":
-            if self.elevenlabs_client:
-                if not elevenlabs_playback_available():
-                    if local_tts_playback_available():
-                        print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
-                    return self.text_to_speech_pyttsx3(text)
-                audio_bytes = None
-                try:
-                    with TTS_LOCK:
-                        TTS_STOP_EVENT.clear()
-                        audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
-                        audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
-                except Exception as e:
-                    cloud_error = classify_cloud_api_error(e, provider="ElevenLabs", stage="tts")
-                    if cloud_error:
-                        print(f"ElevenLabs TTS generation failed: {cloud_error.message} ({e})")
-                        self.speak_cloud_api_alert(cloud_error.message)
-                        return False
-                    if local_tts_playback_available():
-                        print(f"ElevenLabs TTS generation failed: {e}")
-                        print("Falling back to local pyttsx3 TTS on the configured backend output...")
-                    else:
-                        self.stop_thinking_sound()
-                        return False
-                if audio_bytes is not None:
-                    try:
-                        with TTS_LOCK:
-                            self.stop_thinking_sound()
-                            play_mp3_bytes(
-                                audio_bytes,
-                                audio=self.audio,
-                                output_device_index=self.audio_output_device_index,
-                                pipewire_target=self.audio_output_pipewire_target,
-                                volume=self.backend_tts_volume,
-                                pan=self.backend_audio_output_pan,
-                            )
-                        return True
-                    except Exception as e:
-                        if local_tts_playback_available():
-                            print(f"ElevenLabs TTS playback failed: {e}")
-                        self.stop_thinking_sound()
-                        print("Skipping local pyttsx3 fallback because backend cloud TTS playback failed.")
-                        return False
-            elif local_tts_playback_available():
-                print("ElevenLabs TTS selected but ELEVENLABS_API_KEY is missing. Falling back to pyttsx3...")
-            else:
-                self.stop_thinking_sound()
-                return False
-        else:
-            if local_tts_playback_available():
-                print(f"Unknown TTS provider '{self.tts_provider}'. Falling back to pyttsx3...")
-            else:
-                self.stop_thinking_sound()
-                return False
+        if self.tts_provider == "elevenlabs":
+            if not self.elevenlabs_client:
+                print("ElevenLabs TTS unavailable because ELEVENLABS_API_KEY is missing; using Piper.")
+                return self.text_to_speech_piper(text)
+            if not elevenlabs_playback_available():
+                print("ElevenLabs MP3 playback unavailable; using Piper.")
+                return self.text_to_speech_piper(text)
+            try:
+                with TTS_LOCK:
+                    TTS_STOP_EVENT.clear()
+                    audio = self.generate_elevenlabs_tts_audio(text, speed=self.tts_speed)
+                    audio_bytes = audio if isinstance(audio, bytes) else b"".join(audio)
+            except Exception as exc:
+                cloud_error = classify_cloud_api_error(exc, provider="ElevenLabs", stage="tts", locale=self.stt_language or "fr")
+                detail = cloud_error.message if cloud_error else str(exc)
+                print(f"ElevenLabs TTS generation failed; using Piper: {detail}")
+                return self.text_to_speech_piper(text)
+            try:
+                with TTS_LOCK:
+                    self.stop_thinking_sound()
+                    play_mp3_bytes(
+                        audio_bytes,
+                        audio=self.audio,
+                        output_device_index=self.audio_output_device_index,
+                        pipewire_target=self.audio_output_pipewire_target,
+                        volume=self.backend_tts_volume,
+                        pan=self.backend_audio_output_pan,
+                    )
+                return True
+            except Exception as exc:
+                print(f"ElevenLabs TTS playback failed; using Piper: {exc}")
+                return self.text_to_speech_piper(text)
 
-        return self.text_to_speech_pyttsx3(text)
+        print(f"Unknown backend TTS provider '{self.tts_provider}'; using Piper.")
+        return self.text_to_speech_piper(text)
 
-    def text_to_speech_pyttsx3(self, text: str) -> bool:
-        """Speak text through local TTS, preferring a file rendered into backend PyAudio output."""
-        if not local_tts_playback_available():
+    def text_to_speech_piper(self, text: str) -> bool:
+        """Render Piper speech and play it through the configured backend output."""
+        if not piper_ready():
+            self.stop_thinking_sound()
+            print("Piper local TTS is unavailable.")
             return False
         if not self._backend_output_ready():
             self.stop_thinking_sound()
-            print(f"Local pyttsx3 TTS skipped: backend audio output is {self.audio_output_device_status}.")
+            print(f"Piper TTS skipped: backend audio output is {self.audio_output_device_status}.")
             return False
 
-        spoken_text = prepare_text_for_tts(text)
         temp_path = None
         try:
-            with TTS_LOCK:
-                TTS_STOP_EVENT.clear()
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                    temp_path = temp_file.name
-                TTS_ENGINE.save_to_file(spoken_text, temp_path)
-                TTS_ENGINE.runAndWait()
-                file_rendered = temp_path and os.path.exists(temp_path) and os.path.getsize(temp_path) > 0
-                if file_rendered:
-                    try:
-                        self.stop_thinking_sound()
-                        self.play_local_tts_file(temp_path, stop_event=TTS_STOP_EVENT)
-                        return True
-                    except Exception as e:
-                        print(f"Local pyttsx3 backend playback failed on configured output: {e}")
-                        return False
-                if not file_rendered:
-                    print("Local pyttsx3 file rendering failed; direct system TTS is disabled.")
-                self.stop_thinking_sound()
-                return False
-        except Exception as e:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_path = temp_file.name
+            piper_values = dict(os.environ)
+            # Playback applies the configured backend gain/pan, exactly like
+            # cloud TTS. Render Piper at unity gain to avoid applying local
+            # output gain twice.
+            piper_values["BACKEND_TTS_VOLUME"] = "1.0"
+            piper_values["LOCAL_TTS_OUTPUT_GAIN"] = "1.0"
+            render_piper_wav(prepare_text_for_tts(text), temp_path, piper_values)
+            print(f"Piper TTS fallback/local voice: {piper_voice_name(piper_values)}")
             self.stop_thinking_sound()
-            print(f"Local pyttsx3 TTS failed: {e}")
+            self.play_local_tts_file(temp_path, stop_event=TTS_STOP_EVENT)
+            return True
+        except Exception as exc:
+            self.stop_thinking_sound()
+            print(f"Piper local TTS failed: {exc}")
             return False
         finally:
             if temp_path:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(temp_path)
-                except OSError:
-                    pass
 
     def play_local_tts_file(self, audio_path: str | Path, *, stop_event: threading.Event | None = None) -> None:
-        """Play a pyttsx3-rendered file through the selected backend output device."""
+        """Play a locally rendered TTS WAV through the selected backend output device."""
         try:
             self.play_wav_file(audio_path, stop_event=stop_event)
             return
@@ -5645,7 +5554,7 @@ class VoiceAssistant:
             raise ValueError(f"backend audio output device is not available: {self.audio_output_device_detail}")
 
         TTS_STOP_EVENT.clear()
-        if selected_provider == "pyttsx3":
+        if selected_provider == "piper":
             previous_volume = self.backend_tts_volume
             previous_pan = self.backend_audio_output_pan
             previous_output_device_index = self.audio_output_device_index
@@ -5655,7 +5564,7 @@ class VoiceAssistant:
             self.audio_output_device_index = test_output_device_index
             self.audio_output_pipewire_target = test_output_pipewire_target
             try:
-                return self.text_to_speech_pyttsx3(text)
+                return self.text_to_speech_piper(text)
             finally:
                 self.backend_tts_volume = previous_volume
                 self.backend_audio_output_pan = previous_pan
@@ -5683,24 +5592,14 @@ class VoiceAssistant:
 
         if selected_provider == "elevenlabs":
             if not elevenlabs_playback_available():
-                if local_tts_playback_available():
-                    print("ElevenLabs TTS selected but local MP3 playback is unavailable. Falling back to pyttsx3...")
-                    previous_volume = self.backend_tts_volume
-                    previous_pan = self.backend_audio_output_pan
-                    previous_output_device_index = self.audio_output_device_index
-                    previous_output_pipewire_target = self.audio_output_pipewire_target
-                    self.backend_tts_volume = test_volume
-                    self.backend_audio_output_pan = test_pan
-                    self.audio_output_device_index = test_output_device_index
-                    self.audio_output_pipewire_target = test_output_pipewire_target
-                    try:
-                        return self.text_to_speech_pyttsx3(text)
-                    finally:
-                        self.backend_tts_volume = previous_volume
-                        self.backend_audio_output_pan = previous_pan
-                        self.audio_output_device_index = previous_output_device_index
-                        self.audio_output_pipewire_target = previous_output_pipewire_target
-                return False
+                print("ElevenLabs MP3 playback unavailable; testing Piper fallback instead.")
+                return self.test_backend_text_to_speech(
+                    text,
+                    provider="piper",
+                    volume=test_volume,
+                    pan=test_pan,
+                    output_device=output_device,
+                )
             with TTS_LOCK:
                 TTS_STOP_EVENT.clear()
                 audio = self.generate_elevenlabs_tts_audio(
@@ -5740,7 +5639,7 @@ class VoiceAssistant:
             voice=voice,
             input=cleaned_text,
             response_format="mp3",
-            speed=max(0.6, min(1.8, float(speed or 1.0))),
+            speed=normalize_tts_speed("openai", speed),
         )
         return response.read()
 
@@ -5763,7 +5662,7 @@ class VoiceAssistant:
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
             optimize_streaming_latency="2",
-            voice_settings=VoiceSettings(speed=max(0.6, min(1.8, float(speed or 1.0)))),
+            voice_settings=VoiceSettings(speed=normalize_tts_speed("elevenlabs", speed)),
         )
 
     def web_text_to_speech_openai(
@@ -5962,7 +5861,7 @@ class VoiceAssistant:
         except Exception as e:
             cloud_error = classify_cloud_api_error(
                 e,
-                provider="OpenAI" if self.llm_provider == "openai" else self.llm_provider,
+                provider="OpenAI",
                 stage="llm",
             )
             if cloud_error:
@@ -6036,33 +5935,40 @@ class VoiceAssistant:
                 f"Détail: {detail}"
             )
 
-        self.start_thinking_sound()
+        self.semantic_audio.transition(SemanticAudioState.PROCESSING)
         try:
             return await self._run_agent_with_optional_tool_routing(text, speaker_result=speaker_result)
         except asyncio.CancelledError:
-            self.stop_thinking_sound()
+            self.semantic_audio.transition(SemanticAudioState.IDLE)
             raise
         except asyncio.TimeoutError:
-            return "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple."
+            errors = load_locale(self.stt_language or "fr").get("errors") or {}
+            return str(errors.get("command_timeout") or "La demande prend trop de temps à s'exécuter. Merci de réessayer avec une demande plus simple.")
         except Exception as e:
             error_text = str(e)
-            cloud_error = classify_cloud_api_error(e, provider="OpenAI" if self.llm_provider == "openai" else self.llm_provider, stage="llm")
+            cloud_error = classify_cloud_api_error(e, provider="OpenAI", stage="llm", locale=self.stt_language or "fr")
             if cloud_error:
                 print(f"LLM cloud API failed: {cloud_error.message} ({e})")
                 return cloud_error.message
             if "context_length_exceeded" in error_text or "maximum context length" in error_text:
-                return (
-                    "I reached the model context limit because tool definitions are too large for the current model. "
-                    "Please switch to a larger-context model (for example gpt-4o-mini or gpt-4o), "
-                    "or reduce enabled MCP servers/tools."
+                errors = load_locale(self.stt_language or "fr").get("errors") or {}
+                return str(
+                    errors.get("context_limit")
+                    or "La limite de contexte du modèle a été atteinte. Utilise un modèle avec un contexte plus grand ou réduis les outils MCP actifs."
                 )
             if self._is_mcp_connection_loss_error(error_text):
                 self.mcp_reconnect_after_response = True
-                return (
-                    "La connexion au serveur MCP a été perdue pendant l'appel outil. "
-                    "Je vais redémarrer la session MCP, puis tu pourras relancer la commande."
+                errors = load_locale(self.stt_language or "fr").get("errors") or {}
+                return str(
+                    errors.get("mcp_connection_lost")
+                    or "La connexion au serveur MCP a été perdue. La session MCP va être redémarrée ; relance ensuite la commande."
                 )
-            return f"Sorry, I encountered an error: {error_text}"
+            print(f"Command processing failed: {error_text}", flush=True)
+            return localized_error_text(
+                self.stt_language or "fr",
+                domain="command",
+                error=error_text,
+            )
 
     def is_speaker_identity_query(self, text: str) -> bool:
         """Return true for local speaker-recognition diagnostic commands."""
@@ -6225,6 +6131,7 @@ class VoiceAssistant:
             print("Failed to initialize MCP. Continuing without MCP tools; use the web config to fix and reload.")
             if self.web_monitor:
                 self.web_monitor.set_environment_loading(False)
+            await self.announce_startup_ready([])
         else:
             await self.refresh_session_llm_summary()
             await self.announce_startup_ready(self._loaded_mcp_server_names(self.mcp_config))
@@ -6237,9 +6144,12 @@ class VoiceAssistant:
 
                 text = self.pending_injected_command
                 self.pending_injected_command = None
+                command_was_injected = bool(text)
+                text_from_fallback = False
                 speaker_result = SpeakerRecognitionResult()
                 if not text and self.web_monitor:
                     text = self.web_monitor.pop_injected_command()
+                    command_was_injected = bool(text)
                 text, injected_speaker_result = self.injected_command_parts(text)
                 if (
                     injected_speaker_result.speaker != UNKNOWN_SPEAKER
@@ -6250,7 +6160,6 @@ class VoiceAssistant:
                 if text:
                     print(f"Injected command consumed: {text}")
                 else:
-                    text_from_fallback = False
                     if not self.microphone_available:
                         text = await self.wait_for_text_fallback_command()
                         if self.reload_event and self.reload_event.is_set():
@@ -6282,8 +6191,10 @@ class VoiceAssistant:
                         continue
                     else:
                         self._set_backend_audio_state(BackendAudioState.PROCESSING, "audio captured")
-                        if not self.wake_words:
-                            self.start_thinking_sound()
+                        # Capture is complete: start feedback now, before local STT.
+                        # Do not start it at wake detection, because playback while the
+                        # microphone is still recording could contaminate the command.
+                        self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         # Convert to text
                         try:
                             text, speaker_result = self.transcribe_and_recognize_audio(
@@ -6291,7 +6202,7 @@ class VoiceAssistant:
                                 audio_data,
                             )
                         except CloudApiUserError as e:
-                            self.stop_thinking_sound()
+                            self.semantic_audio.transition(self._semantic_listening_state())
                             self._set_backend_audio_state(self._backend_listening_state(), "stt cloud error")
                             print(f"Voice transcription stopped: {e.message}")
                             if self.web_monitor:
@@ -6301,18 +6212,18 @@ class VoiceAssistant:
                             continue
                         if self.reload_event and self.reload_event.is_set():
                             print("Auto environment reload requested. Stopping current assistant.")
-                            self.stop_thinking_sound()
+                            self.semantic_audio.transition(self._semantic_listening_state())
                             self._set_backend_audio_state(self._backend_listening_state(), "reload")
                             return "reload"
                         if not text:
-                            self.stop_thinking_sound()
+                            self.semantic_audio.transition(self._semantic_listening_state())
                             self._set_backend_audio_state(self._backend_listening_state(), "empty transcription")
                             continue
 
                         if self.wake_words:
                             if not self.last_backend_streaming_wake_detected:
                                 print("Backend wake word was configured but no openWakeWord trigger authorized this audio.")
-                                self.stop_thinking_sound()
+                                self.semantic_audio.transition(self._semantic_listening_state())
                                 self.play_rejected_backend_audio(audio_data)
                                 self._set_backend_audio_state(self._backend_listening_state(), "unauthorized audio")
                                 continue
@@ -6324,20 +6235,29 @@ class VoiceAssistant:
                             print(f"Wake word detected: {matched_wake_word}")
                             if command_text != text:
                                 print(f"Command after wake word: {command_text}")
-                            self.start_thinking_sound()
+                            self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         elif self.last_backend_streaming_wake_detected:
+                            if self.last_backend_wake_detected_at is not None:
+                                total_ms = (time.monotonic() - self.last_backend_wake_detected_at) * 1000.0
+                                print(f"Local voice latency: wake→STT-result {total_ms:.0f} ms.", flush=True)
                             print("Command accepted after backend streaming wake detection.")
-                            self.start_thinking_sound()
+                            self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                         text = command_text
 
-                if self._should_skip_duplicate_command(text):
+                if self._should_skip_duplicate_command(
+                    text,
+                    suppress=not (command_was_injected or text_from_fallback),
+                ):
                     print(f"Duplicate command ignored: {text}")
-                    self.stop_thinking_sound()
+                    self.semantic_audio.transition(self._semantic_listening_state())
                     self._set_backend_audio_state(self._backend_listening_state(), "duplicate command")
+                    if self.web_monitor:
+                        self.web_monitor.set_assistant_busy(False)
                     continue
 
                 # Process command
                 self._set_backend_audio_state(BackendAudioState.PROCESSING, "command accepted")
+                self.semantic_audio.transition(SemanticAudioState.PROCESSING)
                 process_task = asyncio.create_task(self.process_command(text, speaker_result=speaker_result))
                 voice_cancel_stop_event = None
                 voice_cancel_task = None
@@ -6434,6 +6354,10 @@ class VoiceAssistant:
                     continue
 
                 response = await process_task
+                sanitized_response = sanitize_spoken_response(self.stt_language or "fr", response)
+                if sanitized_response != response:
+                    print(f"Technical user-facing error sanitized before chat/TTS: {response}", flush=True)
+                    response = sanitized_response
                 if self.reload_event and self.reload_event.is_set():
                     print("Auto environment reload requested. Discarding current response.")
                     if self.web_monitor:
@@ -6441,7 +6365,7 @@ class VoiceAssistant:
                     self._set_backend_audio_state(self._backend_listening_state(), "reload")
                     return "reload"
 
-                self.play_command_ack_sound()
+                self.semantic_audio.transition(SemanticAudioState.RESULT_READY)
                 print(f"\nAssistant: {response}")
                 if self.session_context_store:
                     self.session_context_store.append_message("assistant", response)
@@ -6461,6 +6385,7 @@ class VoiceAssistant:
 
                 # Try to speak the response
                 self._set_backend_audio_state(BackendAudioState.TTS, "speaking response")
+                self.semantic_audio.transition(SemanticAudioState.SPEAKING)
                 if self.interrupt_conversation_enabled and self.microphone_available and self.tts_provider != "none":
                     tts_task = asyncio.create_task(
                         asyncio.to_thread(lambda: asyncio.run(self.text_to_speech(response)))
@@ -6504,6 +6429,7 @@ class VoiceAssistant:
                 else:
                     await self.text_to_speech(response)
 
+                self.semantic_audio.transition(SemanticAudioState.IDLE)
                 if self._backend_streaming_wake_active():
                     self.backend_wake_word_suppress_until = (
                         time.monotonic() + DEFAULT_BACKEND_WAKE_WORD_POST_TTS_SUPPRESS_MS / 1000.0
@@ -6562,11 +6488,6 @@ class VoiceAssistant:
                     except Exception:
                         pass
                 print("TTS engine stop deferred for reload.")
-            else:
-                try:
-                    TTS_ENGINE.stop()
-                except Exception:
-                    pass
             if self.mcp_client and self.mcp_client.sessions:
                 try:
                     await asyncio.wait_for(self.mcp_client.close_all_sessions(), timeout=6.0)
@@ -6578,2129 +6499,12 @@ class VoiceAssistant:
         return "exit"
 
 
-async def main():
-    """Run the improved voice assistant."""
-    import argparse
-
-    from dotenv import dotenv_values, load_dotenv
-
-    def env_bool(name: str, default: bool = False) -> bool:
-        value = os.getenv(name)
-        if value is None:
-            return default
-        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-    def env_int(name: str, default: int) -> int:
-        value = os.getenv(name)
-        if value is None or value.strip() == "":
-            return default
-        try:
-            return int(value)
-        except ValueError:
-            print(f"Error: {name} must be an integer, got: {value}")
-            sys.exit(1)
-
-    def env_float(name: str, default: float) -> float:
-        value = os.getenv(name)
-        if value is None or value.strip() == "":
-            return default
-        try:
-            return float(value)
-        except ValueError:
-            print(f"Error: {name} must be a number, got: {value}")
-            sys.exit(1)
-
-    def env_float_from_values(values: dict, name: str, default: float) -> float:
-        value = values.get(name)
-        if value is None or str(value).strip() == "":
-            return default
-        try:
-            return float(str(value).strip())
-        except ValueError:
-            return default
-
-    def env_int_from_values(values: dict, name: str, default: int) -> int:
-        value = values.get(name)
-        if value is None or str(value).strip() == "":
-            return default
-        try:
-            return int(str(value).strip())
-        except ValueError:
-            return default
-
-    def env_bool_from_values(values: dict, name: str, default: bool = False) -> bool:
-        value = values.get(name)
-        if value is None or str(value).strip() == "":
-            return default
-        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-    def env_optional(name: str) -> str | None:
-        value = os.getenv(name)
-        if value is None or value.strip() == "":
-            return None
-        return value
-
-    def env_secret(name: str) -> str | None:
-        file_path = env_optional(f"{name}_FILE")
-        if not file_path:
-            return None
-
-        try:
-            with open(file_path) as secret_file:
-                secret = secret_file.read().strip()
-        except OSError as e:
-            print(f"Error: could not read {name}_FILE '{file_path}': {e}")
-            sys.exit(1)
-
-        return secret or None
-
-    def load_mcp_config_from_values(values: dict) -> dict | None:
-        mcp_config_path = (values.get("MCP_CONFIG") or "").strip()
-        if not mcp_config_path:
-            return None
-        try:
-            with open(mcp_config_path) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return None
-
-    def mcp_config_path_from_values(values: dict) -> Path:
-        mcp_config_path = (values.get("MCP_CONFIG") or "").strip()
-        if not mcp_config_path:
-            raise ValueError("MCP_CONFIG is not set in the active env file")
-        path = Path(mcp_config_path)
-        return path if path.is_absolute() else Path.cwd() / path
-
-    def normalize_routing_words(value: Any) -> list[str]:
-        raw_values = re.split(r"[,;\n]+", str(value or ""))
-        words: list[str] = []
-        seen: set[str] = set()
-        for item in raw_values:
-            word = item.strip().lower()
-            if word and word not in seen:
-                words.append(word)
-                seen.add(word)
-        return words
-
-    def validate_mcp_routing_updates(config: dict[str, Any], routing_updates: dict[str, str]) -> dict[str, str]:
-        servers = config.get("mcpServers")
-        if not isinstance(servers, dict):
-            raise ValueError("active MCP config has no mcpServers object")
-
-        unknown = sorted(name for name in routing_updates if name not in servers)
-        if unknown:
-            raise ValueError(f"unknown MCP server(s): {', '.join(unknown)}")
-
-        normalized_updates: dict[str, str] = {}
-        keyword_owner: dict[str, str] = {}
-        for server_name, server_config in servers.items():
-            if not isinstance(server_config, dict):
-                continue
-            raw_routing = routing_updates.get(str(server_name))
-            if raw_routing is None:
-                assistant_options = (
-                    server_config.get("assistantOptions")
-                    or server_config.get("assistantPrompt")
-                    or server_config.get("agentPrompt")
-                    or {}
-                )
-                raw_routing = assistant_options.get("routing") if isinstance(assistant_options, dict) else ""
-
-            words = normalize_routing_words(raw_routing)
-            if len(words) > 10:
-                raise ValueError(f"routing words limit exceeded: {server_name} has {len(words)} words, max 10")
-            for word in words:
-                if word in keyword_owner and keyword_owner[word] != server_name:
-                    raise ValueError(f"routing word duplicate: {word}")
-                keyword_owner[word] = str(server_name)
-            normalized_updates[str(server_name)] = ",".join(words)
-        return normalized_updates
-
-    def normalize_mcp_env_options(value: Any) -> dict[str, str]:
-        if not isinstance(value, dict):
-            raise ValueError("MCP server options must be JSON objects")
-        normalized: dict[str, str] = {}
-        for raw_key, raw_value in value.items():
-            key = str(raw_key).strip()
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-                raise ValueError(f"invalid MCP env option name: {key}")
-            if raw_value is None:
-                normalized[key] = ""
-            elif isinstance(raw_value, (dict, list)):
-                normalized[key] = json.dumps(raw_value, ensure_ascii=False, separators=(",", ":"))
-            elif isinstance(raw_value, bool):
-                normalized[key] = "true" if raw_value else "false"
-            else:
-                normalized[key] = str(raw_value)
-        return normalized
-
-    def validate_mcp_server_options_updates(
-        config: dict[str, Any],
-        options_updates: dict[str, dict[str, Any]],
-    ) -> dict[str, dict[str, str]]:
-        servers = config.get("mcpServers")
-        if not isinstance(servers, dict):
-            raise ValueError("active MCP config has no mcpServers object")
-
-        unknown = sorted(name for name in options_updates if name not in servers)
-        if unknown:
-            raise ValueError(f"unknown MCP server(s): {', '.join(unknown)}")
-
-        normalized_updates: dict[str, dict[str, str]] = {}
-        for server_name, options in options_updates.items():
-            normalized_updates[str(server_name)] = normalize_mcp_env_options(options)
-        return normalized_updates
-
-    def format_env_value(value: str) -> str:
-        """Format an env value so python-dotenv can parse it back safely."""
-        value = str(value)
-        if re.fullmatch(r"[A-Za-z0-9_./:@+-]*", value):
-            return value
-        escaped = (
-            value.replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-        )
-        return f'"{escaped}"'
-
-    def update_env_file_values(env_file: Path, updates: dict[str, str], remove_keys: set[str] | None = None) -> None:
-        """Update or append KEY=value pairs in an env file while preserving other lines."""
-        remove_keys = remove_keys or set()
-        try:
-            lines = env_file.read_text().splitlines(keepends=True)
-        except OSError as e:
-            raise ValueError(f"could not read env file '{env_file}': {e}") from e
-
-        remaining = dict(updates)
-        updated_lines = []
-        for line in lines:
-            stripped = line.lstrip()
-            if not stripped or stripped.startswith("#") or "=" not in line:
-                updated_lines.append(line)
-                continue
-
-            key = line.split("=", 1)[0].strip()
-            if key in remove_keys:
-                continue
-            if key in remaining:
-                newline = "\n" if line.endswith("\n") else ""
-                updated_lines.append(f"{key}={format_env_value(remaining.pop(key))}{newline}")
-            else:
-                updated_lines.append(line)
-
-        if remaining:
-            if updated_lines and not updated_lines[-1].endswith("\n"):
-                updated_lines[-1] += "\n"
-            for key, value in remaining.items():
-                updated_lines.append(f"{key}={format_env_value(value)}\n")
-
-        try:
-            env_file.write_text("".join(updated_lines))
-        except OSError as e:
-            raise ValueError(f"could not write env file '{env_file}': {e}") from e
-
-    def list_openai_models(values: dict) -> tuple[list[dict[str, str]], str | None]:
-        if not check_internet_connection():
-            return [], "internet offline"
-
-        api_key = read_secret_from_env_values(values, "OPENAI_API_KEY")
-        if not api_key:
-            return [], "missing OPENAI_API_KEY_FILE"
-
-        try:
-            client = openai.OpenAI(api_key=api_key)
-            response = client.models.list()
-        except Exception as e:
-            return [], f"OpenAI API unavailable: {e}"
-
-        model_ids = sorted(
-            {
-                model.id
-                for model in response.data
-                if model.id.startswith(("gpt-", "o1", "o3", "o4"))
-                and not any(marker in model.id for marker in ("audio", "transcribe", "tts", "image", "realtime"))
-            }
-        )
-        return [{"id": model_id, "label": model_id} for model_id in model_ids], None
-
-    def list_ollama_models(values: dict) -> tuple[list[dict[str, str]], str | None]:
-        base_url = (values.get("OLLAMA_BASE_URL") or "http://localhost:11434").strip().rstrip("/")
-        try:
-            with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2.0) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (OSError, urllib.error.URLError, json.JSONDecodeError) as e:
-            return [], f"Ollama unavailable at {base_url}: {e}"
-
-        names = sorted(
-            model.get("name")
-            for model in payload.get("models", [])
-            if isinstance(model, dict) and model.get("name")
-        )
-        return [{"id": name, "label": name} for name in names], None
-
-    def parse_elevenlabs_voice_options(value: str) -> list[dict[str, str]]:
-        voices = []
-        for voice_id, label in re.findall(r"([A-Za-z0-9_-]+)\s*\(([^)]+)\)", value or ""):
-            voices.append({"id": voice_id, "label": label.strip()})
-        return voices
-
-    def list_elevenlabs_voice_options(values: dict) -> list[dict[str, str]]:
-        return parse_elevenlabs_voice_options(values.get("ELEVENLABS_VOICE_OPTIONS") or "")
-
-    def list_wav_asset_options() -> list[dict[str, str]]:
-        assets_dir = Path("assets")
-        if not assets_dir.exists():
-            return []
-
-        return [
-            {"id": wav_path.name, "label": wav_path.name}
-            for wav_path in sorted(assets_dir.glob("*.wav"), key=lambda path: path.name.lower())
-            if wav_path.is_file()
-        ]
-
-    def list_wake_word_model_options() -> list[dict[str, str]]:
-        data_dir = Path("data")
-        if not data_dir.exists():
-            return []
-
-        options = []
-        for model_path in sorted(data_dir.rglob("*.onnx"), key=lambda path: path.as_posix().lower()):
-            if not model_path.is_file():
-                continue
-            if model_path.name.startswith("._"):
-                continue
-            try:
-                model_id = model_path.relative_to(Path.cwd()).as_posix()
-            except ValueError:
-                model_id = model_path.as_posix()
-            options.append({"id": model_id, "label": model_id})
-        return options
-
-    def display_env_path(path: Path) -> str:
-        try:
-            return str(path.resolve().relative_to(Path.cwd().resolve()))
-        except ValueError:
-            return str(path)
-
-    def list_available_env_files(current_env_file: Path, auto_env_mode: bool) -> dict[str, Any]:
-        candidates: dict[str, Path] = {}
-        search_dirs = [Path.cwd()]
-        if current_env_file.parent not in search_dirs:
-            search_dirs.append(current_env_file.parent)
-        for search_dir in search_dirs:
-            for candidate in search_dir.glob(".env*"):
-                if candidate.is_file():
-                    candidates[display_env_path(candidate)] = candidate
-        if current_env_file.exists():
-            candidates[display_env_path(current_env_file)] = current_env_file
-
-        profiles = [
-            {
-                "id": profile_id,
-                "label": profile_id,
-                "selected": profile_path.resolve() == current_env_file.resolve(),
-            }
-            for profile_id, profile_path in sorted(candidates.items(), key=lambda item: item[0].lower())
-        ]
-        return {
-            "current": display_env_path(current_env_file),
-            "profiles": profiles,
-            "switching_enabled": not auto_env_mode,
-            "auto_mode": auto_env_mode,
-            "connectivity_locked": current_env_file.name in {".env.online", ".env.offline"},
-            "message": (
-                "Manual env switching is disabled while --env-file auto controls the active profile."
-                if auto_env_mode
-                else ""
-            ),
-        }
-
-    def remote_screen_url_from_values(values: dict) -> str:
-        return (values.get("REMOTE_SCREEN_VNC_URL") or "vnc://192.168.0.160:5900?password=ronron").strip()
-
-    def remote_screen_view_only_from_values(values: dict) -> bool:
-        return env_bool_from_values(values, "REMOTE_SCREEN_VNC_VIEW_ONLY", True)
-
-    def save_remote_screen_config(
-        env_file: Path,
-        vnc_url: str,
-        view_only: bool,
-        web_monitor: WebMonitor | None,
-    ) -> dict[str, Any]:
-        cleaned_url = vnc_url.strip()
-        if not cleaned_url:
-            raise ValueError("VNC URL is required")
-        parsed = urllib.parse.urlparse(cleaned_url)
-        if parsed.scheme not in {"vnc", "http", "https"}:
-            raise ValueError("VNC URL must start with vnc://, http://, or https://")
-        if not parsed.netloc:
-            raise ValueError("VNC URL must include a host")
-
-        view_only = bool(view_only)
-        update_env_file_values(
-            env_file,
-            {
-                "REMOTE_SCREEN_VNC_URL": cleaned_url,
-                "REMOTE_SCREEN_VNC_VIEW_ONLY": "true" if view_only else "false",
-            },
-        )
-        if web_monitor:
-            web_monitor.update(remote_screen={"vnc_url": cleaned_url, "view_only": view_only})
-        return {"saved": True, "vnc_url": cleaned_url, "view_only": view_only}
-
-    def build_cloud_api_status(env_file: Path) -> dict[str, Any]:
-        values = dict(dotenv_values(env_file))
-        openai_api_key = read_secret_from_env_values(values, "OPENAI_API_KEY")
-        elevenlabs_api_key = read_secret_from_env_values(values, "ELEVENLABS_API_KEY")
-        result: dict[str, Any] = {
-            "openai": {
-                "status": "missing" if not openai_api_key else "unavailable",
-                "masked_key": mask_secret_tail(openai_api_key),
-                "lines": [
-                    "Crédit restant: non exposé par l'API publique OpenAI.",
-                    "Le coût récent exige une clé autorisée pour les endpoints organisation.",
-                ],
-            },
-            "elevenlabs": {
-                "status": "missing" if not elevenlabs_api_key else "unavailable",
-                "masked_key": mask_secret_tail(elevenlabs_api_key),
-                "lines": [],
-            },
-        }
-
-        if openai_api_key:
-            start_time = int(time.time()) - 7 * 24 * 60 * 60
-            url = f"https://api.openai.com/v1/organization/costs?start_time={start_time}&bucket_width=1d&limit=7"
-            try:
-                data = read_json_url(url, {"Authorization": f"Bearer {openai_api_key}"})
-                total_value = 0.0
-                currency = "usd"
-                for bucket in data.get("data") or []:
-                    for item in bucket.get("results") or []:
-                        amount = item.get("amount") or {}
-                        total_value += float(amount.get("value") or 0)
-                        currency = str(amount.get("currency") or currency)
-                result["openai"] = {
-                    "status": "ok",
-                    "masked_key": mask_secret_tail(openai_api_key),
-                    "cost_7d": {"value": round(total_value, 4), "currency": currency},
-                    "lines": [
-                        "Crédit restant: non exposé par l'API publique OpenAI.",
-                        "Costs API accessible avec cette clé.",
-                    ],
-                }
-            except urllib.error.HTTPError as e:
-                detail = f"Costs API indisponible avec cette clé: HTTP {e.code}."
-                if e.code in {401, 403}:
-                    detail = "Costs API non autorisée avec cette clé. Utilise une clé admin/org pour afficher le coût."
-                result["openai"]["lines"].append(detail)
-            except Exception as e:
-                result["openai"]["lines"].append(f"Costs API indisponible: {e}")
-
-        if elevenlabs_api_key:
-            try:
-                data = read_json_url(
-                    "https://api.elevenlabs.io/v1/user/subscription",
-                    {"xi-api-key": elevenlabs_api_key},
-                )
-                used = int(data.get("character_count") or 0)
-                limit = int(data.get("character_limit") or 0)
-                remaining = max(0, limit - used) if limit else 0
-                tier = str(data.get("tier") or "unknown")
-                subscription_status = str(data.get("status") or "unknown")
-                overage = data.get("current_overage") or {}
-                lines = [f"Plan: {tier}", f"Statut: {subscription_status}"]
-                if overage:
-                    lines.append(f"Overage: {overage.get('amount', '0')} {overage.get('currency', 'usd')}")
-                result["elevenlabs"] = {
-                    "status": "ok",
-                    "masked_key": mask_secret_tail(elevenlabs_api_key),
-                    "characters": {"used": used, "limit": limit, "remaining": remaining},
-                    "lines": lines,
-                }
-            except urllib.error.HTTPError as e:
-                detail = f"Subscription API indisponible: HTTP {e.code}."
-                if e.code in {401, 403}:
-                    detail = "Clé ElevenLabs refusée pour la lecture de subscription."
-                result["elevenlabs"] = {
-                    "status": "error",
-                    "masked_key": mask_secret_tail(elevenlabs_api_key),
-                    "lines": [detail],
-                }
-            except Exception as e:
-                result["elevenlabs"] = {
-                    "status": "error",
-                    "masked_key": mask_secret_tail(elevenlabs_api_key),
-                    "lines": [f"Subscription API indisponible: {e}"],
-                }
-
-        return result
-
-    def resolve_selected_env_file(selection: str, current_env_file: Path) -> Path:
-        selection_path = Path(selection)
-        candidate = selection_path if selection_path.is_absolute() else Path.cwd() / selection_path
-        try:
-            resolved_candidate = candidate.resolve(strict=True)
-        except OSError as e:
-            raise ValueError(f"env file not found: {selection}") from e
-        if not resolved_candidate.is_file():
-            raise ValueError(f"env file is not a file: {selection}")
-        if not resolved_candidate.name.startswith(".env"):
-            raise ValueError("only .env* files can be selected")
-
-        search_dirs = [Path.cwd()]
-        if current_env_file.parent not in search_dirs:
-            search_dirs.append(current_env_file.parent)
-        allowed = {
-            path.resolve()
-            for search_dir in search_dirs
-            for path in search_dir.glob(".env*")
-            if path.is_file()
-        }
-        if current_env_file.exists():
-            allowed.add(current_env_file.resolve())
-        if resolved_candidate not in allowed:
-            raise ValueError("selected env file is outside the available .env profiles")
-        return resolved_candidate
-
-    def build_llm_options(env_file: Path, requested_provider: str | None = None) -> dict[str, Any]:
-        values = dict(dotenv_values(env_file))
-        current_connectivity_mode = connectivity_mode_from_values(values, env_file)
-        current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
-        provider = (requested_provider or current_provider or "openai").strip().lower()
-        current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
-        current_stt_input = (values.get("STT_INPUT") or "both").strip().lower()
-        current_stt_language = normalize_locale(values.get("STT_LANGUAGE"))
-        if current_stt_input not in {"both", "backend", "browser", "silent"}:
-            current_stt_input = "both"
-        current_cloud_tts_provider = cloud_tts_provider_from_values(values)
-        current_tts_output = tts_output_from_values(values)
-        current_wake_word = (values.get("WAKE_WORD") or "").strip()
-        current_stt_prompt = (values.get("STT_PROMPT") or DEFAULT_STT_PROMPT).strip()
-        current_system_prompt = (values.get("ASSISTANT_SYSTEM_PROMPT") or DEFAULT_ASSISTANT_SYSTEM_PROMPT).strip()
-        current_session_context_size = env_int_from_values(values, "SESSION_CONTEXT_SIZE", 6000)
-        current_mcp_agent_max_steps = env_int_from_values(values, "MCP_AGENT_MAX_STEPS", DEFAULT_MCP_AGENT_MAX_STEPS)
-        current_mcp_tool_routing_enabled = env_bool_from_values(values, "MCP_TOOL_ROUTING_ENABLED", False)
-        current_interrupt_conversation_enabled = env_bool_from_values(values, "INTERRUPT_CONVERSATION_ENABLED", False)
-        current_voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
-        raw_thinking_sound_file = values.get("THINKING_SOUND_FILE")
-        current_thinking_sound_file = (
-            "thinking.wav" if raw_thinking_sound_file is None else str(raw_thinking_sound_file).strip()
-        )
-        current_listening_sound_file = (values.get("LISTENING_SOUND_FILE") or "").strip()
-        current_wake_detected_sound_file = (values.get("WAKE_DETECTED_SOUND_FILE") or "").strip()
-        current_startup_loader_sound_enabled = env_bool_from_values(values, "STARTUP_LOADER_SOUND_ENABLED", False)
-        current_startup_loader_sound_file = (values.get("STARTUP_LOADER_SOUND_FILE") or "loader.wav").strip()
-        current_command_ack_sound_file = (values.get("COMMAND_ACK_SOUND_FILE") or "").strip()
-        if not current_command_ack_sound_file and env_bool_from_values(values, "COMMAND_ACK_SOUND_ENABLED", False):
-            current_command_ack_sound_file = "ring.wav"
-        current_openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
-        current_openai_tts_speed = env_float_from_values(values, "WEB_TTS_SPEED", 1.0)
-        current_web_tts_volume = min(1.0, env_float_from_values(values, "WEB_TTS_VOLUME", 1.0))
-        current_backend_tts_volume = env_float_from_values(values, "BACKEND_TTS_VOLUME", 1.0)
-        current_backend_audio_output_pan = normalize_audio_pan(env_float_from_values(values, "BACKEND_AUDIO_OUTPUT_PAN", 0.0))
-        current_backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(values.get("BACKEND_AUDIO_MONITOR_MODE"))
-        current_backend_audio_monitor_volume = env_float_from_values(values, "BACKEND_AUDIO_MONITOR_VOLUME", 1.0)
-        current_backend_audio_input_gain = max(
-            0.5,
-            min(2.0, env_float_from_values(values, "BACKEND_AUDIO_INPUT_GAIN", 1.0)),
-        )
-        current_vad_speech_threshold = env_float_from_values(values, "VAD_SPEECH_THRESHOLD", 0.5)
-        current_vad_negative_threshold = env_float_from_values(values, "VAD_NEGATIVE_THRESHOLD", 0.35)
-        current_vad_min_speech_ms = env_int_from_values(values, "VAD_MIN_SPEECH_MS", 250)
-        current_vad_min_silence_ms = env_int_from_values(values, "VAD_MIN_SILENCE_MS", 650)
-        current_vad_speech_pad_ms = env_int_from_values(values, "VAD_SPEECH_PAD_MS", 100)
-        current_vad_max_speech_seconds = env_float_from_values(values, "VAD_MAX_SPEECH_SECONDS", 8.0)
-        current_backend_wake_word_model_paths = (values.get("BACKEND_WAKE_WORD_MODEL_PATHS") or "").strip()
-        current_backend_wake_word_model_names = (values.get("BACKEND_WAKE_WORD_MODEL_NAMES") or "").strip()
-        current_backend_wake_word_threshold = env_float_from_values(
-            values,
-            "BACKEND_WAKE_WORD_THRESHOLD",
-            DEFAULT_BACKEND_WAKE_WORD_THRESHOLD,
-        )
-        current_backend_wake_word_pre_roll_ms = env_int_from_values(
-            values,
-            "BACKEND_WAKE_WORD_PRE_ROLL_MS",
-            DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS,
-        )
-        current_backend_wake_word_cooldown_ms = env_int_from_values(
-            values,
-            "BACKEND_WAKE_WORD_COOLDOWN_MS",
-            DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS,
-        )
-        current_backend_wake_word_vad_threshold = env_float_from_values(
-            values,
-            "BACKEND_WAKE_WORD_VAD_THRESHOLD",
-            0.0,
-        )
-        current_backend_audio_input_device = (values.get("BACKEND_AUDIO_INPUT_DEVICE") or "").strip()
-        current_backend_audio_output_device = (values.get("BACKEND_AUDIO_OUTPUT_DEVICE") or "").strip()
-        current_speaker_profiles_max = max(0, min(5, env_int_from_values(values, "SPEAKER_PROFILES_MAX", 5)))
-        current_speaker_recognition_enabled = env_bool_from_values(values, "SPEAKER_RECOGNITION_ENABLED", False)
-        current_speaker_backend = (values.get("SPEAKER_BACKEND") or "resemblyzer").strip().lower()
-        current_speaker_threshold = env_float_from_values(values, "SPEAKER_THRESHOLD", 0.75)
-        current_speaker_margin = env_float_from_values(values, "SPEAKER_MARGIN", 0.10)
-        current_speaker_runtime = {}
-        if web_monitor:
-            try:
-                current_speaker_runtime = (
-                    (web_monitor.snapshot().get("runtime") or {}).get("speaker_recognition") or {}
-                )
-            except Exception:
-                current_speaker_runtime = {}
-        internet_online = check_internet_connection()
-        backend_audio_devices = list_pyaudio_devices()
-
-        provider_entries = [
-            {
-                "id": "openai",
-                "label": "OpenAI",
-                "available": internet_online,
-                "reason": None if internet_online else "offline",
-            },
-            {"id": "ollama", "label": "Ollama", "available": True, "reason": None},
-        ]
-
-        if provider not in {"openai", "ollama"}:
-            provider = "openai" if internet_online else "ollama"
-
-        if provider == "openai":
-            models, reason = list_openai_models(values)
-        else:
-            models, reason = list_ollama_models(values)
-
-        message = ""
-        if reason:
-            message = reason
-        elif provider == "openai":
-            message = "OpenAI models loaded from API."
-        elif provider == "ollama":
-            message = "Ollama local models loaded."
-        message = f"{message} Active env: {env_file}.".strip()
-
-        return {
-            "provider": provider,
-            "selected_connectivity_mode": current_connectivity_mode,
-            "providers": provider_entries,
-            "models": models,
-            "selected_model": current_model if provider == current_provider else "",
-            "cloud_tts_providers": CLOUD_TTS_PROVIDER_OPTIONS,
-            "selected_cloud_tts_provider": current_cloud_tts_provider,
-            "selected_stt_input": current_stt_input,
-            "selected_stt_language": current_stt_language,
-            "available_locales": available_locales(),
-            "tts_outputs": TTS_OUTPUT_OPTIONS,
-            "selected_tts_output": current_tts_output,
-            "selected_wake_word": current_wake_word,
-            "selected_stt_prompt": current_stt_prompt,
-            "selected_system_prompt": current_system_prompt,
-            "selected_session_context_size": current_session_context_size,
-            "selected_mcp_agent_max_steps": current_mcp_agent_max_steps,
-            "selected_mcp_tool_routing_enabled": current_mcp_tool_routing_enabled,
-            "selected_interrupt_conversation_enabled": current_interrupt_conversation_enabled,
-            "voices": list_elevenlabs_voice_options(values),
-            "selected_voice_id": current_voice_id,
-            "openai_tts_voices": OPENAI_TTS_VOICE_OPTIONS,
-            "selected_openai_tts_voice": current_openai_tts_voice,
-            "selected_openai_tts_speed": current_openai_tts_speed,
-            "selected_web_tts_volume": current_web_tts_volume,
-            "selected_backend_tts_volume": current_backend_tts_volume,
-            "selected_backend_audio_output_pan": current_backend_audio_output_pan,
-            "selected_backend_audio_monitor_mode": current_backend_audio_monitor_mode,
-            "selected_backend_audio_monitor_volume": current_backend_audio_monitor_volume,
-            "selected_backend_audio_input_gain": current_backend_audio_input_gain,
-            "selected_vad_speech_threshold": current_vad_speech_threshold,
-            "selected_vad_negative_threshold": current_vad_negative_threshold,
-            "selected_vad_min_speech_ms": current_vad_min_speech_ms,
-            "selected_vad_min_silence_ms": current_vad_min_silence_ms,
-            "selected_vad_speech_pad_ms": current_vad_speech_pad_ms,
-            "selected_vad_max_speech_seconds": current_vad_max_speech_seconds,
-            "selected_backend_wake_word_model_paths": current_backend_wake_word_model_paths,
-            "selected_backend_wake_word_model_names": current_backend_wake_word_model_names,
-            "selected_backend_wake_word_threshold": current_backend_wake_word_threshold,
-            "selected_backend_wake_word_pre_roll_ms": current_backend_wake_word_pre_roll_ms,
-            "selected_backend_wake_word_cooldown_ms": current_backend_wake_word_cooldown_ms,
-            "selected_backend_wake_word_vad_threshold": current_backend_wake_word_vad_threshold,
-            "wake_word_model_files": list_wake_word_model_options(),
-            "selected_speaker_recognition_enabled": current_speaker_recognition_enabled,
-            "selected_speaker_backend": current_speaker_backend,
-            "selected_speaker_threshold": current_speaker_threshold,
-            "selected_speaker_margin": current_speaker_margin,
-            "speaker_recognition_runtime": current_speaker_runtime,
-            "selected_speaker_profiles_max": current_speaker_profiles_max,
-            "speaker_profiles": speaker_profile_statuses(values, current_speaker_profiles_max),
-            "backend_audio_inputs": backend_audio_devices["inputs"],
-            "backend_audio_outputs": backend_audio_devices["outputs"],
-            "selected_backend_audio_input_device": current_backend_audio_input_device,
-            "selected_backend_audio_output_device": current_backend_audio_output_device,
-            "thinking_sounds": list_wav_asset_options(),
-            "selected_thinking_sound_file": current_thinking_sound_file,
-            "selected_listening_sound_file": current_listening_sound_file,
-            "selected_wake_detected_sound_file": current_wake_detected_sound_file,
-            "selected_startup_loader_sound_file": (
-                current_startup_loader_sound_file if current_startup_loader_sound_enabled else ""
-            ),
-            "selected_command_ack_sound_file": current_command_ack_sound_file,
-            "message": message,
-        }
-
-    def save_llm_config(
-        env_file: Path,
-        provider: str,
-        model: str,
-        cloud_tts_provider: str,
-        tts_output: str,
-        stt_input: str,
-        stt_language: str,
-        connectivity_mode: str,
-        wake_word: str,
-        stt_prompt: str,
-        system_prompt: str,
-        session_context_size: int,
-        mcp_agent_max_steps: int,
-        mcp_tool_routing_enabled: bool,
-        interrupt_conversation_enabled: bool,
-        backend_audio_input_device: str,
-        backend_audio_input_gain: float,
-        backend_audio_output_device: str,
-        voice_id: str,
-        thinking_sound_file: str,
-        listening_sound_file: str,
-        wake_detected_sound_file: str,
-        startup_loader_sound_file: str,
-        command_ack_sound_file: str,
-        openai_tts_voice: str,
-        openai_tts_speed: float,
-        web_tts_volume: float,
-        backend_tts_volume: float,
-        backend_audio_output_pan: float,
-        backend_audio_monitor_mode: str,
-        backend_audio_monitor_volume: float,
-        vad_speech_threshold: float,
-        vad_negative_threshold: float,
-        vad_min_speech_ms: int,
-        vad_min_silence_ms: int,
-        vad_speech_pad_ms: int,
-        vad_max_speech_seconds: float,
-        backend_wake_word_model_paths: str,
-        backend_wake_word_model_names: str,
-        backend_wake_word_threshold: float,
-        backend_wake_word_pre_roll_ms: int,
-        backend_wake_word_cooldown_ms: int,
-        backend_wake_word_vad_threshold: float,
-        speaker_recognition_enabled: bool,
-        speaker_backend: str,
-        speaker_threshold: float,
-        speaker_margin: float,
-        speaker_profiles: list[dict[str, Any]],
-        web_monitor: WebMonitor | None,
-        reload_event: threading.Event | None,
-        auto_env_mode: bool = False,
-    ) -> dict[str, Any]:
-        provider = provider.strip().lower()
-        model = model.strip()
-        cloud_tts_provider = (cloud_tts_provider or "").strip().lower()
-        tts_output = (tts_output or "").strip().lower()
-        stt_input = (stt_input or "both").strip().lower()
-        stt_language = normalize_locale(stt_language)
-        connectivity_mode = (connectivity_mode or "").strip().lower()
-        wake_word = (wake_word or "").strip()
-        stt_prompt = (stt_prompt or DEFAULT_STT_PROMPT).strip()
-        system_prompt = (system_prompt or "").strip()
-        session_context_size = max(0, min(12000, int(session_context_size or 0)))
-        mcp_agent_max_steps = max(5, min(60, int(mcp_agent_max_steps or DEFAULT_MCP_AGENT_MAX_STEPS)))
-        mcp_tool_routing_enabled = bool(mcp_tool_routing_enabled)
-        interrupt_conversation_enabled = bool(interrupt_conversation_enabled)
-        backend_audio_input_device = str(backend_audio_input_device or "").strip()
-        backend_audio_input_gain = max(
-            0.5,
-            min(2.0, float(backend_audio_input_gain if backend_audio_input_gain is not None else 1.0)),
-        )
-        backend_audio_output_device = str(backend_audio_output_device or "").strip()
-        voice_id = voice_id.strip()
-        thinking_sound_file = thinking_sound_file.strip()
-        listening_sound_file = listening_sound_file.strip()
-        wake_detected_sound_file = wake_detected_sound_file.strip()
-        startup_loader_sound_file = startup_loader_sound_file.strip()
-        command_ack_sound_file = command_ack_sound_file.strip()
-        openai_tts_voice = (openai_tts_voice or "").strip()
-        openai_tts_speed = max(0.6, min(1.8, float(openai_tts_speed or 1.0)))
-        web_tts_volume = max(0.0, min(1.0, float(web_tts_volume if web_tts_volume is not None else 1.0)))
-        backend_tts_volume = max(0.0, min(2.0, float(backend_tts_volume if backend_tts_volume is not None else 1.0)))
-        backend_audio_output_pan = normalize_audio_pan(backend_audio_output_pan)
-        backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(backend_audio_monitor_mode)
-        backend_audio_monitor_volume = max(
-            0.0,
-            min(2.0, float(backend_audio_monitor_volume if backend_audio_monitor_volume is not None else 1.0)),
-        )
-        if backend_audio_monitor_mode == "rejected" and not wake_word:
-            backend_audio_monitor_mode = "off"
-        vad_speech_threshold = max(0.05, min(0.95, float(vad_speech_threshold or 0.5)))
-        vad_negative_threshold = max(0.01, min(0.95, float(vad_negative_threshold or 0.35)))
-        if vad_negative_threshold >= vad_speech_threshold:
-            vad_negative_threshold = max(0.01, vad_speech_threshold - 0.15)
-        vad_min_speech_ms = max(0, min(2000, int(vad_min_speech_ms or 120)))
-        vad_min_silence_ms = max(100, min(5000, int(vad_min_silence_ms or 650)))
-        vad_speech_pad_ms = max(0, min(1000, int(vad_speech_pad_ms or 100)))
-        vad_max_speech_seconds = max(1.0, min(30.0, float(vad_max_speech_seconds or 8.0)))
-        backend_wake_word_model_paths = str(backend_wake_word_model_paths or "").strip()
-        backend_wake_word_model_names = str(backend_wake_word_model_names or "").strip()
-        backend_wake_word_threshold = max(
-            0.05,
-            min(
-                0.99,
-                float(
-                    backend_wake_word_threshold
-                    if backend_wake_word_threshold is not None
-                    else DEFAULT_BACKEND_WAKE_WORD_THRESHOLD
-                ),
-            ),
-        )
-        backend_wake_word_pre_roll_ms = max(
-            200,
-            min(
-                5000,
-                int(
-                    backend_wake_word_pre_roll_ms
-                    if backend_wake_word_pre_roll_ms is not None
-                    else DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS
-                ),
-            ),
-        )
-        backend_wake_word_cooldown_ms = max(
-            0,
-            min(
-                10000,
-                int(
-                    backend_wake_word_cooldown_ms
-                    if backend_wake_word_cooldown_ms is not None
-                    else DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS
-                ),
-            ),
-        )
-        backend_wake_word_vad_threshold = max(
-            0.0,
-            min(
-                1.0,
-                float(backend_wake_word_vad_threshold if backend_wake_word_vad_threshold is not None else 0.0),
-            ),
-        )
-        speaker_recognition_enabled = bool(speaker_recognition_enabled)
-        speaker_backend = (speaker_backend or "resemblyzer").strip().lower()
-        if speaker_backend not in {"resemblyzer", "speechbrain"}:
-            raise ValueError(f"unsupported speaker backend: {speaker_backend}")
-        speaker_threshold = max(0.0, min(1.0, float(speaker_threshold if speaker_threshold is not None else 0.75)))
-        speaker_margin = max(0.0, min(1.0, float(speaker_margin if speaker_margin is not None else 0.10)))
-        normalized_speaker_profiles = []
-        for index, profile in enumerate((speaker_profiles or [])[:5], start=1):
-            name = str(profile.get("name") or "").strip()
-            enabled = bool(profile.get("enabled"))
-            if not name and not enabled:
-                continue
-            normalized_speaker_profiles.append({"index": index, "name": name or f"speaker_{index}", "enabled": enabled})
-        if stt_input not in {"both", "backend", "browser", "silent"}:
-            raise ValueError(f"unsupported STT input: {stt_input}")
-        if provider not in {"openai", "ollama"}:
-            raise ValueError(f"unsupported LLM provider: {provider}")
-        values = dict(dotenv_values(env_file))
-        if not connectivity_mode:
-            connectivity_mode = connectivity_mode_from_values(values, env_file)
-        if connectivity_mode not in {"online", "offline"}:
-            raise ValueError(f"unsupported connectivity mode: {connectivity_mode}")
-        def env_secret_available(name: str) -> bool:
-            file_path = (values.get(f"{name}_FILE") or "").strip()
-            if not file_path:
-                return False
-            try:
-                return bool(Path(file_path).read_text().strip())
-            except OSError:
-                return False
-
-        current_cloud_tts_provider = cloud_tts_provider_from_values(values)
-        if connectivity_mode == "offline":
-            provider = "ollama"
-            cloud_tts_provider = "none"
-            tts_output = "backend"
-            stt_input = "backend"
-            updated_tts_provider = "pyttsx3"
-            updated_web_tts_provider = "none"
-        else:
-            if provider == "ollama":
-                raise ValueError("online mode cannot use Ollama; switch to offline mode for local LLM")
-        if not cloud_tts_provider:
-            cloud_tts_provider = current_cloud_tts_provider
-        if cloud_tts_provider not in {"none", "openai", "elevenlabs"}:
-            raise ValueError(f"unsupported cloud TTS provider: {cloud_tts_provider}")
-        if not tts_output:
-            tts_output = tts_output_from_values(dict(dotenv_values(env_file)))
-        if tts_output not in {"browser", "backend", "silent"}:
-            raise ValueError(f"unsupported TTS output: {tts_output}")
-        browser_stt_selected = stt_input in {"both", "browser"}
-        if connectivity_mode != "offline" and cloud_tts_provider == "none":
-            tts_output = "silent"
-        if connectivity_mode == "offline":
-            pass
-        elif cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "browser":
-            updated_tts_provider = "none"
-            updated_web_tts_provider = cloud_tts_provider
-            if (browser_stt_selected or cloud_tts_provider == "openai") and not env_secret_available("OPENAI_API_KEY"):
-                raise ValueError("browser STT or OpenAI browser TTS requires OPENAI_API_KEY_FILE")
-            if cloud_tts_provider == "elevenlabs" and not env_secret_available("ELEVENLABS_API_KEY"):
-                raise ValueError("ElevenLabs browser TTS requires ELEVENLABS_API_KEY_FILE")
-        elif cloud_tts_provider in {"openai", "elevenlabs"} and tts_output == "backend":
-            if auto_env_mode and env_file == AUTO_ENV_OFFLINE:
-                raise ValueError(
-                    "auto mode is currently using .env.offline, whose backend TTS is local pyttsx3. "
-                    "Start with --env-file .env.online or wait for auto mode to switch online before saving cloud backend TTS."
-                )
-            updated_tts_provider = cloud_tts_provider
-            updated_web_tts_provider = "none"
-            if cloud_tts_provider == "openai" and not env_secret_available("OPENAI_API_KEY"):
-                raise ValueError("OpenAI backend TTS requires OPENAI_API_KEY_FILE")
-            if cloud_tts_provider == "elevenlabs" and not env_secret_available("ELEVENLABS_API_KEY"):
-                raise ValueError("ElevenLabs backend TTS requires ELEVENLABS_API_KEY_FILE")
-        else:
-            updated_tts_provider = "none"
-            updated_web_tts_provider = "none"
-        if connectivity_mode != "offline" and browser_stt_selected and not env_secret_available("OPENAI_API_KEY"):
-            raise ValueError("browser STT requires OPENAI_API_KEY_FILE")
-        current_provider = (values.get("LLM_PROVIDER") or "openai").strip().lower()
-        current_model = (values.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
-        if connectivity_mode == "offline" and (
-            not model
-            or (current_provider != "ollama" and model == current_model)
-            or model.startswith(("gpt-", "o1", "o3", "o4"))
-        ):
-            model = (values.get("OFFLINE_MODEL") or DEFAULT_OLLAMA_MODEL).strip()
-        if not model:
-            model = current_model
-        if not model:
-            raise ValueError("LLM model is required")
-
-        llm_changed = provider != current_provider or model != current_model
-        if llm_changed and provider == "openai" and not check_internet_connection():
-            raise ValueError("OpenAI cannot be selected while internet is offline")
-        if llm_changed:
-            available_models, reason = (list_openai_models(values) if provider == "openai" else list_ollama_models(values))
-            if reason and connectivity_mode != "offline":
-                raise ValueError(reason)
-            if available_models and model not in {item["id"] for item in available_models} and connectivity_mode == "offline":
-                model = available_models[0]["id"]
-            elif available_models and model not in {item["id"] for item in available_models}:
-                raise ValueError(f"model '{model}' is not available for provider '{provider}'")
-
-        voice_options = list_elevenlabs_voice_options(values)
-        if not voice_id:
-            voice_id = (values.get("ELEVENLABS_VOICE_ID") or DEFAULT_ELEVENLABS_VOICE_ID).strip()
-        if voice_options and voice_id not in {item["id"] for item in voice_options}:
-            raise ValueError(f"voice '{voice_id}' is not listed in ELEVENLABS_VOICE_OPTIONS")
-
-        thinking_sound_options = list_wav_asset_options()
-        thinking_sound_file = thinking_sound_file.strip()
-        if thinking_sound_file and thinking_sound_options and thinking_sound_file not in {item["id"] for item in thinking_sound_options}:
-            raise ValueError(f"thinking sound '{thinking_sound_file}' is not a WAV file in assets/")
-        if listening_sound_file and thinking_sound_options and listening_sound_file not in {item["id"] for item in thinking_sound_options}:
-            raise ValueError(f"listening sound '{listening_sound_file}' is not a WAV file in assets/")
-        if wake_detected_sound_file and thinking_sound_options and wake_detected_sound_file not in {item["id"] for item in thinking_sound_options}:
-            raise ValueError(f"wake-detected sound '{wake_detected_sound_file}' is not a WAV file in assets/")
-        if startup_loader_sound_file and thinking_sound_options and startup_loader_sound_file not in {item["id"] for item in thinking_sound_options}:
-            raise ValueError(f"startup loader sound '{startup_loader_sound_file}' is not a WAV file in assets/")
-        if command_ack_sound_file and thinking_sound_options and command_ack_sound_file not in {item["id"] for item in thinking_sound_options}:
-            raise ValueError(f"command acknowledgement sound '{command_ack_sound_file}' is not a WAV file in assets/")
-        saved_startup_loader_sound_file = (
-            startup_loader_sound_file
-            or (values.get("STARTUP_LOADER_SOUND_FILE") or "loader.wav").strip()
-            or "loader.wav"
-        )
-
-        if not openai_tts_voice:
-            openai_tts_voice = (values.get("WEB_TTS_VOICE") or DEFAULT_OPENAI_TTS_VOICE).strip()
-        if openai_tts_voice not in {item["id"] for item in OPENAI_TTS_VOICE_OPTIONS}:
-            raise ValueError(f"OpenAI TTS voice '{openai_tts_voice}' is not available in the web config")
-
-        backend_audio_devices = list_pyaudio_devices()
-        backend_audio_input_ids = {
-            item["id"] for item in backend_audio_devices["inputs"] if item.get("available", True)
-        }
-        backend_audio_output_ids = {
-            item["id"] for item in backend_audio_devices["outputs"] if item.get("available", True)
-        }
-        if backend_audio_input_device and backend_audio_input_device not in backend_audio_input_ids:
-            LOGGER.warning(
-                "Backend audio input device %r is not available; clearing saved selection",
-                backend_audio_input_device,
-            )
-            backend_audio_input_device = ""
-        if backend_audio_output_device and backend_audio_output_device not in backend_audio_output_ids:
-            LOGGER.warning(
-                "Backend audio output device %r is not available; clearing saved selection",
-                backend_audio_output_device,
-            )
-            backend_audio_output_device = ""
-
-        speaker_updates: dict[str, str] = {
-            "SPEAKER_RECOGNITION_ENABLED": "true" if speaker_recognition_enabled else "false",
-            "SPEAKER_BACKEND": speaker_backend,
-            "SPEAKER_THRESHOLD": f"{speaker_threshold:.2f}".rstrip("0").rstrip("."),
-            "SPEAKER_MARGIN": f"{speaker_margin:.2f}".rstrip("0").rstrip("."),
-            "SPEAKER_PROFILES_MAX": "5",
-        }
-        normalized_speaker_profiles_by_index = {
-            int(profile.get("index") or 0): profile for profile in normalized_speaker_profiles
-        }
-        for index in range(1, 6):
-            profile = normalized_speaker_profiles_by_index.get(index, {})
-            speaker_updates[f"SPEAKER_PROFILE_{index}_NAME"] = str(profile.get("name") or "")
-            speaker_updates[f"SPEAKER_PROFILE_{index}_ENABLED"] = "true" if profile.get("enabled") else "false"
-
-        update_env_file_values(
-            env_file,
-            {
-                "LLM_PROVIDER": provider,
-                "OPENAI_MODEL": model,
-                "CONNECTIVITY_MODE": connectivity_mode,
-                "STT_PROVIDER": "local-whisper" if connectivity_mode == "offline" else (values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
-                "STT_INPUT": stt_input,
-                "STT_LANGUAGE": stt_language,
-                "CLOUD_TTS_PROVIDER": cloud_tts_provider,
-                "TTS_PROVIDER": updated_tts_provider,
-                "WEB_STT_PROVIDER": "openai",
-                "WEB_STT_MODEL": (values.get("WEB_STT_MODEL") or "whisper-1").strip() or "whisper-1",
-                "WEB_TTS_PROVIDER": updated_web_tts_provider,
-                "WEB_TTS_MODEL": (values.get("WEB_TTS_MODEL") or DEFAULT_OPENAI_TTS_MODEL).strip() or DEFAULT_OPENAI_TTS_MODEL,
-                "VAD_SPEECH_THRESHOLD": f"{vad_speech_threshold:.2f}".rstrip("0").rstrip("."),
-                "VAD_NEGATIVE_THRESHOLD": f"{vad_negative_threshold:.2f}".rstrip("0").rstrip("."),
-                "VAD_MIN_SPEECH_MS": str(vad_min_speech_ms),
-                "VAD_MIN_SILENCE_MS": str(vad_min_silence_ms),
-                "VAD_SPEECH_PAD_MS": str(vad_speech_pad_ms),
-                "VAD_MAX_SPEECH_SECONDS": f"{vad_max_speech_seconds:.1f}".rstrip("0").rstrip("."),
-                "BACKEND_WAKE_WORD_MODEL_PATHS": backend_wake_word_model_paths,
-                "BACKEND_WAKE_WORD_MODEL_NAMES": backend_wake_word_model_names,
-                "BACKEND_WAKE_WORD_THRESHOLD": f"{backend_wake_word_threshold:.2f}".rstrip("0").rstrip("."),
-                "BACKEND_WAKE_WORD_PRE_ROLL_MS": str(backend_wake_word_pre_roll_ms),
-                "BACKEND_WAKE_WORD_COOLDOWN_MS": str(backend_wake_word_cooldown_ms),
-                "BACKEND_WAKE_WORD_VAD_THRESHOLD": (
-                    f"{backend_wake_word_vad_threshold:.2f}".rstrip("0").rstrip(".")
-                    if backend_wake_word_vad_threshold > 0
-                    else ""
-                ),
-                "WAKE_WORD": wake_word,
-                "STT_PROMPT": stt_prompt,
-                "ASSISTANT_SYSTEM_PROMPT": system_prompt,
-                "SESSION_CONTEXT_SIZE": str(session_context_size),
-                "MCP_AGENT_MAX_STEPS": str(mcp_agent_max_steps),
-                "MCP_TOOL_ROUTING_ENABLED": "true" if mcp_tool_routing_enabled else "false",
-                "INTERRUPT_CONVERSATION_ENABLED": "true" if interrupt_conversation_enabled else "false",
-                "BACKEND_AUDIO_INPUT_DEVICE": backend_audio_input_device,
-                "BACKEND_AUDIO_INPUT_GAIN": f"{backend_audio_input_gain:.2f}",
-                "BACKEND_AUDIO_OUTPUT_DEVICE": backend_audio_output_device,
-                "ELEVENLABS_VOICE_ID": voice_id,
-                "THINKING_SOUND_FILE": thinking_sound_file,
-                "LISTENING_SOUND_FILE": listening_sound_file,
-                "WAKE_DETECTED_SOUND_FILE": wake_detected_sound_file,
-                "STARTUP_LOADER_SOUND_ENABLED": "true" if startup_loader_sound_file else "false",
-                "STARTUP_LOADER_SOUND_FILE": saved_startup_loader_sound_file,
-                "COMMAND_ACK_SOUND_FILE": command_ack_sound_file,
-                "WEB_TTS_VOICE": openai_tts_voice,
-                "WEB_TTS_SPEED": f"{openai_tts_speed:.2f}",
-                "WEB_TTS_VOLUME": f"{web_tts_volume:.2f}",
-                "BACKEND_TTS_VOLUME": f"{backend_tts_volume:.2f}",
-                "BACKEND_AUDIO_OUTPUT_PAN": f"{backend_audio_output_pan:.2f}",
-                "BACKEND_AUDIO_MONITOR_MODE": backend_audio_monitor_mode,
-                "BACKEND_AUDIO_MONITOR_VOLUME": f"{backend_audio_monitor_volume:.2f}",
-                **speaker_updates,
-            },
-            remove_keys={"WEB_AUDIO_ENABLED", "BACKEND_WAKE_WORD_MODE", "COMMAND_ACK_SOUND_ENABLED"},
-        )
-        values = dict(dotenv_values(env_file))
-        mcp_config = load_mcp_config_from_values(values)
-        if web_monitor:
-            web_monitor.update(
-                env_values=values,
-                mcp_config=mcp_config or {},
-                services=build_service_state(
-                    llm_provider=provider,
-                    model=model,
-                    stt_provider=(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
-                    tts_provider=(values.get("TTS_PROVIDER") or "elevenlabs").strip().lower(),
-                    mcp_config=mcp_config,
-                ),
-                thinking_sound_file=thinking_sound_file,
-                command_ack_sound_file=command_ack_sound_file,
-            )
-            web_monitor.set_environment_loading(
-                True,
-                i18n_text(load_locale(stt_language), "web.environment_refresh", "rafraichissement de l'environnement"),
-            )
-
-        if reload_event:
-            reload_event.set()
-
-        return {
-            "saved": True,
-            "message": (
-                "Saved. Browser TTS enabled."
-                if tts_output == "browser"
-                else f"Saved. Backend TTS uses {cloud_tts_provider} in {env_file}."
-                if tts_output == "backend" and cloud_tts_provider in {"openai", "elevenlabs"}
-                else "Saved."
-            ),
-            "provider": provider,
-            "model": model,
-            "connectivity_mode": connectivity_mode,
-            "cloud_tts_provider": cloud_tts_provider,
-            "tts_output": tts_output,
-            "stt_input": stt_input,
-            "stt_language": stt_language,
-            "wake_word": wake_word,
-            "system_prompt": system_prompt,
-            "session_context_size": session_context_size,
-            "mcp_agent_max_steps": mcp_agent_max_steps,
-            "backend_audio_input_device": backend_audio_input_device,
-            "backend_audio_input_gain": backend_audio_input_gain,
-            "backend_audio_output_device": backend_audio_output_device,
-            "voice_id": voice_id,
-            "thinking_sound_file": thinking_sound_file,
-            "listening_sound_file": listening_sound_file,
-            "wake_detected_sound_file": wake_detected_sound_file,
-            "command_ack_sound_file": command_ack_sound_file,
-            "openai_tts_voice": openai_tts_voice,
-            "openai_tts_speed": openai_tts_speed,
-            "web_tts_volume": web_tts_volume,
-            "backend_tts_volume": backend_tts_volume,
-            "backend_audio_output_pan": backend_audio_output_pan,
-            "backend_audio_monitor_mode": backend_audio_monitor_mode,
-            "backend_audio_monitor_volume": backend_audio_monitor_volume,
-            "vad_speech_threshold": vad_speech_threshold,
-            "vad_negative_threshold": vad_negative_threshold,
-            "vad_min_speech_ms": vad_min_speech_ms,
-            "vad_min_silence_ms": vad_min_silence_ms,
-            "vad_speech_pad_ms": vad_speech_pad_ms,
-            "vad_max_speech_seconds": vad_max_speech_seconds,
-            "speaker_recognition_enabled": speaker_recognition_enabled,
-            "speaker_backend": speaker_backend,
-            "speaker_threshold": speaker_threshold,
-            "speaker_margin": speaker_margin,
-            "speaker_profiles": normalized_speaker_profiles,
-            "message": "Configuration saved. Restarting assistant with the new settings.",
-        }
-
-    def clear_env_keys(env_files: list[Path]) -> None:
-        """Clear keys owned by env profiles so auto reloads do not keep stale values."""
-        env_keys = set()
-        for profile in env_files:
-            if profile.exists():
-                env_keys.update(dotenv_values(profile).keys())
-
-        for key in env_keys:
-            os.environ.pop(key, None)
-
-    def speaker_profile_wav_paths_from_values(values: dict, index: int) -> list[str]:
-        profile_root_value = values.get("SPEAKER_PROFILES_DIR") or DEFAULT_SPEAKER_PROFILES_DIR
-        profile_root = Path(str(profile_root_value).strip())
-        return [(profile_root / f"profil{index}_{sample_index}.wav").as_posix() for sample_index in range(1, 4)]
-
-    def speaker_profiles_from_values(values: dict, max_profiles: int = 5) -> list[SpeakerProfile]:
-        profiles: list[SpeakerProfile] = []
-        max_profiles = max(0, min(5, int(max_profiles or 5)))
-        for index in range(1, max_profiles + 1):
-            prefix = f"SPEAKER_PROFILE_{index}_"
-            name = (values.get(f"{prefix}NAME") or "").strip()
-            wav_paths = speaker_profile_wav_paths_from_values(values, index)
-            enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
-            if not name and not enabled:
-                continue
-            profiles.append(
-                SpeakerProfile(
-                    name=name or f"speaker_{index}",
-                    wav_paths=[Path(path) for path in wav_paths],
-                    enabled=enabled,
-                    slug=safe_speaker_profile_slug(name or f"speaker_{index}"),
-                )
-            )
-        return profiles
-
-    def speaker_profile_statuses(values: dict, max_profiles: int = 5) -> list[dict[str, Any]]:
-        statuses = []
-        for index in range(1, max(0, min(5, int(max_profiles or 5))) + 1):
-            prefix = f"SPEAKER_PROFILE_{index}_"
-            name = (values.get(f"{prefix}NAME") or "").strip()
-            enabled = env_bool_from_values(values, f"{prefix}ENABLED", False)
-            wav_paths = speaker_profile_wav_paths_from_values(values, index)
-            samples = []
-            ready_paths = []
-            ready_embedding_paths = []
-            for sample_index, wav_path in enumerate(wav_paths, start=1):
-                path = Path(wav_path)
-                sample_embedding_path = path.with_suffix(".npy")
-                sample_status = "missing"
-                sample_embedding_ready = False
-                if path.exists() and path.is_file():
-                    try:
-                        with wave.open(str(path), "rb") as reader:
-                            sample_status = "ready" if reader.getnframes() > 0 else "error"
-                        if sample_status == "ready":
-                            ready_paths.append(path)
-                            sample_embedding_ready = (
-                                sample_embedding_path.exists()
-                                and sample_embedding_path.is_file()
-                                and sample_embedding_path.stat().st_mtime >= path.stat().st_mtime
-                            )
-                            if sample_embedding_ready:
-                                ready_embedding_paths.append(sample_embedding_path)
-                    except Exception:
-                        sample_status = "error"
-                samples.append(
-                    {
-                        "index": sample_index,
-                        "wav_path": wav_path,
-                        "filename": path.name,
-                        "ready": sample_status == "ready",
-                        "embedding_path": sample_embedding_path.as_posix(),
-                        "embedding_ready": sample_embedding_ready,
-                        "status": sample_status,
-                    }
-                )
-            embedding_count = len(ready_embedding_paths)
-            embedding_ready = embedding_count > 0
-            status = f"{embedding_count}/3 embeddings"
-            statuses.append(
-                {
-                    "index": index,
-                    "name": name,
-                    "enabled": enabled,
-                    "wav_paths": wav_paths,
-                    "samples": samples,
-                    "complete": len(ready_paths) == 3,
-                    "usable": embedding_ready,
-                    "embedding_count": embedding_count,
-                    "embedding_total": len(wav_paths),
-                    "status": status,
-                    "embedding_ready": embedding_ready,
-                    "embedding_path": ready_embedding_paths[0].as_posix() if ready_embedding_paths else "",
-                    "slug": safe_speaker_profile_slug(name or f"speaker_{index}"),
-                }
-            )
-        return statuses
-
-    def build_assistant_from_env(
-        env_file: Path,
-        reload_event: threading.Event | None = None,
-        web_monitor: WebMonitor | None = None,
-    ) -> VoiceAssistant:
-        """Load one env profile and build a fresh assistant instance from it."""
-        clear_profiles = [env_file]
-        if auto_env_mode:
-            clear_profiles.extend([AUTO_ENV_ONLINE, AUTO_ENV_OFFLINE])
-        clear_env_keys(clear_profiles)
-        load_dotenv(env_file, override=True)
-
-        openai_api_key = env_secret("OPENAI_API_KEY")
-        elevenlabs_api_key = env_secret("ELEVENLABS_API_KEY")
-        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-        llm_provider = os.getenv("LLM_PROVIDER", "openai").lower()
-        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        stt_provider = os.getenv("STT_PROVIDER", "openai-whisper").lower()
-        stt_input = os.getenv("STT_INPUT", "both").strip().lower()
-        local_whisper_model = os.getenv("LOCAL_WHISPER_MODEL", "base")
-        stt_language = normalize_locale(os.getenv("STT_LANGUAGE"))
-        stt_prompt = os.getenv("STT_PROMPT", DEFAULT_STT_PROMPT)
-        stt_timeout_seconds = max(1.0, min(300.0, env_float("STT_TIMEOUT_SECONDS", DEFAULT_STT_TIMEOUT_SECONDS)))
-        tts_config = resolve_tts_config_from_values(os.environ)
-        cloud_tts_provider = tts_config.cloud_provider
-        tts_provider = tts_config.backend_provider
-        web_tts_provider = tts_config.web_provider
-        voice_id = os.getenv("ELEVENLABS_VOICE_ID", DEFAULT_ELEVENLABS_VOICE_ID)
-        thinking_sound_file = os.getenv("THINKING_SOUND_FILE", "thinking.wav")
-        listening_sound_file = os.getenv("LISTENING_SOUND_FILE", "").strip()
-        wake_detected_sound_file = os.getenv("WAKE_DETECTED_SOUND_FILE", "").strip()
-        startup_loader_sound_enabled = env_bool("STARTUP_LOADER_SOUND_ENABLED", False)
-        startup_loader_sound_file = os.getenv("STARTUP_LOADER_SOUND_FILE", "loader.wav")
-        command_ack_sound_file = os.getenv("COMMAND_ACK_SOUND_FILE", "").strip()
-        if not command_ack_sound_file and env_bool("COMMAND_ACK_SOUND_ENABLED", False):
-            command_ack_sound_file = "ring.wav"
-        backend_audio_input_device = os.getenv("BACKEND_AUDIO_INPUT_DEVICE", "").strip()
-        backend_audio_input_gain = max(0.5, min(2.0, env_float("BACKEND_AUDIO_INPUT_GAIN", 1.0)))
-        backend_audio_output_device = os.getenv("BACKEND_AUDIO_OUTPUT_DEVICE", "").strip()
-        vad_model_path = os.getenv("VAD_MODEL_PATH", str(DEFAULT_SILERO_VAD_MODEL)).strip() or str(DEFAULT_SILERO_VAD_MODEL)
-        vad_speech_threshold = env_float("VAD_SPEECH_THRESHOLD", 0.5)
-        vad_negative_threshold = env_float("VAD_NEGATIVE_THRESHOLD", 0.35)
-        vad_min_speech_ms = env_int("VAD_MIN_SPEECH_MS", 250)
-        vad_min_silence_ms = env_int("VAD_MIN_SILENCE_MS", 650)
-        vad_speech_pad_ms = env_int("VAD_SPEECH_PAD_MS", 100)
-        vad_max_speech_seconds = env_float("VAD_MAX_SPEECH_SECONDS", 8.0)
-        backend_wake_word_model_paths = parse_env_list(os.getenv("BACKEND_WAKE_WORD_MODEL_PATHS"))
-        backend_wake_word_model_names = parse_env_list(os.getenv("BACKEND_WAKE_WORD_MODEL_NAMES"))
-        backend_wake_word_threshold = max(
-            0.01,
-            min(0.99, env_float("BACKEND_WAKE_WORD_THRESHOLD", DEFAULT_BACKEND_WAKE_WORD_THRESHOLD)),
-        )
-        backend_wake_word_pre_roll_ms = max(
-            0,
-            min(5000, env_int("BACKEND_WAKE_WORD_PRE_ROLL_MS", DEFAULT_BACKEND_WAKE_WORD_PRE_ROLL_MS)),
-        )
-        backend_wake_word_cooldown_ms = max(
-            0,
-            min(10000, env_int("BACKEND_WAKE_WORD_COOLDOWN_MS", DEFAULT_BACKEND_WAKE_WORD_COOLDOWN_MS)),
-        )
-        raw_backend_wake_word_vad_threshold = os.getenv("BACKEND_WAKE_WORD_VAD_THRESHOLD", "").strip()
-        try:
-            backend_wake_word_vad_threshold = (
-                max(0.0, min(1.0, float(raw_backend_wake_word_vad_threshold)))
-                if raw_backend_wake_word_vad_threshold
-                else None
-            )
-        except ValueError:
-            print(
-                f"Invalid BACKEND_WAKE_WORD_VAD_THRESHOLD={raw_backend_wake_word_vad_threshold!r}; ignoring it."
-            )
-            backend_wake_word_vad_threshold = None
-        voice_cancel_during_thinking = env_bool("VOICE_CANCEL_DURING_THINKING", False)
-        interrupt_conversation_enabled = env_bool("INTERRUPT_CONVERSATION_ENABLED", False)
-        web_stt_provider = os.getenv("WEB_STT_PROVIDER", "openai").strip().lower()
-        web_tts_voice = os.getenv("WEB_TTS_VOICE", DEFAULT_OPENAI_TTS_VOICE).strip()
-        web_tts_model = os.getenv("WEB_TTS_MODEL", DEFAULT_OPENAI_TTS_MODEL).strip()
-        web_tts_speed = max(0.6, min(1.8, env_float("WEB_TTS_SPEED", 1.0)))
-        web_tts_volume = max(0.0, min(1.0, env_float("WEB_TTS_VOLUME", 1.0)))
-        backend_tts_volume = max(0.0, min(2.0, env_float("BACKEND_TTS_VOLUME", 1.0)))
-        backend_audio_output_pan = normalize_audio_pan(env_float("BACKEND_AUDIO_OUTPUT_PAN", 0.0))
-        backend_audio_monitor_mode = normalize_backend_audio_monitor_mode(os.getenv("BACKEND_AUDIO_MONITOR_MODE", "off"))
-        backend_audio_monitor_volume = max(0.0, min(2.0, env_float("BACKEND_AUDIO_MONITOR_VOLUME", 1.0)))
-        speaker_recognition_enabled = env_bool("SPEAKER_RECOGNITION_ENABLED", False)
-        speaker_backend = os.getenv("SPEAKER_BACKEND", "resemblyzer").strip().lower()
-        speaker_threshold = max(0.0, min(1.0, env_float("SPEAKER_THRESHOLD", 0.75)))
-        speaker_margin = max(0.0, min(1.0, env_float("SPEAKER_MARGIN", 0.10)))
-        speaker_recognition_timeout_seconds = max(
-            1.0,
-            min(
-                300.0,
-                env_float(
-                    "SPEAKER_RECOGNITION_TIMEOUT_SECONDS",
-                    DEFAULT_SPEAKER_RECOGNITION_TIMEOUT_SECONDS,
-                ),
-            ),
-        )
-        speaker_profiles_max = max(0, min(5, env_int("SPEAKER_PROFILES_MAX", 5)))
-        speaker_profiles = speaker_profiles_from_values(os.environ, speaker_profiles_max)
-        web_stt_model = os.getenv("WEB_STT_MODEL", "whisper-1").strip()
-        wake_words = parse_wake_words(env_optional("WAKE_WORD"))
-        if backend_audio_monitor_mode == "rejected" and not wake_words:
-            print("Backend audio monitor rejected mode requires WAKE_WORD; falling back to off.")
-            backend_audio_monitor_mode = "off"
-        system_prompt = env_optional("ASSISTANT_SYSTEM_PROMPT")
-        mcp_config_path = env_optional("MCP_CONFIG")
-        mcp_prompt_merge_mode = os.getenv("MCP_PROMPT_MERGE_MODE", "append").lower()
-        mcp_agent_memory_enabled = env_bool("MCP_AGENT_MEMORY_ENABLED", True)
-        mcp_agent_timeout_seconds = env_float(
-            "MCP_AGENT_TIMEOUT_SECONDS",
-            DEFAULT_MCP_AGENT_TIMEOUT_SECONDS,
-        )
-        mcp_agent_max_steps = env_int("MCP_AGENT_MAX_STEPS", DEFAULT_MCP_AGENT_MAX_STEPS)
-        mcp_tool_routing_enabled = env_bool("MCP_TOOL_ROUTING_ENABLED", False)
-        session_context_dir = os.getenv("SESSION_CONTEXT_DIR", str(DEFAULT_CONTEXT_DIR)).strip() or str(DEFAULT_CONTEXT_DIR)
-        session_context_size = max(0, min(12000, env_int("SESSION_CONTEXT_SIZE", 6000)))
-
-        if llm_provider not in {"openai", "ollama"}:
-            print(f"Error: LLM_PROVIDER must be 'openai' or 'ollama', got: {llm_provider}")
-            sys.exit(1)
-        if stt_provider not in {"openai-whisper", "local-whisper"}:
-            print(f"Error: STT_PROVIDER must be 'openai-whisper' or 'local-whisper', got: {stt_provider}")
-            sys.exit(1)
-        if stt_input not in {"both", "backend", "browser", "silent"}:
-            print(f"Error: STT_INPUT must be 'both', 'backend', 'browser', or 'silent', got: {stt_input}")
-            sys.exit(1)
-        if cloud_tts_provider not in {"none", "openai", "elevenlabs"}:
-            print(f"Error: CLOUD_TTS_PROVIDER must be 'none', 'openai', or 'elevenlabs', got: {cloud_tts_provider}")
-            sys.exit(1)
-        if tts_provider not in {"openai", "elevenlabs", "pyttsx3", "none"}:
-            print(f"Error: TTS_PROVIDER must be 'openai', 'elevenlabs', 'pyttsx3', or 'none', got: {tts_provider}")
-            sys.exit(1)
-        if web_stt_provider not in {"openai"}:
-            print(f"Error: WEB_STT_PROVIDER must be 'openai', got: {web_stt_provider}")
-            sys.exit(1)
-        if web_tts_provider not in {"openai", "elevenlabs", "none"}:
-            print(f"Error: WEB_TTS_PROVIDER must be 'openai', 'elevenlabs', or 'none', got: {web_tts_provider}")
-            sys.exit(1)
-        if mcp_prompt_merge_mode not in {"append", "replace"}:
-            print(f"Error: MCP_PROMPT_MERGE_MODE must be 'append' or 'replace', got: {mcp_prompt_merge_mode}")
-            sys.exit(1)
-        backend_stt_enabled = stt_input in {"both", "backend"}
-        browser_stt_enabled = stt_input in {"both", "browser"}
-        backend_tts_active = tts_config.backend_active
-        web_tts_requested = tts_config.web_requested
-        active_tts_output = tts_config.output
-        web_audio_enabled = browser_stt_enabled or web_tts_requested
-
-        print(f"Using env file: {env_file}")
-        print(f"Using ElevenLabs voice ID: {voice_id}")
-        print(f"Using LLM provider: {llm_provider}")
-        print(f"Using STT provider: {stt_provider}")
-        print(f"Using STT timeout: {stt_timeout_seconds:.1f}s")
-        print(f"Using STT input: {stt_input}")
-        print(f"Using cloud TTS provider: {cloud_tts_provider}")
-        print(f"Using TTS provider: {tts_provider}")
-        print(f"Using thinking sound file: {thinking_sound_file}")
-        print(f"Using listening sound file: {listening_sound_file or 'disabled'}")
-        print(f"Using wake detected sound file: {wake_detected_sound_file or 'disabled'}")
-        print(f"Using command ack sound file: {command_ack_sound_file or 'disabled'}")
-        print(f"Using backend audio input: {backend_audio_input_device or 'default'}")
-        print(f"Using backend audio input gain: {backend_audio_input_gain:.2f}x")
-        print(f"Using backend audio output: {backend_audio_output_device or 'default'}")
-        print(f"Using backend audio output pan: {backend_audio_output_pan:+.2f}")
-        print(f"Using backend audio monitor: {backend_audio_monitor_mode}, volume {backend_audio_monitor_volume:.2f}")
-        if voice_cancel_during_thinking:
-            print("Using voice cancel during thinking: enabled")
-        if interrupt_conversation_enabled:
-            print("Using interrupt conversation mode: enabled")
-        print(
-            f"Using speaker recognition: "
-            f"{speaker_backend if speaker_recognition_enabled else 'disabled'} "
-            f"({len([profile for profile in speaker_profiles if profile.enabled])}/{speaker_profiles_max} profiles)"
-        )
-        print(f"Using speaker recognition timeout: {speaker_recognition_timeout_seconds:.1f}s")
-        if web_audio_enabled:
-            print(f"Using web audio: STT={web_stt_provider}, TTS={web_tts_provider}")
-        print(f"Using wake word: {', '.join(wake_words) if wake_words else 'disabled'}")
-        if wake_words:
-            model_count = len(backend_wake_word_model_paths or backend_wake_word_model_names)
-            print(
-                "Using backend wake word engine: openWakeWord "
-                f"({model_count} model(s), threshold {backend_wake_word_threshold:.2f}, "
-                f"pre-roll {backend_wake_word_pre_roll_ms} ms)"
-            )
-        print(f"Using MCP agent memory: {mcp_agent_memory_enabled}")
-        print(f"Using MCP agent max steps: {max(5, mcp_agent_max_steps)}")
-        print(f"Using MCP tool routing: {'enabled' if mcp_tool_routing_enabled else 'disabled'}")
-        print(f"Using session context size: {session_context_size} ({session_context_dir})")
-
-        backend_tts_needs_openai = tts_provider == "openai"
-        if (
-            llm_provider == "openai"
-            or (backend_stt_enabled and stt_provider == "openai-whisper")
-            or backend_tts_needs_openai
-        ) and not openai_api_key:
-            print("Error: OpenAI API key is required")
-            print(
-                "Set OPENAI_API_KEY_FILE, or use an offline env file with "
-                "LLM_PROVIDER=ollama and STT_PROVIDER=local-whisper"
-            )
-            sys.exit(1)
-
-        web_tts_has_key = (
-            (web_tts_provider == "openai" and bool(openai_api_key))
-            or (web_tts_provider == "elevenlabs" and bool(elevenlabs_api_key))
-        )
-        audio_file_stt_enabled = web_stt_provider == "openai" and bool(openai_api_key)
-        web_audio_state = {
-            "enabled": web_audio_enabled,
-            "stt_input": stt_input,
-            "tts_output": active_tts_output,
-            "backend_stt_enabled": backend_stt_enabled,
-            "stt_enabled": web_audio_enabled and browser_stt_enabled and web_stt_provider == "openai" and bool(openai_api_key),
-            "audio_file_stt_enabled": audio_file_stt_enabled,
-            "tts_enabled": (
-                web_audio_enabled
-                and web_tts_provider in {"openai", "elevenlabs"}
-                and web_tts_has_key
-                and not backend_tts_active
-            ),
-            "tts_blocked_by_backend": web_audio_enabled and backend_tts_active,
-            "stt_provider": web_stt_provider if web_audio_enabled else "none",
-            "tts_provider": web_tts_provider if web_audio_enabled and not backend_tts_active else "none",
-            "cloud_tts_provider": cloud_tts_provider,
-            "tts_speed": web_tts_speed,
-            "tts_volume": web_tts_volume,
-            "wake_word_enabled": bool(wake_words),
-            "vad_model_url": "/assets/web/static/vendor/silero-vad/silero_vad_v6.onnx",
-            "vad_ort_url": "/assets/web/static/vendor/onnxruntime-web/ort.wasm.min.mjs",
-            "vad_ort_wasm_path": "/assets/web/static/vendor/onnxruntime-web/",
-            "vad_speech_threshold": vad_speech_threshold,
-            "vad_negative_threshold": vad_negative_threshold,
-            "vad_min_speech_ms": vad_min_speech_ms,
-            "vad_min_silence_ms": vad_min_silence_ms,
-            "vad_speech_pad_ms": vad_speech_pad_ms,
-            "vad_max_speech_seconds": vad_max_speech_seconds,
-            "interrupt_conversation_enabled": interrupt_conversation_enabled,
-        }
-        web_tts_enabled = bool(web_audio_state["tts_enabled"])
-
-        mcp_config = None
-        if mcp_config_path:
-            try:
-                with open(mcp_config_path) as f:
-                    mcp_config = json.load(f)
-            except OSError as e:
-                print(f"Error: could not read MCP_CONFIG '{mcp_config_path}': {e}")
-                sys.exit(1)
-            except json.JSONDecodeError as e:
-                print(f"Error: invalid JSON in MCP_CONFIG '{mcp_config_path}': {e}")
-                sys.exit(1)
-
-        session_context_store = SessionContextStore(
-            session_context_dir,
-            summary_max_chars=DEFAULT_SUMMARY_MAX_CHARS,
-        )
-
-        if web_monitor:
-            env_values = dict(dotenv_values(env_file))
-            web_monitor.set_web_password(env_values.get("WEB_PASSWORD"))
-            internet_status = env_file == AUTO_ENV_ONLINE if auto_env_mode else "unknown"
-            web_monitor.update(
-                mode="auto" if auto_env_mode else "fixed",
-                env_file=env_file,
-                internet=internet_status,
-                env_values=env_values,
-                mcp_config=mcp_config or {},
-                services=build_service_state(
-                    llm_provider=llm_provider,
-                    model=model,
-                    stt_provider=stt_provider,
-                    tts_provider=tts_provider,
-                    mcp_config=mcp_config,
-                ),
-                web_audio=web_audio_state,
-                remote_screen={
-                    "vnc_url": remote_screen_url_from_values(env_values),
-                    "view_only": remote_screen_view_only_from_values(env_values),
-                },
-                thinking_sound_file=thinking_sound_file,
-                command_ack_sound_file=command_ack_sound_file,
-            )
-            web_monitor.replace_dialogue(session_context_store.snapshot().get("messages") or [])
-            web_monitor.set_context_state(
-                session_context_store.snapshot(),
-                session_context_size=session_context_size,
-            )
-
-        assistant = VoiceAssistant(
-            openai_api_key=openai_api_key,
-            elevenlabs_api_key=elevenlabs_api_key,
-            model=model,
-            llm_provider=llm_provider,
-            ollama_base_url=ollama_base_url,
-            stt_provider=stt_provider,
-            local_whisper_model=local_whisper_model,
-            stt_language=stt_language,
-            stt_prompt=stt_prompt,
-            stt_timeout_seconds=stt_timeout_seconds,
-            tts_provider=tts_provider,
-            web_tts_enabled=web_tts_enabled,
-            elevenlabs_voice_id=voice_id,
-            thinking_sound_file=thinking_sound_file,
-            listening_sound_file=listening_sound_file,
-            wake_detected_sound_file=wake_detected_sound_file,
-            startup_loader_sound_enabled=startup_loader_sound_enabled,
-            startup_loader_sound_file=startup_loader_sound_file,
-            command_ack_sound_file=command_ack_sound_file,
-            backend_audio_input_device=backend_audio_input_device,
-            backend_audio_input_gain=backend_audio_input_gain,
-            backend_audio_output_device=backend_audio_output_device,
-            vad_model_path=vad_model_path,
-            vad_speech_threshold=vad_speech_threshold,
-            vad_negative_threshold=vad_negative_threshold,
-            vad_min_speech_ms=vad_min_speech_ms,
-            vad_min_silence_ms=vad_min_silence_ms,
-            vad_speech_pad_ms=vad_speech_pad_ms,
-            vad_max_speech_seconds=vad_max_speech_seconds,
-            backend_wake_word_model_paths=backend_wake_word_model_paths,
-            backend_wake_word_model_names=backend_wake_word_model_names,
-            backend_wake_word_threshold=backend_wake_word_threshold,
-            backend_wake_word_pre_roll_ms=backend_wake_word_pre_roll_ms,
-            backend_wake_word_cooldown_ms=backend_wake_word_cooldown_ms,
-            backend_wake_word_vad_threshold=backend_wake_word_vad_threshold,
-            backend_stt_enabled=backend_stt_enabled,
-            tts_speed=web_tts_speed,
-            backend_tts_volume=backend_tts_volume,
-            backend_audio_output_pan=backend_audio_output_pan,
-            backend_audio_monitor_mode=backend_audio_monitor_mode,
-            backend_audio_monitor_volume=backend_audio_monitor_volume,
-            wake_words=wake_words,
-            mcp_config=mcp_config,
-            mcp_load_server_prompt=env_bool("MCP_LOAD_SERVER_PROMPT", False),
-            mcp_prompt_merge_mode=mcp_prompt_merge_mode,
-            mcp_agent_memory_enabled=mcp_agent_memory_enabled,
-            mcp_agent_timeout_seconds=mcp_agent_timeout_seconds,
-            mcp_agent_max_steps=mcp_agent_max_steps,
-            mcp_tool_routing_enabled=mcp_tool_routing_enabled,
-            session_context_store=session_context_store,
-            session_context_size=session_context_size,
-            voice_cancel_during_thinking=voice_cancel_during_thinking,
-            interrupt_conversation_enabled=interrupt_conversation_enabled,
-            speaker_recognition_enabled=speaker_recognition_enabled,
-            speaker_backend=speaker_backend,
-            speaker_threshold=speaker_threshold,
-            speaker_margin=speaker_margin,
-            speaker_recognition_timeout_seconds=speaker_recognition_timeout_seconds,
-            speaker_profiles=speaker_profiles,
-            system_prompt=system_prompt,
-            reload_event=reload_event,
-            web_monitor=web_monitor,
-        )
-        if web_monitor:
-            web_monitor.update(
-                runtime={"speaker_recognition": assistant.speaker_recognition_runtime_state()}
-            )
-
-        if web_monitor:
-            def session_context_response() -> dict[str, Any]:
-                snapshot = session_context_store.snapshot()
-                web_monitor.replace_dialogue(snapshot.get("messages") or [])
-                web_monitor.set_context_state(
-                    snapshot,
-                    session_context_size=assistant.session_context_size,
-                )
-                return snapshot
-
-            def select_session_context(session_id: str) -> dict[str, Any]:
-                session_context_store.select_session(session_id)
-                assistant.refresh_session_llm_summary_blocking()
-                if assistant.agent:
-                    assistant.agent.clear_conversation_history()
-                return session_context_response()
-
-            def new_session_context(title: str | None = None) -> dict[str, Any]:
-                session_context_store.new_session(title)
-                assistant.refresh_session_llm_summary_blocking()
-                if assistant.agent:
-                    assistant.agent.clear_conversation_history()
-                return session_context_response()
-
-            def rename_session_context(session_id: str, title: str) -> dict[str, Any]:
-                session_context_store.rename_session(session_id, title)
-                return session_context_response()
-
-            def clear_session_context(session_id: str) -> dict[str, Any]:
-                was_active = session_context_store.active_id == session_id
-                session_context_store.clear_session_conversation(session_id, preserve_llm_summary=True)
-                if was_active and assistant.agent:
-                    assistant.agent.clear_conversation_history()
-                return session_context_response()
-
-            def save_session_context(session_id: str) -> dict[str, Any]:
-                session_context_store.select_session(session_id)
-                refreshed = assistant.refresh_session_llm_summary_blocking(force=True)
-                if assistant.agent:
-                    assistant.agent.clear_conversation_history()
-                snapshot = session_context_response()
-                snapshot["llm_summary_refreshed"] = refreshed
-                return snapshot
-
-            def delete_session_context(session_id: str) -> dict[str, Any]:
-                was_active = session_context_store.active_id == session_id
-                session_context_store.delete_session(session_id)
-                if was_active and assistant.agent:
-                    assistant.agent.clear_conversation_history()
-                return session_context_response()
-
-            web_monitor.set_session_context_handlers(
-                list_handler=session_context_response,
-                new_handler=new_session_context,
-                select_handler=select_session_context,
-                rename_handler=rename_session_context,
-                clear_handler=clear_session_context,
-                save_handler=save_session_context,
-                delete_handler=delete_session_context,
-            )
-
-            if openai_api_key and assistant.openai_client is None:
-                assistant.openai_client = openai.OpenAI(api_key=openai_api_key)
-            if elevenlabs_api_key and assistant.elevenlabs_client is None:
-                assistant.elevenlabs_client = ElevenLabs(api_key=elevenlabs_api_key)
-
-            web_tts_handler = None
-            if openai_api_key or elevenlabs_api_key:
-                def web_tts_handler(
-                    text: str,
-                    options: dict[str, Any] | None = None,
-                    active_assistant: VoiceAssistant = assistant,
-                ) -> dict[str, Any]:
-                    requested = options or {}
-                    requested_provider = str(requested.get("provider") or "").strip().lower()
-                    configured_provider = (
-                        web_tts_provider if web_tts_provider in {"openai", "elevenlabs"} else cloud_tts_provider
-                    )
-                    provider = requested_provider or configured_provider
-                    speed = max(0.6, min(1.8, float(requested.get("speed") or web_tts_speed or 1.0)))
-
-                    if provider == "openai":
-                        if active_assistant.openai_client is None:
-                            raise ValueError("OpenAI client is not configured")
-                        return active_assistant.web_text_to_speech_openai(
-                            text,
-                            model=str(requested.get("model") or web_tts_model or DEFAULT_OPENAI_TTS_MODEL),
-                            voice=str(requested.get("voice") or web_tts_voice or DEFAULT_OPENAI_TTS_VOICE),
-                            speed=speed,
-                        )
-                    if provider == "elevenlabs":
-                        if active_assistant.elevenlabs_client is None:
-                            raise ValueError("ElevenLabs client is not configured")
-                        return active_assistant.web_text_to_speech_elevenlabs(
-                            text,
-                            voice_id=str(requested.get("voice") or active_assistant.elevenlabs_voice_id),
-                            speed=speed,
-                        )
-                    raise ValueError("Web audio TTS is not available")
-
-            def backend_tts_test_handler(
-                text: str,
-                options: dict[str, Any] | None = None,
-                active_assistant: VoiceAssistant = assistant,
-            ) -> dict[str, Any]:
-                requested = options or {}
-                try:
-                    ok = active_assistant.test_backend_text_to_speech(
-                        text,
-                        provider=str(requested.get("provider") or active_assistant.tts_provider),
-                        model=str(requested.get("model") or DEFAULT_OPENAI_TTS_MODEL),
-                        voice=str(requested.get("voice") or ""),
-                        speed=max(0.6, min(1.8, float(requested.get("speed") or web_tts_speed or 1.0))),
-                        volume=max(0.0, min(2.0, float(requested.get("volume") if requested.get("volume") is not None else active_assistant.backend_tts_volume))),
-                        pan=normalize_audio_pan(float(requested.get("pan") if requested.get("pan") is not None else active_assistant.backend_audio_output_pan)),
-                        output_device=str(requested.get("output_device") or ""),
-                    )
-                except Exception as e:
-                    raise RuntimeError(concise_pyaudio_error(e)) from e
-                if not ok:
-                    raise ValueError("Backend TTS playback failed")
-                return {"ok": True}
-
-            def backend_audio_sample_handler(
-                filename: str,
-                options: dict[str, Any] | None = None,
-                active_assistant: VoiceAssistant = assistant,
-            ) -> dict[str, Any]:
-                requested = options or {}
-                action = str(requested.get("action") or "play").strip().lower()
-                if action == "stop":
-                    active_assistant.stop_backend_audio_sample()
-                    return {"ok": True}
-                if action not in {"play", "start"}:
-                    raise ValueError("unsupported backend audio sample action")
-                try:
-                    play_sample = (
-                        active_assistant.start_backend_audio_sample
-                        if action == "start"
-                        else active_assistant.test_backend_audio_sample
-                    )
-                    play_sample(
-                        filename,
-                        volume=max(
-                            0.0,
-                            min(
-                                2.0,
-                                float(
-                                    requested.get("volume")
-                                    if requested.get("volume") is not None
-                                    else active_assistant.backend_tts_volume
-                                ),
-                            ),
-                        ),
-                        pan=normalize_audio_pan(
-                            float(
-                                requested.get("pan")
-                                if requested.get("pan") is not None
-                                else active_assistant.backend_audio_output_pan
-                            )
-                        ),
-                        output_device=str(requested.get("output_device") or ""),
-                    )
-                except ValueError:
-                    raise
-                except Exception as e:
-                    raise RuntimeError(concise_pyaudio_error(e)) from e
-                return {"ok": True}
-
-            web_monitor.set_web_audio_handlers(
-                transcribe_handler=(
-                    lambda audio_bytes, mime_type, apply_wake_word_gate, active_assistant=assistant: active_assistant.web_audio_transcription_result(
-                        audio_bytes,
-                        mime_type,
-                        model=web_stt_model,
-                        apply_wake_word_gate=apply_wake_word_gate,
-                    )
-                    if web_audio_state["audio_file_stt_enabled"]
-                    else None
-                ),
-                tts_handler=web_tts_handler,
-            )
-            web_monitor.set_backend_audio_diagnostic_handler(
-                lambda device, input_gain, active_assistant=assistant: active_assistant.diagnose_backend_audio_input(
-                    device,
-                    input_gain=input_gain,
-                )
-            )
-            web_monitor.set_backend_speaker_capture_handlers(
-                capture_handler=lambda device, duration, active_assistant=assistant: active_assistant.capture_backend_speaker_sample(
-                    device,
-                    duration_seconds=duration,
-                ),
-                stop_handler=assistant.stop_backend_speaker_capture,
-            )
-            web_monitor.set_backend_tts_test_handler(backend_tts_test_handler)
-            web_monitor.set_backend_audio_sample_handler(backend_audio_sample_handler)
-            web_monitor.set_speaker_profile_sample_handler(assistant.control_speaker_profile_sample)
-            web_monitor.set_cancel_handler(assistant.stop_tts)
-
-        return assistant
-
-    parser = argparse.ArgumentParser(description="Voice-enabled AI assistant")
-    parser.add_argument(
-        "--env-file",
-        default="auto",
-        help="Environment file to load before starting the assistant (default: auto)",
-    )
-    args = parser.parse_args()
-
-    auto_env_mode = args.env_file.strip().lower() == "auto"
-    auto_selection_message = None
-    if auto_env_mode:
-        internet_online = check_internet_connection()
-        env_file = AUTO_ENV_ONLINE if internet_online else AUTO_ENV_OFFLINE
-        auto_selection_message = (
-            "Auto env mode selected "
-            f"{env_file} because internet is {'live' if internet_online else 'inactive'}."
-        )
-    else:
-        env_file = Path(args.env_file)
-
-    if not env_file.exists():
-        print(f"Error: env file not found: {env_file}")
-        print("Use one of the provided profiles, for example:")
-        print("  python voice_assistant/agent.py --env-file .env.online")
-        print("  python voice_assistant/agent.py --env-file .env.offline")
-        print("  python voice_assistant/agent.py --env-file auto")
-        sys.exit(1)
-
-    profile_values = dotenv_values(env_file)
-    web_enabled = (profile_values.get("WEB_MONITOR_ENABLED") or "true").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "y",
-        "on",
-    }
-    web_host = (profile_values.get("WEB_MONITOR_HOST") or "127.0.0.1").strip()
-    try:
-        web_port = int((profile_values.get("WEB_MONITOR_PORT") or "8765").strip())
-    except ValueError:
-        print(f"Error: WEB_MONITOR_PORT must be an integer, got: {profile_values.get('WEB_MONITOR_PORT')}")
-        sys.exit(1)
-
-    reload_event = threading.Event()
-    env_file_lock = threading.RLock()
-
-    def get_active_env_file() -> Path:
-        with env_file_lock:
-            return env_file
-
-    def switch_active_env_file(selection: str) -> dict[str, Any]:
-        nonlocal env_file
-        if auto_env_mode:
-            raise ValueError("manual env switching is disabled while --env-file auto controls the active profile")
-        with env_file_lock:
-            previous_env_file = env_file
-            selected_env_file = resolve_selected_env_file(selection, previous_env_file)
-            if selected_env_file.resolve() == previous_env_file.resolve():
-                return {
-                    "switched": False,
-                    "env_file": display_env_path(env_file),
-                    "message": f"Already using {display_env_path(env_file)}.",
-                }
-            env_file = selected_env_file
-            values = dict(dotenv_values(env_file))
-            mcp_config = load_mcp_config_from_values(values)
-            if web_monitor:
-                web_monitor.set_web_password(values.get("WEB_PASSWORD"))
-                web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
-                web_monitor.update(
-                    env_file=env_file,
-                    mode="manual",
-                    env_values=values,
-                    mcp_config=mcp_config or {},
-                    services=build_service_state(
-                        llm_provider=(values.get("LLM_PROVIDER") or "openai").strip().lower(),
-                        model=(values.get("OPENAI_MODEL") or "gpt-4o-mini").strip(),
-                        stt_provider=(values.get("STT_PROVIDER") or "openai-whisper").strip().lower(),
-                        tts_provider=(values.get("TTS_PROVIDER") or "elevenlabs").strip().lower(),
-                        mcp_config=mcp_config,
-                    ),
-                )
-            reload_event.set()
-            return {
-                "switched": True,
-                "env_file": display_env_path(env_file),
-                "message": f"Switching to {display_env_path(env_file)}.",
-            }
-
-    def save_mcp_routing_config(routing_updates: dict[str, str]) -> dict[str, Any]:
-        with env_file_lock:
-            active_env_file = env_file
-            values = dict(dotenv_values(active_env_file))
-            mcp_config_path = mcp_config_path_from_values(values)
-
-            try:
-                with open(mcp_config_path) as config_file:
-                    config = json.load(config_file)
-            except OSError as e:
-                raise ValueError(f"could not read MCP_CONFIG '{mcp_config_path}': {e}") from e
-            except json.JSONDecodeError as e:
-                raise ValueError(f"invalid JSON in MCP_CONFIG '{mcp_config_path}': {e}") from e
-
-            if not isinstance(config, dict):
-                raise ValueError("active MCP config must be a JSON object")
-
-            normalized_updates = validate_mcp_routing_updates(config, routing_updates)
-            servers = config.get("mcpServers")
-            if not isinstance(servers, dict):
-                raise ValueError("active MCP config has no mcpServers object")
-
-            for server_name, routing in normalized_updates.items():
-                server_config = servers.get(server_name)
-                if not isinstance(server_config, dict):
-                    continue
-                assistant_options = server_config.get("assistantOptions")
-                if not isinstance(assistant_options, dict):
-                    assistant_options = {}
-                    server_config["assistantOptions"] = assistant_options
-                assistant_options["routing"] = routing
-
-            try:
-                with open(mcp_config_path, "w") as config_file:
-                    json.dump(config, config_file, ensure_ascii=False, indent=2)
-                    config_file.write("\n")
-            except OSError as e:
-                raise ValueError(f"could not write MCP_CONFIG '{mcp_config_path}': {e}") from e
-
-            if web_monitor:
-                web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
-                web_monitor.update(env_values=values, mcp_config=config)
-            reload_event.set()
-            return {
-                "ok": True,
-                "message": f"MCP routing saved to {display_env_path(mcp_config_path)}.",
-                "mcp_config": str(mcp_config_path),
-                "routing": normalized_updates,
-            }
-
-    def save_mcp_server_options_config(options_updates: dict[str, dict[str, Any]]) -> dict[str, Any]:
-        with env_file_lock:
-            active_env_file = env_file
-            values = dict(dotenv_values(active_env_file))
-            mcp_config_path = mcp_config_path_from_values(values)
-
-            try:
-                with open(mcp_config_path) as config_file:
-                    config = json.load(config_file)
-            except OSError as e:
-                raise ValueError(f"could not read MCP_CONFIG '{mcp_config_path}': {e}") from e
-            except json.JSONDecodeError as e:
-                raise ValueError(f"invalid JSON in MCP_CONFIG '{mcp_config_path}': {e}") from e
-
-            if not isinstance(config, dict):
-                raise ValueError("active MCP config must be a JSON object")
-
-            normalized_updates = validate_mcp_server_options_updates(config, options_updates)
-            servers = config.get("mcpServers")
-            if not isinstance(servers, dict):
-                raise ValueError("active MCP config has no mcpServers object")
-
-            for server_name, options in normalized_updates.items():
-                server_config = servers.get(server_name)
-                if not isinstance(server_config, dict):
-                    continue
-                server_config["env"] = options
-
-            try:
-                with open(mcp_config_path, "w") as config_file:
-                    json.dump(config, config_file, ensure_ascii=False, indent=2)
-                    config_file.write("\n")
-            except OSError as e:
-                raise ValueError(f"could not write MCP_CONFIG '{mcp_config_path}': {e}") from e
-
-            if web_monitor:
-                web_monitor.set_environment_loading(True, "rafraichissement de l'environnement")
-                web_monitor.update(env_values=values, mcp_config=config)
-            reload_event.set()
-            return {
-                "ok": True,
-                "message": f"MCP server options saved to {display_env_path(mcp_config_path)}.",
-                "mcp_config": str(mcp_config_path),
-                "options": normalized_updates,
-            }
-
-    web_monitor = None
-    if web_enabled:
-        web_monitor = WebMonitor(web_password=profile_values.get("WEB_PASSWORD"))
-        web_monitor.install_console_capture()
-        try:
-            actual_host, actual_port = web_monitor.start(web_host, web_port)
-            print(f"Web monitor available at http://{actual_host}:{actual_port}")
-        except OSError as e:
-            web_monitor.restore_console_capture()
-            web_monitor = None
-            print(f"Web monitor disabled: could not bind {web_host}:{web_port}: {e}")
-
-    if web_monitor:
-        def request_speaker_profile_reload(_result: dict[str, Any]) -> None:
-            stt_language = normalize_locale(str(profile_values.get("STT_LANGUAGE") or "fr"))
-            web_monitor.set_environment_loading(
-                True,
-                i18n_text(load_locale(stt_language), "web.environment_refresh", "rafraichissement de l'environnement"),
-            )
-            reload_event.set()
-
-        web_monitor.set_speaker_profile_update_handler(request_speaker_profile_reload)
-        web_monitor.set_env_profile_handlers(
-            list_handler=lambda: list_available_env_files(get_active_env_file(), auto_env_mode),
-            switch_handler=switch_active_env_file,
-        )
-        web_monitor.set_remote_screen_handler(
-            lambda vnc_url, view_only: save_remote_screen_config(
-                get_active_env_file(),
-                vnc_url,
-                view_only,
-                web_monitor,
-            )
-        )
-        web_monitor.set_mcp_routing_save_handler(save_mcp_routing_config)
-        web_monitor.set_mcp_server_options_save_handler(save_mcp_server_options_config)
-        web_monitor.set_cloud_api_status_handler(lambda: build_cloud_api_status(get_active_env_file()))
-        web_monitor.set_llm_config_handlers(
-            options_handler=lambda provider=None: build_llm_options(get_active_env_file(), provider),
-            save_handler=lambda provider, model, cloud_tts_provider, tts_output, stt_input, stt_language, connectivity_mode, wake_word, stt_prompt, system_prompt, session_context_size, mcp_agent_max_steps, mcp_tool_routing_enabled, interrupt_conversation_enabled, backend_audio_input_device, backend_audio_input_gain, backend_audio_output_device, voice_id, thinking_sound_file, listening_sound_file, wake_detected_sound_file, startup_loader_sound_file, command_ack_sound_file, openai_tts_voice, openai_tts_speed, web_tts_volume, backend_tts_volume, backend_audio_output_pan, backend_audio_monitor_mode, backend_audio_monitor_volume, vad_speech_threshold, vad_negative_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms, vad_max_speech_seconds, backend_wake_word_model_paths, backend_wake_word_model_names, backend_wake_word_threshold, backend_wake_word_pre_roll_ms, backend_wake_word_cooldown_ms, backend_wake_word_vad_threshold, speaker_recognition_enabled, speaker_backend, speaker_threshold, speaker_margin, speaker_profiles: save_llm_config(
-                get_active_env_file(),
-                provider,
-                model,
-                cloud_tts_provider,
-                tts_output,
-                stt_input,
-                stt_language,
-                connectivity_mode,
-                wake_word,
-                stt_prompt,
-                system_prompt,
-                session_context_size,
-                mcp_agent_max_steps,
-                mcp_tool_routing_enabled,
-                interrupt_conversation_enabled,
-                backend_audio_input_device,
-                backend_audio_input_gain,
-                backend_audio_output_device,
-                voice_id,
-                thinking_sound_file,
-                listening_sound_file,
-                wake_detected_sound_file,
-                startup_loader_sound_file,
-                command_ack_sound_file,
-                openai_tts_voice,
-                openai_tts_speed,
-                web_tts_volume,
-                backend_tts_volume,
-                backend_audio_output_pan,
-                backend_audio_monitor_mode,
-                backend_audio_monitor_volume,
-                vad_speech_threshold,
-                vad_negative_threshold,
-                vad_min_speech_ms,
-                vad_min_silence_ms,
-                vad_speech_pad_ms,
-                vad_max_speech_seconds,
-                backend_wake_word_model_paths,
-                backend_wake_word_model_names,
-                backend_wake_word_threshold,
-                backend_wake_word_pre_roll_ms,
-                backend_wake_word_cooldown_ms,
-                backend_wake_word_vad_threshold,
-                speaker_recognition_enabled,
-                speaker_backend,
-                speaker_threshold,
-                speaker_margin,
-                speaker_profiles,
-                web_monitor,
-                reload_event,
-                auto_env_mode,
-            ),
-        )
-
-    if auto_selection_message:
-        print(auto_selection_message)
-
-    if not auto_env_mode:
-        try:
-            announce_reload_complete = False
-            while True:
-                reload_event.clear()
-                active_env_file = get_active_env_file()
-                assistant = build_assistant_from_env(active_env_file, reload_event=reload_event, web_monitor=web_monitor)
-                release_reload_audio_guard()
-                reload_complete_message = None
-                if announce_reload_complete:
-                    print("Configuration reload complete.")
-                    announce_reload_complete = False
-
-                run_result = await assistant.run()
-                if run_result != "reload":
-                    break
-
-                print(f"Configuration reload requested. Restarting assistant with {get_active_env_file()}.")
-                announce_reload_complete = True
-        finally:
-            if web_monitor:
-                web_monitor.stop()
-                web_monitor.restore_console_capture()
-        return
-
-    auto_monitor = AutoNetworkMonitor(
-        initial_online=internet_online,
-        dotenv_values_func=dotenv_values,
-        reload_event=reload_event,
-        web_monitor=web_monitor,
-        interval=AUTO_CHECK_INTERVAL,
-    )
-    auto_monitor.start()
-
-    try:
-        announce_reload_complete = False
-        announce_initial_network_status = True
-        while True:
-            detected_env_file = auto_monitor.detected_env_file
-            with env_file_lock:
-                env_file = detected_env_file
-            if not detected_env_file.exists():
-                print(f"Error: env file not found: {detected_env_file}")
-                sys.exit(1)
-
-            reload_event.clear()
-            assistant = build_assistant_from_env(detected_env_file, reload_event=reload_event, web_monitor=web_monitor)
-            release_reload_audio_guard()
-            if announce_initial_network_status:
-                assistant.start_startup_loader_sound()
-                auto_monitor.announce_initial_status()
-                announce_initial_network_status = False
-            reload_complete_message = None
-            if announce_reload_complete:
-                print("Auto environment reload complete.")
-                announce_reload_complete = False
-
-            run_result = await assistant.run()
-            if run_result != "reload":
-                break
-
-            next_env_file = auto_monitor.detected_env_file
-            print(f"Auto env reload requested. Restarting assistant with {next_env_file}.")
-            announce_reload_complete = True
-    finally:
-        auto_monitor.stop()
-        if web_monitor:
-            web_monitor.stop()
-            web_monitor.restore_console_capture()
+def main() -> int:
+    """Compatibility entry point delegating lifecycle ownership to the common runtime."""
+    from voice_assistant.runtime import main as runtime_main
+
+    return runtime_main()
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, request_force_exit)
-    signal.signal(signal.SIGTERM, request_force_exit)
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    raise SystemExit(main())

@@ -10,60 +10,157 @@ Developer reference: https://deepwiki.com/infrafast/LiveStageAssistant
 
 # 1. Current Architecture
 
+LiveStageAssistant now has one common runtime that owns engine selection, continuous connectivity supervision, the engine-independent startup loader lifecycle and the single production WebMonitor. `VOICE_ENGINE=classic` keeps the historical STT -> LLM -> TTS path; `VOICE_ENGINE=openai-realtime` starts the integrated OpenAI Realtime runtime directly. Offline mode remains local/cloud-independent and is a separate connectivity axis from the online engine choice.
+
+The common runtime selects an explicit `.env.online` or `.env.offline` profile before starting a child engine. Individual engines no longer receive `--env-file auto` when launched by the service runtime, so the historical Classic auto-connectivity watcher is no longer active in the supervised path. Supervised child engines must not bind their own WebMonitor; the parent runtime owns the one production HTTP/GUI endpoint across Classic, Realtime and Local.
+
+Common control plane:
+
 ```text
-                    +--------------------------------------+
-                    |        Live Stage Assistant          |
-                    |        backend Python agent          |
-                    +--------------------------------------+
-                                      ^
-                                      |
-       +------------------------------+------------------------------+
-       |                                                             |
-+------+--------+                                           +--------+-------+
-| Backend local |                                           | Remote web UI  |
-| control       |                                           | browser client |
-+---------------+                                           +----------------+
-| local mic     |                                           | text command   |
-| local TTS     |                                           | browser mic    |
-| terminal      |                                           | browser TTS    |
-+------+--------+                                           +--------+-------+
-       |                                                             |
-       +----------------------- HTTP/web monitor ---------------------+
-                                      |
-                                      v
-+-------------+    +-------------+    +-------------+    +-------------+    +-------------+
-| Audio input | -> | Silero VAD  | -> | STT         | -> | LLM with    | -> | TTS         |
-| backend/web |    | local ONNX  |    | Whisper     |    | MCPAgent    |    | output      |
-+-------------+    +-------------+    +-------------+    +------+------+    +-------------+
-                                                                |
-                                                        +-------+-------+
-                                                        | MCP Servers   |
-                                                        +---------------+
-                                                        | XMSeries-MCP  |
-                                                        | QLCPlus-MCP   |
-                                                        | other MCPs    |
-                                                        +---------------+
+                       LiveStageAssistant service
+                                 |
+                     +-----------+-----------+
+                     |                       |
+             ConnectivityManager      StartupLifecycle
+             detect + watch state      loader ON / OFF
+                     |                       |
+                     +-----------+-----------+
+                                 |
+                         EngineSupervisor
+                                 |
+                 +---------------+---------------+
+                 |               |               |
+              classic      openai-realtime     local
+                 |               |               |
+          STT -> LLM -> TTS   direct audio   local stack
+                 |               |               |
+                 +---------------+---------------+
+                                 |
+                              READY
+                                 |
+                        Common WebMonitor
 ```
 
-The current production voice path is intentionally modular and remains the classic/fallback architecture while realtime work is experimental.
+Future engines such as Gemini Live plug into `EngineSupervisor` without implementing their own network watcher or WebMonitor ownership.
 
-## 1.1 Runtime modes
+Classic remains a first-class supported path. Realtime is production-facing on the dedicated branch but still under staged validation; it is not yet the final default.
 
-LSA supports three complementary control paths:
+## 1.1 Connectivity and voice-engine axes
 
-- **Backend embedded audio**: local microphone capture and backend TTS.
-- **Web text/chat**: text command, cancellation, logs, sessions and config through the browser.
-- **Web audio**: browser microphone and browser TTS proxied through the backend so permanent API keys remain server-side.
+Connectivity and voice engine are independent axes:
 
-The Python backend remains the LLM/MCP control plane. The browser queues commands and cancellation requests; the agent owns wake-word handling, MCP calls, runtime reloads and final responses.
+```text
+Connectivity
+  online
+    -> classic
+    -> OpenAI Realtime
+    -> future Gemini Live / other cloud engines
 
-## 1.2 Configuration model
+  offline
+    -> local engine only
+    -> no required cloud dependency
+```
 
-The selected `.env` profile is the runtime source of truth. Important groups include:
+The common runtime owns connectivity state. Individual engines do not decide whether the installation is online or offline when launched through the supervised service path.
+
+Connectivity events are semantically independent from engine readiness:
+
+```text
+ONLINE event
+  -> select/use online profile
+  -> start the configured online engine
+  -> deliver the ONLINE announcement through the incoming engine speech path when available
+
+ENGINE READY event
+  -> stop startup loader
+  -> announce "ready to execute commands"
+  -> begin normal listening/wait-wake state
+```
+
+The sentence `Assistant connecté à internet` belongs to the ONLINE connectivity event, not to the engine READY event.
+
+## 1.2 Connectivity transition contract
+
+Startup:
+
+```text
+startup
+  -> detect connectivity
+  -> emit ONLINE or OFFLINE state
+  -> choose explicit profile
+  -> start common WebMonitor
+  -> start loader
+  -> start selected engine
+  -> wait for READY
+  -> stop loader
+  -> announce ready
+  -> enter listening or wait-wake state
+```
+
+Internet loss while a cloud engine is active:
+
+```text
+ONLINE
+  -> connectivity loss detected by common ConnectivityManager
+  -> stop outgoing engine cleanly with bounded shutdown
+  -> common WebMonitor remains alive
+  -> announce loss/offline transition using guaranteed-local speech
+  -> activate .env.offline
+  -> force local engine
+  -> loader during local-engine initialization
+  -> local engine READY
+  -> stop loader
+  -> announce ready locally
+  -> continue fully offline
+```
+
+Internet restoration:
+
+```text
+OFFLINE
+  -> common ConnectivityManager emits ONLINE
+  -> common WebMonitor remains alive
+  -> activate .env.online
+  -> choose configured online VOICE_ENGINE
+  -> loader during initialization
+  -> incoming online engine delivers ONLINE announcement
+  -> engine READY lifecycle completes
+  -> resume normal listening
+```
+
+OpenAI Realtime already delivers the ONLINE startup announcement in its own voice path. Classic receives the same already-known ONLINE event through the common engine-entry adapter. The runtime remains the owner of detection and transition semantics.
+
+## 1.3 Startup lifecycle contract
+
+Startup/operator feedback is engine-independent product behavior.
+
+```text
+runtime starts
+  -> loader ON as early as practical
+  -> select/start engine
+  -> engine initializes audio + MCP + provider
+  -> engine emits READY
+  -> loader OFF
+  -> engine-specific speech backend announces status/ready as applicable
+  -> semantic audio state becomes LISTENING or WAIT_WAKE
+```
+
+The common runtime owns timing and policy. The selected engine owns only the mechanism used to speak through its configured voice path.
+
+This common loader lifecycle is implemented and Pi-validated for Classic and OpenAI Realtime.
+
+## 1.4 Configuration model
+
+The selected `.env` profile is the runtime source of truth for profile-level settings and selects the MCP inventory through `MCP_CONFIG`. Connectivity and voice engine remain independent profile-level choices. Per-server MCP transport and permission policy belongs in the MCP JSON inventory rather than being duplicated across `.env` files.
+
+Important profile-level groups include:
 
 ```env
 CONNECTIVITY_MODE=online
-LLM_PROVIDER=openai
+VOICE_ENGINE=classic
+OPENAI_REALTIME_MODEL=gpt-realtime-2.1
+OPENAI_REALTIME_VOICE=marin
+
 OPENAI_MODEL=gpt-4.1-mini
 
 STT_PROVIDER=openai-whisper
@@ -75,846 +172,1069 @@ CLOUD_TTS_PROVIDER=openai
 TTS_PROVIDER=none
 WEB_TTS_PROVIDER=openai
 
+# Independent speech-output gains by locality, not by engine.
+CLOUD_TTS_OUTPUT_GAIN=1.00
+LOCAL_TTS_OUTPUT_GAIN=1.00
+
+# Semantic feedback sounds shared across engines.
+THINKING_SOUND_FILE=thinking.wav
+LISTENING_SOUND_FILE=
+WAKE_DETECTED_SOUND_FILE=
+COMMAND_ACK_SOUND_FILE=
+READY_SOUND_FILE=
+STARTUP_LOADER_SOUND_ENABLED=false
+STARTUP_LOADER_SOUND_FILE=loader.wav
+
+# Offline/local speech defaults. Piper is the Local engine's fixed TTS implementation.
+PIPER_VOICE=fr_FR-siwis-medium
+PIPER_DATA_DIR=data/piper
+
 WAKE_WORD=
 BACKEND_WAKE_WORD_MODEL_PATHS=
 BACKEND_WAKE_WORD_MODEL_NAMES=
 
+# Cloud Classic agent-only controls live in online/cloud profiles.
 MCP_AGENT_MEMORY_ENABLED=true
 MCP_AGENT_TIMEOUT_SECONDS=45
 MCP_AGENT_MAX_STEPS=20
 MCP_TOOL_ROUTING_ENABLED=true
-MCP_CONFIG=mcp_servers.json
 
+# Shared runtime/session/MCP inventory.
+MCP_CONFIG=mcp_servers.json
 SESSION_CONTEXT_SIZE=6000
 SESSION_CONTEXT_DIR=.contexts
 ```
 
-When keys are added, renamed or semantically changed, update `.env.example`, relevant profiles and the web GUI in the same implementation pass.
-
-## 1.3 Wake word
-
-`WAKE_WORD` is optional.
-
-```env
-WAKE_WORD=
-```
-
-means wake-word detection is disabled.
-
-```env
-WAKE_WORD=mix
-```
-
-means local backend wake-word detection is enabled and openWakeWord is required for the backend microphone path.
-
-With wake enabled, backend audio uses the explicit state flow:
+Configuration ownership:
 
 ```text
-WAIT_WAKE -> CAPTURE_COMMAND -> PROCESSING -> TTS
+.env profile
+  -> connectivity / execution mode / Cloud engine / audio defaults
+  -> common semantic feedback sounds
+  -> cloud/local speech-output gains
+  -> MCP_CONFIG path
+
+MCP_CONFIG JSON
+  -> server inventory
+  -> local STDIO/private HTTP connection data
+  -> provider-reachable native HTTPS connection data
+  -> per-server realtime transport: native / stdio / auto
+  -> per-server permission policy
+
+Common WebMonitor / GUI
+  -> one production server owned by runtime
+  -> edits the same canonical profile + MCP JSON model
+  -> one common configuration surface, not duplicated per engine
+  -> resolves internal API/assets relative to its public base path for LAN,
+     reverse proxy and Tailscale Funnel subpath exposure when the public
+     subpath is forwarded to the backend web root
+  -> engine-specific controls appear conditionally only when genuinely specific
+  -> must not maintain a third independent configuration store
 ```
 
-With wake disabled, Silero VAD may capture commands directly without `WAIT_WAKE`.
+When keys are added, renamed or semantically changed, update `.env.example`, relevant profiles, MCP JSON examples/schema and the web GUI in the same implementation pass.
 
-The web GUI exposes the same setting and must remain authoritative. Wake-word status must distinguish disabled from unavailable/error.
+## 1.5 Wake word
 
-## 1.4 Voice activity detection and interruption
-
-Backend and browser STT use bundled Silero VAD. Important settings include:
-
-```env
-VAD_SPEECH_THRESHOLD=0.5
-VAD_NEGATIVE_THRESHOLD=0.35
-VAD_MIN_SPEECH_MS=250
-VAD_MIN_SILENCE_MS=650
-VAD_SPEECH_PAD_MS=100
-VAD_MAX_SPEECH_SECONDS=8
-```
-
-`INTERRUPT_CONVERSATION_ENABLED` controls whether accepted new text/STT input can cancel current processing/TTS and begin a new command.
-
-Backend interruption reuses the normal audio state machine rather than a second special capture path.
-
-## 1.5 Web monitor
-
-The web monitor provides:
-
-- chat command input and response bubbles;
-- browser microphone and browser TTS;
-- cancellation;
-- runtime state and console logs;
-- session persistence and context summaries;
-- config editing;
-- audio input/output selection;
-- VAD and wake-word configuration;
-- speaker recognition configuration;
-- MCP routing/server configuration;
-- remote screen/noVNC integration.
-
-Important HTTP endpoints include snapshot, command injection, cancellation, web STT/TTS, audio diagnostics, speaker-profile capture, session context and MCP routing/config endpoints.
-
-The browser remains a client; the backend owns command execution and MCP state.
-
-## 1.6 Speaker recognition
-
-Speaker recognition is optional. Resemblyzer is the current backend. STT and speaker recognition are started together for an accepted utterance so their bounded execution overlaps rather than accumulating sequential latency.
-
-Speaker identity is contextual information only. LSA must not directly map a detected speaker to a mixer bus/channel/light. Domain mapping belongs to the relevant MCP server.
-
-## 1.7 MCP architecture
-
-MCP servers remain authoritative for domain-specific tools and protocol logic.
-
-LSA should not duplicate mixer, lighting or other domain protocol implementations inside the agent.
-
-The agent may:
-
-- discover MCP servers;
-- load optional MCP prompts/instructions;
-- expose or route tools;
-- pass conversation/speaker context;
-- call MCP tools;
-- return structured results to the LLM.
-
-Current external/live state is always time-sensitive and must be read again through MCP tools instead of being answered from conversation memory.
-
-## 1.8 Offline reliability and auto profile switching
-
-Offline mode remains cloud-independent and uses Ollama, local faster-whisper, local pyttsx3 and local/stdio MCP servers.
-
-Auto profile switching must preserve this contract in both directions. Runtime reloads must not leak stale audio objects or leave child MCP/TTS processes behind.
-
-Raspberry Pi service shutdown remains bounded so a pathological local component cannot block systemd stop indefinitely.
-
-## 1.9 Docker / Synology architecture
-
-Docker packages the Python backend together with Node.js support required by local stdio MCP servers. Synology DSM 7.x uses the same container architecture through Docker/Container Manager; Synology is a deployment target, not a separate application mode.
-
-### Container layout and persistence
-
-The compose setup mounts configuration and persistent data separately:
+`WAKE_WORD` is optional and remains the single source of truth for activation policy.
 
 ```text
-container/
-  config/
-    .env.infrafast
-    OPENAI_API_KEY.txt
-    ELEVENLABS_API_KEY.txt
-    mcp_servers.infrafast.json
-  data/
+classic + wake ON
+classic + wake OFF
+realtime + wake ON   <- RV3 target
+realtime + wake OFF  <- currently exercised
 ```
 
-`./container/config` is mounted at `/config` and `./container/data` at `/data`. Persisted chat/session state should use a writable path such as `SESSION_CONTEXT_DIR=/data/contexts`. Speaker-recognition data is also expected under persistent `/data` storage.
+Wake-word behavior must preserve the Classic semantic contract: silence while waiting for wake, one cue when wake is detected, processing feedback only after an accepted command, post-TTS suppression before re-arming, and no false listening/processing feedback for ambient speech.
 
-The image contains the application runtime and bundled web assets. When Compose mounts `./assets:/app/assets:ro`, that host folder must be complete because a partial bind mount hides the corresponding files already present in the image.
+## 1.6 Voice activity detection and interruption
 
-The container entrypoint starts the assistant with `ASSISTANT_ENV_FILE` when provided, defaults to `/config/.env.infrafast`, and may otherwise select a mounted `.env*` profile. The assistant itself loads that env file; Docker Compose does not need to inject the whole application configuration through `env_file`.
+Classic backend/browser STT uses bundled Silero VAD. Realtime uses provider turn detection/server VAD for the active direct-audio session. `INTERRUPT_CONVERSATION_ENABLED` remains a classic-path control; Realtime barge-in behavior is owned by the realtime session/provider adapter and must remain provider-neutral.
 
-### Docker profiles
+## 1.7 Semantic audio feedback contract
 
-Multiple mounted profile pairs can represent different MCP topologies, for example:
+User-facing audio feedback is a common product contract, not an implementation detail of Classic, Realtime or a particular provider.
 
-- default remote HTTP MCP endpoints;
-- LAN/local HTTP endpoints;
-- Tailscale HTTP endpoints;
-- mounted local stdio MCP servers.
-
-Only one application env profile is active at a time. The web profile selector can enumerate mounted `.env*` files when manual switching is allowed. Profile names are deployment conveniences; the architectural distinction is HTTP MCP versus local stdio MCP.
-
-### Bridge and host networking
-
-Bridge networking is the default/recommended container shape. The web monitor is published from the container's internal `WEB_MONITOR_PORT`, normally `8765`, to a host/NAS port selected by Compose. `WEB_MONITOR_HOST_PORT` changes the published host port only; it does not change the assistant's internal listener.
-
-In bridge mode:
-
-- `127.0.0.1` refers to the LSA container itself;
-- external MCP servers, Ollama or other services must use a reachable LAN IP, Tailscale IP, Docker service name or other routable address;
-- host audio requires `/dev/snd`/audio-group passthrough and compatible host hardware.
-
-If host networking is intentionally used instead, the Compose `ports` mapping must be removed because published ports do not apply in host mode.
-
-### MCP placement: HTTP versus stdio
-
-When XMSeries-MCP or QLCPlus-MCP runs as a separate HTTP service/container, LSA's MCP config should contain only the streamable HTTP endpoint and optional MCP authentication headers. Mixer/QLC protocol settings such as OSC host, OSC port and protocol belong to the MCP service itself, not to the LSA application env.
-
-When an MCP runs as a local stdio child process, its built checkout must be mounted into the LSA container and its script path plus MCP-specific environment belong in the selected `mcp_servers*.json` entry. This preserves the ownership boundary: LSA controls MCP transport/orchestration, while each MCP owns its device-specific configuration.
-
-Raw LAN/Tailscale addresses normally use `http://` unless the MCP endpoint is genuinely behind TLS. Using `https://` against a plain HTTP service results in TLS/protocol errors.
-
-### MCP admin proxy
-
-The web monitor can expose MCP admin pages either directly or through the LSA backend proxy. Proxy mode is useful when the browser can reach only the NAS/LSA host while that host can reach MCP servers through Tailscale or another private network. In proxy mode, configured bearer headers are applied server-side and are not exposed to the browser.
-
-Local stdio MCP entries have no independent HTTP admin frame. When the UI edits routing metadata such as `assistantOptions.routing`, saving rewrites the active MCP configuration and reloads the assistant; therefore the selected MCP JSON must be writable by the container user.
-
-### Docker/Synology audio and browser constraints
-
-Backend audio exists only when the host exposes compatible audio hardware to the container. `/dev/snd` passthrough does not guarantee that a NAS USB/audio device will work with PyAudio/ALSA. Browser audio or text mode remains the preferred fallback.
-
-Browser microphone capture on a LAN/NAS hostname may require HTTPS because browsers restrict microphone access in insecure contexts. Browser device selection is local to each browser and is not a server-side audio-routing setting.
-
-Backend audio capture auto-selects a channel/rate combination that can actually be opened and resamples internally to the 16 kHz representation used by Silero VAD. This avoids assuming that a NAS/Pi ALSA device accepts a native 16 kHz stream.
-
-Runtime config reloads interrupt active backend capture and must release or defer audio/TTS/MCP resources without blocking the replacement runtime. These reload semantics are part of the general runtime architecture, not Synology-specific behavior.
-
-### Security and first-run posture
-
-A LAN/NAS-exposed web monitor should use `WEB_PASSWORD` unless unauthenticated access is deliberately accepted. Permanent API keys stay in mounted secret text files, not in the image.
-
-The recommended first validation shape is browser/text control with browser or silent TTS. This proves the app, MCP connectivity and API configuration before adding host audio passthrough. Operational commands for creating the Synology project, starting Compose and accessing the monitor live in the user-facing README rather than this architecture section.
-
-## 1.10 Rack connectivity, Tailscale and remote MCP
-
-The mobile-rack architecture keeps the MCP servers physically or logically close to the stage hardware. A Raspberry Pi or equivalent rack computer acts as the control gateway; LiveStageAssistant may run on a Synology NAS, PC, Raspberry Pi, container host or another authorized machine.
+Canonical states:
 
 ```text
-                   LiveStageAssistant / remote agent
-                              |
-                    MCP over Streamable HTTP
-                              |
-              +---------------+----------------+
-              |                                |
-       private Tailscale                trusted HTTPS
-       when both nodes can              when an external
-       join the tailnet                 client needs it
-              |                                |
-              +---------------+----------------+
-                              |
-                              v
-                     RACK GATEWAY / PI
-                 +------------+-------------+
-                 |                          |
-          XMSeries-MCP                 QLCPlus-MCP
-          HTTP MCP                     HTTP MCP
-                 |                          |
-            local OSC               local/native QLC+
-                 |                          |
-             mixer                     lighting
+STARTING
+  -> startup loader cue/loop
+
+READY
+  -> ready announcement and optional READY_SOUND_FILE
+
+WAIT_WAKE
+  -> LISTENING_SOUND_FILE once when entering armed wake-word wait
+  -> then silence while waiting for activation
+
+WAKE_DETECTED
+  -> WAKE_DETECTED_SOUND_FILE
+  -> user knows the assistant is now accepting the command
+
+LISTENING
+  -> LISTENING_SOUND_FILE
+  -> used when wake word is disabled/direct listening begins
+
+PROCESSING
+  -> THINKING_SOUND_FILE loop
+  -> begins only after the user command is actually accepted
+
+RESULT_READY
+  -> stop thinking
+  -> COMMAND_ACK_SOUND_FILE
+
+SPEAKING
+  -> assistant speech output
+
+IDLE
+  -> transition back to WAIT_WAKE when wake is enabled
+  -> transition back to LISTENING when wake is disabled
 ```
 
-Architectural rules:
+The semantic state machine must be provider/engine-neutral. Engines/runtime emit semantic events; the shared audio-feedback layer maps those states to configured cues. This preserves the Classic user experience while allowing Realtime and future engines to use the same UX contract.
 
-- Tailscale is the preferred private transport when LSA and the rack gateway can join the same tailnet. It gives remote MCP access without forwarding venue/router ports.
-- Public HTTPS is an alternative, not a requirement. When an MCP must be reachable by a client that cannot join the tailnet, expose only the MCP HTTP surface through trusted TLS and appropriate authentication/access control. A reverse proxy or Tailscale Funnel may provide this transport, but neither is part of the MCP business logic.
-- OSC, DMX/native lighting ports and other device protocols stay on the rack/local network. Do not expose them directly to the public Internet.
-- No NAS subnet routing is required merely to control the rack: LSA talks to the rack MCP endpoint, and the rack MCP server talks locally to the device.
-- MCP server ports, Tailscale addresses, DNS names and rack LAN addresses are deployment values, not architectural constants. The selected `.env` and `MCP_CONFIG` files are the source of truth.
-- The rack remains usable behind venue Wi-Fi, guest networks, 4G/5G routers, phone tethering, Starlink or another upstream connection as long as the chosen private/public MCP transport can establish outbound connectivity.
+Realtime owns one common provider-event loop and one common capture path. WebMonitor integration, session-context injection and the local wake gate plug into that runtime through explicit `RealtimeRuntimeCallbacks`; they must not monkey-patch `event_loop`, `capture_loop` or `SemanticAudioController.transition`. This keeps provider events, MCP bridge calls, wake authorization and UI state under one state machine.
 
-The repository still carries an explicit `.env.tailscale` profile using `mcp_servers_tailscale.json`. The current configuration demonstrates that private and public transports can coexist: the mixer MCP is addressed through a private Tailscale IP while QLCPlus-MCP is addressed through a trusted HTTPS endpoint. This hybrid topology is valid and is more general than the older assumption that every remote MCP must use Tailscale.
+## 1.8 MCP architecture
 
-The original rack design used a fixed example topology such as a rack LAN in `192.168.100.0/24` and a mixer at `192.168.100.16`. Such addresses remain useful deployment examples but must not be copied into generic architecture logic. Likewise, XMSeries-MCP OSC port/protocol settings must follow the actual mixer family and MCP configuration rather than a single hard-coded port.
+MCP servers remain authoritative for domain-specific tools and protocol logic. LSA must not duplicate mixer, lighting or other domain protocol implementations inside the agent.
 
-This section supersedes the former `LiveStageAssistant_Architecture_Tailscale_Rack.docx`: its durable design principles are retained here, while old installation commands, fixed addresses and the former “QLC-MCP future” wording are intentionally not preserved as architecture requirements.
+LSA may discover MCP servers, load optional MCP prompts/instructions, expose or route tools, pass conversation/speaker context, call MCP tools and return structured results to the model. Current external/live state is time-sensitive and must be read again through MCP tools rather than answered from conversation memory.
+
+HTTP and STDIO are both durable transports. Local STDIO remains a first-class capability for classic/offline use and for realtime through the LSA bridge path.
+
+Each MCP server owns two independent realtime policies:
+
+1. **Transport policy**: `native`, `stdio` or `auto`.
+2. **Permission policy**: `open` by default, optional `approval` independently per server.
+
+One MCP's permission or transport choice must not implicitly change another MCP.
+
+## 1.9 Offline reliability
+
+Offline mode remains cloud-independent and uses the deterministic Local engine, local faster-whisper, Piper local TTS and local/STDIO MCP command gateways. `CONNECTIVITY_MODE=offline` always selects Local and never dispatches to a cloud engine. When connectivity is online, Local remains selectable alongside Cloud.
+
+On `realtime-voice-architecture`, OR4 established that generative local tool planning was unsuitable for the Pi5 stage-control critical path. The production Local engine therefore uses deterministic natural-command interpretation and MCP command gateways; LSA remains domain-agnostic and orchestrates server selection, analyze/execute flow and safety. The experimental local-LLM/Ollama implementation and its benchmark harnesses have now been removed. Cloud Classic and Realtime engines remain available online.
+
+The common `ConnectivityManager` and `EngineSupervisor` implement the production ownership model. Basic Pi5 Online -> Offline -> Online round trips are validated for both Classic and OpenAI Realtime with local loss/READY announcements and without observed audio-device lockup.
+
+## 1.10 Rack connectivity and remote MCP
+
+The rack gateway may expose MCP servers through private HTTP, trusted HTTPS, Tailscale or Tailscale Funnel depending on the client. Device protocols such as OSC remain local to the rack.
+
+Provider-native remote MCP requires a provider-reachable endpoint, typically authenticated HTTPS. `localhost`, private-only LAN addresses and STDIO are not directly reachable by a cloud realtime provider and therefore require the LSA bridge path.
 
 ---
 
 # 2. Roadmap System
 
-This section is the authoritative implementation backlog for architecture-level improvements.
-
-Each roadmap has a stable short identifier and numbered milestones. A request such as:
-
-```text
-Implement milestone RV3 of Realtime Voice Architecture
-Implement milestone MK2 of MCP Knowledge Architecture
-Implement milestone AV1 of Audio Validation
-```
-
-must be resolvable from this document alone.
-
-## 2.1 Milestone rules
-
 - `[ ]` = planned/not complete.
 - `[~]` = implementation in progress or implemented but not fully validated.
-- `[x]` = implemented **and tested/validated** at the level defined by that milestone.
+- `[x]` = implemented and tested/validated at the level defined by that milestone.
 - Do not mark a milestone complete merely because code exists.
 - When a milestone is implemented, update this document in the same change.
 - Keep short implementation notes under the relevant milestone rather than creating another roadmap/spec file.
-- New architecture improvements should normally become a new subsection here, not a new Markdown document.
 
 ---
 
 # 3. Roadmap RV - Realtime Voice Architecture
 
-**Status:** active experimental roadmap. RV0 creates/refreshes the dedicated `realtime-voice-architecture` branch from the current `main` before implementation work begins.
+**Status:** active experimental roadmap on dedicated branch `realtime-voice-architecture`. RV0 and RV1 are validated. RV2B STDIO bridge is validated on Pi5. RV2C AUTO safety is validated and AUTO now prefers a configured local STDIO path without a destructive pre-probe; native remains an explicit/remote capability and safe alternate path. RV2E cost characterization is complete for the current representative read scenario, including cold/warm separation. RV2D health/status and single-runtime WebMonitor ownership are implemented and waiting for consolidated Pi/browser validation. Semantic audio feedback parity remains a priority before RV3 wake-word completion.
 
-**Goal:** add a selectable low-latency full-duplex realtime voice path alongside the existing classic STT -> LLM -> TTS path, without decommissioning the classic architecture, without rewriting the existing MCP execution mechanism, and while preserving wake-word behavior, speaker/context features, offline operation, GUI configuration and stage safety.
+**Goal:** provide a clean Local/Cloud runtime split: deterministic Local for offline-safe command execution, and selectable Cloud engines (Classic, OpenAI Realtime, Gemini Live), while preserving MCP transport flexibility, wake-word behavior, semantic user feedback, speaker/context features, GUI configuration and stage safety.
 
 ## RV architecture invariants
 
 1. Do not rewrite LSA wholesale.
-2. The classic pipeline remains a first-class supported path. RV contains no classic-pipeline decommissioning milestone.
-3. Online mode may use classic or realtime; offline mode remains classic-only until a separately validated local realtime architecture exists.
-4. LSA remains MCP-agnostic. Realtime code must contain no XMSeries-, QLCPlus- or other domain-specific execution logic.
-5. RV does not redesign the existing MCP discovery, routing, execution, error handling or domain safety mechanisms. Realtime tool calls are adapted only as needed to enter the existing LSA tool/MCP execution path.
-6. Adding a new MCP must not require modifying the realtime engine or provider adapter.
-7. Realtime providers are interchangeable behind a provider-neutral interface. OpenAI Realtime is the first reference implementation, not a permanent architectural dependency.
-8. In a realtime turn, the realtime model performs the functional roles normally split across STT + LLM/reasoning + TTS, including deciding when to emit a tool call.
-9. Realtime turns must reuse the same relevant LSA context sources, agent instructions and existing tool path rather than introducing a second domain-control stack.
-10. `WAKE_WORD` remains the single source of truth for wake activation in classic and realtime modes. No realtime-specific wake enable flag is allowed.
-11. The GUI eventually exposes the selected voice pipeline and hides settings irrelevant to that pipeline while preserving shared settings and the inactive pipeline's saved configuration.
-12. Measure latency, reliability, tool-call quality and real end-to-end cost before preferring realtime over the working classic path.
-13. Keep Python as the main backend language unless profiling proves a narrow hot path needs another language.
+2. Classic remains a first-class Cloud path. Deterministic Local is the permanent offline path and may also be selected while online; no local generative LLM is part of the supported architecture.
+3. LSA remains MCP-agnostic. Realtime code must contain no XMSeries-, QLCPlus- or other domain-specific execution logic.
+4. Realtime supports provider-native remote MCP and an LSA bridge into the existing MCP client.
+5. STDIO remains a first-class durable capability.
+6. `MCP_CONFIG` remains the common MCP inventory/source of truth.
+7. MCP transport policy is configured per server: `native`, `stdio`, `auto`.
+8. MCP permission policy is configured per server: `open`, `approval`.
+9. GUI and runtime edit/read the same canonical MCP configuration.
+10. `.env` profiles select profile-level behavior and MCP inventory; they do not duplicate per-server policy.
+11. Adding a new MCP must not require domain-specific changes to the realtime engine/provider adapter.
+12. Realtime providers are interchangeable behind a provider-neutral interface.
+13. `WAKE_WORD` remains the single source of truth for activation.
+14. Technical configuration/internal prompts are English; user interaction follows detected language.
+15. Realtime uses the general LSA prompt plus a small realtime voice addendum.
+16. Realtime logs preserve `Utilisateur:` and `Assistant:` transcripts when available.
+17. Measure latency, reliability, tool quality and cost before selecting defaults.
+18. No automatic retry may create credible duplicate stage-control writes.
+19. Startup loader timing/policy belongs to the common runtime, not individual engines.
+20. Connectivity detection, continuous connectivity watching, profile switching and engine switching belong to the common runtime, not individual engines.
+21. Semantic audio feedback states and cue policy belong to a shared layer, not individual engines.
+22. GUI configuration must not duplicate equivalent screens per engine; common controls remain in one stable place, with only genuinely engine-specific controls shown conditionally.
+23. Cloud and local speech output use independent common gains (`CLOUD_TTS_OUTPUT_GAIN`, `LOCAL_TTS_OUTPUT_GAIN`), not per-engine gain settings.
+24. `Assistant connecté à internet` belongs to an ONLINE connectivity event; `Assistant vocal prêt à exécuter des commandes` belongs to an ENGINE READY event.
+25. Loss of Internet while a cloud engine is active must be announced through a guaranteed-local speech path before/while switching to offline.
+26. Low-level ALSA/JACK probe noise should be suppressed while real audio failures remain visible as concise LSA errors.
+27. For stage-local MCP servers, measured latency takes precedence over provider-native elegance: AUTO prefers a healthy local/STDIO execution path when available while preserving explicit native mode.
+28. Production exposes exactly one WebMonitor owned by the common runtime. Child engines must never bind a second GUI/server; remaining legacy handlers are migration sources only, not a second runtime architecture.
 
 ## RV target architecture
 
 ```text
-                           LiveStageAssistant
-                                  |
-                           VOICE_PIPELINE
-                         +--------+--------+
-                         |                 |
-                      classic          realtime
-                         |                 |
-                  STT -> LLM -> TTS   RealtimeEngine
-                         |                 |
-                         |          provider abstraction
-                         |          +------+-------+
-                         |          |              |
-                         |       OpenAI         Gemini / future
-                         |       Realtime       realtime provider
-                         |          |
-                         +----------+----------+
-                                    |
-                           structured tool call
-                                    |
-                       existing LSA tool/MCP path
-                                    |
-                              any MCP server
+                         LiveStageAssistant
+                                |
+                    +-----------+-----------+
+                    |                       |
+            ConnectivityManager      SemanticAudio/Startup
+                    |                       |
+                    +-----------+-----------+
+                                |
+                        EngineSupervisor
+                  +-------------+-------------+
+                  |             |             |
+               classic      realtime        local
+                  |             |             |
+           existing MCP     native/bridge  local MCP
+                  |             |             |
+                  +-------------+-------------+
+                                |
+                       Common WebMonitor
+```
+## RV prompt and spoken-language policyThe VAD has no language prompt. Prompting applies to the realtime model/session, not speech-boundary detection.At engine instantiation, LSA logs the exact final consolidated prompt that is sent to the selected LLM path. Classic/OpenAI logs the prompt after freshness and MCP prompt merging, backend Realtime logs the prompt after MCP prompt merging and realtime voice-control contract composition, and browser Realtime logs the instructions passed to the browser session secret flow.`ASSISTANT_SYSTEM_PROMPT` and `STT_PROMPT` are prompt-file references, not inline prompt bodies. By default they point to `data/prompt/assistant_system_prompt.md` and `data/prompt/stt_prompt.md`. The Web GUI exposes these values as dropdowns populated from `data/prompt/*.md` and `data/prompt/*.txt`; the selected file path is persisted in the active env profile and resolved relative to the env profile directory first, then relative to the project root for CLI, service and Docker execution.```textPROMPT.md / general LSA instructions              +
+realtime voice addendum
+              =
+realtime session instructions
 ```
 
-The realtime provider handles audio understanding, model reasoning/tool selection and audio response for realtime turns. LSA keeps local audio-device ownership, activation policy, optional wake-word detection, speaker/context handling where applicable, existing tool/MCP execution, online/offline switching, fallback, logging and metrics.
+A tool-required turn must produce no spoken narration before tool execution; the model calls the tool silently and speaks once after required tool results are available.
 
-The intended configuration shape after RV8 is conceptually:
-
-```env
-VOICE_PIPELINE=classic
-# or
-VOICE_PIPELINE=realtime
-
-REALTIME_PROVIDER=openai
-OPENAI_REALTIME_MODEL=<configured-realtime-model>
-```
-
-Provider-specific model IDs are configuration values, never architectural constants. Alternate providers may add their own model settings, for example a future Gemini realtime model, while implementing the same provider-neutral realtime interface.
-
-## RV classic/realtime coexistence policy
-
-Both pipelines remain supported:
+## RV MCP transport strategy
 
 ```text
-online  -> classic OR realtime
-offline -> classic
+native
+  -> provider-native remote MCP only
+  -> useful when the provider must reach the MCP directly or no healthy local bridge is available
+
+stdio
+  -> LSA bridge / existing MCP client only
+  -> preferred for stage-local execution when available and healthy
+
+auto
+  -> prefer configured local STDIO/bridge without starting it during selection
+  -> validate local health during the single real bridge startup
+  -> use native when no local execution route is configured or when native is explicitly selected
+  -> cross-transport fallback only on clearly safe failure
+  -> never blindly replay an ambiguous write
 ```
 
-Classic remains required for offline operation, automatic fallback, diagnostics, regression comparison and provider independence. Switching pipelines must not erase or rewrite unrelated settings from the inactive pipeline.
+For write/control operations, fallback is allowed only when non-execution of the previous write is established. Ambiguous post-dispatch outcomes are not retried automatically.
 
-The GUI behavior targeted by RV8 is:
-
-- **classic selected:** show classic STT/LLM/TTS provider/model settings;
-- **realtime selected:** show realtime provider/model/session/voice settings;
-- **always shared:** wake word, audio input/output, MCP configuration, applicable speaker/context settings, sessions and security;
-- preserve hidden settings so switching classic <-> realtime is reversible.
-
-## RV wake-word policy
-
-The four combinations are required:
+## RV MCP permission strategy
 
 ```text
-classic  + wake ON
-classic  + wake OFF
-realtime + wake ON
-realtime + wake OFF
+Open / unrestricted   <- DEFAULT
+  -> expose all tools
+  -> no ordinary per-call approval
+
+Require approval
+  -> expose tools with approval according to provider/bridge capability
 ```
-
-No realtime-specific wake enable/disable setting should be introduced. `WAKE_WORD` remains the single source of truth.
-
-With wake enabled:
-
-```text
-WAIT_WAKE -> REALTIME_SESSION_ACTIVE -> inactivity/stop -> WAIT_WAKE
-```
-
-Follow-up turns do not require repeating the wake word while the realtime session remains active.
-
-With wake disabled:
-
-```text
-REALTIME_READY -> speech/session activation -> REALTIME_SESSION_ACTIVE
-```
-
-openWakeWord must not be instantiated or required in this mode.
-
-## RV provider strategy
-
-### OpenAI Realtime direct
-
-Use first as the reference implementation and latency baseline. The backend implementation starts with a direct Python realtime transport, initially WebSocket, so existing backend audio-device selection/routing can be reused and measured with minimal orchestration overhead.
-
-At least one cost-oriented realtime model and one higher-capability realtime model should be benchmarked when available/configured. Model IDs remain configurable because provider offerings change independently of LSA architecture.
-
-### Pipecat + OpenAI Realtime
-
-Benchmark after the direct path is proven. Pipecat remains attractive because it is Python-first and provider-neutral, but it should be adopted only if measured latency/resource/complexity trade-offs justify the extra orchestration layer.
-
-### LiveKit Agents
-
-Reconsider if LSA evolves into multi-participant/distributed realtime audio. It is currently likely heavier than needed for a single rack assistant.
-
-### Gemini Live
-
-Use as the first alternate-provider benchmark after the OpenAI reference path is stable. The same provider-neutral `RealtimeEngine` boundary must allow it without changing MCP execution or domain logic.
-
-### Existing classic pipeline
-
-Retain permanently for offline mode, fallback, diagnostics and benchmark comparison unless a future separate roadmap explicitly changes that decision.
-
-## RV language strategy
-
-- **Python** stays the main backend language.
-- **TypeScript** is appropriate for browser-native WebRTC and existing MCP servers.
-- **Go/Rust** are only candidates for narrow profiled audio/DSP hot paths; no application-wide rewrite is planned.
-
-## RV benchmark and instrumentation contract
-
-Classic and realtime measurements must be comparable where the concepts overlap. The exact event mapping differs because realtime combines STT, LLM and TTS inside one model/session.
-
-Reference timestamps:
-
-```text
-T0 activation reference
-   wake detected if wake enabled
-   first accepted speech/session activation if wake disabled
-T1 first useful audio accepted/streamed
-T2 user speech end / turn committed
-T3 classic STT complete OR realtime model turn processing active
-T4 first tool request emitted, when applicable
-T5 existing tool/MCP execution begins
-T6 existing tool/MCP execution completes
-T7 first response audio frame available
-T8 first response audio played
-T9 playback ends
-```
-
-Track at least:
-
-- activation -> useful audio;
-- speech-end -> STT complete for classic;
-- speech-end -> first tool request when applicable;
-- tool/MCP execution duration;
-- speech-end -> first model audio;
-- speech-end -> first audible response;
-- total interaction duration;
-- barge-in stop latency;
-- reconnect latency and fallback count;
-- provider/model errors and audio-device lockups;
-- tool-selection accuracy and argument accuracy on a shared command corpus;
-- duplicate/unnecessary tool-call rate;
-- median/p90/p95 where sample size is sufficient.
-
-### Cost comparison
-
-Cost must be measured end-to-end, not by comparing only LLM token prices.
-
-```text
-classic cost  = STT + LLM input/output + TTS
-realtime cost = realtime audio input + model/context/reasoning/tool use + audio output
-```
-
-For each benchmark provider/model, record actual usage when the API exposes it and derive at least:
-
-- average cost per interaction;
-- cost for a fixed repeated-command corpus, preferably 100 representative commands;
-- cost per minute of representative conversation;
-- effect of prompt/context caching where available.
-
-Cost is evaluated together with latency, tool-call correctness and stability; no provider/model is selected solely on per-token price.
 
 ## RV milestones
 
-### RV0 - Branch, classic baseline and realtime skeleton
+### RV0 - Branch, classic baseline and realtime skeleton — VALIDATED
 
-Goal: establish a current, measurable starting point before any realtime audio implementation.
+- [x] dedicated branch established;
+- [x] provider-neutral architecture documented;
+- [x] Classic/realtime coexistence policy documented;
+- [x] Classic timing/cost baseline recorded;
+- [x] isolated `RealtimeEngine` skeleton created.
 
-- [ ] create/refresh `realtime-voice-architecture` from the current `main`;
-- [x] realtime architecture and provider-neutral invariants documented in this file;
-- [x] classic/realtime coexistence and no-decommissioning policy documented;
-- [x] optional wake-word policy clarified;
-- [x] roadmap consolidated into this document;
-- [ ] formalize the classic timing events needed for comparison;
-- [ ] add only missing lightweight classic-path instrumentation;
-- [ ] record a reproducible classic latency baseline;
-- [ ] record a reproducible classic end-to-end cost baseline where cloud usage is measurable;
-- [ ] create an isolated `RealtimeEngine` interface/package skeleton only, with no live realtime audio transport yet.
+### RV1 - Minimal OpenAI Realtime audio spike — VALIDATED
 
-Exit: dedicated branch is current with `main`, classic latency/cost baseline is recorded, and the realtime package boundary exists without changing production classic behavior.
+- [x] provider-neutral OpenAI adapter;
+- [x] direct WebSocket transport;
+- [x] configured mic/output reuse;
+- [x] direct realtime speech/audio;
+- [x] barge-in/cancellation validated;
+- [x] clean shutdown/resource release;
+- [x] latency/cost metrics;
+- [x] wake-disabled operation without openWakeWord;
+- [x] French/English behavior validated.
 
-### RV1 - Minimal OpenAI Realtime audio spike
+### RV2 - Dual-path Realtime MCP integration
 
-Goal: prove realtime audio round trip without tool/MCP execution.
+#### RV2A - Native mode reference path — IN PROGRESS
 
-- [ ] implement the OpenAI provider behind the provider-neutral realtime interface;
-- [ ] use direct Python WebSocket transport first;
-- [ ] selected backend mic -> OpenAI Realtime;
-- [ ] returned realtime audio -> selected backend output;
-- [ ] realtime model handles speech understanding/reasoning/response generation for the turn;
-- [ ] interruption/barge-in and cancellation;
-- [ ] reconnect and clean session shutdown;
-- [ ] realtime latency metrics aligned with the benchmark contract;
-- [ ] capture actual end-to-end realtime cost/usage when exposed by the provider;
-- [ ] benchmark at least a cost-oriented and a higher-capability configured realtime model when available;
-- [ ] verify `WAKE_WORD=` works without openWakeWord dependency;
-- [ ] verify no audio-device lockup after repeated start/stop/reconnect cycles.
+- [x] XMSeries provider-native HTTPS/Funnel discovery/read/write;
+- [x] provider-neutral realtime code;
+- [x] production open permission validated;
+- [ ] validate QLCPlus as second native fixture; nice-to-have / non-blocking;
+- [~] complete failure-mode metrics.
 
-Exit: stable 10-minute conversation, repeatable interruption, measurable latency comparison against classic, recorded cost comparison and no audio-device lockup.
+#### RV2B - STDIO mode / LSA bridge — VALIDATED
 
-### RV2 - Realtime connection to the existing tool path
+- [x] bridge realtime tool events into existing MCP execution;
+- [x] preserve STDIO/local capability;
+- [x] read and controlled write validated on Pi5;
+- [x] explicit STDIO never attempts native.
 
-Goal: connect realtime model tool calls to the existing LSA tool/MCP execution mechanism without redesigning that mechanism.
+#### RV2C - Auto mode and transport fallback — FUNCTIONALLY VALIDATED
 
-- [ ] convert provider realtime tool-call events only as necessary into the representation already consumed by LSA;
-- [ ] dispatch through the existing tool/MCP path rather than creating a parallel MCP implementation;
-- [ ] return the existing tool result to the realtime provider/session;
-- [ ] preserve current MCP discovery/routing/execution/error behavior;
-- [ ] add timestamps around the realtime-to-existing-tool-path boundary;
-- [ ] handle cancellation/retry/reconnect without duplicate tool execution;
-- [ ] compare classic versus realtime tool selection and arguments on the same representative command corpus;
-- [ ] use a safe/read-only XMSeries tool first only as a validation fixture, then a controlled write;
-- [ ] validate with QLCPlus only as a second fixture, not as realtime-specific code;
-- [ ] prove that another MCP can be used without modifying the realtime engine/provider adapter.
+- [x] per-server AUTO startup selection;
+- [x] MCP prompt parity across native/bridge;
+- [x] pre-dispatch native failure -> STDIO fallback;
+- [x] safe fallback policy blocks ambiguous write replay;
+- [x] integrated-service 502 -> STDIO fallback validated;
+- [x] auth/timeout/post-dispatch deterministic unit tests and fault matrix executed on Pi5;
+- [x] real provider-native post-dispatch mutation fault injection validates no ambiguous replay;
+- [x] direct native-vs-STDIO read-only comparison completed on the same Pi5/XR16 with 20 samples;
+- [x] AUTO selection priority changed to local-STDIO-first and functionally validated on Pi5 (`effective=stdio`, 39 tools discovered on the real mixer MCP);
+- [ ] representative Classic-vs-Realtime tool corpus — nice-to-have validation harness, not roadmap-blocking;
+- [ ] arbitrary unrelated MCP proof without engine changes — nice-to-have validation harness.
 
-Exit: repeated tool commands execute through the existing path with correct selection/arguments, no duplicate writes, no domain-specific realtime code and no ambiguous queued actions after cancel/reconnect.
+### RV2C direct native-vs-STDIO latency benchmark — PI5 VALIDATED
+
+Benchmark conditions: same Pi5, OpenAI Realtime `gpt-realtime-2.1`, same read-only MCP tool, same XR16, native over HTTPS/Tailscale Funnel, STDIO through the local LSA bridge, 20 samples per transport.
+
+| Metric | Native HTTPS/Funnel | STDIO/local | STDIO advantage |
+|---|---:|---:|---:|
+| MCP tool execution — median | 1,152.550 ms | 12.151 ms | ~94.9x faster tool execution |
+| MCP tool execution — p95 | 2,830.382 ms | 21.398 ms | 2,808.984 ms lower |
+| Request -> tool done — median | 1,736.432 ms | 695.502 ms | 1,040.930 ms saved (~59.9% lower latency) |
+| Request -> tool done — p95 | 3,361.784 ms | 806.767 ms | ~4.17x lower p95 |
+
+Interpretation: local STDIO is faster and materially more deterministic for stage-local execution. Native remains valuable for remote/provider-direct use and as an alternate capability.
+
+#### RV2D - Canonical config, runtime and per-MCP GUI policy — IN PROGRESS
+
+- [~] canonical backward-compatible MCP config;
+- [x] `MCP_CONFIG` remains profile-level selector;
+- [x] per-MCP GUI transport `auto/native/stdio` visually validated;
+- [x] per-MCP GUI permission `Open / Require approval` visually validated;
+- [x] GUI persistence validated;
+- [x] mixed mixer AUTO + QLCPlus STDIO validated in integrated Realtime service;
+- [x] global online `Classic / OpenAI Realtime` selector persisted;
+- [x] service launcher selects voice engine before importing Classic;
+- [x] common startup loader lifecycle implemented and Pi-validated for OpenAI Realtime and Classic;
+- [x] Realtime audio probe noise cleaned;
+- [x] common connectivity supervision and basic online/offline engine/profile round trips Pi-validated under OR2;
+- [~] server health/status shows configured/effective transport and permission; implementation complete, consolidated Pi/browser validation pending;
+- [~] one common production WebMonitor owned by `runtime.py`; child Classic/Local monitor binding suppressed under supervision, consolidated Pi/browser validation pending;
+- [~] migrate remaining configuration/session/audio-diagnostic handlers out of `agent.py` into common runtime services; implementation complete in the runtime-owned WebMonitor through shared services for web STT/TTS, backend TTS test, backend WAV preview, speaker-profile sample preview, backend microphone diagnostic and backend speaker capture. Consolidated Pi/browser validation remains pending before marking complete.
+- [ ] STDIO approval completion;
+- [~] cloud/local independent output gains through one common configuration surface;
+- [ ] final inventory consolidation/plugin-style GUI.
+
+### RV2E - Realtime MCP latency, tool-call efficiency and cost — COST CHARACTERIZATION VALIDATED
+
+- [ ] representative MCP command corpus — nice-to-have validation harness;
+- [x] redundant calls quantified on the representative read path and reduced to the expected resolver + read sequence;
+- [ ] compare alternate realtime models — optional optimization, not blocking current roadmap;
+- [x] locate major latency ownership for current production path;
+- [x] benchmark native vs bridge for representative read-only request on identical Pi5/XR16 conditions;
+- [x] benchmark Classic vs Realtime end-to-end cost on the same spoken read request with actual provider usage;
+- [x] separate Realtime cold/session overhead from warm marginal request cost;
+- [x] estimate cost per 100 and 1,000 requests from measured repeated data;
+- [x] obtain repeated transaction series sufficient for median and p95 on the representative read scenario.
+
+Final repeated transaction series (2026-09-07, same spoken `Quel est le volume de clic ?` request, same target/result, same local STDIO execution):
+
+| Metric | Classic online | Realtime warm |
+|---|---:|---:|
+| Median variable cost / transaction | $0.0033208 | $0.0306284 |
+| Cost / 100 transactions | $0.33208 | $3.06284 |
+| Cost / 1,000 transactions | $3.3208 | $30.6284 |
+| Median post-speech latency | 10.19 s | 2.14 s |
+| p95 post-speech latency | 11.16 s | 2.23 s |
+| Cost ratio vs Classic | 1x | 9.22x |
+
+Realtime cold first transaction in the same series: **$0.0772088**. The warm transactions are therefore the useful estimate for steady conversational operation. On this scenario Realtime warm is materially more expensive but approximately 79% lower in median post-speech latency.
+
+Interpretation: the cost request is closed for the current representative transaction. Do not generalize 9.22x to every future prompt/tool shape; repeat only if model, provider, MCP routing or conversation-context policy changes materially.
+
+Post-validation cleanup (2026-09-19): the historical measurements above are retained as the architecture decision record, while the temporary RV0/RV1/RV2 latency/cost instrumentation, probes and benchmark scripts used to obtain them have been removed from production code. Functional timeout/watchdog/VAD/cooldown timing remains because it is runtime behavior, not benchmark instrumentation.
+
+### RV2F - Semantic user audio feedback parity — PRIORITY
+
+**Goal:** preserve and generalize the Classic user-facing audio-state behavior across Realtime, Local and future engines so the operator always knows whether LSA is starting, ready, waiting for wake, listening, processing, ready to answer or speaking.
+
+- [x] define provider/engine-neutral semantic states in `voice_assistant/semantic_audio.py`;
+- [x] define shared cue mapping for startup, ready, listening, wake-detected, thinking and result-ready states;
+- [x] common semantic-audio controller/lifecycle independent of engine/provider implemented;
+- [~] Realtime emits/uses semantic `READY`, `LISTENING`/`WAIT_WAKE`, `PROCESSING`, `RESULT_READY`, `SPEAKING`, `IDLE` events; initial Pi logs validate wake-OFF transitions, final audible wake-ON recette pending;
+- [~] Classic behavior is adapted to the shared contract without regressing its validated wake-word behavior; implementation complete, Pi wake ON/OFF audible validation pending;
+- [~] semantic thinking loop starts only after command acceptance and stops before result-ready/speech in Realtime; audible validation pending;
+- [~] `WAIT_WAKE` plays the same one-shot ready-to-listen cue when entering armed wake wait, then remains silent; ambient speech must not trigger processing cues; implementation in shared controller, final noisy-room validation pending;
+- [~] `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event; implementation complete for Classic and Realtime wake paths, audible validation pending;
+- [~] preserve Classic-style post-TTS suppression/re-arm behavior before returning to wake listening; implementation preserved, comparison validation pending;
+- [x] add optional `READY_SOUND_FILE` while preserving spoken READY announcements;
+- [x] expose semantic audio cue selection once in the common GUI, not separately by engine;
+- [ ] consolidated Pi validation with wake OFF and wake ON.
+
+Exit: Classic, Realtime and Local expose the same user-understandable semantic state feedback, with wake-word authorization semantics preserved.
 
 ### RV3 - Optional wake word and realtime session lifecycle
 
-- [ ] wake-enabled realtime uses local openWakeWord;
-- [ ] wake-disabled realtime does not instantiate/require openWakeWord;
-- [ ] GUI save/reload preserves `WAKE_WORD`;
-- [ ] pipeline switching does not alter `WAKE_WORD`;
-- [ ] follow-up turns do not require repeating the wake word while the session remains active;
-- [ ] inactivity/close policy defined;
-- [ ] return to `WAIT_WAKE` only when wake enabled;
-- [ ] assistant output cannot retrigger wake word;
-- [ ] real-speaker barge-in tested;
-- [ ] all four classic/realtime + wake ON/OFF combinations remain behaviorally coherent.
+- [~] wake-enabled backend realtime uses local openWakeWord; provider-neutral local gate implemented, final Pi recette pending;
+- [x] wake-disabled realtime does not instantiate openWakeWord;
+- [~] preserve `WAKE_WORD` across engine switching; unified profile save and common wake gate implemented, final Pi recette pending;
+- [~] integrate RV2F semantic feedback contract with wake lifecycle; WAIT_WAKE/WAKE_DETECTED/re-arm wiring implemented;
+- [~] preserve Classic post-TTS suppression/re-arm semantics; Realtime uses the same post-TTS suppression contract, consolidated comparison pending;
+- [~] inactivity/close policy implemented through `REALTIME_INACTIVITY_TIMEOUT_SECONDS` and `REALTIME_ACTION_GRACE_SECONDS`; disabled by default until field timing is validated;
+- [~] production-service barge-in retest; response cancellation is wired, hardware retest pending;
+- [x] general prompt + realtime addendum composition;
+- [x] transcript observability.
 
 ### RV4 - Realtime robustness, cancellation and fallback
 
-Goal: harden the realtime path itself; this milestone does not refactor MCP.
-
-- [ ] WebSocket/provider reconnect behavior;
-- [ ] network-loss handling;
-- [ ] cancellation during audio generation;
-- [ ] cancellation immediately before/during/after a tool call;
-- [ ] duplicate tool-call prevention across retries/reconnects;
-- [ ] provider/session timeout handling;
-- [ ] provider errors surfaced naturally;
-- [ ] existing tool errors returned to the realtime model without creating a parallel error layer;
-- [ ] deterministic session/audio cleanup;
-- [ ] automatic fallback to classic when realtime becomes unavailable and fallback is safe;
-- [ ] no ambiguous action state after interruption/reconnect/fallback.
-
-Exit: failure injection cannot cause duplicate control actions, stuck audio/session resources or loss of the classic fallback path.
+- [~] WebSocket/provider reconnect while Internet remains available; bounded exponential reconnect implemented, Pi/provider validation pending;
+- [x] basic network-loss handling and Realtime -> Local -> Realtime recovery validated through common OR2 supervisor on Pi5;
+- [~] cancellation around MCP calls; speech cancellation does not cancel/replay already-dispatched MCP tasks;
+- [~] duplicate-call prevention across reconnects; bounded call-id memory suppresses duplicate bridge dispatch within the child lifecycle;
+- [~] provider/session timeout handling; startup/tool timeouts and reconnect budget implemented;
+- [~] realtime turn lifecycle now uses explicit phases (`idle/capturing/wait_response/responding/tool_running/wait_followup`) and phase-specific soft deadlines. A turn timeout cancels only the current response, clears stale provider input/output buffers when supported, resets local turn state and returns to listening **without reconnecting the provider session**. Reconnect/fallback is reserved for actual transport/provider failures. Pi sequence validation remains pending;
+- [~] deterministic cleanup; reconnect attempts reuse the existing deterministic session cleanup path;
+- [~] provider-failure fallback to Classic/local implemented at supervisor level but not prioritized for further work or validation yet;
+- [~] no ambiguous action state after interruption/reconnect/fallback; realtime turn tracking now records active response, tool-in-flight, cancellation/failure reset and grace-period state. Hardware reconnect/interruption recette pending.
 
 ### RV5 - Pipecat comparison
 
-- [ ] equivalent OpenAI Realtime benchmark through Pipecat;
-- [ ] compare latency/CPU/RAM;
-- [ ] compare end-to-end cost for the same provider/model where applicable;
-- [ ] compare code complexity and failure surface;
-- [ ] compare interruption/reconnect behavior;
-- [ ] compare provider portability;
-- [ ] select primary orchestration approach and record the measured rationale here.
+- [ ] equivalent benchmark;
+- [ ] latency/CPU/RAM/cost/complexity comparison;
+- [ ] orchestration choice from measured evidence.
 
 ### RV6 - Alternate realtime provider
 
-- [ ] Gemini Live spike behind the same provider-neutral realtime interface;
-- [ ] same latency/reliability benchmark suite;
-- [ ] same end-to-end cost methodology;
-- [ ] French recognition/voice comparison;
-- [ ] tool-selection/argument comparison on the same corpus;
-- [ ] reconnect/session stability comparison;
-- [ ] confirm adding the provider requires no MCP/domain-specific change;
-- [ ] record whether the alternate provider is retained as supported, benchmark-only or rejected.
+- [~] alternate provider behind same interface; Gemini Live adapter/factory implemented, live validation pending;
+- [x] architecture requires no new connectivity watcher for Gemini/other engines;
+- [ ] equivalent latency/reliability/cost/multilingual benchmark;
+- [~] preserve bridge/STDIO regardless of provider-native MCP capability; Gemini uses the common LSA bridge and rejects unsupported native mode explicitly.
 
 ### RV7 - Browser WebRTC
 
-- [ ] direct experimental browser realtime transport;
-- [ ] backend-mediated ephemeral/session authorization;
-- [ ] backend retains existing tool/MCP execution and security ownership;
-- [ ] classic browser text/audio path retained;
-- [ ] mobile browser validation;
-- [ ] latency/cost comparison with backend WebSocket path;
-- [ ] reconnect and browser permission behavior validated.
+- [~] direct browser realtime transport; WebRTC diagnostic path implemented, browser validation pending;
+- [~] backend-mediated ephemeral authorization; short-lived OpenAI client-secret endpoint implemented;
+- [~] secrets stay server-side; browser receives only the short-lived client secret;
+- [ ] optional browser-side wake gate for direct OpenAI Realtime WebRTC. Current behavior is intentional: browser Realtime streams directly to the provider and does not pass through the local LSA openWakeWord gate, so wake authorization is guaranteed only by backend realtime/classic/browser-STT paths. A future final design may either disable direct browser Realtime while `WAKE_WORD` is configured or implement deterministic browser-side wake detection before opening/sending realtime audio;
+- [ ] mobile browser validation.
 
-### RV8 - Unified selectable voice pipeline and GUI
-
-Target configuration:
+### RV8 - Unified selectable voice engine and GUI — IN PROGRESS
 
 ```env
-VOICE_PIPELINE=classic
-# or
-VOICE_PIPELINE=realtime
-
-REALTIME_PROVIDER=openai
-OPENAI_REALTIME_MODEL=<configured-realtime-model>
+CONNECTIVITY_MODE=online
+VOICE_ENGINE=classic
+# or openai-realtime
+OPENAI_REALTIME_MODEL=gpt-realtime-2.1
+OPENAI_REALTIME_VOICE=marin
+CLOUD_TTS_OUTPUT_GAIN=1.00
+LOCAL_TTS_OUTPUT_GAIN=1.00
+MCP_CONFIG=mcp_servers.json
 ```
 
-- [ ] runtime pipeline selection;
-- [ ] runtime realtime-provider/model selection through provider abstraction;
-- [ ] automatic fallback to classic;
-- [ ] offline profiles force/use classic without deleting realtime configuration;
-- [ ] GUI configuration for pipeline and realtime provider/model;
-- [ ] GUI hides classic-only controls in realtime mode and realtime-only controls in classic mode;
-- [ ] GUI keeps shared controls visible;
-- [ ] switching classic <-> realtime preserves the inactive pipeline's configuration;
-- [ ] health/status indicators identify active pipeline/provider and fallback state;
-- [ ] regression tests;
-- [ ] classic + wake ON tested;
-- [ ] classic + wake OFF tested;
-- [ ] realtime + wake ON tested;
-- [ ] realtime + wake OFF tested.
+- [x] runtime engine selector;
+- [x] GUI `Classic / OpenAI Realtime` persistence;
+- [x] selected Realtime starts without Classic voice stack import;
+- [x] common startup loader lifecycle across Classic and Realtime;
+- [x] offline remains separate and cloud-blocked structurally;
+- [x] common `ConnectivityManager` owns startup detection + continuous watch in code;
+- [x] `EngineSupervisor` performs profile/engine replacement in code;
+- [x] Pi validate Realtime Online -> Offline -> Online round trip;
+- [x] Pi validate Classic Online -> Offline -> Online round trip;
+- [~] provider/model/voice controls implemented in the existing common GUI; functional browser/Pi validation pending;
+- [~] health/status identifies active connectivity/engine/provider/MCP transport; implementation complete, functional validation pending;
+- [~] independent Cloud/Local output gain contract implemented; runtime/GUI wiring in progress;
+- [~] common semantic feedback configuration defined; runtime/GUI wiring in progress;
+- [~] single common runtime-owned WebMonitor architecture implemented; remaining child-owned handlers still need extraction into common services, not a second GUI;
+- [ ] no duplicated engine-specific configuration screens; consolidate any remaining temporary RV2D controls into the common sections;
+- [ ] all Classic/Realtime + wake ON/OFF combinations tested.
 
 ### RV9 - Raspberry Pi 5 stage validation
 
 - [ ] CPU/RAM/temperature;
-- [ ] network loss/reconnect/fallback;
+- [x] basic network loss/reconnect profile and engine replacement validated for Classic and Realtime;
 - [ ] high ambient noise;
-- [ ] backend audio-device stability;
-- [ ] XR16/X32 operation through the unchanged existing MCP path;
-- [ ] QLC+ simultaneous activity through the unchanged existing MCP path;
-- [ ] multiple MCPs active;
+- [x] audio stability across tested cloud -> local -> cloud round trips with no observed output lockup;
+- [~] XR16/X32 and QLC+ transport validation; XR16+QLCPlus current Pi validated, X32 pending;
+- [x] mixed MCP transport policy validated;
+- [ ] mixed permission policies;
 - [ ] long-running realtime session;
-- [ ] service restart/recovery;
-- [ ] shutdown during realtime activity;
-- [ ] profile reload and classic/realtime switching;
-- [ ] real-speaker barge-in;
-- [ ] final latency/tool-quality/cost comparison against the classic baseline.
-
-Do not merge realtime runtime code into `main` until optional wake behavior, existing tool/MCP-path integrity, interruption, failure recovery, fallback, Pi resource usage, tool-call quality and measured latency/cost trade-offs are validated at the milestone level required for the intended release. The classic pipeline remains supported after realtime integration.
+- [x] Realtime service restart validated;
+- [x] common loader lifecycle validated for Realtime and Classic startup;
+- [x] Online -> Offline -> Online engine round trips validated for both Realtime and Classic;
+- [~] barge-in validated in RV1, production-service retest pending;
+- [ ] consolidated semantic-feedback / health / GUI / gain functional recette;
+- [ ] final latency/tool-quality/cost summary after remaining functional milestones.
 
 ---
 
 # 4. Roadmap MK - MCP Knowledge Architecture
 
-**Former name:** Future RAG And MCP Knowledge Architecture.
+**Goal:** allow LSA to answer domain-specific technical questions without hard-coding device/vendor documentation into the generic agent prompt.
 
-**Goal:** allow LSA to answer domain-specific technical questions without hard-coding XMSeries, QLC+, Mixing Station, OSC, MIDI, DMX, ArtNet, sACN or vendor documentation into the generic agent prompt.
+Runtime startup remains usable when MCP servers are partially unavailable. The assistant probes configured MCP servers, skips unreachable servers when at least one server can still connect, initializes the remaining tools, and announces the actual number of available MCP tools. If no tools are available, the ready announcement says that no MCP is connected instead of implying full tool availability.
 
-## MK design principles
+Startup ready wording is composed once in `voice_assistant/startup_messages.py` and reused by Classic and Realtime so all engines announce available MCP tools with the same i18n behavior.
 
-1. The LSA agent remains domain-neutral.
-2. Domain knowledge belongs to MCP servers.
-3. MCP servers expose tools, prompts and knowledge resources.
-4. LSA discovers and synchronizes knowledge resources.
-5. Knowledge is cached/indexed locally.
-6. Reuse an existing RAG/retrieval engine before adding another vector stack.
-7. Adding an MCP should be able to add its knowledge automatically.
-8. Must remain compatible with interchangeable LLMs, including OpenAI and Ollama.
-9. Target resource footprint must remain suitable for Raspberry Pi class hardware.
+Voice preview is exposed next to the selected voice control rather than as a separate global button. Classic OpenAI/ElevenLabs, OpenAI Realtime and Gemini Live use the common `/api/backend-tts-test` path for backend playback previews; Classic browser TTS preview still uses the browser TTS path when browser output is selected.
 
-## MK target architecture
+Local mode has no LLM lifecycle. No local model service is started, stopped, pulled or monitored by LSA.
 
-```text
-MCP servers
-   |
-   +-- tools
-   +-- prompts
-   +-- knowledge:// resources
-           |
-           v
-     LSA knowledge sync
-           |
-           +-- local cache
-           +-- chunk/index
-           +-- retrieval
-           |
-           v
-        LLM context
-```
-
-Example resources:
-
-```text
-knowledge://xmseries/manual
-knowledge://xmseries/api
-knowledge://xmseries/osc
-knowledge://qlcplus/userguide
-knowledge://qlcplus/cues
-knowledge://mixingstation/api
-knowledge://mixingstation/manual
-```
-
-Recommended startup flow:
-
-1. discover MCPs;
-2. discover/fetch knowledge resources;
-3. cache locally;
-4. index/update retrieval store;
-5. inject only relevant chunks at query time.
-
-Before adding ChromaDB, FAISS, LlamaIndex or another dependency, verify whether existing LangChain/LangGraph retrieval/vector facilities can satisfy the requirement.
-
-Embedding candidates:
-
-- local SentenceTransformers `all-MiniLM-L6-v2`;
-- OpenAI `text-embedding-3-small` as cloud alternative.
-
-## MK milestones
+The Linux/Raspberry install script provisions only the supported runtime stack: openWakeWord ONNX resources, WebSocket realtime transport support, Piper local TTS and the default French Piper voice `fr_FR-siwis-medium`. Ollama and local generative models are intentionally not installed or managed by LSA.
 
 ### MK0 - Inventory existing retrieval capability
-
-- [ ] audit current dependencies and code for LangChain/LangGraph retrieval/vector support;
-- [ ] measure Raspberry Pi feasibility;
-- [ ] choose reuse path before adding a new dependency;
-- [ ] record the selected architecture here.
+- [ ] audit current dependencies/code;
+- [ ] measure Raspberry Pi feasibility.
 
 ### MK1 - Knowledge resource contract
-
-- [ ] define MCP knowledge resource naming and metadata;
-- [ ] define version/hash/update semantics;
-- [ ] define MIME/text handling and maximum resource size;
-- [ ] add example contract for XMSeries and QLCPlus.
+- [ ] naming/metadata/version/hash/MIME/size semantics.
 
 ### MK2 - Discovery and local cache
-
-- [ ] discover knowledge resources from connected MCPs;
-- [ ] fetch and cache locally;
-- [ ] isolate cache by MCP/resource;
-- [ ] detect changed/deleted resources;
-- [ ] operate safely when one MCP knowledge source is unavailable.
+- [ ] discover/fetch/cache resources;
+- [ ] detect changed/deleted resources.
 
 ### MK3 - Index and retrieval
-
-- [ ] chunk resources;
-- [ ] create/update retrieval index;
-- [ ] retrieve top relevant chunks;
-- [ ] avoid indexing duplicate unchanged content;
-- [ ] benchmark local CPU/RAM/storage.
+- [ ] chunk/index/retrieve;
+- [ ] benchmark Pi resources.
 
 ### MK4 - Prompt/context integration
-
-- [ ] inject retrieved chunks only when relevant;
-- [ ] keep system prompt domain-neutral;
-- [ ] preserve MCP tool use for live external state;
-- [ ] include resource provenance in debug/log context;
-- [ ] prevent retrieved stale docs from replacing live MCP reads.
+- [ ] inject only relevant chunks;
+- [ ] preserve MCP live reads for current state.
 
 ### MK5 - MCP knowledge rollout
-
-- [ ] XMSeries knowledge resource set;
-- [ ] QLCPlus knowledge resource set;
-- [ ] optional Mixing Station resource set;
-- [ ] update/synchronization behavior tested.
+- [ ] XMSeries;
+- [ ] QLCPlus;
+- [ ] optional Mixing Station.
 
 ### MK6 - Raspberry/offline validation
-
-- [ ] full local/Ollama query path;
-- [ ] Raspberry resource test;
-- [ ] startup/update timing;
-- [ ] corrupted cache recovery;
-- [ ] offline operation from previously cached resources.
+- [x] deterministic Local query path through MCP command gateways;
+- [ ] cache/update recovery tests.
 
 ---
 
 # 5. Roadmap AV - Wake Word And Audio Validation
 
-This consolidates the remaining validation work from the existing wake-word/audio refactor.
-
-The code-level refactor is already substantially implemented: wake mode is derived from `WAKE_WORD`, strict wake-first backend capture exists, explicit runtime states exist, interruption reuses the same state machine, and STT/speaker recognition can execute in parallel.
-
-## AV milestones
-
 ### AV0 - Validation corpus
-
-- [ ] collect representative backend/Raspberry microphone recordings;
-- [ ] ambient speech without wake;
-- [ ] wake+command without pause;
-- [ ] wake+command with pause;
-- [ ] short commands;
-- [ ] stage noise;
-- [ ] post-TTS tail;
-- [ ] interruption during PROCESSING/TTS.
+- [ ] ambient speech, wake timing, short commands, stage noise, post-TTS tail, interruption.
 
 ### AV1 - Wake model evaluation
-
-- [ ] benchmark selected openWakeWord model on the corpus;
-- [ ] quantify false accepts/misses;
-- [ ] adjust thresholds only from measured evidence;
-- [ ] evaluate replacement/training only if required.
+- [ ] benchmark selected model;
+- [ ] quantify false accepts/misses.
 
 ### AV2 - State-machine regression coverage
-
-- [ ] long `WAIT_WAKE`;
-- [ ] ambient speech ignored before wake;
-- [ ] command timeout;
-- [ ] post-TTS rearm;
-- [ ] interruption disabled/enabled;
-- [ ] wake+command timing variants;
-- [ ] dev-dependency environment full suite.
+- [ ] long wait, ambient ignore, timeout, post-TTS rearm, interruption modes.
+- [ ] Realtime inactivity disabled: with `REALTIME_INACTIVITY_TIMEOUT_SECONDS=0`, a long idle session remains open until normal stop/restart.
+- [ ] Realtime inactivity enabled: with a short non-zero timeout, idle closes cleanly without replaying stale audio, stale text or queued MCP calls.
+- [ ] Realtime action grace: timeout is deferred while a response/tool call is active or inside `REALTIME_ACTION_GRACE_SECONDS` after speech stop.
+- [ ] Realtime reconnect/fallback: after provider error or connection close, no old in-flight MCP action is replayed automatically after recovery.
+- [ ] Realtime interruption: barge-in cancels speech playback and clears the active response state without cancelling/replaying already dispatched MCP work.
 
 ### AV3 - Hardware recette
-
-- [ ] Raspberry Pi real input/output;
-- [ ] backend TTS;
-- [ ] browser TTS/STT;
-- [ ] audio diagnostic;
-- [ ] speaker recognition;
-- [ ] MCP routing;
-- [ ] env reload;
-- [ ] stop/interruption behavior.
+- [ ] Pi input/output, TTS, browser audio, diagnostics, speaker recognition, MCP routing, env reload, interruption.
 
 ### AV4 - Rejected audio monitor restoration
+- [ ] VAD only for rejected-speech delimiting during WAIT_WAKE;
+- [ ] wake word remains sole authorization.
 
-Only for `BACKEND_AUDIO_MONITOR_MODE=rejected`:
+### AV5 - Semantic audio feedback recette — PRIORITY
 
-- [ ] run Silero VAD in parallel with openWakeWord during `WAIT_WAKE` solely to delimit rejected speech;
-- [ ] openWakeWord remains the only authorization path to `CAPTURE_COMMAND`;
-- [ ] rejected VAD must never trigger STT, speaker recognition, LLM or MCP;
-- [ ] no extra VAD cost in `off`/`passthrough` modes;
-- [ ] validate Raspberry Pi CPU impact.
+- [ ] startup loader audible and stops exactly on READY;
+- [ ] READY announcement/cue occurs once;
+- [ ] wake OFF: listening cue occurs when direct command capture is ready;
+- [ ] wake ON: ready-to-listen cue occurs once when armed, WAIT_WAKE stays silent afterward, and wake-detected cue occurs once on valid activation;
+- [ ] thinking loop begins only after accepted command;
+- [ ] thinking loop stops before result-ready/speech;
+- [ ] result-ready acknowledgement cue occurs once;
+- [ ] TTS speech transitions back to WAIT_WAKE/LISTENING correctly;
+- [ ] post-TTS suppression prevents self-trigger/retrigger;
+- [ ] Cloud and Local gains are independently audible/configurable;
+- [ ] same GUI controls apply regardless of selected engine.
+
+Realtime turn completion is intentionally conservative: `response.done` alone does not make the assistant available again while bridge tool execution, provider follow-up generation or result delivery is still pending. The runtime waits for `REALTIME_TURN_SETTLE_SECONDS` before returning to IDLE/LISTENING so late tool events from the provider do not race against the web `busy` state or semantic audio state. Benign provider races such as `response_cancel_not_active` are logged as warnings and do not trigger realtime fallback/reconnect.
+
+The common realtime loop treats input transcription as observational metadata rather than a lifecycle barrier. A `user_transcript_error` is logged and does not fabricate an `awaiting_response` state; if no provider response/tool is active, the turn returns to IDLE/LISTENING immediately. Native MCP follow-up events are observed as diagnostics only; bridge tool result delivery marks that a provider response is expected, so there is no separate stale follow-up flag that can keep the assistant busy forever after an assistant response is complete. With local realtime wake enabled, provider `speech_started` events that arrive while assistant speech is protected by the wake gate are ignored instead of being treated as user barge-in.
+
+Realtime recovery is intentionally split by scope. Provider lifecycle conflicts such as OpenAI `conversation_already_has_active_response` are treated as recoverable turn-local conditions: they must never raise `provider_failure`, stop MCP children or reconnect a healthy session. The OpenAI adapter also suppresses duplicate `response.create` calls while a response is already active.
+
+```text
+turn timeout / active-response lifecycle conflict
+  -> cancel or suppress duplicate response as appropriate
+  -> clear stale turn state/output when needed
+  -> keep microphone capture available during PROCESSING
+  -> keep the same provider session
+
+turn timeout
+  -> cancel current response
+  -> clear queued output
+  -> clear provider input buffer when supported
+  -> reset RealtimeTurnTracker phase
+  -> IDLE/LISTENING
+  -> keep the same provider session
+
+connection_error / connection_closed / fatal provider error
+  -> provider_failure
+  -> stop child session
+  -> supervisor reconnect/fallback policy
+```
+
+Phase deadlines are configured independently: `REALTIME_CAPTURE_TIMEOUT_SECONDS`, `REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS`, `REALTIME_RESPONSE_TIMEOUT_SECONDS` and `REALTIME_FOLLOWUP_TIMEOUT_SECONDS`. `REALTIME_TURN_TIMEOUT_SECONDS` remains a read-only compatibility fallback for older user profiles but is no longer written by repository profiles or the Web GUI. MCP execution keeps its own timeout and is never automatically replayed after an ambiguous timeout.
+
+When local realtime wake-word gating is enabled, wake detection remains physically separated from the cloud stream: openWakeWord consumes the permanent backend capture locally and audio is not forwarded to the realtime provider until the wake gate authorizes it. Provider VAD remains responsible for delimiting the post-wake command. Provider auto-response stays disabled in this wake-enabled path so a wake-only utterance cannot accidentally produce a model response; LSA creates the provider response after a useful transcript. A transcript that contains only the wake word rearms listening without appending chat messages, starting the thinking cue or asking the model to respond. A continuous utterance such as "momo baisse le volume" remains valid through the retained pre-roll. A fully local command-VAD + manual `input_audio_buffer.commit` design remains a possible later optimization, but is deliberately not introduced in this recovery change because it would duplicate turn-boundary detection and increase cross-provider regression risk.
 
 ---
 
 # 6. Roadmap OR - Offline Reliability And Auto Profile Switching
 
-Much of this roadmap is already implemented; remaining work is primarily hardware/regression validation.
+## OR architecture rule
 
-### OR0 - Profile contract
+Connectivity is a common-runtime concern. The historical Classic watcher remains a backward-compatibility implementation detail only; production service ownership now lives in the common runtime.
 
-- [x] offline profile remains Ollama + local Whisper + local TTS + local/stdio MCP;
-- [x] online/offline profile switching preserves provider semantics;
-- [x] network-status announcement uses the newly selected profile's TTS path.
+### OR0 - Profile contract — STRUCTURALLY VALIDATED
+
+- [x] offline uses deterministic Local + local Whisper + Piper local TTS + local/STDIO MCP command gateways;
+- [x] connectivity and voice engine remain independent configuration axes;
+- [x] offline must never start a cloud realtime provider;
+- [x] network status announcement semantics centralized and Pi-validated for the basic Classic/Realtime round trips;
+- [x] offline TTS uses the local speech implementation without cloud dependency.
 
 ### OR1 - Resource cleanup and service behavior
 
-- [x] outgoing audio resources are bounded/released across runtime reloads;
-- [x] systemd shutdown is bounded with service timeout/control-group behavior;
-- [ ] repeated online -> offline -> online hardware test;
+- [x] outgoing Classic audio resources bounded/released across reloads;
+- [x] systemd shutdown bounded;
 - [ ] service-stop-during-processing hardware test.
 
+### OR2 - Common ConnectivityManager and EngineSupervisor — CORE PI ROUND-TRIP VALIDATED
+
+**Goal:** provide one online/offline transition mechanism for Classic, OpenAI Realtime, Local and future engines.
+
+- [x] common `ConnectivityManager` with initial detection and continuous watch;
+- [x] one configurable connectivity probe/check interval;
+- [x] explicit ONLINE/OFFLINE transition events only on actual state changes;
+- [x] production service launches engines with explicit profile paths;
+- [x] prevent duplicate Classic + common-runtime watchers in supervised path;
+- [x] ONLINE selects `.env.online` and configured online `VOICE_ENGINE`;
+- [x] OFFLINE selects `.env.offline` and forces local engine;
+- [x] Internet loss announced through guaranteed-local speech;
+- [x] outgoing engine cleanly stopped with bounded terminate/kill fallback;
+- [x] common startup loader while incoming engine initializes;
+- [x] explicit READY markers stop loader before spoken ready announcement;
+- [x] Internet restoration relaunches configured online engine;- [x] MCP profile/config selection preserved structurally;
+- [x] audio-device ownership stable across tested engine replacements;- [~] expose current connectivity state and active engine to common WebMonitor/health status; implemented, consolidated functional validation pending;
+- [~] common WebMonitor remains parent-owned across engine/profile replacements; implementation complete, Pi/browser validation pending;- [x] Online Realtime -> Offline Local -> Online Realtime Pi validation;
+- [x] Online Classic -> Offline Local -> Online Classic Pi validation;- [ ] recovery when Internet flaps repeatedly;
+- [x] future engines require no separate network watcher implementation.
+### OR3 - Local TTS for offline mode — FUNCTIONALLY VALIDATED ON PI5
+- [x] shared local-TTS adapter without coupling it to Realtime provider code;- [x] `.env.offline` remains fully cloud-independent;
+- [x] local speech model/settings documented and installed automatically;- [x] local-engine responses routed through local TTS on Pi5;
+- [x] common-runtime Internet-loss/offline-transition and local READY announcements validated;- [x] historical system-TTS implementation removed after local-TTS validation;
+- [~] qualitative voice validation complete; quantitative synthesis latency/CPU/RAM/startup measurements remain optional;
+- [x] offline startup/local speech path validated with no Internet dependency;
+- [x] Online Realtime -> Offline Local -> Online Realtime without audio-device lockup;
+- [x] Online Classic -> Offline Local -> Online Classic without audio-device lockup;
+- [x] installers and user-facing guidance updated.
+
+### OR4 - Deterministic Offline/Local Command Engine — IN PROGRESS
+
+**Product decision:** the production Offline/Local path no longer uses a local LLM. Local speech remains fully local (backend microphone/VAD/wake word -> local Whisper -> deterministic MCP command gateway -> Piper), while cloud/LLM engines keep their existing agent, prompt and low-level MCP tool behavior unchanged.
+
+**Local/Cloud GUI cleanup (2026-09-19):** the retired local-LLM/Ollama implementation, dependency, installer path, profile keys and benchmark tests have been removed. The Web GUI now models execution explicitly as Local deterministic or Cloud; selecting Cloud then chooses Classic, OpenAI Realtime or Gemini Live. This advances the GUI consolidation milestone without changing remaining validation gates.
+
+**Local STT selection and tuning decision (2026-09-21):** a temporary Pi5 benchmark corpus (12 French mixer commands x 3 takes) compared Faster-Whisper `tiny`, `base` and `small`, prompt/hotword strategies, realistic XR16 name registries and an offline XMSeries parser/resolver replay. The benchmark tooling and generated audio/reports were intentionally temporary and are removed after recording these conclusions.
+
+| Observation | Representative result | Decision |
+| --- | --- | --- |
+| `small` quality vs `base` | broad run: `base_prompt` ~25% exact / 24.24% WER / 66.67% entity recall / ~3.0 s; `small_current` 55.56% exact / 10.61% WER / 80.95% entity recall / ~9.3 s | use `small` as the quality baseline for Local STT; optimize latency before considering a downgrade to `base` |
+| entity-only hotwords | `small_prompt` 15.91% WER / 95.24% entity recall; adding entity hotwords worsened WER to 19.70% and entity recall to 92.86% | do not feed a broad dynamic mixer-name list through Whisper hotwords |
+| mixer registry inside `initial_prompt` | compact prompt with 20 real XR16 names dropped `small` exactness to 13.89% / WER 28.79%; 60 names dropped to 5.56% / WER 34.85% | keep STT prompt focused on language/command acoustics; domain name resolution belongs after STT |
+| post-STT family-scoped resolution experiment | with `small_prompt_current`, strict replay gave 44.44% fully correct commands; benchmark-only family-aware fuzzy reached 47.22% with 0 wrong accepted on the 20-name XR16 registry; the 60-name stress registry also produced 0 wrong accepted but less gain | preserve MCP-owned family scoping and fail-closed ambiguity safety; do not relax production fuzzy-write safety solely from this corpus |
+
+Operational interpretation after the offline corpus:
+
+- stop further micro-benchmarking unless a concrete regression or architectural choice requires it;
+- never inject a large runtime mixer-name registry into Whisper prompting/hotwords; target identity remains a post-STT MCP responsibility;
+- do not duplicate mixer vocabulary or fuzzy-name logic in LSA; XMSeries-MCP remains authoritative for target families and resolution;
+- benchmark-only family-aware fuzzy resolution was not promoted to production; current fail-closed write safety remains authoritative;
+- model selection from the synthetic/offline corpus is historical evidence only and must be overridden by end-to-end live recipe evidence when they disagree.
+
+**Local STT latency pass (2026-09-21) — [x] implementation retained, `small` live baseline rejected:** the Local path keeps a warm Faster-Whisper model, int8 CPU inference, four CPU threads and `beam_size=1`. Per-command temporary WAV creation and PyAV re-decode remain removed: native backend PCM16/16 kHz is converted directly to an in-memory float32 waveform. Short deterministic decoding remains bounded with `max_new_tokens=48`, runtime logs expose model-load time plus decode time/audio duration/RTF, the Raspberry profile keeps the 500 ms end-of-speech setting, and short pre-VAD speech fragments are preserved in pre-roll instead of being discarded.
+
+**Live voice recipe decision (2026-09-21) — `base` validation gate:** the end-to-end Raspberry recipe showed that `small` was not usable for the live-control target despite its better offline-corpus transcription scores. Typical Local STT decode times were roughly 10–14 s and wake-to-STT-result was commonly around 13–18 s, with longer commands exceeding 20 s. The dominant functional failures were STT substitutions/omissions such as status words, short action words and target names; when the transcript was correct, deterministic mixer reads/writes, routing, multi-destination commands, ramps, sequences and fail-closed unknown-target handling generally behaved correctly. The live session also exposed prompt leakage and MCP-routing vocabulary contamination in Whisper output. Therefore the next production candidate intentionally simplifies STT rather than adding parser aliases:
+
+- `base` becomes the Raspberry Local default and current live baseline; `small` remains selectable only for comparison;
+- the STT prompt is reduced to a short neutral fidelity instruction with no examples, device names, channel names or concrete numeric values;
+- MCP routing keywords remain available to MCP orchestration but are no longer appended to Whisper `initial_prompt` and are no longer included in Whisper hotwords;
+- Local Whisper hotwords are a small fixed generic command vocabulary only, with no dynamic MCP/device names and no enumerated numeric vocabulary;
+- the validated PCM-direct, warm-model, VAD/pre-roll and post-STT safety/parser improvements are retained unchanged;
+- after one full live recipe on this `base` configuration, either keep/tune Faster-Whisper if reliability and latency are credible, or open a focused `whisper.cpp` backend benchmark if they are not.
+
+**Alternative STT benchmark harness (2026-09-25) — [~] corpus + first comparison complete; targeted Sherpa follow-up pending:** after the live `base` recipe remained too unreliable despite acceptable decode speed and after production phonetic target resolution was added in XMSeries-MCP, the historical isolated benchmark workflow was restored without changing the supported Local runtime. `scripts/stt_benchmark.py` reads the Raspberry offline profile as data only, reuses its configured backend input/output devices, records or resumes three accepted WAV takes per phrase with replay/re-record/skip controls, and replays exactly the same corpus through selectable engines. Experimental dependencies and models live only under ignored `.stt-benchmark/`; setup never uses sudo and never changes the production `.venv`, env profiles, services or MCP configs. Raw WAVs/results remain under ignored `recordings/stt_benchmark_audio/`.
+
+The regenerated Pi corpus contains 16 phrases x 3 accepted takes (48 WAVs). The first full raw comparison measured Faster-Whisper `base` at p50 4026 ms / p95 4909 ms / RTF 1.296 / WER 58.17%, `whisper.cpp base-q5_0` at 4551 ms / 4860 ms / 1.480 / 62.75%, `whisper.cpp small-q5_0` at 16470 ms / 17095 ms / 5.350 / 53.27%, and Sherpa Zipformer FR int8 greedy at 1538 ms / 2720 ms / 0.503 / 48.37%. The production XMSeries replay on the 42 mixer samples demonstrated why raw WER is secondary: XR16 full-command correctness was 30.95% for Faster-Whisper base, 16.67% for whisper.cpp base, 33.33% for whisper.cpp small, and only 2.38% for Sherpa greedy. Faster recovered eight phonetic identities but also exposed one unsafe accepted target; the stress registry exposed three exact-vs-phonetic collision writes for whisper.cpp small. Those concrete cases drove bounded parser repairs and a Local-only phonetic collision guard in XMSeries-MCP; the saved STT JSON can be rescored without any new audio decoding.
+
+The benchmark records raw transcription, model-load time, warm per-file decode time, RTF, exact-match and WER. The LSA harness then opportunistically invokes the isolated XMSeries scorer when the sibling repository is present. That scorer uses the current production parser and current resolver order `exact -> contains -> structured -> phonetic -> fuzzy` against both the real 20-name XR16 registry and a 60-name stress registry; it performs no OSC/mixer I/O. The decision metric remains full command correctness with `wrong_accepted=0`; WER alone cannot select a production engine. QLC phrases are retained in the audio corpus for STT comparison but are excluded from the XMSeries semantic scorer.
+
+One focused Sherpa experiment remains because its greedy decoder was by far the fastest but frequently lost command verbs/units. Since Sherpa contextual hotwords require `modified_beam_search`, the harness now exposes two additional benchmark-only variants on the same WAVs: `sherpa-onnx-zipformer-fr-int8-beam` (modified beam, no hotwords) as the control, and `sherpa-onnx-zipformer-fr-int8-hotwords` (same beam plus a small static structural vocabulary such as METS/MONTE/BAISSE/MUTE/DÉMUTE/D B/Q L C). No dynamic mixer/channel/bus names are injected. The original French model is BPE-based, so setup fetches its matching small SentencePiece vocabulary from the original training model into `.stt-benchmark/` solely for contextual-hotword encoding. This milestone remains `[~]` until the post-fix XMSeries rescore and the two targeted Sherpa variants have been measured.
+
+Target local path:
+
+```text
+speech
+  -> local STT
+  -> raw transcript + generic context
+  -> optional MCP routing narrows candidate servers only
+  -> deterministic gateway analysis inside participating MCP server(s)
+  -> clarification OR opaque execution plan
+  -> deterministic gateway execute
+  -> MCP-owned localized result text
+  -> local TTS
+```
+
+Architecture rules:
+
+- **no local LLM** is allowed on the stage-control path; Ollama is retired from the production Offline/Local architecture;
+- domain language/semantics live in the relevant MCP server: mixer actions in XMSeries-MCP, QLC+ actions in QLCPlus-MCP;
+- LSA remains domain-agnostic: it owns STT/TTS, wake/VAD, speaker context, MCP transport/session orchestration, routing optimization, cross-MCP arbitration, approval policy and user-facing lifecycle only;
+- routing keywords remain an optimization: a match narrows analysis to one MCP server; no match keeps every gateway-capable MCP eligible;
+- when no route matches, gateway **analysis** may run concurrently because it must be side-effect-free; execution is single-plan and sequential;
+- zero recognized gateways -> deterministic local "command not recognized" behavior; there is no conversational LLM fallback in Offline/Local mode;
+- more than one gateway claiming the same unrouted utterance -> execute nothing and ask for clarification;
+- a pending gateway clarification is opportunistic, not exclusive: if the owning gateway rejects or no longer recognizes the follow-up, LSA immediately re-analyzes the same utterance as a fresh command through normal routing so a stale QLC/mixer clarification cannot swallow a new command;
+- cloud Classic/OpenAI Realtime/Gemini Live continue using the current prompts and low-level MCP tools; the local gateway must not become visible to those model tool inventories;
+- local gateway capability is enabled only for MCP processes/endpoints dedicated to the Local engine. STDIO children receive a local-only environment overlay; persistent HTTP deployments need a gateway-enabled local instance/endpoint and must not silently alter a shared cloud-facing MCP tool inventory;
+- deterministic analysis may read live state/resolvers/inventory but must never mutate external state;
+- every write plan is short-lived, opaque, one-shot and bound to the relevant live-state generation/snapshot so stale plans cannot execute after a mixer/QLC project/state change;
+- the existing per-MCP permission/approval policy must still gate writes after analysis and before execution;
+- no automatic retry may replay an ambiguous or timed-out write.
+
+### OR4 capability-extension rule
+
+The deterministic Local architecture is now an **extension model, not a parser-construction project**. For domain commands, LiveStageAssistant transports text and neutral context to the owning MCP gateway; it does not interpret mixer/lighting semantics.
+
+For XMSeries capabilities specifically, the owning repository must extend its established native lexical-slot parser and preserve typed-MCP/Local semantic symmetry. A new capability should flow through:
+
+`typed MCP contract + deterministic intent`
+→ MCP resolver/capability planning
+→ shared business/adapter primitive
+→ protocol-aware OSC/automation execution.
+
+LSA must not add command-specific rewrites, mixer target families, owner-name resolution, routing semantics or OSC behavior to compensate for a missing MCP parser case. Speaker recognition remains LSA-owned only as neutral identity/context transport; mapping that identity to a bus, channel or Main LR remains XMSeries-MCP-owned.
+
+#### OR4A - Local Ollama feasibility spike — [x] CLOSED, NOT SELECTED
+
+- [x] direct Ollama tool calling, compact prompts, routed tool subsets, 3B/1B/1.5B candidates and OpenAI-compatible Ollama API shape were benchmarked on Pi5;
+- [x] model isolation, warm steady-state and CPU-contention tests were performed;
+- [x] representative warm single tool decisions remained roughly 9-10 s at best and worsened substantially under rack CPU load, with Ollama saturating CPU during inference;
+- [x] smaller 1B did not materially improve latency and produced a wrong tool decision in the steady-state corpus;
+- [x] production conclusion: local generative tool planning is technically functional but unsuitable for the stage-control critical path on the current Pi5;
+- [x] experimental native local-LLM runner, dependency and benchmark harnesses removed after deterministic Local validation.
+
+#### OR4B0 - Shared deterministic command-core contract — IMPLEMENTED / CI VALIDATED
+
+Create a small independent TypeScript package/repository, provisionally `@infrafast/stage-command-core` / `StageCommandCore`, consumed by XMSeries-MCP and QLCPlus-MCP. It is a library, **not a service** and never runs a separate daemon.
+
+The common package owns only domain-neutral mechanics:
+
+- [x] versioned wire contract `lsa-command-gateway/v1`;
+- [x] raw + normalized text representation with source spans; raw execution identifiers remain available;
+- [x] deterministic tokenization/matcher primitives and locale hooks;
+- [x] generic number/sign/percentage helpers plus `parse-duration` reuse for durations;
+- [x] generic analysis/result types and explicit `read|write|none` effect classification;
+- [x] generic clarification/continuation support;
+- [x] opaque plan store with cryptographically random token, TTL, one-shot write consumption and stale-plan hook;
+- [x] common Local-only gateway registration helper and reserved tool names;
+- [x] common test/corpus harness;
+- [x] no mixer terms, QLC captions, OSC/native protocol paths or vendor-specific semantics in the shared package;
+- [~] QLCPlus-MCP OR4B1 pins the core by exact Git commit; XMSeries pinning remains for OR4B2;
+- [ ] establish semantic versioning: incompatible gateway schema change requires a protocol-major bump.
+
+Target analysis response:
+
+```json
+{
+  "protocol": "lsa-command-gateway/v1",
+  "recognized": true,
+  "status": "ready",
+  "effect": "write",
+  "planToken": "<opaque>",
+  "expiresInMs": 30000,
+  "responseText": null
+}
+```
+
+Clarification returns `status=clarification`, localized `responseText` and an opaque `continuationToken`; execution returns structured success/error plus localized `responseText`. LSA must never inspect domain plan internals.
+
+#### OR4B1 - QLCPlus-MCP local gateway vertical slice — IMPLEMENTED / AUTOMATED CI VALIDATED
+
+QLCPlus is the first minimal vertical slice because its current exact-caption safety policy is small and already server-authoritative. QLCPlus-MCP PR #7 is merged on `main` as `97ebf54670d2e3e70841ce803f1897a9d2a7e0a0`. Node 20.20/22 `npm ci` + TypeScript build + test CI is green. LiveStageAssistant/Pi end-to-end acceptance and Pi latency measurement remain pending.
+
+- [x] gateway registration is disabled by default and enabled only by the Local-engine environment/capability flag;
+- [x] implement deterministic intents for local state/list requests and explicit QLC button commands;
+- [x] preserve the exact execution identity rule: case-insensitive only; spaces, punctuation, accents, `_` and `-` remain significant;
+- [x] shared normalization may help identify the command prefix but never normalizes the caption used for authorization/execution;
+- [x] bind button plans to the current native project/inventory generation and reject stale plans;
+- [x] produce deterministic localized success/error/clarification text so LSA needs no LLM response formatter;
+- [x] existing `qlc_get_state`, `qlc_list_widgets`, `qlc_button_press`, PROMPT and cloud/ordinary tool inventory remain unchanged when the Local gateway is disabled;
+- [~] automated corpus covers state/list plan classification, exact caption/case behavior, accent/separator mismatch, stale project generation and duplicate-write prevention; additional explicit no-match/not-ready/token-expiry cases remain useful before live acceptance;
+- [ ] measure analysis+execution overhead inside MCP excluding QLC native action: target <100 ms typical on Pi5.
+
+#### OR4B2 - XMSeries-MCP local gateway MVP — IMPLEMENTED / AUTOMATED CI VALIDATED
+
+XMSeries-MCP PR #11 is merged on `main` as `0256b3d66dcdf6594f25e8aa0b6fe7ecec07bfed`. It pins `stage-command-core@fa9f8baef06a668efb18b1bfc50060335689f287`, reuses the current XMSeries resolver/OSC client, and keeps the grammar intentionally limited to the high-value MVP. PR and post-merge Node 20.20/22 `npm ci` + full regression CI are green. Pi/LSA live acceptance and latency measurement are not yet validated.
+
+Implement only the high-value basic mixer grammar first; do not port all prompt semantics in one change.
+
+- [x] gateway disabled by default and enabled only for Local-engine sessions;
+- [x] reuse existing live name resolver and protocol-aware low-level functions rather than duplicating resolution/OSC logic;
+- [x] phase 1 intents: mixer status, named-target level read, absolute dB level write, relative level up/down, mute/unmute;
+- [x] preserve bare-name global family resolution and current exact/contains/structured/fuzzy safety rules;
+- [x] ambiguous contains/structured and fuzzy-only matches return clarification, never a write plan;
+- [x] bind plan to resolved target identity and re-resolve before every write; stale identity changes fail closed;
+- [x] Main LR/façade alias behavior remains MCP-owned;
+- [x] deterministic localized response text comes from XMSeries-MCP;
+- [x] existing low-level OSC MCP tools and PROMPT remain unchanged for cloud agents;
+- [~] corpus includes French and English representative commands; STT-like punctuation/case expansion remains pending;
+- [ ] target analysis+execution overhead excluding mixer/network I/O: <100 ms typical on Pi5.
+
+#### OR4B3 - LSA deterministic Local engine — MERGED / AUTOMATED CI VALIDATED
+
+PR #10 is merged into `realtime-voice-architecture` as `e244af4a2f5d474005ff6803c5818aa25f4f87aa`. A dedicated `local_engine.py` reuses the existing microphone/VAD/wake/local Whisper/Piper stack while replacing the LLM/MCPAgent path with a domain-neutral deterministic gateway orchestrator. PR and post-merge CI passed on Python 3.11/3.12. Raspberry Pi read-path acceptance passed on 18 September 2026 with both `mixer` and `qlcplus` gateways discovered and all four acceptance cases passing. A second live run with `--allow-writes` then executed the exact QLC command `qlc wave`; the harness reported `PASS ready/write ... executed` and the operator confirmed that the `wave` button was physically pressed in QLC+. Controlled XMSeries writes were live-validated on 18 September 2026 using channel `batterie`: mute, unmute, absolute level set to -30 dB, then relative +3 dB all executed successfully; the operator confirmed the live mixer state ended at -27 dB. The live run reported analysis p50 10.0 ms / p95 12.8 ms and total p50 78.8 ms / p95 84.1 ms. This clears the basic XMSeries MVP live gate and unlocks OR4B4 advanced semantics.
+
+Create and keep a real deterministic Local engine, independent from the Cloud Classic LLM path.
+
+- [x] add a dedicated Local engine/runtime path that hard-blocks LLM construction and never creates MCPAgent;
+- [x] retain the existing VoiceAssistant speech shell for local Whisper, Piper, wake word, VAD, semantic audio cues, speaker recognition and common runtime ownership;
+- [x] open MCP sessions directly for local command-gateway discovery/invocation from the existing MCP inventory;
+- [x] for locally spawned STDIO MCPs, overlay `LSA_LOCAL_COMMAND_GATEWAY=1` on a copied config without changing saved cloud MCP configuration;
+- [x] discover `lsa-command-gateway/v1` generically by reserved tools + protocol schema; no XMSeries/QLCPlus action grammar in LSA;
+- [x] routed utterance -> analyze selected MCP only;
+- [x] unrouted utterance -> analyze all gateway-capable MCPs concurrently;
+- [x] zero claims -> deterministic not-recognized response; one claim -> continue; multiple claims -> deterministic clarification with no execution;
+- [x] continuation token pins follow-up to the MCP that requested clarification;
+- [x] honor `open|approval` MCP policy based on gateway `effect` before executing a write;
+- [x] execute exactly one accepted plan; no automatic write retry exists in the Local orchestrator;
+- [x] use MCP-provided `responseText` for execution/clarification results; LSA fallback/approval wording remains domain-neutral;
+- [x] startup READY reports deterministic gateway availability and explicitly reports degraded/no-command capability when none is compatible;
+- [x] runtime identity reports `engine=local`, `provider=local`, `model=deterministic`.
+
+#### OR4B4 - XMSeries advanced deterministic parity — PARSER V1 CLOSED / LIVE ACCEPTANCE CONTINUES
+
+The XMSeries deterministic parser architecture is closed as V1 on 21 September 2026. The final unified parser consolidation, generic target-list/multi-destination resolution and explicit family qualifiers are merged on XMSeries-MCP `main`, ending at commit `2fa4d16888741766e0b7eda9b26c5ca0f4f313e0` with Node 20.20/22 CI green. New mixer commands must extend that existing parser/capability architecture; they must not create a new parser path in LSA or XMSeries gateway code.
+
+Basic XMSeries read/write acceptance is complete. Remaining `[~]` items below track live rack coverage of advanced semantics, not parser completeness. The implementation remains entirely MCP-side and reuses existing resolver, OSC and automation code; LSA still only sees `lsa-command-gateway/v1`.
+
+- [~] source -> destination sends and structured ownership phrases: channel -> bus absolute/relative commands implemented; live rack acceptance still pending;
+- [~] dB and percent, absolute and relative semantics: implemented for single targets and channel -> bus; live rack acceptance still pending;
+- [~] speaker-context defaults without moving speaker business logic into LSA: generic `context.speaker` forwarding and contextual Pi-corpus support merged as `70e9ef32c2a878a31ebca818be91c943d46510ca`; XMSeries-MCP owns `XMS_SPEAKER_MAP` semantics. Live rack acceptance remains pending;
+- [~] bulk/group operations: XMSeries-MCP PR #14 merged as `f98d9ac0c09b9a98a61bde8b574a86aef7ece0ac` with Node 20.20/22 CI green; deterministic parser parity now covers selected/all/all-except bus mute and channel-send dB writes to selected/all buses, plus Main LR shorthand such as `monte le volume de 10%`; live Pi acceptance pending;
+- [~] fades/ramps and delayed actions, with all timing owned by XMSeries-MCP automation: fade-in/out, progressive absolute/relative ramps, explicit from/to ranges and delayed level changes implemented. Live rack validation now confirms `baisse progressivement batterie à -30 dB en 2 secondes` executed as a real progressive fade to -30 dB and `mets batterie à -27 dB dans 2 secondes` executed as a real delayed level change after the requested 2-second wait. Source-to-bus ramps remain pending;
+- [x] cancellation/status for automation jobs: XMSeries-MCP PR #13 merged as `43aa59c79b8424993d20339610c40309cdd2117f` with Node 20.20/22 CI green; live Pi acceptance confirmed that a long fade can be listed while running and cancelled through the opaque gateway plan. A 21 September Local-shell regression that treated any utterance containing `annule`/`arrête` as a speech interruption is fixed by reserving shell cancellation for standalone cancel tokens only; longer commands such as `annule la dernière automation` continue to the deterministic gateways. Cloud Classic/Realtime behavior is unchanged;
+- [ ] expand multilingual/STT corpus only from observed commands; avoid unconstrained fuzzy NLP;
+- [x] maintain a domain corpus as the regression source of truth and review PROMPT changes against the same semantic cases to limit cloud/local drift; XMSeries now runs parser, architecture, capability-symmetry, protocol-safety, command-corpus and functional-recipe checks in its CI.
+
+Temporal semantics are deterministic in XMSeries-MCP: `en N secondes` means ramp duration; `dans N secondes` means delay before action. Fade-in/out with no explicit target defaults to Main LR/façade.
+
+#### OR4B5 - GUI/config migration — IMPLEMENTED / CI VALIDATED
+
+The GUI separates `Mode = Local déterministe / Cloud`. Local is not an LLM model; Cloud exposes the retained cloud engines (Classic, OpenAI Realtime, Gemini Live). Offline forces Local, while online allows either Local or Cloud.
+
+- [x] Offline connectivity forces/selects Local;
+- [x] hide Cloud-only model/context/MCPAgent/system-prompt controls when Local is active;
+- [x] keep deterministic per-MCP routing configuration in the MCP section while hiding the Cloud-only global Tool Routing toggle in Local;
+- [x] Local status reports `local/deterministic` rather than a fake provider/model;
+- [x] `/api/llm-options` and config-save logic are engine-aware; Local requires neither provider nor model and no longer persists Cloud-agent keys;
+- [x] preserve Classic/OpenAI Realtime/Gemini Cloud controls and saved online values;
+- [x] Local/Cloud labels are present in every supported locale file under `assets/i18n/`;
+- [x] regression tests lock the Local/Cloud selector, Cloud-engine mapping and absence of retired provider controls.
+
+#### OR4B6 - Offline profile, installer and dependency cleanup — IMPLEMENTED / CI VALIDATED
+
+- [x] `.env.offline` and Raspberry offline profile retain only Local runtime/audio/STT/Piper/session/MCP settings plus explicit `VOICE_ENGINE=local`;
+- [x] `.env.example`, online/offline profiles and service-pack profiles contain no retired Ollama/local-LLM keys;
+- [x] installer/service-pack no longer installs, pulls, starts, migrates or manages a local LLM; user-owned installations remain untouched;
+- [x] obsolete local-LLM installer knobs, migration code, manager/runner/startup code and direct dependency removed;
+- [x] Cloud dependencies and OpenAI/Realtime paths required by Classic and Realtime remain intact;
+- [x] OR4 local-LLM benchmark/probe scripts retired after preserving the architecture decision record;
+- [x] repository-wide regression guard prevents Ollama/local-LLM artifacts from returning to runtime profiles/code.
+
+#### OR4C - Cross-repository safety and compatibility gate
+
+- [x] pin one gateway protocol/core version known to work across LSA + XMSeries-MCP + QLCPlus-MCP: both gateway servers pin `stage-command-core@fa9f8baef06a668efb18b1bfc50060335689f287`, while LSA requires `lsa-command-gateway/v1`;
+- [x] incompatible gateway version -> Local engine marks that MCP unsupported; protocol-schema discovery is regression-tested and never attempts a best-effort write;
+- [~] validate STDIO first; the domain-neutral Pi/rack harness is merged as `63019ba4089b7b9c6d06ac5b307914fca8645a5e` with PR + post-merge Python 3.11/3.12 CI green and produces JSON latency evidence. Real Raspberry Pi read-path acceptance passed on 18 September 2026: both `mixer` and `qlcplus` gateways were discovered under `lsa-command-gateway/v1`, all 4 corpus cases passed, analysis latency was p50 3.0 ms / p95 6.4 ms and total latency p50 5.9 ms / p95 11.7 ms. A second live run with `--allow-writes` executed the exact QLC command `qlc wave`; the harness reported `PASS ready/write ... executed` and the operator confirmed the `wave` button was physically pressed in QLC+. That run measured analysis p50 2.9 ms / p95 6.6 ms and total p50 6.4 ms / p95 12.3 ms. Controlled XMSeries writes remain pending. Validate persistent local HTTP only with an explicitly gateway-enabled instance;
+- [~] gateway-disabled MCP regression tests preserve the pre-OR4 low-level tool/prompt inventory; live cloud/external-client confirmation remains pending;
+- [x] local gateway tools are disabled by default and absent from normal MCP/cloud tool inventories unless the dedicated Local child overlay enables them;
+- [~] automated tests cover approval, clarification routing, stale-plan/identity and duplicate/one-shot write protection; timeout behavior remains part of the live cross-repository gate;
+- [ ] measure accepted-transcript -> MCP action latency, CPU and RAM with QLC+, Whisper/Piper and rack services active;
+- [ ] target simple deterministic command completion <=1 s excluding STT/TTS, and materially below historical Ollama CPU load.
+
+Live rack procedure: [OR4C Raspberry Pi deterministic gateway acceptance](OR4C_PI_ACCEPTANCE.md).
+
+#### OR4D - Production cutover
+
+- [ ] Pi5 live corpus: XMSeries basic + advanced representative commands, QLC exact buttons/listing, routed and unrouted turns;
+- [ ] Online Classic -> Offline Local -> Online Classic regression with cloud behavior unchanged;
+- [ ] Online Realtime -> Offline Local -> Online Realtime regression with cloud behavior unchanged;
+- [~] Internet-loss transition reaches Local READY with no local LLM dependency; code path complete, final Pi reconnect recette remains;
+- [~] clean install contains no local-LLM installation step; final fresh-Pi installation recette remains;
+- [~] repository profiles no longer contain local-LLM keys; existing user-owned local-LLM software is ignored and left untouched;
+- [x] experimental local-LLM implementation removed; OR4 production direction is deterministic Local.
+
 ---
 
-# 7. Roadmap Maintenance Rules
+# 7. Evolution GUI
 
-1. This file is the default destination for architecture-level plans, future improvements, technical debt that changes architecture, and implementation milestones.
-2. Do not create `*_ROADMAP.md`, `*_ARCHITECTURE.md`, ADR collections or parallel design files for work that can be represented here.
-3. Separate operational documentation should be exceptional and kept only when consolidation would make README or this file materially worse.
-4. A milestone is checked `[x]` only after implementation and its required test/validation pass.
-5. When implementation reveals a changed design, update the relevant roadmap subsection before or in the same commit as the code.
-6. Keep milestone identifiers stable once used in conversation, commits or implementation requests.
-7. New roadmaps get a short unique prefix and are added as another section here.
-8. Short work notes belong immediately under the affected milestone; do not create a new log file.
+**Status:** active design/implementation roadmap tied to RV2D/RV8. Canonical MCP normalization, per-server realtime controls, global online voice-engine selection and integrated Realtime service exist. Production WebMonitor ownership has moved to the common runtime; remaining configuration handlers still embedded in `agent.py` must now be extracted into common services. Runtime health tiles and Realtime model/voice controls are implemented and awaiting consolidated functional validation.
+
+## 7.1 UX principles
+
+1. Primary object is an MCP plugin/server, not a transport configuration.
+2. Default view shows name, status and capabilities; transport details belong in Advanced.
+3. One logical MCP may have remote and local execution without duplicate plugin cards.
+4. Tools/prompts/resources remain MCP-owned and dynamically discovered.
+5. GUI edits the same canonical inventory used by runtime.
+6. Browser never receives stored secrets.
+7. Probe/discovery cannot execute write tools.
+8. Disable keeps configuration; remove removes LSA configuration only.
+9. Temporary technical controls must eventually be retired.
+10. **Do not duplicate equivalent configuration screens per voice engine.** Common audio, wake, semantic cues, MCP, connectivity and gain settings live once in stable common sections.
+11. Engine/provider-specific fields are conditional children of the common controls, not separate configuration pages.
+12. Cloud/Local output gains are common locality-level controls and remain independent of the selected engine.
+13. **Exactly one production WebMonitor is allowed.** It is owned by the common runtime and survives engine/profile replacement; child-engine GUI ownership is legacy code to migrate, never a supported parallel architecture.
+
+## 7.2 Target configuration ownership
+
+```text
+.env profile
+  -> connectivity / voice engine / provider / audio
+  -> common semantic cues
+  -> cloud/local speech gains
+  -> MCP_CONFIG
+
+canonical MCP inventory
+  -> logical servers
+  -> remote/local endpoints
+  -> enabled state
+  -> realtime transport/permission policy
+
+runtime state
+  -> connectivity state
+  -> active engine/provider/model/voice
+  -> configured/effective MCP transport
+  -> last error/probe/capabilities
+  -> semantic audio state
+
+common WebMonitor services
+  -> canonical config read/write
+  -> runtime status
+  -> diagnostics/session operations
+  -> no engine-specific server duplication
+```
+
+## 7.3-7.14 Target GUI/API direction
+
+- one common Voice/AI section with conditional provider/model/voice fields;
+- one common Audio/Feedback section for listening/wake/thinking/ready/result cues and Cloud/Local gains;
+- plugin-style MCP list/details;
+- remote HTTPS add/probe flow;
+- developer-oriented STDIO JSON flow;
+- Tools / Prompts / Resources browsers;
+- compact ordinary settings + Advanced transport/auth/local details;
+- unified `/api/mcp` CRUD/probe/capability API;
+- import/migrate legacy inventories atomically;
+- secrets remain backend-only.
+
+## 7.15 Evolution GUI milestones
+
+### CFG-0 - Align roadmap with implemented work — VALIDATED FOR CURRENT STATE
+- [x] canonical normalization/current controls documented;
+- [x] permission contract narrowed to `open | approval`;
+- [x] integrated-service AUTO fallback and startup lifecycle recorded.
+
+### CFG-1 - Freeze canonical MCP model
+- [ ] inventory deployed profiles/inventories;
+- [ ] freeze backward-compatible server model;
+- [ ] add enabled/display identity semantics;
+- [ ] secret references;
+- [ ] prevent divergent parsers.
+
+### CFG-2 - MCP registry/manager service
+- [ ] load/save/add/remove/enable/disable/probe/status;
+- [ ] reuse existing clients/lifecycle;
+- [ ] capability discovery;
+- [ ] expose configured/effective transport independently.
+
+### CFG-3 - Unified MCP web API
+- [ ] CRUD + probe/capability endpoints;
+- [ ] secret non-disclosure;
+- [ ] invalid URL/auth/timeout/STDIO validation.
+
+### CFG-4 - MCP Plugins GUI
+- [ ] plugin list/detail tabs;
+- [ ] status/capability counts;
+- [ ] active transport diagnostics;
+- [ ] retire temporary realtime-policy UI.
+
+### CFG-5 - Remote HTTPS lifecycle
+- [ ] Connect/Test/Add;
+- [ ] capability preview;
+- [ ] enable/disable/remove;
+- [ ] secret replacement without disclosure.
+
+### CFG-6 - Local/STDIO lifecycle
+- [ ] raw JSON test/add/edit;
+- [ ] clean child lifecycle;
+- [ ] remote + local under one logical MCP.
+
+### CFG-7 - Legacy inventory consolidation
+- [ ] import/migrate atomically;
+- [ ] converge toward one active inventory;
+- [ ] restart/profile preservation;
+- [ ] concise README/env examples.
+
+### CFG-8 - Multi-MCP production validation
+- [x] XMSeries + QLCPlus generic integrated runtime path;
+- [x] mixed `auto/open` + `stdio/open`;
+- [ ] mixed permissions;
+- [ ] complete STDIO approval or explicitly keep unsupported;
+- [x] pre-dispatch AUTO fallback parity;
+- [x] native-vs-STDIO read-only benchmark on identical Pi5/XR16 conditions;
+- [x] AUTO effective selection prefers configured local STDIO when available and is Pi-functionally validated.
+
+### CFG-9 - Unified voice/audio configuration — PRIORITY
+
+- [~] common Voice/AI engine selector + model + voice controls implemented;
+- [x] Cloud/Local independent output-gain contract implemented across supervised Classic, Local/Piper, Realtime and legacy direct `agent.py` speech paths;
+- [~] semantic feedback cue contract implemented;
+- [~] one common runtime-owned WebMonitor server implemented; legacy child server binding suppressed under supervision;
+- [~] migrate remaining Web configuration/session/diagnostic handlers out of `agent.py` into common runtime services; implementation complete in the runtime-owned WebMonitor without a child compatibility bridge. Shared services now cover web STT/TTS, backend TTS test, backend WAV preview, speaker-profile sample preview, backend microphone diagnostic and backend speaker capture. The active engine audio path remains functional, including backend voice detection/speaker recognition when configured. Consolidated Pi/browser validation remains pending before marking complete.
+- [x] wire Cloud/Local gains into all relevant speech outputs; feedback-cue/sample preview volumes remain separately controlled by their semantic audio settings;
+- [~] render Cloud/Local gain controls once in the common GUI;
+- [x] render semantic cue controls once in the common GUI; command acknowledgement, thinking, ready, listening, wake-detected and startup-loader WAV selectors share the common Interface utilisateur section;
+- [ ] ensure wake-word options do not move to a separate engine-specific page;
+- [ ] remove/reconcile temporary duplicate RV2D controls;
+- [ ] Pi/browser functional validation across Classic/Realtime/Local.
 
 ---
 
-# 8. Current Next Actions
+# 8. Roadmap Maintenance Rules
 
-Recommended Realtime Voice sequence:
+1. This file is the default destination for architecture-level plans and milestones.
+2. Do not create parallel roadmap/architecture/ADR/worklog files for work represented here.
+3. `[x]` means implemented and validated.
+4. Update this document with milestone implementation/design changes.
+5. Keep milestone identifiers stable.
+6. Hardware/user validation must be recorded under the affected milestone before moving its status to validated/complete.
+7. MCP-specific optimization findings belong in the relevant MCP project/backlog and must not derail LSA roadmap completion unless they block a current LSA milestone.
 
-1. **RV0**: create/refresh `realtime-voice-architecture` from current `main`, formalize/complete classic timing instrumentation, record classic latency/cost baseline, then add only the provider-neutral `RealtimeEngine` skeleton.
-2. **RV1**: implement the isolated direct OpenAI Realtime audio spike without tool/MCP execution and compare latency, stability and end-to-end cost against classic.
-3. **RV2**: connect realtime tool-call events to the unchanged existing LSA tool/MCP execution path and compare tool-call correctness on the shared corpus.
-4. Continue through **RV3-RV9** only against the acceptance criteria defined above; keep classic available throughout.
+---
 
-Other roadmaps are independently activable. For example, work can start on **MK0** without waiting for Realtime Voice, or on **AV0** to improve current classic voice reliability.
+# 9. Current Next Actions
+
+1. **OR4 Local acceptance:** validate the deterministic Local engine on Pi5 with representative mixer and QLC command-gateway commands, including online-selected Local and automatic offline Local. No local-LLM benchmark is part of the production roadmap.
+2. **RV2D / CFG-9 — validate the single common WebMonitor migration:** keep `runtime.py` as the only production WebMonitor owner for Classic, Realtime and Local; run the migrated common handlers on Pi/browser before marking the milestone complete. No historical/second WebMonitor is allowed in the supervised architecture.
+3. **RV2D / OR2 / RV8 — consolidated WebMonitor functional validation:** run one Pi/browser recette covering port 8765, secret redaction, runtime health/status, active/effective MCP transport, engine/model/voice controls, backend microphone diagnostic/capture, browser STT/TTS and persistence across engine/profile switches so multiple `[~]` entries can move to `[x]` together.
+4. **RV2F / CFG-9 — semantic audio feedback validation:** run audible Classic/Realtime/Local checks for READY, LISTENING/WAIT_WAKE, WAKE_DETECTED, PROCESSING, RESULT_READY, SPEAKING and IDLE before marking RV2F complete.
+5. **RV2F / RV3 — wake compatibility validation:** verify wake ON/OFF behavior in a noisy room: entering `WAIT_WAKE` plays one ready-to-listen cue, ambient speech does not trigger thinking/repeated listening cues, `WAKE_DETECTED_SOUND_FILE` fires once per accepted wake event and Classic post-TTS suppression/re-arm remains intact.
+6. **CFG-9 / RV8 — output-gain validation:** verify Cloud/Local speech gains audibly across Classic cloud TTS, Local/Piper and Realtime while keeping feedback-cue/sample-preview volumes semantically separate from speech gain.
+7. **RV3 / RV4 — realtime lifecycle validation:** validate phase-specific soft turn recovery (capture/wait-response/response/follow-up), transcription-error recovery, interruption, and that only real transport/provider failures reconnect/fallback; verify no stale action is replayed.
+8. **RV7 — optional browser Realtime wake gate decision:** keep current direct WebRTC behavior documented, then later decide whether to disable browser Realtime when `WAKE_WORD` is set or implement deterministic browser-side wake detection.
+9. **OR2 — repeated flap validation:** exercise repeated Internet loss/restoration cycles after the common WebMonitor and functional UX/audio milestones are stable.
+10. **Evolution GUI:** continue CFG-1 through CFG-7 toward one MCP registry/API and plugin-style UI, without duplicating engine configuration screens or Web servers.
+11. **Nice-to-have / backlog:** representative MCP corpus, second-native-MCP fixtures, MCP-specific raw/bulk/automation optimizations and further fallback tuning remain useful but non-blocking and must not interrupt completion of the current LSA roadmap.

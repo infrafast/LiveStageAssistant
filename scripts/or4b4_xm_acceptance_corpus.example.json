@@ -1,0 +1,39 @@
+{
+  "cases": [
+    {
+      "text": "statut mixeur",
+      "expected": "ready",
+      "effect": "read"
+    },
+    {
+      "text": "mets __CHANNEL__ à 50%",
+      "expected": "ready",
+      "effect": "write",
+      "execute": false
+    },
+    {
+      "text": "monte __CHANNEL__ de 10%",
+      "expected": "ready",
+      "effect": "write",
+      "execute": false
+    },
+    {
+      "text": "mets __CHANNEL__ sur __BUS__ à -20 dB",
+      "expected": "ready",
+      "effect": "write",
+      "execute": false
+    },
+    {
+      "text": "monte progressivement __CHANNEL__ à -30 dB en 2 secondes",
+      "expected": "ready",
+      "effect": "write",
+      "execute": false
+    },
+    {
+      "text": "mets __CHANNEL__ à -25 dB dans 2 secondes",
+      "expected": "ready",
+      "effect": "write",
+      "execute": false
+    }
+  ]
+}

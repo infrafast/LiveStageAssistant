@@ -33,44 +33,35 @@ case "$cmd" in
   start)
     sudo systemctl start "$SERVICE"
     ;;
-
   stop)
     sudo systemctl stop "$SERVICE"
     ;;
-
   restart)
     sudo systemctl restart "$SERVICE"
     ;;
-
   status)
     systemctl status "$SERVICE" --no-pager
     ;;
-
   logs)
     journalctl -u "$SERVICE" -f
     ;;
-
   run-auto)
     cd "$APP_DIR"
-    ASSISTANT_AUTO_ENV_DIR="$ENV_DIR" "$PYTHON_BIN" voice_assistant/agent.py --env-file auto
+    ASSISTANT_AUTO_ENV_DIR="$ENV_DIR" "$PYTHON_BIN" -m voice_assistant.runtime --env-file auto
     ;;
-
   auto)
     sudo systemctl enable "$SERVICE"
     sudo systemctl start "$SERVICE"
     echo "Live Stage Assistant auto-start enabled and service started."
     ;;
-
   noauto)
     sudo systemctl disable "$SERVICE"
     echo "Live Stage Assistant auto-start disabled."
     ;;
-
   last-state)
     echo "Enabled: $(systemctl is-enabled "$SERVICE" 2>/dev/null || true)"
     echo "Active : $(systemctl is-active "$SERVICE" 2>/dev/null || true)"
     ;;
-
   health)
     if curl -fsS "$SNAPSHOT_URL" >/dev/null; then
       echo "Live Stage Assistant web monitor is responding at $WEB_URL"
@@ -79,7 +70,6 @@ case "$cmd" in
       exit 1
     fi
     ;;
-
   test-remote)
     IP="$(tailscale ip -4 2>/dev/null | head -n 1)"
     if [ -z "$IP" ]; then
@@ -90,13 +80,11 @@ case "$cmd" in
     echo "Remote web monitor: http://$IP:$WEB_PORT"
     curl -I "http://$IP:$WEB_PORT" || true
     ;;
-
   config)
     echo "Online profile : $ONLINE_ENV_FILE"
     echo "Offline profile: $OFFLINE_ENV_FILE"
     sudo nano "$ONLINE_ENV_FILE" "$OFFLINE_ENV_FILE"
     ;;
-
   *)
     echo "Usage: livestageassistant {start|stop|restart|status|logs|run-auto|auto|noauto|last-state|health|test-remote|config}"
     exit 1

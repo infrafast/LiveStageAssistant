@@ -1,5 +1,5 @@
 [Unit]
-Description=Live Stage Assistant stdio MCP Agent
+Description=Live Stage Assistant
 Documentation=https://github.com/infrafast/LiveStageAssistant
 After=network-online.target tailscaled.service sound.target qlcplus.service
 Wants=network-online.target
@@ -13,7 +13,7 @@ WorkingDirectory=/home/pi/LiveStageAssistant
 Environment=ASSISTANT_AUTO_ENV_DIR=/etc/livestageassistant
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-ExecStart=/home/pi/LiveStageAssistant/.venv/bin/python voice_assistant/agent.py --env-file auto
+ExecStart=/home/pi/LiveStageAssistant/.venv/bin/python -m voice_assistant.runtime --env-file auto
 Restart=always
 RestartSec=5
 KillMode=control-group
