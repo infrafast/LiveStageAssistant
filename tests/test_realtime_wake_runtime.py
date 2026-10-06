@@ -121,6 +121,38 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         self.assertEqual(engine.sent[0], b"PRE")
         self.assertEqual(len(engine.sent), 2)
 
+    def test_post_wake_watchdog_fires_without_provider_events(self):
+        with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
+            messages = []
+
+            async def feedback(message):
+                messages.append(message)
+                return True
+
+            runtime = wake_runtime.RealtimeWakeRuntime(
+                self._config(),
+                slow_response_feedback=feedback,
+                slow_response_delay_seconds=0.01,
+                slow_response_message="Connexion lente...",
+            )
+        controller = FakeController()
+        runtime.semantic = controller
+
+        class Engine:
+            def __init__(self):
+                self.sent = []
+            async def send_audio(self, pcm):
+                self.sent.append(pcm)
+
+        async def scenario():
+            await runtime.capture_filter(Engine(), b"pcm", asyncio.Event())
+            await asyncio.sleep(0.03)
+
+        asyncio.run(scenario())
+        self.assertEqual(messages, ["Connexion lente..."])
+        self.assertIn(SemanticAudioState.WAKE_DETECTED, controller.states)
+        self.assertIn(SemanticAudioState.PROCESSING, controller.states)
+
     def test_build_runtime_callbacks_does_not_patch_service_module(self):
         original_capture = realtime_service.capture_loop
         original_event_loop = realtime_service.event_loop
