@@ -87,7 +87,9 @@ def normalize_engine(values: Mapping[str, object], *, online: bool) -> str:
 def fallback_engine_candidates(values: Mapping[str, object], *, online: bool) -> tuple[str, ...]:
     if not online:
         return ()
-    raw = str(values.get("VOICE_ENGINE_FALLBACK") or "classic").strip().lower()
+    # Engine fallback must be explicit. An implicit fallback can silently switch
+    # a failed Realtime session to a different online engine/profile behavior.
+    raw = str(values.get("VOICE_ENGINE_FALLBACK") or "none").strip().lower()
     if raw in {"", "none", "off", "disabled", "false", "0"}:
         return ()
     result: list[str] = []
