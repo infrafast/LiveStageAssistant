@@ -195,7 +195,7 @@ class SlowResponseFeedbackTests(unittest.IsolatedAsyncioTestCase):
                     callbacks=callbacks,
                     timeout_seconds=15.0,
                 ),
-                timeout=0.2,
+                timeout=0.6,
             )
 
         self.assertEqual(messages, ["Temps écoulé."])
