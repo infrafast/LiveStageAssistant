@@ -89,6 +89,8 @@ class RealtimeWakeRuntime:
         self.slow_response_delay_seconds = max(0.0, float(slow_response_delay_seconds))
         self.slow_response_message = str(slow_response_message or "Connexion lente...").strip() or "Connexion lente..."
         self._post_wake_task: asyncio.Task | None = None
+        self._post_wake_notice_started = False
+        self._local_status_speaking = False
         print(
             format_openwakeword_waiting(
                 config.wake_word,
@@ -130,12 +132,21 @@ class RealtimeWakeRuntime:
 
     def provider_progress(self) -> None:
         task = self._post_wake_task
+        if task is None or task.done():
+            self._post_wake_task = None
+            self._post_wake_notice_started = False
+            return
+        # Once the local slow-connection announcement has started, provider
+        # input-VAD events must not cancel it. Let Piper finish, then enter
+        # PROCESSING so the configured thinking loop starts deterministically.
+        if self._post_wake_notice_started:
+            return
         self._post_wake_task = None
-        if task is not None and not task.done():
-            task.cancel()
+        task.cancel()
 
     def _arm_post_wake_feedback(self) -> None:
         self.provider_progress()
+        self._post_wake_notice_started = False
         if self.slow_response_feedback is None or self.slow_response_delay_seconds <= 0:
             return
 
@@ -148,8 +159,14 @@ class RealtimeWakeRuntime:
                     f"LSA cloud request: no provider progress after wake elapsed={self.slow_response_delay_seconds:.1f}s",
                     flush=True,
                 )
-                spoken = await self.slow_response_feedback(self.slow_response_message)
+                self._post_wake_notice_started = True
+                self._local_status_speaking = True
+                try:
+                    spoken = await self.slow_response_feedback(self.slow_response_message)
+                finally:
+                    self._local_status_speaking = False
                 if spoken and self.semantic is not None and not self.gate.waiting:
+                    print("LSA slow-response feedback complete; starting thinking sound", flush=True)
                     self.semantic_transition(self.semantic, SemanticAudioState.PROCESSING)
             except asyncio.CancelledError:
                 raise
@@ -159,6 +176,10 @@ class RealtimeWakeRuntime:
         self._post_wake_task = asyncio.create_task(runner(), name="lsa-realtime-post-wake-feedback")
 
     async def capture_filter(self, engine, realtime_pcm: bytes, stop_event: asyncio.Event) -> bool:
+        # Never feed locally generated system speech back into provider VAD/STT.
+        if self._local_status_speaking:
+            return True
+
         if not self.gate.waiting:
             return False
 
