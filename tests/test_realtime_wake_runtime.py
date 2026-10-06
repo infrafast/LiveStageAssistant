@@ -153,6 +153,41 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         self.assertIn(SemanticAudioState.WAKE_DETECTED, controller.states)
         self.assertIn(SemanticAudioState.PROCESSING, controller.states)
 
+    def test_slow_status_blocks_capture_and_starts_processing_after_piper(self):
+        with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
+            release = asyncio.Event()
+            capture_results = []
+
+            async def feedback(_message):
+                runtime._local_status_speaking = True
+                capture_results.append(await runtime.capture_filter(object(), b"pcm", asyncio.Event()))
+                runtime._local_status_speaking = False
+                release.set()
+                return True
+
+            runtime = wake_runtime.RealtimeWakeRuntime(
+                self._config(),
+                slow_response_feedback=feedback,
+                slow_response_delay_seconds=0.01,
+                slow_response_message="Connexion lente...",
+            )
+
+        controller = FakeController()
+        runtime.semantic = controller
+
+        class Engine:
+            async def send_audio(self, _pcm):
+                return None
+
+        async def scenario():
+            await runtime.capture_filter(Engine(), b"pcm", asyncio.Event())
+            await asyncio.wait_for(release.wait(), timeout=0.2)
+            await asyncio.sleep(0.01)
+
+        asyncio.run(scenario())
+        self.assertEqual(capture_results, [True])
+        self.assertIn(SemanticAudioState.PROCESSING, controller.states)
+
     def test_build_runtime_callbacks_does_not_patch_service_module(self):
         original_capture = realtime_service.capture_loop
         original_event_loop = realtime_service.event_loop
