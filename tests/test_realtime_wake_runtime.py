@@ -275,6 +275,12 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         self.assertEqual(messages, ["Connexion lente..."])
         self.assertNotIn("Temps écoulé, commande annulée.", messages)
 
+    def test_provider_progress_is_safe_without_running_event_loop(self):
+        with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
+            runtime = wake_runtime.RealtimeWakeRuntime(self._config())
+        runtime.provider_progress()
+        self.assertTrue(runtime._post_wake_provider_progress_seen)
+
     def test_build_runtime_callbacks_does_not_patch_service_module(self):
         original_capture = realtime_service.capture_loop
         original_event_loop = realtime_service.event_loop
