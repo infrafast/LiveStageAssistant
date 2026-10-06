@@ -365,7 +365,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 post_wake_vad_threshold=0.01,
                 post_wake_vad_ignore_ms=0,
                 post_wake_end_silence_ms=100,
-                post_wake_no_speech_timeout_seconds=0.1,
+                post_wake_no_speech_timeout_seconds=0.5,
             )
 
         controller = FakeController()
@@ -380,7 +380,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
             stop_event = asyncio.Event()
             await runtime.capture_filter(engine, b"wake", stop_event)
             silence = b"\x00\x00" * 480
-            for _ in range(6):
+            for _ in range(26):
                 await runtime.capture_filter(engine, silence, stop_event)
 
         asyncio.run(scenario())
