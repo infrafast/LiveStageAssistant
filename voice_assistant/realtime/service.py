@@ -85,6 +85,7 @@ class RealtimeRuntimeCallbacks:
     defer_provider_response_until_user_transcript: bool = False
     is_wake_only_transcript: Callable[[str], bool] | None = None
     slow_response_feedback: Callable[[str], Awaitable[bool]] | None = None
+    provider_progress: Callable[[], None] | None = None
 
     @property
     def has_supervised_text(self) -> bool:
@@ -236,6 +237,16 @@ def transition_semantic(
         except Exception as exc:
             print(f"Realtime semantic callback warning: {exc}", flush=True)
     return bool(semantic.transition(state))
+
+
+def _provider_progress(callbacks: RealtimeRuntimeCallbacks | None) -> None:
+    runtime_callbacks = _callbacks(callbacks)
+    if runtime_callbacks.provider_progress is None:
+        return
+    try:
+        runtime_callbacks.provider_progress()
+    except Exception as exc:
+        print(f"Realtime provider-progress callback warning: {exc}", flush=True)
 
 
 async def _set_busy(callbacks: RealtimeRuntimeCallbacks | None, busy: bool) -> None:
@@ -1049,6 +1060,7 @@ async def event_loop(
 
             turn_tracker.touch()
             if event.type == "speech_started":
+                _provider_progress(runtime_callbacks)
                 if _should_ignore_provider_speech_started(runtime_callbacks, getattr(semantic, "state", None)):
                     print("Realtime speech started ignored while assistant speech is protected by local wake gate", flush=True)
                     continue
@@ -1069,6 +1081,7 @@ async def event_loop(
                 print("LSA cloud request: audio turn sent status=waiting-response", flush=True)
                 schedule_slow_response_notice()
             elif event.type == "user_transcript_done":
+                _provider_progress(runtime_callbacks)
                 text = str(event.data.get("text") or "").strip()
                 if text:
                     if _is_wake_only_transcript(runtime_callbacks, text):
@@ -1129,6 +1142,7 @@ async def event_loop(
                 # leave WAIT_RESPONSE/RESPONDING untouched because response.created
                 # may legally precede or follow transcription completion/failure.
             elif event.type == "response_started":
+                _provider_progress(runtime_callbacks)
                 if slow_response_task is not None and not slow_response_task.done():
                     if slow_response_notice_started:
                         # Once the local status sentence has started, let it finish
