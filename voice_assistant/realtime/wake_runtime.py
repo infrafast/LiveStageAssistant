@@ -138,22 +138,29 @@ class RealtimeWakeRuntime:
         return bool(semantic.transition(state))
 
     def provider_progress(self) -> None:
+        # Record provider progress first and keep it sticky for the current
+        # post-wake cycle. It is reset only when a new wake cycle is armed.
+        self._post_wake_provider_progress_seen = True
+
         task = self._post_wake_task
-        if task is asyncio.current_task():
-            self._post_wake_task = None
-            self._post_wake_notice_started = False
-            return
-        if task is None or task.done():
-            self._post_wake_task = None
-            self._post_wake_notice_started = False
+        if task is None:
             return
 
-        # Any real provider event permanently disarms the post-wake hard timeout.
-        # If Piper is already speaking, remember the progress instead of
-        # cancelling the local TTS task mid-sentence; the runner will exit as
-        # soon as that sentence finishes. From that point onward the normal
-        # phase-specific Realtime/LLM/MCP timeouts own the turn.
-        self._post_wake_provider_progress_seen = True
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+
+        if task is current:
+            return
+
+        if task.done():
+            self._post_wake_task = None
+            return
+
+        # If Piper is already speaking, do not cancel the task mid-sentence.
+        # The runner will observe the sticky progress flag immediately after
+        # the local announcement and exit before arming the hard timeout.
         if self._post_wake_notice_started:
             return
 
@@ -161,7 +168,10 @@ class RealtimeWakeRuntime:
         task.cancel()
 
     def _arm_post_wake_feedback(self, engine) -> None:
-        self.provider_progress()
+        previous_task = self._post_wake_task
+        if previous_task is not None and not previous_task.done():
+            previous_task.cancel()
+        self._post_wake_task = None
         self._post_wake_notice_started = False
         self._post_wake_provider_progress_seen = False
         if self.slow_response_feedback is None or self.slow_response_delay_seconds <= 0:
@@ -191,6 +201,7 @@ class RealtimeWakeRuntime:
                             "post-wake hard timeout disarmed",
                             flush=True,
                         )
+                        self._post_wake_task = None
                         return
 
                     print("LSA slow-response feedback complete; starting thinking sound", flush=True)
@@ -250,6 +261,7 @@ class RealtimeWakeRuntime:
                         if self.semantic is not None:
                             self.semantic_transition(self.semantic, SemanticAudioState.LISTENING)
                         print("LSA post-wake timeout recovery complete; listening re-armed", flush=True)
+                        self._post_wake_task = None
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
