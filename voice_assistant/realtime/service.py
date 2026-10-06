@@ -919,6 +919,7 @@ async def event_loop(
     last_completed_response: dict[str, Any] = {"id": "", "had_audio": False}
     command_task: asyncio.Task | None = None
     slow_response_task: asyncio.Task | None = None
+    slow_response_notice_started = False
 
     async def cancel_slow_response_task() -> None:
         nonlocal slow_response_task
@@ -941,10 +942,12 @@ async def event_loop(
             slow_response_task.cancel()
 
         async def slow_response_runner() -> None:
+            nonlocal slow_response_notice_started
             try:
                 await asyncio.sleep(delay)
                 if not turn_tracker.awaiting_response or turn_tracker.phase == RealtimeTurnPhase.RESPONDING:
                     return
+                slow_response_notice_started = True
                 message = str(
                     os.getenv("REALTIME_SLOW_RESPONSE_MESSAGE")
                     or DEFAULT_REALTIME_SLOW_RESPONSE_MESSAGE
@@ -1124,7 +1127,16 @@ async def event_loop(
                 # leave WAIT_RESPONSE/RESPONDING untouched because response.created
                 # may legally precede or follow transcription completion/failure.
             elif event.type == "response_started":
-                await cancel_slow_response_task()
+                if slow_response_task is not None and not slow_response_task.done():
+                    if slow_response_notice_started:
+                        # Once the local status sentence has started, let it finish
+                        # before provider speech/thinking is allowed to use the same
+                        # backend output. Cancelling asyncio.to_thread would not stop
+                        # the underlying Piper playback and could create overlap.
+                        await asyncio.gather(slow_response_task, return_exceptions=True)
+                        slow_response_task = None
+                    else:
+                        await cancel_slow_response_task()
                 response = event.data.get("response") or {}
                 turn_tracker.response_started_event(str(response.get("id") or ""))
                 await _set_busy(runtime_callbacks, True)
