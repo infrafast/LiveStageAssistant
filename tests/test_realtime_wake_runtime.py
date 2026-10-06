@@ -134,6 +134,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_feedback=feedback,
                 slow_response_delay_seconds=0.01,
                 slow_response_message="Connexion lente...",
+                post_wake_command_grace_seconds=0.01,
             )
         controller = FakeController()
         runtime.semantic = controller
@@ -170,6 +171,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_feedback=feedback,
                 slow_response_delay_seconds=0.01,
                 slow_response_message="Connexion lente...",
+                post_wake_command_grace_seconds=0.01,
             )
 
         controller = FakeController()
@@ -201,6 +203,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_feedback=feedback,
                 slow_response_delay_seconds=0.01,
                 slow_response_message="Connexion lente...",
+                post_wake_command_grace_seconds=0.01,
                 post_wake_abort_seconds=0.02,
                 timeout_message="Temps écoulé, commande annulée.",
                 recovery_operation_timeout_seconds=0.01,
@@ -250,6 +253,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_feedback=feedback,
                 slow_response_delay_seconds=0.01,
                 slow_response_message="Connexion lente...",
+                post_wake_command_grace_seconds=0.01,
                 post_wake_abort_seconds=0.02,
                 timeout_message="Temps écoulé, commande annulée.",
                 recovery_operation_timeout_seconds=0.01,
