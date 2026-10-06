@@ -220,6 +220,32 @@ class RuntimeWebServicesTests(unittest.TestCase):
         self.assertEqual(kwargs["input_gain"], 1.25)
         self.assertEqual(kwargs["values"]["BACKEND_AUDIO_INPUT_DEVICE"], "pipewire:source:test-input")
 
+    def test_backend_tts_preview_infers_realtime_provider_from_active_engine(self):
+        self.online.write_text(
+            self.online.read_text(encoding="utf-8") + "TTS_PROVIDER=elevenlabs\n",
+            encoding="utf-8",
+        )
+        with mock.patch(
+            "voice_assistant.backend_tts._render_realtime_wav",
+            new=mock.AsyncMock(),
+        ) as realtime_render, mock.patch.object(
+            self.services._backend_tts_tester.player,
+            "control_path",
+            return_value={"ok": True},
+        ):
+            result = self.services._backend_tts_tester.test(
+                "test realtime voice",
+                values=self.services._values(),
+                openai_api_key="test-key",
+                elevenlabs_api_key="eleven-key",
+                options={"voice": "ash", "model": "gpt-realtime-2.1"},
+            )
+        self.assertEqual(result["provider"], "openai-realtime")
+        realtime_render.assert_awaited_once()
+        kwargs = realtime_render.await_args.kwargs
+        self.assertEqual(kwargs["provider"], "openai-realtime")
+        self.assertEqual(kwargs["voice"], "ash")
+
     def test_backend_output_test_forwards_selected_output_device(self):
         expected = {"ok": True}
         options = {
