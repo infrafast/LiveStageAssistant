@@ -72,7 +72,10 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         speech = (int(12000).to_bytes(2, "little", signed=True)) * 480
         silence = b"\x00\x00" * 480
         await runtime.capture_filter(engine, speech, stop_event)
-        await runtime.capture_filter(engine, silence, stop_event)
+        # 480 samples at 24 kHz = 20 ms. Feed 6 silent frames (120 ms)
+        # so the test exceeds the production minimum end-silence clamp (100 ms).
+        for _ in range(6):
+            await runtime.capture_filter(engine, silence, stop_event)
 
     def test_listening_is_wait_wake_until_authorized(self):
         with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
@@ -146,7 +149,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_message="Connexion lente...",
                 post_wake_vad_threshold=0.01,
                 post_wake_vad_ignore_ms=0,
-                post_wake_end_silence_ms=20,
+                post_wake_end_silence_ms=100,
             )
         controller = FakeController()
         runtime.semantic = controller
@@ -186,7 +189,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_message="Connexion lente...",
                 post_wake_vad_threshold=0.01,
                 post_wake_vad_ignore_ms=0,
-                post_wake_end_silence_ms=20,
+                post_wake_end_silence_ms=100,
             )
 
         controller = FakeController()
@@ -221,7 +224,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_message="Connexion lente...",
                 post_wake_vad_threshold=0.01,
                 post_wake_vad_ignore_ms=0,
-                post_wake_end_silence_ms=20,
+                post_wake_end_silence_ms=100,
                 post_wake_abort_seconds=0.02,
                 timeout_message="Temps écoulé, commande annulée.",
                 recovery_operation_timeout_seconds=0.01,
@@ -274,7 +277,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_message="Connexion lente...",
                 post_wake_vad_threshold=0.01,
                 post_wake_vad_ignore_ms=0,
-                post_wake_end_silence_ms=20,
+                post_wake_end_silence_ms=100,
                 post_wake_abort_seconds=0.02,
                 timeout_message="Temps écoulé, commande annulée.",
                 recovery_operation_timeout_seconds=0.01,
