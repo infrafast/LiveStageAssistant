@@ -12,11 +12,44 @@ PIPER_VOICE="fr_FR-siwis-medium"
 PIPER_MODEL="$APP_DIR/data/piper/$PIPER_VOICE.onnx"
 PIPER_CONFIG="$PIPER_MODEL.json"
 
-require_python_stack() {
+repair_python_stack_if_needed() {
+  local needs_repair=0
+
   if [ ! -x "$PYTHON_BIN" ]; then
-    echo "Error: $PYTHON_BIN not found or not executable." >&2
-    echo "Create the virtual environment first, then install LiveStageAssistant dependencies." >&2
-    echo "Example: cd $APP_DIR && ./scripts/install.sh" >&2
+    needs_repair=1
+  else
+    if ! "$PYTHON_BIN" - <<'PY'
+from importlib import metadata
+metadata.version("piper-tts")
+import voice_assistant.realtime
+PY
+    then
+      needs_repair=1
+    fi
+
+    if [ ! -f "$PIPER_MODEL" ] || [ ! -f "$PIPER_CONFIG" ]; then
+      needs_repair=1
+    fi
+  fi
+
+  if [ "$needs_repair" = "1" ]; then
+    echo "Live Stage Assistant Python/Piper runtime is incomplete; running the repository installer."
+    if [ ! -f "$APP_DIR/scripts/install.sh" ]; then
+      echo "Error: $APP_DIR/scripts/install.sh not found." >&2
+      exit 1
+    fi
+    (
+      cd "$APP_DIR"
+      sh ./scripts/install.sh
+    )
+  fi
+}
+
+require_python_stack() {
+  repair_python_stack_if_needed
+
+  if [ ! -x "$PYTHON_BIN" ]; then
+    echo "Error: $PYTHON_BIN not found or not executable after installation." >&2
     exit 1
   fi
 
@@ -44,18 +77,35 @@ PY
 from importlib import metadata
 metadata.version("piper-tts")
 import voice_assistant.realtime
+from piper import PiperVoice
 PY
   then
-    echo "Error: Piper or Realtime voice support is missing from $APP_DIR/.venv." >&2
-    echo "Run: cd $APP_DIR && ./scripts/install.sh" >&2
+    echo "Error: Piper or Realtime voice support is still missing from $APP_DIR/.venv after repair." >&2
     exit 1
   fi
 
   if [ ! -f "$PIPER_MODEL" ] || [ ! -f "$PIPER_CONFIG" ]; then
-    echo "Error: default French Piper voice is missing: $PIPER_MODEL" >&2
-    echo "Run: cd $APP_DIR && ./scripts/install.sh" >&2
+    echo "Error: default French Piper voice is still missing after repair: $PIPER_MODEL" >&2
     exit 1
   fi
+
+  PIPER_VERIFY_MODEL="$PIPER_MODEL" "$PYTHON_BIN" - <<'PY'
+import io
+import os
+import wave
+from pathlib import Path
+from piper import PiperVoice
+
+model = Path(os.environ["PIPER_VERIFY_MODEL"])
+config = model.with_suffix(model.suffix + ".json")
+voice = PiperVoice.load(str(model), config_path=str(config))
+rendered = io.BytesIO()
+with wave.open(rendered, "wb") as wav_file:
+    voice.synthesize_wav("Test de synthèse vocale locale.", wav_file)
+if len(rendered.getvalue()) <= 44:
+    raise SystemExit("Piper service-pack verification failed: synthesis produced no audio")
+print(f"Piper service-pack verification OK: {model.name}")
+PY
 }
 
 require_node_stack() {
