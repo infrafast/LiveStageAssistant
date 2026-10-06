@@ -8,6 +8,8 @@ contains only runtime adapters that plug into those loops through
 from __future__ import annotations
 
 import asyncio
+from array import array
+import math
 import os
 from pathlib import Path
 import re
@@ -79,7 +81,9 @@ class RealtimeWakeRuntime:
         slow_response_feedback: Callable[[str], Awaitable[bool]] | None = None,
         slow_response_delay_seconds: float = 2.0,
         slow_response_message: str = "Connexion lente...",
-        post_wake_command_grace_seconds: float = 4.0,
+        post_wake_vad_threshold: float = 0.015,
+        post_wake_vad_ignore_ms: int = 250,
+        post_wake_end_silence_ms: int = 700,
         post_wake_abort_seconds: float = 8.0,
         timeout_message: str = "Temps écoulé, commande annulée.",
         recovery_operation_timeout_seconds: float = 1.0,
@@ -92,7 +96,9 @@ class RealtimeWakeRuntime:
         self.slow_response_feedback = slow_response_feedback
         self.slow_response_delay_seconds = max(0.0, float(slow_response_delay_seconds))
         self.slow_response_message = str(slow_response_message or "Connexion lente...").strip() or "Connexion lente..."
-        self.post_wake_command_grace_seconds = max(0.0, float(post_wake_command_grace_seconds))
+        self.post_wake_vad_threshold = max(0.001, min(1.0, float(post_wake_vad_threshold)))
+        self.post_wake_vad_ignore_ms = max(0, int(post_wake_vad_ignore_ms))
+        self.post_wake_end_silence_ms = max(100, int(post_wake_end_silence_ms))
         self.post_wake_abort_seconds = max(0.0, float(post_wake_abort_seconds))
         self.timeout_message = str(timeout_message or "Temps écoulé, commande annulée.").strip() or "Temps écoulé, commande annulée."
         self.recovery_operation_timeout_seconds = max(0.1, float(recovery_operation_timeout_seconds))
@@ -100,6 +106,11 @@ class RealtimeWakeRuntime:
         self._post_wake_notice_started = False
         self._post_wake_provider_progress_seen = False
         self._local_status_speaking = False
+        self._post_wake_vad_active = False
+        self._post_wake_vad_speech_seen = False
+        self._post_wake_vad_silence_ms = 0.0
+        self._post_wake_vad_ignore_remaining_ms = 0.0
+        self._post_wake_phrase_ended = False
         print(
             format_openwakeword_waiting(
                 config.wake_word,
@@ -143,6 +154,7 @@ class RealtimeWakeRuntime:
         # Record provider progress first and keep it sticky for the current
         # post-wake cycle. It is reset only when a new wake cycle is armed.
         self._post_wake_provider_progress_seen = True
+        self._post_wake_vad_active = False
 
         task = self._post_wake_task
         if task is None:
@@ -169,23 +181,83 @@ class RealtimeWakeRuntime:
         self._post_wake_task = None
         task.cancel()
 
+    def _reset_post_wake_vad(self) -> None:
+        self._post_wake_vad_active = True
+        self._post_wake_vad_speech_seen = False
+        self._post_wake_vad_silence_ms = 0.0
+        self._post_wake_vad_ignore_remaining_ms = float(self.post_wake_vad_ignore_ms)
+        self._post_wake_phrase_ended = False
+        self._post_wake_provider_progress_seen = False
+
+    @staticmethod
+    def _pcm16_rms_level(pcm: bytes) -> float:
+        if not pcm:
+            return 0.0
+        samples = array("h")
+        samples.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])
+        if not samples:
+            return 0.0
+        mean_square = sum(float(sample) * float(sample) for sample in samples) / len(samples)
+        return min(1.0, math.sqrt(mean_square) / 32768.0)
+
+    def _observe_post_wake_vad(self, engine, pcm: bytes) -> None:
+        if (
+            not self._post_wake_vad_active
+            or self._post_wake_provider_progress_seen
+            or self._post_wake_phrase_ended
+            or self._local_status_speaking
+        ):
+            return
+
+        frame_ms = (len(pcm) / (24000.0 * 2.0)) * 1000.0
+        if frame_ms <= 0:
+            return
+
+        if self._post_wake_vad_ignore_remaining_ms > 0:
+            self._post_wake_vad_ignore_remaining_ms = max(
+                0.0,
+                self._post_wake_vad_ignore_remaining_ms - frame_ms,
+            )
+            return
+
+        level = self._pcm16_rms_level(pcm)
+        if level >= self.post_wake_vad_threshold:
+            self._post_wake_vad_speech_seen = True
+            self._post_wake_vad_silence_ms = 0.0
+            return
+
+        if not self._post_wake_vad_speech_seen:
+            return
+
+        self._post_wake_vad_silence_ms += frame_ms
+        if self._post_wake_vad_silence_ms < self.post_wake_end_silence_ms:
+            return
+
+        self._post_wake_phrase_ended = True
+        self._post_wake_vad_active = False
+        print(
+            "LSA local VAD: post-wake end of speech detected "
+            f"silence={self._post_wake_vad_silence_ms:.0f}ms threshold={self.post_wake_vad_threshold:.3f}",
+            flush=True,
+        )
+        self._arm_post_wake_feedback(engine)
+
     def _arm_post_wake_feedback(self, engine) -> None:
         previous_task = self._post_wake_task
         if previous_task is not None and not previous_task.done():
             previous_task.cancel()
         self._post_wake_task = None
         self._post_wake_notice_started = False
-        self._post_wake_provider_progress_seen = False
-        if self.slow_response_feedback is None or self.post_wake_command_grace_seconds <= 0:
+        if self.slow_response_feedback is None or self.slow_response_delay_seconds <= 0:
             return
 
         async def runner() -> None:
             try:
-                await asyncio.sleep(self.post_wake_command_grace_seconds)
-                if self.gate.waiting:
+                await asyncio.sleep(self.slow_response_delay_seconds)
+                if self.gate.waiting or self._post_wake_provider_progress_seen:
                     return
                 print(
-                    f"LSA cloud request: no provider progress after wake elapsed={self.post_wake_command_grace_seconds:.1f}s",
+                    f"LSA cloud request: no provider progress after local end-of-speech elapsed={self.slow_response_delay_seconds:.1f}s",
                     flush=True,
                 )
                 self._post_wake_notice_started = True
@@ -277,6 +349,7 @@ class RealtimeWakeRuntime:
             return True
 
         if not self.gate.waiting:
+            self._observe_post_wake_vad(engine, realtime_pcm)
             return False
 
         if self.speaking and not self.interrupt_enabled:
@@ -288,7 +361,7 @@ class RealtimeWakeRuntime:
 
         if self.semantic is not None:
             self.semantic_transition(self.semantic, SemanticAudioState.WAKE_DETECTED)
-        self._arm_post_wake_feedback(engine)
+        self._reset_post_wake_vad()
 
         pre_roll = self.gate.consume_pre_roll()
         print(
@@ -371,11 +444,23 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
         slow_response_delay = 2.0
 
     try:
-        post_wake_command_grace_seconds = float(
-            str(values.get("REALTIME_POST_WAKE_COMMAND_GRACE_SECONDS") or "4.0")
+        post_wake_vad_threshold = float(
+            str(values.get("BACKEND_WAKE_WORD_VAD_THRESHOLD") or "0.015")
         )
     except (TypeError, ValueError):
-        post_wake_command_grace_seconds = 4.0
+        post_wake_vad_threshold = 0.015
+    try:
+        post_wake_vad_ignore_ms = int(float(
+            str(values.get("REALTIME_POST_WAKE_VAD_IGNORE_MS") or "250")
+        ))
+    except (TypeError, ValueError):
+        post_wake_vad_ignore_ms = 250
+    try:
+        post_wake_end_silence_ms = int(float(
+            str(values.get("REALTIME_POST_WAKE_END_SILENCE_MS") or "700")
+        ))
+    except (TypeError, ValueError):
+        post_wake_end_silence_ms = 700
     try:
         post_wake_abort_seconds = float(str(values.get("REALTIME_POST_WAKE_ABORT_SECONDS") or "8.0"))
     except (TypeError, ValueError):
@@ -393,7 +478,9 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
         slow_response_feedback=slow_response_feedback,
         slow_response_delay_seconds=slow_response_delay,
         slow_response_message=str(values.get("REALTIME_SLOW_RESPONSE_MESSAGE") or "Connexion lente..."),
-        post_wake_command_grace_seconds=post_wake_command_grace_seconds,
+        post_wake_vad_threshold=post_wake_vad_threshold,
+        post_wake_vad_ignore_ms=post_wake_vad_ignore_ms,
+        post_wake_end_silence_ms=post_wake_end_silence_ms,
         post_wake_abort_seconds=post_wake_abort_seconds,
         timeout_message=str(values.get("REALTIME_TIMEOUT_MESSAGE") or "Temps écoulé, commande annulée."),
         recovery_operation_timeout_seconds=recovery_operation_timeout_seconds,
