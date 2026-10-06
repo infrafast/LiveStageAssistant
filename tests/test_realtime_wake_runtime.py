@@ -28,8 +28,11 @@ class FakeGate:
         self.preroll = b"PRE"
         self.last_detection_label = "momo"
         self.last_detection_score = 0.9
+        self.auto_detect = True
 
     def feed(self, _pcm):
+        if not self.auto_detect:
+            return False
         self.waiting = False
         return True
 
@@ -379,6 +382,7 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
             engine = Engine()
             stop_event = asyncio.Event()
             await runtime.capture_filter(engine, b"wake", stop_event)
+            runtime.gate.auto_detect = False
             silence = b"\x00\x00" * 480
             for _ in range(26):
                 await runtime.capture_filter(engine, silence, stop_event)
