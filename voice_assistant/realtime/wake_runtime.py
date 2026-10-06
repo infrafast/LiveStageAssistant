@@ -11,7 +11,7 @@ import asyncio
 import os
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from dotenv import dotenv_values
 
@@ -71,12 +71,24 @@ def _realtime_instructions_with_active_session(engine, values: dict[str, Any], *
 class RealtimeWakeRuntime:
     """Local realtime wake gate wired through explicit service callbacks."""
 
-    def __init__(self, config: RealtimeWakeConfig, *, interrupt_enabled: bool = False) -> None:
+    def __init__(
+        self,
+        config: RealtimeWakeConfig,
+        *,
+        interrupt_enabled: bool = False,
+        slow_response_feedback: Callable[[str], Awaitable[bool]] | None = None,
+        slow_response_delay_seconds: float = 2.0,
+        slow_response_message: str = "Connexion lente...",
+    ) -> None:
         self.config = config
         self.gate = RealtimeWakeGate(config)
         self.interrupt_enabled = bool(interrupt_enabled)
         self.semantic: SemanticAudioController | None = None
         self.speaking = False
+        self.slow_response_feedback = slow_response_feedback
+        self.slow_response_delay_seconds = max(0.0, float(slow_response_delay_seconds))
+        self.slow_response_message = str(slow_response_message or "Connexion lente...").strip() or "Connexion lente..."
+        self._post_wake_task: asyncio.Task | None = None
         print(
             format_openwakeword_waiting(
                 config.wake_word,
@@ -114,6 +126,36 @@ class RealtimeWakeRuntime:
 
         return bool(semantic.transition(state))
 
+    def provider_progress(self) -> None:
+        task = self._post_wake_task
+        self._post_wake_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _arm_post_wake_feedback(self) -> None:
+        self.provider_progress()
+        if self.slow_response_feedback is None or self.slow_response_delay_seconds <= 0:
+            return
+
+        async def runner() -> None:
+            try:
+                await asyncio.sleep(self.slow_response_delay_seconds)
+                if self.gate.waiting:
+                    return
+                print(
+                    f"LSA cloud request: no provider progress after wake elapsed={self.slow_response_delay_seconds:.1f}s",
+                    flush=True,
+                )
+                spoken = await self.slow_response_feedback(self.slow_response_message)
+                if spoken and self.semantic is not None and not self.gate.waiting:
+                    self.semantic_transition(self.semantic, SemanticAudioState.PROCESSING)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"Realtime post-wake slow-response feedback warning: {exc}", flush=True)
+
+        self._post_wake_task = asyncio.create_task(runner(), name="lsa-realtime-post-wake-feedback")
+
     async def capture_filter(self, engine, realtime_pcm: bytes, stop_event: asyncio.Event) -> bool:
         if not self.gate.waiting:
             return False
@@ -127,6 +169,7 @@ class RealtimeWakeRuntime:
 
         if self.semantic is not None:
             self.semantic_transition(self.semantic, SemanticAudioState.WAKE_DETECTED)
+        self._arm_post_wake_feedback()
 
         pre_roll = self.gate.consume_pre_roll()
         print(
@@ -206,10 +249,14 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
     runtime = RealtimeWakeRuntime(
         config,
         interrupt_enabled=_bool(values.get("INTERRUPT_CONVERSATION_ENABLED"), False),
+        slow_response_feedback=slow_response_feedback,
+        slow_response_delay_seconds=float(str(values.get("REALTIME_SLOW_RESPONSE_NOTICE_SECONDS") or "2.0")),
+        slow_response_message=str(values.get("REALTIME_SLOW_RESPONSE_MESSAGE") or "Connexion lente..."),
     )
     callbacks.capture_filter = runtime.capture_filter
     callbacks.semantic_transition = runtime.semantic_transition
     callbacks.should_ignore_provider_speech_started = runtime.should_ignore_provider_speech_started
     callbacks.defer_provider_response_until_user_transcript = True
     callbacks.is_wake_only_transcript = runtime.is_wake_only_transcript
+    callbacks.provider_progress = runtime.provider_progress
     return callbacks
