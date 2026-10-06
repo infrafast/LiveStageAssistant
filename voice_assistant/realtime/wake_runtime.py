@@ -96,6 +96,7 @@ class RealtimeWakeRuntime:
         self.recovery_operation_timeout_seconds = max(0.1, float(recovery_operation_timeout_seconds))
         self._post_wake_task: asyncio.Task | None = None
         self._post_wake_notice_started = False
+        self._post_wake_provider_progress_seen = False
         self._local_status_speaking = False
         print(
             format_openwakeword_waiting(
@@ -146,17 +147,23 @@ class RealtimeWakeRuntime:
             self._post_wake_task = None
             self._post_wake_notice_started = False
             return
-        # Once the local slow-connection announcement has started, provider
-        # input-VAD events must not cancel it. Let Piper finish, then enter
-        # PROCESSING so the configured thinking loop starts deterministically.
+
+        # Any real provider event permanently disarms the post-wake hard timeout.
+        # If Piper is already speaking, remember the progress instead of
+        # cancelling the local TTS task mid-sentence; the runner will exit as
+        # soon as that sentence finishes. From that point onward the normal
+        # phase-specific Realtime/LLM/MCP timeouts own the turn.
+        self._post_wake_provider_progress_seen = True
         if self._post_wake_notice_started:
             return
+
         self._post_wake_task = None
         task.cancel()
 
     def _arm_post_wake_feedback(self, engine) -> None:
         self.provider_progress()
         self._post_wake_notice_started = False
+        self._post_wake_provider_progress_seen = False
         if self.slow_response_feedback is None or self.slow_response_delay_seconds <= 0:
             return
 
@@ -176,13 +183,22 @@ class RealtimeWakeRuntime:
                 finally:
                     self._local_status_speaking = False
                 if spoken and self.semantic is not None and not self.gate.waiting:
-                    print("LSA slow-response feedback complete; starting thinking sound", flush=True)
                     self._post_wake_notice_started = False
+
+                    if self._post_wake_provider_progress_seen:
+                        print(
+                            "LSA slow-response feedback complete; provider progress already observed, "
+                            "post-wake hard timeout disarmed",
+                            flush=True,
+                        )
+                        return
+
+                    print("LSA slow-response feedback complete; starting thinking sound", flush=True)
                     self.semantic_transition(self.semantic, SemanticAudioState.PROCESSING)
 
                     if self.post_wake_abort_seconds > 0:
                         await asyncio.sleep(self.post_wake_abort_seconds)
-                        if self.gate.waiting:
+                        if self.gate.waiting or self._post_wake_provider_progress_seen:
                             return
 
                         print(
