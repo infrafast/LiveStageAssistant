@@ -55,6 +55,8 @@ DEFAULT_REALTIME_WAIT_RESPONSE_TIMEOUT_SECONDS = 8.0
 DEFAULT_REALTIME_RESPONSE_TIMEOUT_SECONDS = 30.0
 DEFAULT_REALTIME_FOLLOWUP_TIMEOUT_SECONDS = 12.0
 DEFAULT_REALTIME_EVENT_POLL_SECONDS = 0.5
+DEFAULT_REALTIME_SLOW_RESPONSE_NOTICE_SECONDS = 2.0
+DEFAULT_REALTIME_SLOW_RESPONSE_MESSAGE = "Connexion lente..."
 
 
 def _float_env(name: str, default: float) -> float:
@@ -82,6 +84,7 @@ class RealtimeRuntimeCallbacks:
     should_ignore_provider_speech_started: Callable[[SemanticAudioState | None], bool] | None = None
     defer_provider_response_until_user_transcript: bool = False
     is_wake_only_transcript: Callable[[str], bool] | None = None
+    slow_response_feedback: Callable[[str], Awaitable[bool]] | None = None
 
     @property
     def has_supervised_text(self) -> bool:
@@ -915,6 +918,53 @@ async def event_loop(
     )
     last_completed_response: dict[str, Any] = {"id": "", "had_audio": False}
     command_task: asyncio.Task | None = None
+    slow_response_task: asyncio.Task | None = None
+
+    async def cancel_slow_response_task() -> None:
+        nonlocal slow_response_task
+        task = slow_response_task
+        slow_response_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    def schedule_slow_response_notice() -> None:
+        nonlocal slow_response_task
+        delay = _float_env(
+            "REALTIME_SLOW_RESPONSE_NOTICE_SECONDS",
+            DEFAULT_REALTIME_SLOW_RESPONSE_NOTICE_SECONDS,
+        )
+        if delay <= 0 or runtime_callbacks.slow_response_feedback is None:
+            return
+        if slow_response_task is not None and not slow_response_task.done():
+            slow_response_task.cancel()
+
+        async def slow_response_runner() -> None:
+            try:
+                await asyncio.sleep(delay)
+                if not turn_tracker.awaiting_response or turn_tracker.phase == RealtimeTurnPhase.RESPONDING:
+                    return
+                message = str(
+                    os.getenv("REALTIME_SLOW_RESPONSE_MESSAGE")
+                    or DEFAULT_REALTIME_SLOW_RESPONSE_MESSAGE
+                ).strip() or DEFAULT_REALTIME_SLOW_RESPONSE_MESSAGE
+                print(
+                    f"LSA cloud request: slow response elapsed={delay:.1f}s status=waiting",
+                    flush=True,
+                )
+                spoken = await runtime_callbacks.slow_response_feedback(message)
+                if spoken and turn_tracker.awaiting_response and turn_tracker.phase != RealtimeTurnPhase.RESPONDING:
+                    transition_semantic(semantic, SemanticAudioState.PROCESSING, runtime_callbacks)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"Realtime slow-response feedback warning: {exc}", flush=True)
+
+        slow_response_task = asyncio.create_task(
+            slow_response_runner(),
+            name="lsa-realtime-slow-response-feedback",
+        )
 
     def schedule_settle(response_id: str, response_had_audio: bool) -> None:
         if not response_id or response_id in settled_responses or response_id in settling_responses:
@@ -1011,11 +1061,14 @@ async def event_loop(
             elif event.type == "speech_stopped":
                 turn_tracker.speech_stopped()
                 print("Realtime speech stopped", flush=True)
+                print("LSA cloud request: audio turn sent status=waiting-response", flush=True)
+                schedule_slow_response_notice()
             elif event.type == "user_transcript_done":
                 text = str(event.data.get("text") or "").strip()
                 if text:
                     if _is_wake_only_transcript(runtime_callbacks, text):
                         print("Realtime wake word only; waiting for command speech.", flush=True)
+                        await cancel_slow_response_task()
                         turn_tracker.reset_after_cancel_or_failure()
                         await _set_busy(runtime_callbacks, False)
                         transition_semantic(semantic, SemanticAudioState.IDLE, runtime_callbacks)
@@ -1062,6 +1115,7 @@ async def event_loop(
                     # In wake-gated deferred-response mode no response will be
                     # created without a useful transcript, so abandon only this turn.
                     if not turn_tracker.current_response_id and not turn_tracker.tool_in_flight:
+                        await cancel_slow_response_task()
                         turn_tracker.reset_after_cancel_or_failure()
                         await _set_busy(runtime_callbacks, False)
                         transition_semantic(semantic, SemanticAudioState.IDLE, runtime_callbacks)
@@ -1070,6 +1124,7 @@ async def event_loop(
                 # leave WAIT_RESPONSE/RESPONDING untouched because response.created
                 # may legally precede or follow transcription completion/failure.
             elif event.type == "response_started":
+                await cancel_slow_response_task()
                 response = event.data.get("response") or {}
                 turn_tracker.response_started_event(str(response.get("id") or ""))
                 await _set_busy(runtime_callbacks, True)
@@ -1123,6 +1178,8 @@ async def event_loop(
                         "Realtime action state reset after provider error; no in-flight action will be replayed automatically",
                         flush=True,
                     )
+                await cancel_slow_response_task()
+                await cancel_slow_response_task()
                 turn_tracker.reset_after_cancel_or_failure()
                 await _set_busy(runtime_callbacks, False)
                 provider_failure.set()
@@ -1139,6 +1196,7 @@ async def event_loop(
                 provider_failure.set()
                 stop_event.set()
     finally:
+        await cancel_slow_response_task()
         if command_task is not None:
             command_task.cancel()
         for task in tuple(tool_tasks):
