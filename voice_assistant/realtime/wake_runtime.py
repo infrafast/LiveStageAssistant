@@ -17,6 +17,7 @@ from dotenv import dotenv_values
 
 from ..child_command_channel import child_monitor_from_env
 from ..semantic_audio import SemanticAudioController, SemanticAudioState
+from ..local_tts import speak_local_status
 from ..session_context import DEFAULT_CONTEXT_DIR, DEFAULT_SUMMARY_MAX_CHARS, SessionContextStore
 from ..wake_word import normalize_for_wake_word
 from ..wake_logging import format_openwakeword_detected, format_openwakeword_waiting
@@ -170,6 +171,12 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
     env_path = Path(env_file).expanduser().resolve()
     values = dict(dotenv_values(env_path))
     callbacks = RealtimeRuntimeCallbacks()
+
+    async def slow_response_feedback(message: str) -> bool:
+        print(f"LSA cloud request: local feedback via Piper message={message!r}", flush=True)
+        return bool(await asyncio.to_thread(speak_local_status, message, values))
+
+    callbacks.slow_response_feedback = slow_response_feedback
 
     monitor = child_monitor_from_env()
     if monitor is not None:
