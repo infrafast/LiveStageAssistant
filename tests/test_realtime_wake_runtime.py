@@ -310,6 +310,54 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         runtime.provider_progress()
         self.assertTrue(runtime._post_wake_provider_progress_seen)
 
+    def test_post_wake_vad_remembers_speech_during_ignore_window(self):
+        with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
+            messages = []
+
+            async def feedback(message):
+                messages.append(message)
+                return True
+
+            runtime = wake_runtime.RealtimeWakeRuntime(
+                self._config(),
+                slow_response_feedback=feedback,
+                slow_response_delay_seconds=0.01,
+                slow_response_message="Connexion lente...",
+                post_wake_vad_threshold=0.01,
+                post_wake_vad_ignore_ms=250,
+                post_wake_end_silence_ms=100,
+                post_wake_abort_seconds=0,
+            )
+
+        controller = FakeController()
+        runtime.semantic = controller
+
+        class Engine:
+            async def send_audio(self, _pcm):
+                return None
+
+        async def scenario():
+            engine = Engine()
+            stop_event = asyncio.Event()
+            await runtime.capture_filter(engine, b"wake", stop_event)
+            speech = (int(12000).to_bytes(2, "little", signed=True)) * 480
+            silence = b"\x00\x00" * 480
+
+            # Speech occurs entirely while the ignore window is active.
+            for _ in range(8):
+                await runtime.capture_filter(engine, speech, stop_event)
+
+            # Finish the ignore window, then provide enough silence to end the phrase.
+            for _ in range(12):
+                await runtime.capture_filter(engine, silence, stop_event)
+
+            await asyncio.sleep(0.03)
+
+        asyncio.run(scenario())
+        self.assertTrue(runtime._post_wake_vad_speech_seen)
+        self.assertTrue(runtime._post_wake_phrase_ended)
+        self.assertEqual(messages, ["Connexion lente..."])
+
     def test_build_runtime_callbacks_does_not_patch_service_module(self):
         original_capture = realtime_service.capture_loop
         original_event_loop = realtime_service.event_loop
