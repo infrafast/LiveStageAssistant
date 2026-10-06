@@ -358,6 +358,36 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         self.assertTrue(runtime._post_wake_phrase_ended)
         self.assertEqual(messages, ["Connexion lente..."])
 
+    def test_wake_without_command_speech_rearms_locally(self):
+        with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
+            runtime = wake_runtime.RealtimeWakeRuntime(
+                self._config(),
+                post_wake_vad_threshold=0.01,
+                post_wake_vad_ignore_ms=0,
+                post_wake_end_silence_ms=100,
+                post_wake_no_speech_timeout_seconds=0.1,
+            )
+
+        controller = FakeController()
+        runtime.semantic = controller
+
+        class Engine:
+            async def send_audio(self, _pcm):
+                return None
+
+        async def scenario():
+            engine = Engine()
+            stop_event = asyncio.Event()
+            await runtime.capture_filter(engine, b"wake", stop_event)
+            silence = b"\x00\x00" * 480
+            for _ in range(6):
+                await runtime.capture_filter(engine, silence, stop_event)
+
+        asyncio.run(scenario())
+        self.assertFalse(runtime._post_wake_vad_active)
+        self.assertEqual(controller.states[-2:], [SemanticAudioState.IDLE, SemanticAudioState.WAIT_WAKE])
+        self.assertTrue(runtime.gate.waiting)
+
     def test_build_runtime_callbacks_does_not_patch_service_module(self):
         original_capture = realtime_service.capture_loop
         original_event_loop = realtime_service.event_loop
