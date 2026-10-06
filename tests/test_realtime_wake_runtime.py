@@ -188,6 +188,51 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
         self.assertEqual(capture_results, [True])
         self.assertIn(SemanticAudioState.PROCESSING, controller.states)
 
+    def test_post_wake_abort_announces_timeout_and_rearms(self):
+        with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
+            messages = []
+
+            async def feedback(message):
+                messages.append(message)
+                return True
+
+            runtime = wake_runtime.RealtimeWakeRuntime(
+                self._config(),
+                slow_response_feedback=feedback,
+                slow_response_delay_seconds=0.01,
+                slow_response_message="Connexion lente...",
+                post_wake_abort_seconds=0.02,
+                timeout_message="Temps écoulé, commande annulée.",
+                recovery_operation_timeout_seconds=0.01,
+            )
+
+        controller = FakeController()
+        runtime.semantic = controller
+
+        class Engine:
+            async def send_audio(self, _pcm):
+                return None
+
+            async def cancel_response(self):
+                return None
+
+            async def discard_input_audio(self):
+                return None
+
+        async def scenario():
+            await runtime.capture_filter(Engine(), b"pcm", asyncio.Event())
+            await asyncio.sleep(0.08)
+
+        asyncio.run(scenario())
+        self.assertEqual(
+            messages,
+            ["Connexion lente...", "Temps écoulé, commande annulée."],
+        )
+        self.assertIn(SemanticAudioState.PROCESSING, controller.states)
+        self.assertIn(SemanticAudioState.IDLE, controller.states)
+        self.assertEqual(controller.states[-1], SemanticAudioState.WAIT_WAKE)
+        self.assertTrue(runtime.gate.waiting)
+
     def test_build_runtime_callbacks_does_not_patch_service_module(self):
         original_capture = realtime_service.capture_loop
         original_event_loop = realtime_service.event_loop
