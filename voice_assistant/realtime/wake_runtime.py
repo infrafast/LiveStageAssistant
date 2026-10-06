@@ -114,11 +114,13 @@ class RealtimeWakeRuntime:
             return bool(semantic.transition(SemanticAudioState.WAIT_WAKE))
 
         if state == SemanticAudioState.SPEAKING:
+            self.provider_progress()
             self.speaking = True
             self.gate.rearm(suppress_ms=0)
             return bool(semantic.transition(state))
 
         if state == SemanticAudioState.IDLE:
+            self.provider_progress()
             self.speaking = False
             result = bool(semantic.transition(state))
             self.gate.rearm()
@@ -246,11 +248,16 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
         print("LSA Realtime wake: disabled", flush=True)
         return callbacks
 
+    try:
+        slow_response_delay = float(str(values.get("REALTIME_SLOW_RESPONSE_NOTICE_SECONDS") or "2.0"))
+    except (TypeError, ValueError):
+        slow_response_delay = 2.0
+
     runtime = RealtimeWakeRuntime(
         config,
         interrupt_enabled=_bool(values.get("INTERRUPT_CONVERSATION_ENABLED"), False),
         slow_response_feedback=slow_response_feedback,
-        slow_response_delay_seconds=float(str(values.get("REALTIME_SLOW_RESPONSE_NOTICE_SECONDS") or "2.0")),
+        slow_response_delay_seconds=slow_response_delay,
         slow_response_message=str(values.get("REALTIME_SLOW_RESPONSE_MESSAGE") or "Connexion lente..."),
     )
     callbacks.capture_filter = runtime.capture_filter
