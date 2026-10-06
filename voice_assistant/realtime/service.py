@@ -922,16 +922,18 @@ async def event_loop(
     slow_response_notice_started = False
 
     async def cancel_slow_response_task() -> None:
-        nonlocal slow_response_task
+        nonlocal slow_response_task, slow_response_notice_started
         task = slow_response_task
         slow_response_task = None
+        slow_response_notice_started = False
         if task is None or task.done():
             return
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
     def schedule_slow_response_notice() -> None:
-        nonlocal slow_response_task
+        nonlocal slow_response_task, slow_response_notice_started
+        slow_response_notice_started = False
         delay = _float_env(
             "REALTIME_SLOW_RESPONSE_NOTICE_SECONDS",
             DEFAULT_REALTIME_SLOW_RESPONSE_NOTICE_SECONDS,
@@ -1135,6 +1137,7 @@ async def event_loop(
                         # the underlying Piper playback and could create overlap.
                         await asyncio.gather(slow_response_task, return_exceptions=True)
                         slow_response_task = None
+                        slow_response_notice_started = False
                     else:
                         await cancel_slow_response_task()
                 response = event.data.get("response") or {}
