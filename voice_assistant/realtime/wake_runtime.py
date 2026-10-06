@@ -213,14 +213,22 @@ class RealtimeWakeRuntime:
         if frame_ms <= 0:
             return
 
+        level = self._pcm16_rms_level(pcm)
+
         if self._post_wake_vad_ignore_remaining_ms > 0:
+            # Ignore only end-of-speech decisions during the wake-word tail.
+            # Speech itself must still be remembered, otherwise a command that
+            # starts immediately after the wake word can be swallowed entirely
+            # and the local VAD will wait forever for speech_seen=True.
+            if level >= self.post_wake_vad_threshold:
+                self._post_wake_vad_speech_seen = True
+                self._post_wake_vad_silence_ms = 0.0
             self._post_wake_vad_ignore_remaining_ms = max(
                 0.0,
                 self._post_wake_vad_ignore_remaining_ms - frame_ms,
             )
             return
 
-        level = self._pcm16_rms_level(pcm)
         if level >= self.post_wake_vad_threshold:
             self._post_wake_vad_speech_seen = True
             self._post_wake_vad_silence_ms = 0.0
