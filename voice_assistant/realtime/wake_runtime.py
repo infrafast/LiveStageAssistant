@@ -79,7 +79,7 @@ class RealtimeWakeRuntime:
         slow_response_feedback: Callable[[str], Awaitable[bool]] | None = None,
         slow_response_delay_seconds: float = 2.0,
         slow_response_message: str = "Connexion lente...",
-        post_wake_abort_seconds: float = 5.0,
+        post_wake_abort_seconds: float = 8.0,
         timeout_message: str = "Temps écoulé, commande annulée.",
         recovery_operation_timeout_seconds: float = 1.0,
     ) -> None:
@@ -369,9 +369,9 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
         slow_response_delay = 2.0
 
     try:
-        post_wake_abort_seconds = float(str(values.get("REALTIME_POST_WAKE_ABORT_SECONDS") or "5.0"))
+        post_wake_abort_seconds = float(str(values.get("REALTIME_POST_WAKE_ABORT_SECONDS") or "8.0"))
     except (TypeError, ValueError):
-        post_wake_abort_seconds = 5.0
+        post_wake_abort_seconds = 8.0
     try:
         recovery_operation_timeout_seconds = float(
             str(values.get("REALTIME_RECOVERY_OPERATION_TIMEOUT_SECONDS") or "1.0")
