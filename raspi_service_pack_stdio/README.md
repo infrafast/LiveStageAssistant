@@ -33,7 +33,7 @@ When the active profile is offline, `VOICE_ENGINE=local` selects the determinist
 
 ## Prerequisites
 
-Run the repository install script before installing the service. It installs the system packages used by backend audio capture/playback and cloud TTS MP3 playback, the Python dependencies, openWakeWord ONNX resources, realtime transport support, and Piper local TTS with a default French voice:
+Run the repository install script before installing the service. It installs the system packages used by backend audio capture/playback and cloud TTS MP3 playback, the Python dependencies, openWakeWord ONNX resources, realtime transport support, and Piper local TTS with a default French voice. The service installer also performs a safety check: if the Python/Piper runtime or default voice files are missing, it automatically reruns the repository installer before installing the systemd unit:
 
 ```bash
 cd /home/pi/LiveStageAssistant
@@ -54,11 +54,11 @@ The installer intentionally does not install or manage a local LLM. Existing use
 On Linux/Raspberry, Piper is installed with `piper-tts` and the default French voice files are downloaded to:
 
 ```text
-data/piper_voices/fr_FR-siwis-medium.onnx
-data/piper_voices/fr_FR-siwis-medium.onnx.json
+data/piper/fr_FR-siwis-medium.onnx
+data/piper/fr_FR-siwis-medium.onnx.json
 ```
 
-Set `LSA_SKIP_PIPER=1` to skip Piper, `LSA_PIPER_VOICE=<voice-name>` to choose another voice file name, or `LSA_PIPER_VOICE_DIR=<dir>` to store voices elsewhere.
+Set `LSA_SKIP_PIPER=1` to skip Piper, `LSA_PIPER_VOICE=<voice-name>` to choose another voice file name, or `LSA_PIPER_DATA_DIR=<dir>` to store voices elsewhere.
 
 Realtime voice dependencies currently install the lightweight WebSocket transport used by the experimental realtime path. Set `LSA_SKIP_REALTIME=1` to skip that optional setup.
 
