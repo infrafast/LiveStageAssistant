@@ -79,6 +79,9 @@ class RealtimeWakeRuntime:
         slow_response_feedback: Callable[[str], Awaitable[bool]] | None = None,
         slow_response_delay_seconds: float = 2.0,
         slow_response_message: str = "Connexion lente...",
+        post_wake_abort_seconds: float = 5.0,
+        timeout_message: str = "Temps écoulé, commande annulée.",
+        recovery_operation_timeout_seconds: float = 1.0,
     ) -> None:
         self.config = config
         self.gate = RealtimeWakeGate(config)
@@ -88,6 +91,9 @@ class RealtimeWakeRuntime:
         self.slow_response_feedback = slow_response_feedback
         self.slow_response_delay_seconds = max(0.0, float(slow_response_delay_seconds))
         self.slow_response_message = str(slow_response_message or "Connexion lente...").strip() or "Connexion lente..."
+        self.post_wake_abort_seconds = max(0.0, float(post_wake_abort_seconds))
+        self.timeout_message = str(timeout_message or "Temps écoulé, commande annulée.").strip() or "Temps écoulé, commande annulée."
+        self.recovery_operation_timeout_seconds = max(0.1, float(recovery_operation_timeout_seconds))
         self._post_wake_task: asyncio.Task | None = None
         self._post_wake_notice_started = False
         self._local_status_speaking = False
@@ -132,6 +138,10 @@ class RealtimeWakeRuntime:
 
     def provider_progress(self) -> None:
         task = self._post_wake_task
+        if task is asyncio.current_task():
+            self._post_wake_task = None
+            self._post_wake_notice_started = False
+            return
         if task is None or task.done():
             self._post_wake_task = None
             self._post_wake_notice_started = False
@@ -144,7 +154,7 @@ class RealtimeWakeRuntime:
         self._post_wake_task = None
         task.cancel()
 
-    def _arm_post_wake_feedback(self) -> None:
+    def _arm_post_wake_feedback(self, engine) -> None:
         self.provider_progress()
         self._post_wake_notice_started = False
         if self.slow_response_feedback is None or self.slow_response_delay_seconds <= 0:
@@ -167,7 +177,63 @@ class RealtimeWakeRuntime:
                     self._local_status_speaking = False
                 if spoken and self.semantic is not None and not self.gate.waiting:
                     print("LSA slow-response feedback complete; starting thinking sound", flush=True)
+                    self._post_wake_notice_started = False
                     self.semantic_transition(self.semantic, SemanticAudioState.PROCESSING)
+
+                    if self.post_wake_abort_seconds > 0:
+                        await asyncio.sleep(self.post_wake_abort_seconds)
+                        if self.gate.waiting:
+                            return
+
+                        print(
+                            f"LSA post-wake timeout after thinking={self.post_wake_abort_seconds:.1f}s; cancelling stalled cloud turn",
+                            flush=True,
+                        )
+
+                        try:
+                            await asyncio.wait_for(
+                                engine.cancel_response(),
+                                timeout=self.recovery_operation_timeout_seconds,
+                            )
+                        except asyncio.TimeoutError:
+                            print(
+                                f"Realtime post-wake cancellation timed out after {self.recovery_operation_timeout_seconds:.1f}s; continuing local recovery",
+                                flush=True,
+                            )
+                        except Exception as exc:
+                            print(f"Realtime post-wake cancellation warning: {exc}", flush=True)
+
+                        discard_input = getattr(engine, "discard_input_audio", None)
+                        if callable(discard_input):
+                            try:
+                                await asyncio.wait_for(
+                                    discard_input(),
+                                    timeout=self.recovery_operation_timeout_seconds,
+                                )
+                            except asyncio.TimeoutError:
+                                print(
+                                    f"Realtime post-wake input-buffer reset timed out after {self.recovery_operation_timeout_seconds:.1f}s; continuing local recovery",
+                                    flush=True,
+                                )
+                            except Exception as exc:
+                                print(f"Realtime post-wake input-buffer reset warning: {exc}", flush=True)
+
+                        if self.semantic is not None:
+                            self.semantic_transition(self.semantic, SemanticAudioState.IDLE)
+
+                        self._local_status_speaking = True
+                        try:
+                            print(
+                                f"LSA post-wake timeout: local feedback via Piper message={self.timeout_message!r}",
+                                flush=True,
+                            )
+                            await self.slow_response_feedback(self.timeout_message)
+                        finally:
+                            self._local_status_speaking = False
+
+                        if self.semantic is not None:
+                            self.semantic_transition(self.semantic, SemanticAudioState.LISTENING)
+                        print("LSA post-wake timeout recovery complete; listening re-armed", flush=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -192,7 +258,7 @@ class RealtimeWakeRuntime:
 
         if self.semantic is not None:
             self.semantic_transition(self.semantic, SemanticAudioState.WAKE_DETECTED)
-        self._arm_post_wake_feedback()
+        self._arm_post_wake_feedback(engine)
 
         pre_roll = self.gate.consume_pre_roll()
         print(
@@ -274,12 +340,26 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
     except (TypeError, ValueError):
         slow_response_delay = 2.0
 
+    try:
+        post_wake_abort_seconds = float(str(values.get("REALTIME_POST_WAKE_ABORT_SECONDS") or "5.0"))
+    except (TypeError, ValueError):
+        post_wake_abort_seconds = 5.0
+    try:
+        recovery_operation_timeout_seconds = float(
+            str(values.get("REALTIME_RECOVERY_OPERATION_TIMEOUT_SECONDS") or "1.0")
+        )
+    except (TypeError, ValueError):
+        recovery_operation_timeout_seconds = 1.0
+
     runtime = RealtimeWakeRuntime(
         config,
         interrupt_enabled=_bool(values.get("INTERRUPT_CONVERSATION_ENABLED"), False),
         slow_response_feedback=slow_response_feedback,
         slow_response_delay_seconds=slow_response_delay,
         slow_response_message=str(values.get("REALTIME_SLOW_RESPONSE_MESSAGE") or "Connexion lente..."),
+        post_wake_abort_seconds=post_wake_abort_seconds,
+        timeout_message=str(values.get("REALTIME_TIMEOUT_MESSAGE") or "Temps écoulé, commande annulée."),
+        recovery_operation_timeout_seconds=recovery_operation_timeout_seconds,
     )
     callbacks.capture_filter = runtime.capture_filter
     callbacks.semantic_transition = runtime.semantic_transition
