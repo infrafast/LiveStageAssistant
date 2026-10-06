@@ -57,6 +57,8 @@ DEFAULT_REALTIME_FOLLOWUP_TIMEOUT_SECONDS = 12.0
 DEFAULT_REALTIME_EVENT_POLL_SECONDS = 0.5
 DEFAULT_REALTIME_SLOW_RESPONSE_NOTICE_SECONDS = 2.0
 DEFAULT_REALTIME_SLOW_RESPONSE_MESSAGE = "Connexion lente..."
+DEFAULT_REALTIME_RECOVERY_OPERATION_TIMEOUT_SECONDS = 1.0
+DEFAULT_REALTIME_TIMEOUT_MESSAGE = "Temps écoulé."
 
 
 def _float_env(name: str, default: float) -> float:
@@ -396,7 +398,8 @@ async def recover_turn_timeout(
     callbacks: RealtimeRuntimeCallbacks | None,
     timeout_seconds: float,
 ) -> None:
-    """Recover one stalled turn without destroying a healthy provider session."""
+    """Recover one stalled turn without allowing provider cleanup to block LSA."""
+    runtime_callbacks = _callbacks(callbacks)
     timed_out_phase = turn_tracker.phase
     response_id = turn_tracker.current_response_id
     if response_id:
@@ -408,21 +411,58 @@ async def recover_turn_timeout(
         "cancelling current turn without reconnecting session",
         flush=True,
     )
+
+    recovery_timeout = max(
+        0.1,
+        _float_env(
+            "REALTIME_RECOVERY_OPERATION_TIMEOUT_SECONDS",
+            DEFAULT_REALTIME_RECOVERY_OPERATION_TIMEOUT_SECONDS,
+        ),
+    )
+
     try:
-        await engine.cancel_response()
+        await asyncio.wait_for(engine.cancel_response(), timeout=recovery_timeout)
+    except asyncio.TimeoutError:
+        print(
+            f"Realtime turn cancellation timed out after {recovery_timeout:.1f}s; continuing local recovery",
+            flush=True,
+        )
     except Exception as exc:
         print(f"Realtime turn cancellation warning: {exc}", flush=True)
+
     if timed_out_phase in {RealtimeTurnPhase.CAPTURING, RealtimeTurnPhase.WAIT_RESPONSE}:
         discard_input = getattr(engine, "discard_input_audio", None)
         if callable(discard_input):
             try:
-                await discard_input()
+                await asyncio.wait_for(discard_input(), timeout=recovery_timeout)
+            except asyncio.TimeoutError:
+                print(
+                    f"Realtime input-buffer reset timed out after {recovery_timeout:.1f}s; continuing local recovery",
+                    flush=True,
+                )
             except Exception as exc:
                 print(f"Realtime input-buffer reset warning: {exc}", flush=True)
+
     turn_tracker.reset_after_cancel_or_failure()
-    transition_semantic(semantic, SemanticAudioState.IDLE, callbacks)
-    transition_semantic(semantic, SemanticAudioState.LISTENING, callbacks)
-    await _set_busy(callbacks, False)
+
+    # Leave PROCESSING first so the thinking loop stops before the local status
+    # sentence. In wake-gated mode IDLE also rearms the local wake gate, which
+    # prevents the Piper announcement from being sent back to the provider.
+    transition_semantic(semantic, SemanticAudioState.IDLE, runtime_callbacks)
+    await _set_busy(runtime_callbacks, False)
+
+    timeout_message = str(
+        os.getenv("REALTIME_TIMEOUT_MESSAGE") or DEFAULT_REALTIME_TIMEOUT_MESSAGE
+    ).strip()
+    if timeout_message and runtime_callbacks.slow_response_feedback is not None:
+        try:
+            print(f"LSA realtime timeout: local feedback via Piper message={timeout_message!r}", flush=True)
+            await runtime_callbacks.slow_response_feedback(timeout_message)
+        except Exception as exc:
+            print(f"Realtime timeout local feedback warning: {exc}", flush=True)
+
+    transition_semantic(semantic, SemanticAudioState.LISTENING, runtime_callbacks)
+    print("Realtime turn recovery complete; listening re-armed", flush=True)
 
 
 async def settle_completed_response(
