@@ -144,5 +144,67 @@ class SlowResponseFeedbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(SemanticAudioState.PROCESSING, semantic.states)
 
 
+
+    async def test_timeout_recovery_is_bounded_and_rearms_listening(self):
+        class Semantic:
+            def __init__(self):
+                self.states = []
+                self.state = None
+
+            def transition(self, state):
+                self.states.append(state)
+                self.state = state
+                return True
+
+        class HangingEngine(DummyEngine):
+            async def cancel_response(self):
+                await asyncio.Event().wait()
+
+            async def discard_input_audio(self):
+                await asyncio.Event().wait()
+
+        engine = HangingEngine(RealtimeEngineConfig(provider="test", model="test-model"))
+        tracker = realtime_service.RealtimeTurnTracker(action_grace_seconds=0)
+        tracker.speech_started()
+        semantic = Semantic()
+        messages = []
+
+        async def feedback(message):
+            messages.append(message)
+            return True
+
+        callbacks = realtime_service.RealtimeRuntimeCallbacks(
+            slow_response_feedback=feedback,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "REALTIME_RECOVERY_OPERATION_TIMEOUT_SECONDS": "0.01",
+                "REALTIME_TIMEOUT_MESSAGE": "Temps écoulé.",
+            },
+            clear=False,
+        ):
+            await asyncio.wait_for(
+                realtime_service.recover_turn_timeout(
+                    engine=engine,
+                    turn_tracker=tracker,
+                    interrupted=set(),
+                    queue=asyncio.Queue(),
+                    semantic=semantic,
+                    callbacks=callbacks,
+                    timeout_seconds=15.0,
+                ),
+                timeout=0.2,
+            )
+
+        self.assertEqual(messages, ["Temps écoulé."])
+        self.assertEqual(
+            semantic.states[-2:],
+            [SemanticAudioState.IDLE, SemanticAudioState.LISTENING],
+        )
+        self.assertEqual(tracker.phase, realtime_service.RealtimeTurnPhase.IDLE)
+
+
 if __name__ == "__main__":
     unittest.main()
