@@ -1213,6 +1213,37 @@ common WebMonitor services
 
 ---
 
+## CFG-10 - split TTS engine from IA engine — PLANNED
+
+**Goal:** decouple the conversational/IA engine from the speech-output engine so LSA can reuse one local Piper voice across compatible Cloud and Local modes, reduce paid cloud-TTS usage, and keep a guaranteed-local system-status voice.
+
+Target compatibility matrix:
+
+```text
+Local deterministic -> Piper
+Classic             -> Piper / OpenAI TTS / ElevenLabs
+OpenAI Realtime     -> Native provider audio / Piper
+Gemini Live         -> Native Gemini audio with the current Live audio model
+```
+
+Planned architecture:
+
+- [ ] separate **IA engine** selection from **TTS engine** selection in the canonical config/UI;
+- [ ] keep Piper as the mandatory Local TTS and as the provider-independent local system/status voice;
+- [ ] Classic: allow Piper as the primary backend TTS after the cloud LLM returns text, avoiding OpenAI/ElevenLabs TTS cost when selected;
+- [ ] OpenAI Realtime: prototype a text-output -> Piper path in addition to native provider audio; measure end-of-user-speech -> first-Piper-audio latency, interruption behavior, naturalness and real API-cost reduction before deciding whether it becomes a supported/default mode;
+- [ ] Gemini Live: keep native Gemini audio for the current Live audio model; do not transcribe already-generated Gemini audio merely to re-synthesize it with Piper;
+- [ ] preserve provider-native speech as an option where it provides materially better realtime latency/prosody;
+- [ ] use the same Piper system-status channel in all engines for critical local announcements such as "Connexion lente...", "Connexion perdue." and "Mode local activé.";
+- [ ] keep audio arbitration explicit: real assistant/provider speech has priority over local status speech, with no double playback;
+- [ ] validate Raspberry Pi CPU/RAM impact and Piper lazy-load/preload behavior before choosing the final loading policy.
+
+Decision basis: Classic is straightforward because its response is already text before TTS. OpenAI Realtime can potentially save output-audio cost by using model text plus Piper, but this must be measured against added latency and loss of native prosody. Gemini Live's current native-audio path should remain native rather than generating cloud audio and then discarding/re-synthesizing it.
+
+Exit: TTS routing is a first-class configuration axis independent from IA-engine selection wherever the provider protocol supports it, with measured Pi latency/cost results and no regression in realtime interruption or stage-control reliability.
+
+---
+
 # 8. Roadmap Maintenance Rules
 
 1. This file is the default destination for architecture-level plans and milestones.
