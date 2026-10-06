@@ -64,6 +64,16 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
             pre_roll_ms=1600,
         )
 
+    async def _feed_local_command_end(self, runtime, engine):
+        stop_event = asyncio.Event()
+        # First frame authorizes the wake gate.
+        await runtime.capture_filter(engine, b"wake", stop_event)
+        # Then provide post-wake command speech followed by local silence.
+        speech = (int(12000).to_bytes(2, "little", signed=True)) * 480
+        silence = b"\x00\x00" * 480
+        await runtime.capture_filter(engine, speech, stop_event)
+        await runtime.capture_filter(engine, silence, stop_event)
+
     def test_listening_is_wait_wake_until_authorized(self):
         with mock.patch.object(wake_runtime, "RealtimeWakeGate", FakeGate):
             runtime = wake_runtime.RealtimeWakeRuntime(self._config())
@@ -134,7 +144,9 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_feedback=feedback,
                 slow_response_delay_seconds=0.01,
                 slow_response_message="Connexion lente...",
-                post_wake_command_grace_seconds=0.01,
+                post_wake_vad_threshold=0.01,
+                post_wake_vad_ignore_ms=0,
+                post_wake_end_silence_ms=20,
             )
         controller = FakeController()
         runtime.semantic = controller
@@ -146,7 +158,8 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 self.sent.append(pcm)
 
         async def scenario():
-            await runtime.capture_filter(Engine(), b"pcm", asyncio.Event())
+            engine = Engine()
+            await self._feed_local_command_end(runtime, engine)
             await asyncio.sleep(0.03)
 
         asyncio.run(scenario())
@@ -171,7 +184,9 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_feedback=feedback,
                 slow_response_delay_seconds=0.01,
                 slow_response_message="Connexion lente...",
-                post_wake_command_grace_seconds=0.01,
+                post_wake_vad_threshold=0.01,
+                post_wake_vad_ignore_ms=0,
+                post_wake_end_silence_ms=20,
             )
 
         controller = FakeController()
@@ -182,7 +197,8 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 return None
 
         async def scenario():
-            await runtime.capture_filter(Engine(), b"pcm", asyncio.Event())
+            engine = Engine()
+            await self._feed_local_command_end(runtime, engine)
             await asyncio.wait_for(release.wait(), timeout=0.2)
             await asyncio.sleep(0.01)
 
@@ -203,7 +219,9 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_feedback=feedback,
                 slow_response_delay_seconds=0.01,
                 slow_response_message="Connexion lente...",
-                post_wake_command_grace_seconds=0.01,
+                post_wake_vad_threshold=0.01,
+                post_wake_vad_ignore_ms=0,
+                post_wake_end_silence_ms=20,
                 post_wake_abort_seconds=0.02,
                 timeout_message="Temps écoulé, commande annulée.",
                 recovery_operation_timeout_seconds=0.01,
@@ -223,7 +241,8 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 return None
 
         async def scenario():
-            await runtime.capture_filter(Engine(), b"pcm", asyncio.Event())
+            engine = Engine()
+            await self._feed_local_command_end(runtime, engine)
             await asyncio.sleep(0.08)
 
         asyncio.run(scenario())
@@ -253,7 +272,9 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 slow_response_feedback=feedback,
                 slow_response_delay_seconds=0.01,
                 slow_response_message="Connexion lente...",
-                post_wake_command_grace_seconds=0.01,
+                post_wake_vad_threshold=0.01,
+                post_wake_vad_ignore_ms=0,
+                post_wake_end_silence_ms=20,
                 post_wake_abort_seconds=0.02,
                 timeout_message="Temps écoulé, commande annulée.",
                 recovery_operation_timeout_seconds=0.01,
@@ -271,7 +292,8 @@ class RealtimeWakeRuntimeTests(unittest.TestCase):
                 raise AssertionError("post-wake abort must be disarmed after provider progress")
 
         async def scenario():
-            await runtime.capture_filter(Engine(), b"pcm", asyncio.Event())
+            engine = Engine()
+            await self._feed_local_command_end(runtime, engine)
             await asyncio.wait_for(release.wait(), timeout=0.2)
             await asyncio.sleep(0.06)
 
