@@ -79,6 +79,7 @@ class RealtimeWakeRuntime:
         slow_response_feedback: Callable[[str], Awaitable[bool]] | None = None,
         slow_response_delay_seconds: float = 2.0,
         slow_response_message: str = "Connexion lente...",
+        post_wake_command_grace_seconds: float = 4.0,
         post_wake_abort_seconds: float = 8.0,
         timeout_message: str = "Temps écoulé, commande annulée.",
         recovery_operation_timeout_seconds: float = 1.0,
@@ -91,6 +92,7 @@ class RealtimeWakeRuntime:
         self.slow_response_feedback = slow_response_feedback
         self.slow_response_delay_seconds = max(0.0, float(slow_response_delay_seconds))
         self.slow_response_message = str(slow_response_message or "Connexion lente...").strip() or "Connexion lente..."
+        self.post_wake_command_grace_seconds = max(0.0, float(post_wake_command_grace_seconds))
         self.post_wake_abort_seconds = max(0.0, float(post_wake_abort_seconds))
         self.timeout_message = str(timeout_message or "Temps écoulé, commande annulée.").strip() or "Temps écoulé, commande annulée."
         self.recovery_operation_timeout_seconds = max(0.1, float(recovery_operation_timeout_seconds))
@@ -174,16 +176,16 @@ class RealtimeWakeRuntime:
         self._post_wake_task = None
         self._post_wake_notice_started = False
         self._post_wake_provider_progress_seen = False
-        if self.slow_response_feedback is None or self.slow_response_delay_seconds <= 0:
+        if self.slow_response_feedback is None or self.post_wake_command_grace_seconds <= 0:
             return
 
         async def runner() -> None:
             try:
-                await asyncio.sleep(self.slow_response_delay_seconds)
+                await asyncio.sleep(self.post_wake_command_grace_seconds)
                 if self.gate.waiting:
                     return
                 print(
-                    f"LSA cloud request: no provider progress after wake elapsed={self.slow_response_delay_seconds:.1f}s",
+                    f"LSA cloud request: no provider progress after wake elapsed={self.post_wake_command_grace_seconds:.1f}s",
                     flush=True,
                 )
                 self._post_wake_notice_started = True
@@ -369,6 +371,12 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
         slow_response_delay = 2.0
 
     try:
+        post_wake_command_grace_seconds = float(
+            str(values.get("REALTIME_POST_WAKE_COMMAND_GRACE_SECONDS") or "4.0")
+        )
+    except (TypeError, ValueError):
+        post_wake_command_grace_seconds = 4.0
+    try:
         post_wake_abort_seconds = float(str(values.get("REALTIME_POST_WAKE_ABORT_SECONDS") or "8.0"))
     except (TypeError, ValueError):
         post_wake_abort_seconds = 8.0
@@ -385,6 +393,7 @@ def build_runtime_callbacks(env_file: str | Path) -> RealtimeRuntimeCallbacks:
         slow_response_feedback=slow_response_feedback,
         slow_response_delay_seconds=slow_response_delay,
         slow_response_message=str(values.get("REALTIME_SLOW_RESPONSE_MESSAGE") or "Connexion lente..."),
+        post_wake_command_grace_seconds=post_wake_command_grace_seconds,
         post_wake_abort_seconds=post_wake_abort_seconds,
         timeout_message=str(values.get("REALTIME_TIMEOUT_MESSAGE") or "Temps écoulé, commande annulée."),
         recovery_operation_timeout_seconds=recovery_operation_timeout_seconds,
