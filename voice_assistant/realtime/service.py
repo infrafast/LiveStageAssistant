@@ -1116,6 +1116,7 @@ async def event_loop(
                     turn_tracker.reset_after_cancel_or_failure()
                     await _set_busy(runtime_callbacks, False)
             elif event.type == "speech_stopped":
+                _provider_progress(runtime_callbacks)
                 turn_tracker.speech_stopped()
                 print("Realtime speech stopped", flush=True)
                 print("LSA cloud request: audio turn sent status=waiting-response", flush=True)
