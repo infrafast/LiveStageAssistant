@@ -164,7 +164,17 @@ class BackendTtsTester:
         options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         requested = options or {}
-        provider = str(requested.get("provider") or _value(values, "TTS_PROVIDER", "none")).strip().lower()
+        requested_provider = str(requested.get("provider") or "").strip().lower()
+        if requested_provider:
+            provider = requested_provider
+        else:
+            voice_engine = _value(values, "VOICE_ENGINE", "").strip().lower()
+            if voice_engine == "openai-realtime":
+                provider = "openai-realtime"
+            elif voice_engine == "gemini-live":
+                provider = "gemini-live"
+            else:
+                provider = _value(values, "TTS_PROVIDER", "none").strip().lower()
         if provider in {"", "none"}:
             raise ValueError("backend TTS output is disabled")
         volume = max(0.0, min(2.0, _float(requested.get("volume"), _float(_value(values, "BACKEND_TTS_VOLUME", "1.0"), 1.0))))
